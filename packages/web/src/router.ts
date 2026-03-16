@@ -10,6 +10,7 @@ import { rootRoute } from "./routes/root";
 import { scheduledTasksRoute } from "./routes/scheduled-tasks";
 import { skillsRoute } from "./routes/skills";
 import { teamRoute } from "./routes/team";
+import { usageRoute } from "./routes/usage";
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -20,6 +21,7 @@ const routeTree = rootRoute.addChildren([
     teamRoute,
     scheduledTasksRoute,
     skillsRoute,
+    usageRoute,
     filesRoute,
     connectionsRoute.addChildren([connectionsCallbackRoute]),
   ]),
