@@ -459,7 +459,9 @@ function UsageOverTimeChart({ timePeriod }: { timePeriod: TimePeriod }) {
           label: "Messages",
           data: chartData.messages,
           borderColor: "#C8A800",
-          backgroundColor: (ctx: { chart: { ctx: CanvasRenderingContext2D; chartArea?: { top: number; bottom: number } } }) => {
+          backgroundColor: (ctx: {
+            chart: { ctx: CanvasRenderingContext2D; chartArea?: { top: number; bottom: number } };
+          }) => {
             const { chart } = ctx;
             if (!chart.chartArea) return "rgba(254,237,1,0.28)";
             const gradient = chart.ctx.createLinearGradient(0, chart.chartArea.top, 0, chart.chartArea.bottom);
@@ -558,7 +560,8 @@ function UsageOverTimeChart({ timePeriod }: { timePeriod: TimePeriod }) {
             <span
               className="inline-block h-0.5 w-4"
               style={{
-                backgroundImage: "repeating-linear-gradient(to right, #888780 0px, #888780 4px, transparent 4px, transparent 7px)",
+                backgroundImage:
+                  "repeating-linear-gradient(to right, #888780 0px, #888780 4px, transparent 4px, transparent 7px)",
               }}
             />
             Skills triggered
@@ -833,7 +836,10 @@ function EntityRow({
           ) : null}
           {entity.type === "group" ? (
             <>
-              <Badge variant="secondary" className="rounded-[4px] bg-muted px-1.5 py-0 text-[9px] text-muted-foreground">
+              <Badge
+                variant="secondary"
+                className="rounded-[4px] bg-muted px-1.5 py-0 text-[9px] text-muted-foreground"
+              >
                 Group
               </Badge>
               {memberCount !== null ? (
@@ -954,10 +960,7 @@ function ActivityByChannel({
               <span>{ch.label}</span>
             </div>
             <div className="h-[7px] flex-1 overflow-hidden rounded-[4px] bg-[#B4B2A9]">
-              <div
-                className="h-full rounded-[4px] bg-[#FEED01]"
-                style={{ width: `${(ch.count / maxCount) * 100}%` }}
-              />
+              <div className="h-full rounded-[4px] bg-[#FEED01]" style={{ width: `${(ch.count / maxCount) * 100}%` }} />
             </div>
             <span className="w-[28px] text-right font-mono text-[11px] tabular-nums text-foreground">{ch.count}</span>
           </div>
