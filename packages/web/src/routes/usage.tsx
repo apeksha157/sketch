@@ -256,7 +256,7 @@ function TabButton({ label, isActive, onClick }: { label: string; isActive: bool
       type="button"
       onClick={onClick}
       className={cn(
-        "relative pb-3 font-mono text-[12px] uppercase tracking-[0.06em] transition-colors",
+        "relative pb-3 font-mono text-[11px] uppercase tracking-[0.07em] transition-colors",
         isActive ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
@@ -275,7 +275,7 @@ function TimeFilter({
 }) {
   const options: TimePeriod[] = ["Week", "Month", "Quarter"];
   return (
-    <div className="inline-flex rounded-lg bg-secondary p-0.5 dark:bg-muted/50">
+    <div className="inline-flex rounded-lg border-[0.5px] border-border bg-card p-0.5 dark:bg-[#111110]">
       {options.map((opt) => (
         <button
           key={opt}
@@ -284,7 +284,7 @@ function TimeFilter({
           className={cn(
             "rounded-md px-3 py-1 text-xs transition-colors",
             value === opt
-              ? "bg-background font-medium text-foreground shadow-xs"
+              ? "bg-accent font-medium text-foreground dark:bg-[#1C1C1A]"
               : "text-muted-foreground hover:text-foreground",
           )}
         >
@@ -311,7 +311,7 @@ function TeamView({
       {/* Time filter + plan tag */}
       <div className="flex items-center justify-between">
         <TimeFilter value={timePeriod} onChange={onTimePeriodChange} />
-        <span className="text-xs text-muted-foreground">Pro plan · renews Apr 1</span>
+        <span className="font-mono text-[11px] text-muted-foreground">Pro plan · renews Apr 1</span>
       </div>
 
       {/* 3-up metric cards */}
@@ -400,7 +400,7 @@ function MetricCard({
   const isPositive = delta > 0;
 
   return (
-    <div className="rounded-lg bg-secondary p-4 dark:bg-muted/50">
+    <div className="rounded-lg bg-card p-4 dark:bg-[#111110]">
       <p className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">{label}</p>
       <p className="mt-1 text-[26px] font-medium leading-tight">{value}</p>
       {delta !== 0 ? (
@@ -423,13 +423,13 @@ function AmountSpentCard({ value, periodLabel }: { value: number; periodLabel: s
   const isAmber = pctOfPlan >= 80;
 
   return (
-    <div className="rounded-lg bg-secondary p-4 dark:bg-muted/50">
+    <div className="rounded-lg bg-card p-4 dark:bg-[#111110]">
       <p className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">Amount spent</p>
       <p className={cn("mt-1 text-[26px] font-medium leading-tight", isAmber && "text-amber-600 dark:text-amber-400")}>
         ${value.toFixed(2)}
       </p>
       <p className="mt-1 text-[11px] text-muted-foreground">{periodLabel}</p>
-      <div className="mt-2 h-[7px] w-full overflow-hidden rounded-[4px] bg-[#B4B2A9]">
+      <div className="mt-2 h-[7px] w-full overflow-hidden rounded-[4px] bg-[#B4B2A9] dark:bg-[#4A4840]">
         <div
           className={cn("h-full rounded-[4px] transition-all", isAmber ? "bg-amber-500" : "bg-[#FEED01]")}
           style={{ width: `${pctOfPlan}%` }}
@@ -486,7 +486,7 @@ function UsageOverTimeChart({ timePeriod }: { timePeriod: TimePeriod }) {
           type: "line" as const,
           label: "Skills triggered",
           data: chartData.skills,
-          borderColor: "#B4B2A9",
+          borderColor: "#5F5E5A",
           backgroundColor: "transparent",
           borderWidth: 1.5,
           borderDash: [4, 3],
@@ -561,7 +561,7 @@ function UsageOverTimeChart({ timePeriod }: { timePeriod: TimePeriod }) {
               className="inline-block h-0.5 w-4"
               style={{
                 backgroundImage:
-                  "repeating-linear-gradient(to right, #888780 0px, #888780 4px, transparent 4px, transparent 7px)",
+                  "repeating-linear-gradient(to right, #5F5E5A 0px, #5F5E5A 4px, transparent 4px, transparent 7px)",
               }}
             />
             Skills triggered
@@ -645,7 +645,7 @@ function TeamAdoptionTable() {
     <div className="overflow-hidden rounded-lg border-[0.5px] border-border bg-card">
       {/* Toolbar: filter tabs + search */}
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <div className="inline-flex rounded-lg bg-secondary p-0.5 dark:bg-muted/50">
+        <div className="inline-flex rounded-lg border-[0.5px] border-border bg-card p-0.5 dark:bg-[#111110]">
           {filterTabs.map((tab) => (
             <button
               key={tab.key}
@@ -654,7 +654,7 @@ function TeamAdoptionTable() {
               className={cn(
                 "rounded-md px-2.5 py-1 text-xs transition-colors",
                 filter === tab.key
-                  ? "bg-background font-medium text-foreground shadow-xs"
+                  ? "bg-accent font-medium text-foreground dark:bg-[#1C1C1A]"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -689,7 +689,7 @@ function TeamAdoptionTable() {
               setSearch(e.target.value);
               setPage(1);
             }}
-            className="h-7 min-w-[180px] rounded-md border-[0.5px] border-border bg-secondary pl-7 pr-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none dark:bg-muted/50"
+            className="h-7 min-w-[180px] rounded-md border-[0.5px] border-border bg-card pl-7 pr-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none dark:bg-[#111110]"
           />
         </div>
       </div>
@@ -697,26 +697,26 @@ function TeamAdoptionTable() {
       <table className="w-full text-[13px]">
         <thead>
           <tr className="border-b border-border text-left">
-            <th className="px-4 py-2.5 font-mono text-[10px] font-normal uppercase tracking-[0.06em] text-muted-foreground">
+            <th className="px-4 py-2.5 font-mono text-[10px] font-normal uppercase tracking-[0.05em] text-muted-foreground">
               {filter === "groups" ? "Group" : filter === "agents" ? "Agent" : "Member"}
             </th>
             {filter === "groups" ? (
-              <th className="px-4 py-2.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.06em] text-muted-foreground">
+              <th className="px-4 py-2.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.05em] text-muted-foreground">
                 Members
               </th>
             ) : null}
-            <th className="px-4 py-2.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.06em] text-muted-foreground">
+            <th className="px-4 py-2.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.05em] text-muted-foreground">
               Messages
             </th>
             {filter !== "agents" ? (
-              <th className="px-4 py-2.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.06em] text-muted-foreground">
+              <th className="px-4 py-2.5 text-right font-mono text-[10px] font-normal uppercase tracking-[0.05em] text-muted-foreground">
                 Skills used
               </th>
             ) : null}
-            <th className="px-4 py-2.5 font-mono text-[10px] font-normal uppercase tracking-[0.06em] text-muted-foreground">
+            <th className="px-4 py-2.5 font-mono text-[10px] font-normal uppercase tracking-[0.05em] text-muted-foreground">
               Last active
             </th>
-            <th className="px-4 py-2.5 font-mono text-[10px] font-normal uppercase tracking-[0.06em] text-muted-foreground">
+            <th className="px-4 py-2.5 font-mono text-[10px] font-normal uppercase tracking-[0.05em] text-muted-foreground">
               Activity
             </th>
           </tr>
@@ -825,7 +825,7 @@ function EntityRow({
           )}
           <span className="text-[13px] font-medium">{entity.name}</span>
           {isCurrentUser ? (
-            <Badge className="rounded-[4px] bg-[#E6F1FB] px-1.5 py-0 text-[10px] text-[#185FA5] dark:bg-[#185FA5]/20 dark:text-[#6CB4EE]">
+            <Badge className="rounded-[4px] bg-[#E6F1FB] px-1.5 py-0 text-[10px] text-[#185FA5] dark:bg-[#0C447C] dark:text-[#85B7EB]">
               You
             </Badge>
           ) : null}
@@ -912,7 +912,7 @@ function GroupAvatar({ name }: { name: string }) {
 function ActivityBar({ pct }: { pct: number }) {
   return (
     <div className="flex items-center gap-2">
-      <div className="h-[7px] w-[80px] overflow-hidden rounded-[4px] bg-[#B4B2A9]">
+      <div className="h-[7px] w-[80px] overflow-hidden rounded-[4px] bg-[#B4B2A9] dark:bg-[#4A4840]">
         {pct > 0 ? <div className="h-full rounded-[4px] bg-[#FEED01]" style={{ width: `${pct}%` }} /> : null}
       </div>
     </div>
@@ -920,22 +920,40 @@ function ActivityBar({ pct }: { pct: number }) {
 }
 
 function ChannelIcon({ platform }: { platform: "slack" | "whatsapp" | "email" }) {
-  const cls = "shrink-0 text-muted-foreground";
   if (platform === "slack")
     return (
-      <svg width={14} height={14} viewBox="0 0 24 24" className={cls} fill="currentColor" aria-hidden="true">
-        <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zm1.271 0a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zm0 1.271a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zm-1.268 0a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zm0-1.268a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" />
+      <svg width={16} height={16} viewBox="0 0 16 16" className="shrink-0 rounded-[4px]" aria-hidden="true">
+        <rect width={16} height={16} rx={4} fill="#4A154B" />
+        <text
+          x={8}
+          y={12}
+          textAnchor="middle"
+          fill="white"
+          fontSize={11}
+          fontWeight={700}
+          fontFamily="Inter, sans-serif"
+        >
+          #
+        </text>
       </svg>
     );
   if (platform === "whatsapp")
     return (
-      <svg width={14} height={14} viewBox="0 0 24 24" className={cls} fill="currentColor" aria-hidden="true">
-        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413z" />
+      <svg width={16} height={16} viewBox="0 0 10 10" className="shrink-0 rounded-[4px]" aria-hidden="true">
+        <rect width={10} height={10} rx={2.5} fill="#25D366" />
+        <path
+          d="M5 1C2.79 1 1 2.79 1 5C1 5.74 1.21 6.43 1.57 7.02L1 9L3.06 8.45C3.63 8.78 4.29 8.97 5 8.97C7.21 8.97 9 7.18 9 4.97C9 2.79 7.21 1 5 1Z"
+          fill="white"
+        />
       </svg>
     );
   return (
-    <svg width={14} height={14} viewBox="0 0 24 24" className={cls} fill="currentColor" aria-hidden="true">
-      <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z" />
+    <svg width={16} height={16} viewBox="0 0 16 16" className="shrink-0 rounded-[4px]" aria-hidden="true">
+      <rect width={16} height={16} rx={4} fill="#444441" />
+      <path
+        d="M12 4.5H4c-.55 0-1 .45-1 1v5c0 .55.45 1 1 1h8c.55 0 1-.45 1-1v-5c0-.55-.45-1-1-1zm0 2-4 2.5-4-2.5v-1l4 2.5 4-2.5v1z"
+        fill="white"
+      />
     </svg>
   );
 }
@@ -955,11 +973,11 @@ function ActivityByChannel({
       <div className="space-y-3">
         {channels.map((ch) => (
           <div key={ch.platform} className="flex items-center gap-2.5">
-            <div className="flex w-[100px] items-center gap-1.5 text-[13px] text-foreground">
+            <div className="flex w-[90px] items-center gap-2 text-[13px] text-foreground">
               <ChannelIcon platform={ch.platform} />
               <span>{ch.label}</span>
             </div>
-            <div className="h-[7px] flex-1 overflow-hidden rounded-[4px] bg-[#B4B2A9]">
+            <div className="h-[7px] flex-1 overflow-hidden rounded-[4px] bg-[#B4B2A9] dark:bg-[#4A4840]">
               <div className="h-full rounded-[4px] bg-[#FEED01]" style={{ width: `${(ch.count / maxCount) * 100}%` }} />
             </div>
             <span className="w-[28px] text-right font-mono text-[11px] tabular-nums text-foreground">{ch.count}</span>
