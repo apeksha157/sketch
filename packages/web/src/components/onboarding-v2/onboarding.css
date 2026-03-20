@@ -1,0 +1,846 @@
+/* Onboarding conversational UI — scoped design tokens and animations */
+
+.onboarding-root {
+  --ob-yellow: #feed01;
+  --ob-bg: #0a0a0a;
+  --ob-container-bg: #0c0c0c;
+  --ob-card: rgba(255, 255, 255, 0.035);
+  --ob-card-border: rgba(255, 255, 255, 0.06);
+  --ob-text: rgba(255, 255, 255, 0.9);
+  --ob-text-dim: rgba(255, 255, 255, 0.48);
+  --ob-text-muted: rgba(255, 255, 255, 0.35);
+  --ob-divider: rgba(255, 255, 255, 0.06);
+  --ob-green: #25d366;
+  --ob-error: rgba(226, 75, 74, 0.8);
+  --ob-error-border: rgba(226, 75, 74, 0.4);
+  --ob-green-border: rgba(37, 211, 102, 0.4);
+
+  --ob-font-body: "Inter", sans-serif;
+  --ob-font-mono: "IBM Plex Mono", monospace;
+  --ob-font-deco: "Gloria Hallelujah", cursive;
+
+  font-family: var(--ob-font-body);
+  background: var(--ob-bg);
+  color: var(--ob-text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* ── Animations ── */
+
+@keyframes ob-fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ob-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ob-rowReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ob-animate-in {
+  animation: ob-fadeIn 0.4s ease-out both;
+}
+
+.ob-animate-finish {
+  animation: ob-fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.ob-animate-spin {
+  animation: ob-spin 1s linear infinite;
+}
+
+.ob-animate-row {
+  animation: ob-rowReveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Container ── */
+
+.ob-container {
+  width: 100%;
+  max-width: 560px;
+  height: min(740px, 90vh);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--ob-container-bg);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 24px;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+
+.ob-header {
+  padding: 20px 28px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ob-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ob-header-logo {
+  font-family: var(--ob-font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ob-text);
+}
+
+.ob-header-setup {
+  font-family: var(--ob-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+}
+
+/* ── Step track ── */
+
+.ob-track {
+  padding: 8px 28px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: var(--ob-container-bg);
+}
+
+.ob-track-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 100px;
+  border: none;
+  background: transparent;
+  cursor: default;
+  transition: background 0.2s;
+  font-family: var(--ob-font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ob-track-pill[data-clickable="true"] {
+  cursor: pointer;
+}
+
+.ob-track-pill[data-state="active"] {
+  background: rgba(254, 237, 1, 0.08);
+  color: var(--ob-yellow);
+}
+
+.ob-track-pill[data-state="done"] {
+  background: rgba(254, 237, 1, 0.04);
+  color: rgba(254, 237, 1, 0.53);
+}
+
+.ob-track-pill[data-state="inactive"] {
+  color: rgba(255, 255, 255, 0.16);
+}
+
+.ob-track-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.ob-track-dot[data-state="active"] {
+  background: var(--ob-yellow);
+}
+
+.ob-track-dot[data-state="done"] {
+  display: none;
+}
+
+.ob-track-dot[data-state="inactive"] {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.ob-track-connector {
+  width: 10px;
+  height: 1px;
+  margin: 0 4px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ob-track-connector[data-done="true"] {
+  background: rgba(254, 237, 1, 0.13);
+}
+
+/* ── Chat area ── */
+
+.ob-chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 28px 0;
+  scroll-behavior: smooth;
+}
+
+/* ── Messages ── */
+
+.ob-msg {
+  margin-bottom: 12px;
+}
+
+.ob-msg-label {
+  font-family: var(--ob-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ob-msg-label-sketch {
+  color: var(--ob-yellow);
+}
+
+.ob-msg-label-user {
+  color: var(--ob-text-dim);
+  justify-content: flex-end;
+}
+
+.ob-msg-body {
+  font-family: var(--ob-font-body);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.7;
+  color: var(--ob-text);
+}
+
+.ob-msg-body-sketch {
+  padding-left: 32px;
+}
+
+.ob-msg-body-user {
+  text-align: right;
+}
+
+/* ── User message pill ── */
+
+.ob-user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-family: var(--ob-font-body);
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--ob-text);
+}
+
+/* ── Section divider ── */
+
+.ob-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 0;
+}
+
+.ob-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--ob-divider);
+}
+
+.ob-divider-label {
+  font-family: var(--ob-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ob-text-muted);
+  white-space: nowrap;
+}
+
+/* ── Widgets (indented like message body) ── */
+
+.ob-widget {
+  padding-left: 32px;
+  margin-bottom: 12px;
+}
+
+/* ── Auth picker ── */
+
+.ob-auth-card {
+  background: var(--ob-card);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  border: none;
+  width: 100%;
+  text-align: left;
+  transition: background 0.2s;
+  color: var(--ob-text);
+}
+
+.ob-auth-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ob-auth-icon-container {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ob-auth-title {
+  font-family: var(--ob-font-body);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ob-text);
+}
+
+.ob-auth-subtitle {
+  font-family: var(--ob-font-body);
+  font-size: 12px;
+  color: var(--ob-text-muted);
+}
+
+/* ── Workspace card ── */
+
+.ob-workspace-card {
+  background: var(--ob-card);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 320px;
+}
+
+.ob-workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 14px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-family: var(--ob-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow);
+}
+
+.ob-workspace-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+}
+
+.ob-workspace-row + .ob-workspace-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.ob-workspace-row-label {
+  font-family: var(--ob-font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ob-text-muted);
+}
+
+.ob-workspace-row-value {
+  font-family: var(--ob-font-body);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ob-text);
+}
+
+/* ── CTA buttons — website-consistent ── */
+
+.ob-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 28px;
+  border-radius: 10px;
+  border: none;
+  font-family: var(--ob-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  text-decoration: none;
+}
+
+.ob-cta:hover {
+  opacity: 0.88;
+}
+
+.ob-cta-primary {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+
+.ob-cta-dark {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--ob-text);
+}
+
+.ob-cta-dark-on-yellow {
+  background: #0a0a0a;
+  color: var(--ob-yellow);
+}
+
+.ob-cta:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── Pill buttons (WhatsApp picker) ── */
+
+.ob-pill {
+  padding: 14px 28px;
+  border-radius: 10px;
+  border: none;
+  font-family: var(--ob-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.ob-pill:hover {
+  opacity: 0.88;
+}
+
+.ob-pill-primary {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+
+.ob-pill-ghost {
+  background: transparent;
+  color: var(--ob-text-dim);
+  font-family: var(--ob-font-body);
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* ── QR card ── */
+
+.ob-qr-card {
+  max-width: 300px;
+  background: var(--ob-card);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.ob-qr-card[data-connected="true"] {
+  border: 1px solid var(--ob-green-border);
+}
+
+.ob-qr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ob-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-text-muted);
+  align-self: flex-start;
+}
+
+.ob-qr-header[data-connected="true"] {
+  color: var(--ob-green);
+}
+
+.ob-qr-container {
+  width: 180px;
+  height: 180px;
+  background: #fff;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.ob-qr-container canvas,
+.ob-qr-container img {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ob-qr-wa-logo {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  background: #fff;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ob-qr-text {
+  font-family: var(--ob-font-body);
+  font-size: 12px;
+  color: var(--ob-text-muted);
+  text-align: center;
+}
+
+.ob-qr-connected {
+  color: var(--ob-green);
+  font-weight: 600;
+}
+
+.ob-qr-subtext {
+  font-family: var(--ob-font-body);
+  font-size: 11px;
+  color: var(--ob-text-muted);
+}
+
+.ob-qr-success-circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--ob-green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── API key input ── */
+
+.ob-api-card {
+  max-width: 380px;
+  background: var(--ob-card);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.ob-api-toggle {
+  display: flex;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  padding: 3px;
+  margin-bottom: 20px;
+}
+
+.ob-api-toggle-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-family: var(--ob-font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.ob-api-toggle-tab[data-active="true"] {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--ob-text);
+}
+
+.ob-api-field-label {
+  font-family: var(--ob-font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+  margin-bottom: 6px;
+}
+
+.ob-api-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid var(--ob-divider);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-family: var(--ob-font-mono);
+  font-size: 13px;
+  color: var(--ob-text);
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 12px;
+}
+
+.ob-api-input::placeholder {
+  color: var(--ob-text-muted);
+}
+
+.ob-api-input:focus {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.ob-api-input[data-state="error"] {
+  border-color: var(--ob-error-border);
+}
+
+.ob-api-input[data-state="valid"] {
+  border-color: var(--ob-green-border);
+}
+
+.ob-api-select {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1.5px solid var(--ob-divider);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-family: var(--ob-font-mono);
+  font-size: 13px;
+  color: var(--ob-text);
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 12px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.ob-api-select option {
+  background: #1a1a1a;
+  color: var(--ob-text);
+}
+
+.ob-api-btn {
+  width: 100%;
+  padding: 14px;
+  border: none;
+  border-radius: 10px;
+  font-family: var(--ob-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.ob-api-btn[data-state="default"] {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+
+.ob-api-btn[data-state="loading"] {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ob-api-btn[data-state="success"] {
+  background: var(--ob-green);
+  color: #fff;
+}
+
+.ob-api-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.ob-api-error {
+  font-family: var(--ob-font-body);
+  font-size: 12px;
+  color: var(--ob-error);
+  margin-top: 8px;
+}
+
+.ob-api-success {
+  font-family: var(--ob-font-body);
+  font-size: 12px;
+  color: var(--ob-green);
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.ob-api-help {
+  font-family: var(--ob-font-body);
+  font-size: 11px;
+  color: var(--ob-text-muted);
+  text-align: center;
+  margin-top: 8px;
+}
+
+.ob-api-help a {
+  color: var(--ob-text-muted);
+  text-decoration: none;
+}
+
+.ob-api-help a:hover {
+  color: var(--ob-text-dim);
+}
+
+/* ── Yellow finish card ── */
+
+.ob-finish {
+  background: var(--ob-yellow);
+  border-radius: 20px;
+  padding: 48px 32px;
+  text-align: center;
+  margin-left: -28px;
+  margin-right: -28px;
+}
+
+.ob-finish-heading {
+  font-family: var(--ob-font-deco);
+  font-size: 32px;
+  font-weight: 400;
+  color: #0a0a0a;
+  margin: 16px 0 6px;
+}
+
+.ob-finish-subtitle {
+  font-family: var(--ob-font-body);
+  font-size: 14px;
+  color: rgba(10, 10, 10, 0.33);
+  margin-bottom: 24px;
+}
+
+.ob-finish-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 36px;
+  border-radius: 10px;
+  background: #0a0a0a;
+  color: var(--ob-yellow);
+  font-family: var(--ob-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  text-decoration: none;
+}
+
+.ob-finish-cta:hover {
+  opacity: 0.88;
+}
+
+/* ── Loading spinner ── */
+
+.ob-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--ob-text);
+  border-radius: 50%;
+  animation: ob-spin 0.8s linear infinite;
+}
+
+.ob-spinner-dark {
+  border-color: rgba(0, 0, 0, 0.1);
+  border-top-color: #0a0a0a;
+}
+
+/* ── ConnCard (connection status) ── */
+
+.ob-conn-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 32px;
+  font-family: var(--ob-font-body);
+  font-size: 14px;
+  color: var(--ob-text-dim);
+  line-height: 1.7;
+}
+
+.ob-conn-card-success {
+  color: var(--ob-text);
+}
+
+.ob-conn-green {
+  color: var(--ob-green);
+  font-weight: 600;
+}
+
+/* ── Example prompts ── */
+
+.ob-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 32px;
+}
+
+.ob-prompt-item {
+  font-family: var(--ob-font-body);
+  font-size: 13px;
+  font-style: italic;
+  color: rgba(254, 237, 1, 0.73);
+  line-height: 1.6;
+}
+
+/* ── Bottom spacer ── */
+
+.ob-bottom-spacer {
+  height: 28px;
+}
