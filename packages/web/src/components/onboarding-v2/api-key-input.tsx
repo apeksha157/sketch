@@ -1,3 +1,4 @@
+import { useTheme } from "@/hooks/use-theme";
 import { useState } from "react";
 import type { ApiProvider } from "./types";
 
@@ -8,11 +9,15 @@ interface ApiKeyInputProps {
 const AWS_REGIONS = ["us-east-1", "us-west-2", "eu-west-1", "eu-west-3", "ap-southeast-1", "ap-northeast-1"];
 
 function AwsMark({ size = 16 }: { size?: number }) {
-  return <img src="/logos/aws-logo.png" alt="AWS" style={{ height: size, width: "auto" }} />;
+  const { resolvedTheme } = useTheme();
+  const filter = resolvedTheme === "dark" ? "brightness(0) invert(1)" : undefined;
+  return <img src="/logos/aws-logo.png" alt="AWS" style={{ height: size, width: "auto", filter }} />;
 }
 
 function AnthropicMark({ size = 16 }: { size?: number }) {
-  return <img src="/logos/anthropic-logo.png" alt="Anthropic" style={{ height: size, width: "auto" }} />;
+  const { resolvedTheme } = useTheme();
+  const filter = resolvedTheme === "dark" ? "brightness(0) invert(1)" : undefined;
+  return <img src="/logos/anthropic-logo.png" alt="Anthropic" style={{ height: size, width: "auto", filter }} />;
 }
 
 /** API key input with AWS Bedrock and Anthropic tabs. */
