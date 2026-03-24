@@ -26,6 +26,7 @@ export type WidgetType =
   | "api-key-input"
   | "yellow-finish"
   | "example-prompts"
+  | "section-continue"
   | "loading";
 
 /** An instruction in the message queue (not yet processed). */

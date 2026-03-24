@@ -1,4 +1,3 @@
-import { SketchIcon } from "./spark-icon";
 import type { AuthMethod } from "./types";
 
 interface YellowFinishProps {
@@ -12,10 +11,10 @@ export function YellowFinish({ authMethod, onCta }: YellowFinishProps) {
 
   return (
     <div className="ob-finish ob-animate-finish">
-      <SketchIcon size={36} variant="light" />
+      <img src="/logos/sketch-logo-dark.png" alt="Sketch" style={{ height: 48, width: "auto" }} />
       <div className="ob-finish-heading">You're ready.</div>
       <div className="ob-finish-subtitle">Message Sketch to get started.</div>
-      <button type="button" className="ob-finish-cta" onClick={onCta}>
+      <button type="button" className="ob-btn ob-btn-dark" onClick={onCta}>
         {ctaLabel}
       </button>
     </div>

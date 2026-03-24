@@ -178,16 +178,39 @@ export function useOnboardingFlow() {
   const handleWorkspaceComplete = useCallback(() => {
     const method = state.authMethod;
     const isAdmin = state.isAdmin;
+    const workspace = state.workspace;
 
     const confirmMsg = isAdmin
-      ? "You're the first one here — you're the admin. Teammates join automatically with the same email domain."
-      : `You're joining ${state.workspace?.name}. ${state.workspace?.adminName || "The admin"} and others are already here.`;
+      ? "You're the admin. Teammates join with the same email domain."
+      : `You're joining ${workspace?.name}.`;
+
+    // Persist the completed workspace card as a frozen inline message before clearing it.
+    appendMessage({
+      id: nextId(),
+      kind: "widget",
+      step: 1,
+      widgetType: "workspace-card",
+      widgetProps: { authMethod: method, data: workspace, isAdmin, frozen: true },
+    });
 
     setActiveWidget(null);
     enqueue([
-      { type: "delay", ms: 500 },
+      { type: "delay", ms: 900 },
       { type: "sketch-message", text: confirmMsg, step: 1 },
-      { type: "delay", ms: 1000 },
+      { type: "delay", ms: 1200 },
+      { type: "sketch-message", text: "Now let's connect your channels.", step: 1 },
+      { type: "delay", ms: 700 },
+      { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Channels" } },
+    ]);
+  }, [appendMessage, enqueue, state.authMethod, state.isAdmin, state.workspace]);
+
+  // ── Step 1 → 2: User clicks "Next: Channels" ──
+
+  const handleWorkspaceContinue = useCallback(() => {
+    const method = state.authMethod;
+    setActiveWidget(null);
+    enqueue([
+      { type: "user-message", text: "Go to Channels", step: 1 },
       { type: "action", action: "set-step", step: 2 },
       { type: "divider", label: "Channels", step: 2 },
       {
@@ -201,7 +224,7 @@ export function useOnboardingFlow() {
       { type: "delay", ms: 400 },
       { type: "widget", widgetType: "whatsapp-picker", step: 2, props: { canSkip: method === "slack" } },
     ]);
-  }, [enqueue, state.authMethod, state.isAdmin, state.workspace]);
+  }, [enqueue, state.authMethod]);
 
   // ── Step 2: Channel connection ──
 
@@ -266,6 +289,13 @@ export function useOnboardingFlow() {
   // ── Completion ──
 
   const handleExamplePromptsDone = useCallback(() => {
+    appendMessage({
+      id: nextId(),
+      kind: "widget",
+      step: 3,
+      widgetType: "example-prompts",
+      widgetProps: { frozen: true },
+    });
     setActiveWidget(null);
     enqueue([
       { type: "sketch-message", text: "Mention @Sketch in any channel, or DM me directly.", step: 3 },
@@ -296,6 +326,7 @@ export function useOnboardingFlow() {
     handleAuthSelect,
     handleConnComplete,
     handleWorkspaceComplete,
+    handleWorkspaceContinue,
     handleWhatsAppConnect,
     handleWhatsAppConnected,
     handleWhatsAppSkip,

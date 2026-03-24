@@ -56,7 +56,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
       <div className="ob-qr-card" data-connected={isConnected}>
         {/* Header */}
         <div className="ob-qr-header" data-connected={isConnected}>
-          <WhatsAppIcon size={14} color={isConnected ? "#25D366" : "rgba(255,255,255,0.35)"} />
+          <WhatsAppIcon size={14} color={isConnected ? "#25D366" : "#feed01"} />
           {isConnected ? "WHATSAPP CONNECTED" : "CONNECT WHATSAPP"}
         </div>
 
@@ -81,8 +81,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
             <span className="ob-qr-text">QR code expired.</span>
             <button
               type="button"
-              className="ob-cta ob-cta-primary"
-              style={{ fontSize: 11, padding: "10px 20px" }}
+              className="ob-btn ob-btn-primary"
               onClick={handleRefresh}
             >
               Generate new code
@@ -92,7 +91,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
           <>
             <div className="ob-qr-container">
               {/* Placeholder QR — production uses server-generated QR */}
-              <svg viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="QR code">
+              <svg viewBox="0 0 180 180" width="200" height="200" role="img" aria-label="QR code">
                 <title>QR code</title>
                 <rect width="180" height="180" fill="#fff" />
                 <rect x="12" y="12" width="48" height="48" rx="4" fill="#000" />

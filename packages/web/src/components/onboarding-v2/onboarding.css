@@ -2,14 +2,14 @@
 
 .onboarding-root {
   --ob-yellow: #feed01;
-  --ob-bg: #0a0a0a;
-  --ob-container-bg: #0c0c0c;
-  --ob-card: rgba(255, 255, 255, 0.035);
-  --ob-card-border: rgba(255, 255, 255, 0.06);
-  --ob-text: rgba(255, 255, 255, 0.9);
-  --ob-text-dim: rgba(255, 255, 255, 0.48);
-  --ob-text-muted: rgba(255, 255, 255, 0.35);
-  --ob-divider: rgba(255, 255, 255, 0.06);
+  --ob-bg: #040404;
+  --ob-container-bg: #111110;
+  --ob-card: linear-gradient(180deg, #1c1c1a 0%, #111110 100%);
+  --ob-card-border: #2c2c2a;
+  --ob-text: #fafaf8;
+  --ob-text-dim: #b0b0aa;
+  --ob-text-muted: #9c9a92;
+  --ob-divider: #2c2c2a;
   --ob-green: #25d366;
   --ob-error: rgba(226, 75, 74, 0.8);
   --ob-error-border: rgba(226, 75, 74, 0.4);
@@ -18,6 +18,16 @@
   --ob-font-body: "Inter", sans-serif;
   --ob-font-mono: "IBM Plex Mono", monospace;
   --ob-font-deco: "Gloria Hallelujah", cursive;
+
+  /* ── Type scale — minimum 10px everywhere ── */
+  --ob-fs-xs:   10px;  /* mono labels, badges, avatar letters */
+  --ob-fs-sm:   11px;  /* secondary labels, chips, row labels */
+  --ob-fs-base: 12px;  /* body small, field labels, status text */
+  --ob-fs-md:   13px;  /* body regular, input values */
+  --ob-fs-lg:   14px;  /* body large, button text, message text */
+  --ob-fs-xl:   16px;  /* card values, primary values */
+  --ob-fs-2xl:  18px;  /* header logo */
+  --ob-fs-3xl:  32px;  /* finish headline */
 
   font-family: var(--ob-font-body);
   background: var(--ob-bg);
@@ -89,6 +99,7 @@
   border: 1px solid var(--ob-card-border);
   border-radius: 24px;
   overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
 /* ── Header ── */
@@ -108,14 +119,14 @@
 
 .ob-header-logo {
   font-family: var(--ob-font-mono);
-  font-size: 18px;
+  font-size: var(--ob-fs-2xl);
   font-weight: 700;
   color: var(--ob-text);
 }
 
 .ob-header-setup {
   font-family: var(--ob-font-mono);
-  font-size: 10px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -144,7 +155,7 @@
   cursor: default;
   transition: background 0.2s;
   font-family: var(--ob-font-mono);
-  font-size: 11px;
+  font-size: var(--ob-fs-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -190,11 +201,11 @@
   width: 10px;
   height: 1px;
   margin: 0 4px;
-  background: rgba(255, 255, 255, 0.04);
+  background: #2c2c2a;
 }
 
 .ob-track-connector[data-done="true"] {
-  background: rgba(254, 237, 1, 0.13);
+  background: rgba(254, 237, 1, 0.2);
 }
 
 /* ── Chat area ── */
@@ -215,7 +226,7 @@
 
 .ob-msg-label {
   font-family: var(--ob-font-mono);
-  font-size: 10px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -236,13 +247,22 @@
 
 .ob-msg-body {
   font-family: var(--ob-font-body);
-  font-size: 14px;
+  font-size: var(--ob-fs-lg);
   font-weight: 400;
   line-height: 1.7;
   color: var(--ob-text);
 }
 
 .ob-msg-body-sketch {
+  padding-left: 32px;
+}
+
+/* Continuation message — no label row, align body with the batch above */
+.ob-msg-continued {
+  margin-top: 4px;
+}
+
+.ob-msg-continued .ob-msg-body {
   padding-left: 32px;
 }
 
@@ -256,11 +276,12 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 10px;
+  background: #1c1c1a;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 12px;
   padding: 10px 16px;
   font-family: var(--ob-font-body);
-  font-size: 14px;
+  font-size: var(--ob-fs-lg);
   font-weight: 400;
   color: var(--ob-text);
 }
@@ -282,7 +303,7 @@
 
 .ob-divider-label {
   font-family: var(--ob-font-mono);
-  font-size: 10px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.14em;
@@ -307,15 +328,16 @@
   align-items: center;
   gap: 14px;
   cursor: pointer;
-  border: none;
+  border: 1px solid var(--ob-card-border);
   width: 100%;
   text-align: left;
-  transition: background 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
   color: var(--ob-text);
 }
 
 .ob-auth-card:hover {
-  background: rgba(255, 255, 255, 0.06);
+  border-color: #5f5e5a;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .ob-auth-icon-container {
@@ -329,14 +351,14 @@
 
 .ob-auth-title {
   font-family: var(--ob-font-body);
-  font-size: 14px;
+  font-size: var(--ob-fs-lg);
   font-weight: 600;
   color: var(--ob-text);
 }
 
 .ob-auth-subtitle {
   font-family: var(--ob-font-body);
-  font-size: 12px;
+  font-size: var(--ob-fs-base);
   color: var(--ob-text-muted);
 }
 
@@ -355,9 +377,9 @@
   gap: 8px;
   padding-bottom: 14px;
   margin-bottom: 2px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--ob-divider);
   font-family: var(--ob-font-mono);
-  font-size: 10px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -372,12 +394,12 @@
 }
 
 .ob-workspace-row + .ob-workspace-row {
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid var(--ob-divider);
 }
 
 .ob-workspace-row-label {
   font-family: var(--ob-font-mono);
-  font-size: 11px;
+  font-size: var(--ob-fs-sm);
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
@@ -386,105 +408,229 @@
 
 .ob-workspace-row-value {
   font-family: var(--ob-font-body);
-  font-size: 16px;
+  font-size: var(--ob-fs-xl);
   font-weight: 600;
   color: var(--ob-text);
 }
 
-/* ── CTA buttons — website-consistent ── */
+/* Workspace name with logo */
+.ob-ws-name-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
-.ob-cta {
+.ob-ws-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: rgba(254, 237, 1, 0.18);
+  color: var(--ob-yellow);
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Google auth — user profile avatar (circle) */
+.ob-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #4285F4;
+  color: #fff;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Role badge */
+.ob-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ob-text-dim);
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ob-role-badge-admin {
+  background: rgba(254, 237, 1, 0.12);
+  color: var(--ob-yellow);
+}
+
+/* Stacked member avatars */
+.ob-avatars {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.ob-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--ob-container-bg);
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 700;
+  color: #fff;
+  margin-left: -6px;
+  flex-shrink: 0;
+}
+
+.ob-avatars .ob-avatar:first-child {
+  margin-left: 0;
+}
+
+.ob-avatar-extra {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--ob-text-dim);
+  font-size: var(--ob-fs-xs);
+}
+
+.ob-avatars-label {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 600;
+  color: var(--ob-text);
+  margin-left: 10px;
+}
+
+/* Channel chips */
+.ob-channel-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ob-channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
+  font-weight: 500;
+  color: var(--ob-text-dim);
+}
+
+.ob-channel-hash {
+  color: var(--ob-text-muted);
+  font-weight: 400;
+}
+
+.ob-channel-chip-more {
+  color: var(--ob-text-muted);
+  background: transparent;
+  padding-left: 2px;
+}
+
+/* ── Unified button system ── */
+
+/* Base: shared shape, font, and sizing for all action buttons */
+.ob-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 14px 28px;
-  border-radius: 10px;
-  border: none;
+  padding: 13px 24px;
+  border-radius: 12px;
+  border: 1px solid transparent;
   font-family: var(--ob-font-mono);
-  font-size: 12px;
+  font-size: var(--ob-fs-base);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   cursor: pointer;
-  transition: opacity 0.2s;
+  transition: opacity 0.15s, border-color 0.15s, background 0.15s, color 0.15s;
   text-decoration: none;
+  white-space: nowrap;
 }
 
-.ob-cta:hover {
-  opacity: 0.88;
-}
-
-.ob-cta-primary {
-  background: var(--ob-yellow);
-  color: #0a0a0a;
-}
-
-.ob-cta-dark {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  color: var(--ob-text);
-}
-
-.ob-cta-dark-on-yellow {
-  background: #0a0a0a;
-  color: var(--ob-yellow);
-}
-
-.ob-cta:disabled {
+.ob-btn:disabled {
   opacity: 0.3;
   cursor: not-allowed;
 }
 
-/* ── Pill buttons (WhatsApp picker) ── */
-
-.ob-pill {
-  padding: 14px 28px;
-  border-radius: 10px;
-  border: none;
-  font-family: var(--ob-font-mono);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
-
-.ob-pill:hover {
-  opacity: 0.88;
-}
-
-.ob-pill-primary {
+/* Primary: yellow fill */
+.ob-btn-primary {
   background: var(--ob-yellow);
   color: #0a0a0a;
 }
 
-.ob-pill-ghost {
-  background: transparent;
-  color: var(--ob-text-dim);
-  font-family: var(--ob-font-body);
-  font-size: 13px;
-  font-weight: 500;
-  text-transform: none;
-  letter-spacing: normal;
+.ob-btn-primary:not(:disabled):hover {
+  opacity: 0.92;
+  box-shadow: 0 0 20px rgba(254, 237, 1, 0.35), 0 0 60px rgba(254, 237, 1, 0.1);
 }
+
+/* Ghost: bordered, dim text — for secondary/skip actions */
+.ob-btn-ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: var(--ob-text-dim);
+}
+
+.ob-btn-ghost:not(:disabled):hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  color: var(--ob-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Dark-on-yellow: used inside the yellow finish card */
+.ob-btn-dark {
+  background: #0a0a0a;
+  color: var(--ob-yellow);
+}
+
+.ob-btn-dark:not(:disabled):hover {
+  opacity: 0.88;
+}
+
+/* Legacy aliases — keeps old class names working during transition */
+.ob-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 13px 24px; border-radius: 10px; border: 1px solid transparent; font-family: var(--ob-font-mono); font-size: var(--ob-fs-base); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; transition: opacity 0.15s; text-decoration: none; }
+.ob-cta-primary { background: var(--ob-yellow); color: #0a0a0a; }
+.ob-cta-primary:hover { opacity: 0.88; }
+.ob-cta-dark-on-yellow { background: #0a0a0a; color: var(--ob-yellow); }
+.ob-cta-dark-on-yellow:hover { opacity: 0.88; }
+.ob-cta:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* ── QR card ── */
 
 .ob-qr-card {
-  max-width: 300px;
+  width: 100%;
+  max-width: 320px;
   background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
   border-radius: 16px;
   padding: 24px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 16px;
+  align-items: stretch;
+  gap: 0;
 }
 
 .ob-qr-card[data-connected="true"] {
-  border: 1px solid var(--ob-green-border);
+  border-color: var(--ob-green-border);
 }
 
 .ob-qr-header {
@@ -492,12 +638,14 @@
   align-items: center;
   gap: 8px;
   font-family: var(--ob-font-mono);
-  font-size: 10px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: var(--ob-text-muted);
-  align-self: flex-start;
+  color: var(--ob-yellow);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--ob-divider);
 }
 
 .ob-qr-header[data-connected="true"] {
@@ -505,15 +653,17 @@
 }
 
 .ob-qr-container {
-  width: 180px;
-  height: 180px;
+  width: 100%;
+  aspect-ratio: 1;
   background: #fff;
-  border-radius: 12px;
+  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   position: relative;
+  padding: 12px;
+  box-sizing: border-box;
 }
 
 .ob-qr-container canvas,
@@ -535,9 +685,11 @@
 
 .ob-qr-text {
   font-family: var(--ob-font-body);
-  font-size: 12px;
-  color: var(--ob-text-muted);
+  font-size: var(--ob-fs-md);
+  font-weight: 500;
+  color: var(--ob-text);
   text-align: center;
+  margin-top: 16px;
 }
 
 .ob-qr-connected {
@@ -546,9 +698,12 @@
 }
 
 .ob-qr-subtext {
-  font-family: var(--ob-font-body);
-  font-size: 11px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  letter-spacing: 0.04em;
   color: var(--ob-text-muted);
+  text-align: center;
+  margin-top: 6px;
 }
 
 .ob-qr-success-circle {
@@ -564,7 +719,7 @@
 /* ── API key input ── */
 
 .ob-api-card {
-  max-width: 380px;
+  max-width: 320px;
   background: var(--ob-card);
   border-radius: 16px;
   padding: 24px;
@@ -572,8 +727,9 @@
 
 .ob-api-toggle {
   display: flex;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 8px;
+  background: #1c1c1a;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 10px;
   padding: 3px;
   margin-bottom: 20px;
 }
@@ -584,9 +740,10 @@
   border: none;
   border-radius: 6px;
   background: transparent;
-  font-family: var(--ob-font-body);
-  font-size: 12px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
   font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--ob-text-muted);
   cursor: pointer;
   transition: all 0.2s;
@@ -603,7 +760,7 @@
 
 .ob-api-field-label {
   font-family: var(--ob-font-mono);
-  font-size: 10px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -613,16 +770,17 @@
 
 .ob-api-input {
   width: 100%;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1.5px solid var(--ob-divider);
+  box-sizing: border-box;
+  background: #1c1c1a;
+  border: 1px solid var(--ob-card-border);
   border-radius: 10px;
   padding: 11px 12px;
   font-family: var(--ob-font-mono);
-  font-size: 13px;
+  font-size: var(--ob-fs-md);
   color: var(--ob-text);
   outline: none;
   transition: border-color 0.2s;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .ob-api-input::placeholder {
@@ -630,7 +788,7 @@
 }
 
 .ob-api-input:focus {
-  border-color: rgba(255, 255, 255, 0.15);
+  border-color: #5f5e5a;
 }
 
 .ob-api-input[data-state="error"] {
@@ -643,16 +801,17 @@
 
 .ob-api-select {
   width: 100%;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1.5px solid var(--ob-divider);
+  box-sizing: border-box;
+  background: #1c1c1a;
+  border: 1px solid var(--ob-card-border);
   border-radius: 10px;
   padding: 11px 12px;
   font-family: var(--ob-font-mono);
-  font-size: 13px;
+  font-size: var(--ob-fs-md);
   color: var(--ob-text);
   outline: none;
   transition: border-color 0.2s;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   appearance: none;
   cursor: pointer;
 }
@@ -663,27 +822,32 @@
 }
 
 .ob-api-btn {
+  /* Extends ob-btn visually — full width variant */
   width: 100%;
-  padding: 14px;
-  border: none;
+  padding: 13px 24px;
   border-radius: 10px;
+  border: 1px solid transparent;
   font-family: var(--ob-font-mono);
-  font-size: 12px;
+  font-size: var(--ob-fs-base);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   cursor: pointer;
-  transition: background 0.2s;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   margin-top: 4px;
+  transition: opacity 0.15s, background 0.15s;
 }
 
 .ob-api-btn[data-state="default"] {
   background: var(--ob-yellow);
   color: #0a0a0a;
+}
+
+.ob-api-btn[data-state="default"]:hover {
+  opacity: 0.88;
 }
 
 .ob-api-btn[data-state="loading"] {
@@ -705,14 +869,14 @@
 
 .ob-api-error {
   font-family: var(--ob-font-body);
-  font-size: 12px;
+  font-size: var(--ob-fs-base);
   color: var(--ob-error);
   margin-top: 8px;
 }
 
 .ob-api-success {
   font-family: var(--ob-font-body);
-  font-size: 12px;
+  font-size: var(--ob-fs-base);
   color: var(--ob-green);
   font-weight: 600;
   margin-top: 8px;
@@ -720,7 +884,7 @@
 
 .ob-api-help {
   font-family: var(--ob-font-body);
-  font-size: 11px;
+  font-size: var(--ob-fs-sm);
   color: var(--ob-text-muted);
   text-align: center;
   margin-top: 8px;
@@ -741,14 +905,17 @@
   background: var(--ob-yellow);
   border-radius: 20px;
   padding: 48px 32px;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  margin-left: -28px;
-  margin-right: -28px;
 }
 
 .ob-finish-heading {
   font-family: var(--ob-font-deco);
-  font-size: 32px;
+  font-size: var(--ob-fs-3xl);
   font-weight: 400;
   color: #0a0a0a;
   margin: 16px 0 6px;
@@ -756,33 +923,11 @@
 
 .ob-finish-subtitle {
   font-family: var(--ob-font-body);
-  font-size: 14px;
+  font-size: var(--ob-fs-lg);
   color: rgba(10, 10, 10, 0.33);
   margin-bottom: 24px;
 }
 
-.ob-finish-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 14px 36px;
-  border-radius: 10px;
-  background: #0a0a0a;
-  color: var(--ob-yellow);
-  font-family: var(--ob-font-mono);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  border: none;
-  cursor: pointer;
-  transition: opacity 0.2s;
-  text-decoration: none;
-}
-
-.ob-finish-cta:hover {
-  opacity: 0.88;
-}
 
 /* ── Loading spinner ── */
 
@@ -808,7 +953,7 @@
   gap: 10px;
   padding-left: 32px;
   font-family: var(--ob-font-body);
-  font-size: 14px;
+  font-size: var(--ob-fs-lg);
   color: var(--ob-text-dim);
   line-height: 1.7;
 }
@@ -832,15 +977,33 @@
 }
 
 .ob-prompt-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   font-family: var(--ob-font-body);
-  font-size: 13px;
+  font-size: var(--ob-fs-md);
   font-style: italic;
-  color: rgba(254, 237, 1, 0.73);
+  color: var(--ob-text-dim);
   line-height: 1.6;
 }
 
-/* ── Bottom spacer ── */
+.ob-prompt-arrow {
+  color: var(--ob-yellow);
+  font-style: normal;
+  flex-shrink: 0;
+}
+
+/* ── Bottom spacer ──
+   Must be tall enough that any step divider can be scrolled to
+   the top of the chat viewport. We use a large min-height so
+   scrollTo always has room; the spacer just adds empty space
+   below the last real content. */
 
 .ob-bottom-spacer {
-  height: 28px;
+  min-height: 60vh;
+  flex-shrink: 0;
+}
+
+.ob-bottom-spacer[data-completed="true"] {
+  min-height: 28px;
 }
