@@ -79,11 +79,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
         ) : status === "expired" ? (
           <>
             <span className="ob-qr-text">QR code expired.</span>
-            <button
-              type="button"
-              className="ob-btn ob-btn-primary"
-              onClick={handleRefresh}
-            >
+            <button type="button" className="ob-btn ob-btn-primary" onClick={handleRefresh}>
               Generate new code
             </button>
           </>

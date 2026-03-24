@@ -2,32 +2,33 @@
 
 .onboarding-root {
   --ob-yellow: #feed01;
-  --ob-bg: #040404;
-  --ob-container-bg: #111110;
-  --ob-card: linear-gradient(180deg, #1c1c1a 0%, #111110 100%);
-  --ob-card-border: #2c2c2a;
-  --ob-text: #fafaf8;
-  --ob-text-dim: #b0b0aa;
-  --ob-text-muted: #9c9a92;
-  --ob-divider: #2c2c2a;
-  --ob-green: #25d366;
-  --ob-error: rgba(226, 75, 74, 0.8);
-  --ob-error-border: rgba(226, 75, 74, 0.4);
-  --ob-green-border: rgba(37, 211, 102, 0.4);
+  --ob-yellow-fg: #6b6200; /* dark yellow for text/icons on light backgrounds */
+  --ob-bg: #f7f7f5;
+  --ob-container-bg: #ffffff;
+  --ob-card: linear-gradient(180deg, #ffffff 0%, #f4f4f2 100%);
+  --ob-card-border: #d5d5d3;
+  --ob-text: #040404;
+  --ob-text-dim: #3d3d39;
+  --ob-text-muted: #5f5e5a;
+  --ob-divider: #d5d5d3;
+  --ob-green: #1a7f37;
+  --ob-error: rgba(220, 38, 38, 0.8);
+  --ob-error-border: rgba(220, 38, 38, 0.35);
+  --ob-green-border: rgba(26, 127, 55, 0.35);
 
   --ob-font-body: "Inter", sans-serif;
   --ob-font-mono: "IBM Plex Mono", monospace;
   --ob-font-deco: "Gloria Hallelujah", cursive;
 
   /* ── Type scale — minimum 10px everywhere ── */
-  --ob-fs-xs:   10px;  /* mono labels, badges, avatar letters */
-  --ob-fs-sm:   11px;  /* secondary labels, chips, row labels */
-  --ob-fs-base: 12px;  /* body small, field labels, status text */
-  --ob-fs-md:   13px;  /* body regular, input values */
-  --ob-fs-lg:   14px;  /* body large, button text, message text */
-  --ob-fs-xl:   16px;  /* card values, primary values */
-  --ob-fs-2xl:  18px;  /* header logo */
-  --ob-fs-3xl:  32px;  /* finish headline */
+  --ob-fs-xs: 10px; /* mono labels, badges, avatar letters */
+  --ob-fs-sm: 11px; /* secondary labels, chips, row labels */
+  --ob-fs-base: 12px; /* body small, field labels, status text */
+  --ob-fs-md: 13px; /* body regular, input values */
+  --ob-fs-lg: 14px; /* body large, button text, message text */
+  --ob-fs-xl: 16px; /* card values, primary values */
+  --ob-fs-2xl: 18px; /* header logo */
+  --ob-fs-3xl: 32px; /* finish headline */
 
   font-family: var(--ob-font-body);
   background: var(--ob-bg);
@@ -99,7 +100,7 @@
   border: 1px solid var(--ob-card-border);
   border-radius: 24px;
   overflow: hidden;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
 /* ── Header ── */
@@ -166,17 +167,17 @@
 }
 
 .ob-track-pill[data-state="active"] {
-  background: rgba(254, 237, 1, 0.08);
-  color: var(--ob-yellow);
+  background: rgba(107, 98, 0, 0.08);
+  color: var(--ob-yellow-fg);
 }
 
 .ob-track-pill[data-state="done"] {
-  background: rgba(254, 237, 1, 0.04);
-  color: rgba(254, 237, 1, 0.53);
+  background: rgba(107, 98, 0, 0.04);
+  color: rgba(107, 98, 0, 0.5);
 }
 
 .ob-track-pill[data-state="inactive"] {
-  color: rgba(255, 255, 255, 0.16);
+  color: rgba(4, 4, 4, 0.22);
 }
 
 .ob-track-dot {
@@ -194,18 +195,18 @@
 }
 
 .ob-track-dot[data-state="inactive"] {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(4, 4, 4, 0.15);
 }
 
 .ob-track-connector {
   width: 10px;
   height: 1px;
   margin: 0 4px;
-  background: #2c2c2a;
+  background: var(--ob-divider);
 }
 
 .ob-track-connector[data-done="true"] {
-  background: rgba(254, 237, 1, 0.2);
+  background: rgba(107, 98, 0, 0.25);
 }
 
 /* ── Chat area ── */
@@ -237,7 +238,7 @@
 }
 
 .ob-msg-label-sketch {
-  color: var(--ob-yellow);
+  color: var(--ob-yellow-fg);
 }
 
 .ob-msg-label-user {
@@ -276,7 +277,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #1c1c1a;
+  background: #ebebea;
   border: 1px solid var(--ob-card-border);
   border-radius: 12px;
   padding: 10px 16px;
@@ -336,8 +337,8 @@
 }
 
 .ob-auth-card:hover {
-  border-color: #5f5e5a;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  border-color: #9c9a92;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
 }
 
 .ob-auth-icon-container {
@@ -383,7 +384,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: var(--ob-yellow);
+  color: var(--ob-yellow-fg);
 }
 
 .ob-workspace-row {
@@ -427,8 +428,8 @@
   width: 26px;
   height: 26px;
   border-radius: 6px;
-  background: rgba(254, 237, 1, 0.18);
-  color: var(--ob-yellow);
+  background: rgba(107, 98, 0, 0.1);
+  color: var(--ob-yellow-fg);
   font-family: var(--ob-font-mono);
   font-size: var(--ob-fs-base);
   font-weight: 700;
@@ -443,7 +444,7 @@
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: #4285F4;
+  background: #4285f4;
   color: #fff;
   font-family: var(--ob-font-mono);
   font-size: var(--ob-fs-xs);
@@ -457,7 +458,7 @@
   align-items: center;
   padding: 3px 10px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(4, 4, 4, 0.05);
   color: var(--ob-text-dim);
   font-family: var(--ob-font-mono);
   font-size: var(--ob-fs-xs);
@@ -467,8 +468,8 @@
 }
 
 .ob-role-badge-admin {
-  background: rgba(254, 237, 1, 0.12);
-  color: var(--ob-yellow);
+  background: rgba(107, 98, 0, 0.09);
+  color: var(--ob-yellow-fg);
 }
 
 /* Stacked member avatars */
@@ -499,7 +500,7 @@
 }
 
 .ob-avatar-extra {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(4, 4, 4, 0.06);
   color: var(--ob-text-dim);
   font-size: var(--ob-fs-xs);
 }
@@ -527,7 +528,7 @@
   gap: 2px;
   padding: 3px 8px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(4, 4, 4, 0.05);
   font-family: var(--ob-font-mono);
   font-size: var(--ob-fs-sm);
   font-weight: 500;
@@ -586,14 +587,14 @@
 /* Ghost: bordered, dim text — for secondary/skip actions */
 .ob-btn-ghost {
   background: transparent;
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(4, 4, 4, 0.14);
   color: var(--ob-text-dim);
 }
 
 .ob-btn-ghost:not(:disabled):hover {
-  border-color: rgba(255, 255, 255, 0.28);
+  border-color: rgba(4, 4, 4, 0.28);
   color: var(--ob-text);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(4, 4, 4, 0.03);
 }
 
 /* Dark-on-yellow: used inside the yellow finish card */
@@ -607,12 +608,41 @@
 }
 
 /* Legacy aliases — keeps old class names working during transition */
-.ob-cta { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 13px 24px; border-radius: 10px; border: 1px solid transparent; font-family: var(--ob-font-mono); font-size: var(--ob-fs-base); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; cursor: pointer; transition: opacity 0.15s; text-decoration: none; }
-.ob-cta-primary { background: var(--ob-yellow); color: #0a0a0a; }
-.ob-cta-primary:hover { opacity: 0.88; }
-.ob-cta-dark-on-yellow { background: #0a0a0a; color: var(--ob-yellow); }
-.ob-cta-dark-on-yellow:hover { opacity: 0.88; }
-.ob-cta:disabled { opacity: 0.3; cursor: not-allowed; }
+.ob-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 24px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  text-decoration: none;
+}
+.ob-cta-primary {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+.ob-cta-primary:hover {
+  opacity: 0.88;
+}
+.ob-cta-dark-on-yellow {
+  background: #0a0a0a;
+  color: var(--ob-yellow);
+}
+.ob-cta-dark-on-yellow:hover {
+  opacity: 0.88;
+}
+.ob-cta:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
 
 /* ── QR card ── */
 
@@ -642,7 +672,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
-  color: var(--ob-yellow);
+  color: var(--ob-yellow-fg);
   padding-bottom: 14px;
   margin-bottom: 20px;
   border-bottom: 1px solid var(--ob-divider);
@@ -727,7 +757,7 @@
 
 .ob-api-toggle {
   display: flex;
-  background: #1c1c1a;
+  background: #ebebea;
   border: 1px solid var(--ob-card-border);
   border-radius: 10px;
   padding: 3px;
@@ -754,7 +784,7 @@
 }
 
 .ob-api-toggle-tab[data-active="true"] {
-  background: rgba(255, 255, 255, 0.07);
+  background: #ffffff;
   color: var(--ob-text);
 }
 
@@ -771,7 +801,7 @@
 .ob-api-input {
   width: 100%;
   box-sizing: border-box;
-  background: #1c1c1a;
+  background: #ffffff;
   border: 1px solid var(--ob-card-border);
   border-radius: 10px;
   padding: 11px 12px;
@@ -788,7 +818,7 @@
 }
 
 .ob-api-input:focus {
-  border-color: #5f5e5a;
+  border-color: #3d3d39;
 }
 
 .ob-api-input[data-state="error"] {
@@ -802,7 +832,7 @@
 .ob-api-select {
   width: 100%;
   box-sizing: border-box;
-  background: #1c1c1a;
+  background: #ffffff;
   border: 1px solid var(--ob-card-border);
   border-radius: 10px;
   padding: 11px 12px;
@@ -817,7 +847,7 @@
 }
 
 .ob-api-select option {
-  background: #1a1a1a;
+  background: #ffffff;
   color: var(--ob-text);
 }
 
@@ -928,13 +958,12 @@
   margin-bottom: 24px;
 }
 
-
 /* ── Loading spinner ── */
 
 .ob-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(0, 0, 0, 0.1);
   border-top-color: var(--ob-text);
   border-radius: 50%;
   animation: ob-spin 0.8s linear infinite;
@@ -988,7 +1017,7 @@
 }
 
 .ob-prompt-arrow {
-  color: var(--ob-yellow);
+  color: var(--ob-yellow-fg);
   font-style: normal;
   flex-shrink: 0;
 }

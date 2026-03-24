@@ -382,10 +382,7 @@ export function OnboardingChat() {
         return <ApiKeyInput onValidated={handleApiKeyValidated} />;
       case "example-prompts":
         return (
-          <ExamplePrompts
-            onDone={handleExamplePromptsDone}
-            hideLabel={isSketchOrigin(messages[messages.length - 1])}
-          />
+          <ExamplePrompts onDone={handleExamplePromptsDone} hideLabel={isSketchOrigin(messages[messages.length - 1])} />
         );
       case "yellow-finish":
         return (
@@ -404,7 +401,7 @@ export function OnboardingChat() {
         {/* Header */}
         <div className="ob-header">
           <div className="ob-header-left">
-            <img src="/logos/sketch-logo-light.png" alt="Sketch" style={{ height: 40, width: "auto" }} />
+            <img src="/logos/sketch-logo-dark.png" alt="Sketch" style={{ height: 40, width: "auto" }} />
           </div>
           <span className="ob-header-setup">SETUP</span>
         </div>
