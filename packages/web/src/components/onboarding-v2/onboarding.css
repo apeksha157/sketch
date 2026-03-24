@@ -172,12 +172,12 @@
 }
 
 .ob-track-pill[data-state="done"] {
-  background: rgba(107, 98, 0, 0.04);
-  color: rgba(107, 98, 0, 0.5);
+  background: transparent;
+  color: var(--ob-text-muted);
 }
 
 .ob-track-pill[data-state="inactive"] {
-  color: rgba(4, 4, 4, 0.22);
+  color: rgba(4, 4, 4, 0.3);
 }
 
 .ob-track-dot {
@@ -187,7 +187,7 @@
 }
 
 .ob-track-dot[data-state="active"] {
-  background: var(--ob-yellow);
+  background: var(--ob-yellow-fg);
 }
 
 .ob-track-dot[data-state="done"] {
@@ -195,7 +195,7 @@
 }
 
 .ob-track-dot[data-state="inactive"] {
-  background: rgba(4, 4, 4, 0.15);
+  background: rgba(4, 4, 4, 0.2);
 }
 
 .ob-track-connector {
@@ -206,7 +206,7 @@
 }
 
 .ob-track-connector[data-done="true"] {
-  background: rgba(107, 98, 0, 0.25);
+  background: rgba(107, 98, 0, 0.35);
 }
 
 /* ── Chat area ── */
