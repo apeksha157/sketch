@@ -60,10 +60,10 @@ describe("OnboardingChat", () => {
     expect(screen.getByText("API Key")).toBeInTheDocument();
   });
 
-  it("renders header with sketch. logo and SETUP label", () => {
+  it("renders header with sketch logo image and SETUP label", () => {
     renderWithProviders(<OnboardingChat />);
 
-    expect(screen.getByText("sketch.")).toBeInTheDocument();
+    expect(screen.getByAltText("Sketch")).toBeInTheDocument();
     expect(screen.getByText("SETUP")).toBeInTheDocument();
   });
 });
