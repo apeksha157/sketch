@@ -14,5 +14,5 @@ export function SketchIcon({ size = 20, variant = "dark" }: { size?: number; var
 
 /** Sketch icon used as avatar next to the "SKETCH" sender label in chat messages. */
 export function SparkAvatar({ size = 20 }: { size?: number }) {
-  return <SketchIcon size={size} variant="dark" />;
+  return <SketchIcon size={size} variant="light" />;
 }

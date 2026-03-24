@@ -56,7 +56,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
       <div className="ob-qr-card" data-connected={isConnected}>
         {/* Header */}
         <div className="ob-qr-header" data-connected={isConnected}>
-          <WhatsAppIcon size={14} color={isConnected ? "#25D366" : "#feed01"} />
+          <WhatsAppIcon size={14} color={isConnected ? "#25D366" : "#6b6200"} />
           {isConnected ? "WHATSAPP CONNECTED" : "CONNECT WHATSAPP"}
         </div>
 

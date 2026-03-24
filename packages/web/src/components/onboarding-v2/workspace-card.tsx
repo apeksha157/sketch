@@ -108,7 +108,7 @@ export function WorkspaceCard({ authMethod, data, isAdmin, onComplete, frozen = 
     <div className="ob-widget ob-animate-in">
       <div className="ob-workspace-card">
         <div className="ob-workspace-header">
-          <SketchIcon size={20} />
+          <SketchIcon size={20} variant="light" />
           SETTING UP WORKSPACE
         </div>
 
