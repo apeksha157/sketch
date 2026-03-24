@@ -1,3 +1,4 @@
+import { useTheme } from "@/hooks/use-theme";
 import { type ReactNode, useCallback, useEffect, useRef } from "react";
 import "./onboarding.css";
 
@@ -149,6 +150,7 @@ function ExamplePrompts({ onDone, hideLabel = false }: { onDone: () => void; hid
 }
 
 export function OnboardingChat() {
+  const { resolvedTheme, setTheme } = useTheme();
   const chatRef = useRef<HTMLDivElement>(null);
 
   /** Whether the user is manually scrolling (set by wheel/touch, cleared after 2s idle). */
@@ -401,9 +403,52 @@ export function OnboardingChat() {
         {/* Header */}
         <div className="ob-header">
           <div className="ob-header-left">
-            <img src="/logos/sketch-logo-dark.png" alt="Sketch" style={{ height: 40, width: "auto" }} />
+            <img
+              src={resolvedTheme === "dark" ? "/logos/sketch-logo-light.png" : "/logos/sketch-logo-dark.png"}
+              alt="Sketch"
+              style={{ height: 40, width: "auto" }}
+            />
           </div>
-          <span className="ob-header-setup">SETUP</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button
+              type="button"
+              className="ob-theme-toggle"
+              onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+              aria-label={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {resolvedTheme === "dark" ? (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+                </svg>
+              ) : (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                </svg>
+              )}
+            </button>
+            <span className="ob-header-setup">SETUP</span>
+          </div>
         </div>
 
         {/* Step indicator */}

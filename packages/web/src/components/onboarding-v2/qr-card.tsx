@@ -1,3 +1,4 @@
+import { useTheme } from "@/hooks/use-theme";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 interface QRCardProps {
@@ -16,6 +17,7 @@ function WhatsAppIcon({ size = 16, color = "#25D366" }: { size?: number; color?:
 
 /** Self-contained QR code card with WhatsApp branding. Transitions from scanning to connected in-place. */
 export function QRCard({ onConnected, demo = true }: QRCardProps) {
+  const { resolvedTheme } = useTheme();
   const [status, setStatus] = useState<"scanning" | "connected" | "expired">("scanning");
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
@@ -56,7 +58,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
       <div className="ob-qr-card" data-connected={isConnected}>
         {/* Header */}
         <div className="ob-qr-header" data-connected={isConnected}>
-          <WhatsAppIcon size={14} color={isConnected ? "#25D366" : "#6b6200"} />
+          <WhatsAppIcon size={14} color={isConnected ? "#25D366" : resolvedTheme === "dark" ? "#feed01" : "#6b6200"} />
           {isConnected ? "WHATSAPP CONNECTED" : "CONNECT WHATSAPP"}
         </div>
 

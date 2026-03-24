@@ -1,3 +1,5 @@
+import { useTheme } from "@/hooks/use-theme";
+
 /**
  * Sketch brand icon — hand-drawn spark with "S" in the center.
  * Uses actual PNG assets from /logos/.
@@ -12,7 +14,13 @@ export function SketchIcon({ size = 20, variant = "dark" }: { size?: number; var
   );
 }
 
+/** Sketch icon that automatically switches between light/dark variants based on the active theme. */
+export function ThemedSketchIcon({ size = 20 }: { size?: number }) {
+  const { resolvedTheme } = useTheme();
+  return <SketchIcon size={size} variant={resolvedTheme === "dark" ? "dark" : "light"} />;
+}
+
 /** Sketch icon used as avatar next to the "SKETCH" sender label in chat messages. */
 export function SparkAvatar({ size = 20 }: { size?: number }) {
-  return <SketchIcon size={size} variant="light" />;
+  return <ThemedSketchIcon size={size} />;
 }

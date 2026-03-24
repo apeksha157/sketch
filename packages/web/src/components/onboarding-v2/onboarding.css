@@ -1036,3 +1036,138 @@
 .ob-bottom-spacer[data-completed="true"] {
   min-height: 28px;
 }
+
+/* ── Dark mode ── */
+
+.dark .onboarding-root {
+  --ob-yellow-fg: var(--ob-yellow);
+  --ob-bg: #0f0f0d;
+  --ob-container-bg: #1a1a18;
+  --ob-card: linear-gradient(180deg, #222220 0%, #1d1d1b 100%);
+  --ob-card-border: #2e2e2c;
+  --ob-text: #f5f5f0;
+  --ob-text-dim: #c8c8c0;
+  --ob-text-muted: #7a7a70;
+  --ob-divider: #2e2e2c;
+  --ob-green: #3dd68c;
+  --ob-error: rgba(255, 59, 48, 0.8);
+  --ob-error-border: rgba(255, 59, 48, 0.35);
+  --ob-green-border: rgba(61, 214, 140, 0.35);
+}
+
+.dark .ob-container {
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.dark .ob-track-pill[data-state="active"] {
+  background: rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-track-pill[data-state="inactive"] {
+  color: rgba(245, 245, 240, 0.3);
+}
+
+.dark .ob-track-dot[data-state="inactive"] {
+  background: rgba(245, 245, 240, 0.2);
+}
+
+.dark .ob-track-connector[data-done="true"] {
+  background: rgba(254, 237, 1, 0.25);
+}
+
+.dark .ob-user-pill {
+  background: rgba(245, 245, 240, 0.06);
+}
+
+.dark .ob-auth-card:hover {
+  border-color: rgba(245, 245, 240, 0.2);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.dark .ob-ws-logo {
+  background: rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-role-badge {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-role-badge-admin {
+  background: rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-avatar-extra {
+  background: rgba(245, 245, 240, 0.08);
+  color: var(--ob-text-dim);
+}
+
+.dark .ob-channel-chip {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-btn-ghost {
+  border-color: rgba(245, 245, 240, 0.14);
+}
+
+.dark .ob-btn-ghost:not(:disabled):hover {
+  border-color: rgba(245, 245, 240, 0.28);
+  background: rgba(245, 245, 240, 0.03);
+  color: var(--ob-text);
+}
+
+.dark .ob-api-toggle {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-api-toggle-tab[data-active="true"] {
+  background: rgba(245, 245, 240, 0.1);
+}
+
+.dark .ob-api-input,
+.dark .ob-api-select {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-api-input:focus {
+  border-color: rgba(245, 245, 240, 0.4);
+}
+
+.dark .ob-api-select option {
+  background: #1a1a18;
+}
+
+.dark .ob-spinner {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .ob-spinner-dark {
+  border-color: rgba(255, 255, 255, 0.1);
+  border-top-color: #f5f5f0;
+}
+
+/* ── Theme toggle button ── */
+
+.ob-theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.ob-theme-toggle:hover {
+  background: rgba(4, 4, 4, 0.06);
+  color: var(--ob-text);
+}
+
+.dark .ob-theme-toggle:hover {
+  background: rgba(245, 245, 240, 0.08);
+  color: var(--ob-text);
+}

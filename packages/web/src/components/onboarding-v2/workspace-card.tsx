@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { SketchIcon } from "./spark-icon";
+import { ThemedSketchIcon } from "./spark-icon";
 import type { AuthMethod } from "./types";
 
 interface WorkspaceCardProps {
@@ -108,7 +108,7 @@ export function WorkspaceCard({ authMethod, data, isAdmin, onComplete, frozen = 
     <div className="ob-widget ob-animate-in">
       <div className="ob-workspace-card">
         <div className="ob-workspace-header">
-          <SketchIcon size={20} variant="light" />
+          <ThemedSketchIcon size={20} />
           SETTING UP WORKSPACE
         </div>
 
