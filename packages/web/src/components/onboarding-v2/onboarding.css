@@ -367,6 +367,7 @@
 
 .ob-workspace-card {
   background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
   border-radius: 16px;
   padding: 24px;
   max-width: 320px;
@@ -751,6 +752,7 @@
 .ob-api-card {
   max-width: 320px;
   background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
   border-radius: 16px;
   padding: 24px;
 }
