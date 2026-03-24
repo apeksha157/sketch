@@ -37,12 +37,8 @@ function MemberAvatars({ count }: { count: number }) {
   return (
     <div className="ob-avatars">
       {avatars.map((a, i) => (
-        <span
-          key={i}
-          className="ob-avatar"
-          style={{ background: a.color, zIndex: shown - i }}
-          aria-hidden="true"
-        >
+        // biome-ignore lint/suspicious/noArrayIndexKey: avatars are stable positional items
+        <span key={i} className="ob-avatar" style={{ background: a.color, zIndex: shown - i }} aria-hidden="true">
           {a.letter}
         </span>
       ))}

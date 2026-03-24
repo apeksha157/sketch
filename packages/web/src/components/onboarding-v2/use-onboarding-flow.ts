@@ -303,7 +303,7 @@ export function useOnboardingFlow() {
       { type: "widget", widgetType: "yellow-finish", step: 3 },
     ]);
     setState((prev) => ({ ...prev, completed: true }));
-  }, [enqueue]);
+  }, [appendMessage, enqueue]);
 
   const handleFinishCta = useCallback(() => {
     // In production: deep link to Slack DM or WhatsApp conversation
