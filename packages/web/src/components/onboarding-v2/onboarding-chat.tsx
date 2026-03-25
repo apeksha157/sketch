@@ -1,5 +1,5 @@
 import { useTheme } from "@/hooks/use-theme";
-import { type ReactNode, useCallback, useEffect, useRef } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import "./onboarding.css";
 
 import { ApiKeyInput } from "./api-key-input";
@@ -152,6 +152,7 @@ function ExamplePrompts({ onDone, hideLabel = false }: { onDone: () => void; hid
 export function OnboardingChat() {
   const { resolvedTheme, setTheme } = useTheme();
   const chatRef = useRef<HTMLDivElement>(null);
+  const spacerRef = useRef<HTMLDivElement>(null);
 
   /** Whether the user is manually scrolling (set by wheel/touch, cleared after 2s idle). */
   const userScrollingRef = useRef(false);
@@ -264,6 +265,40 @@ export function OnboardingChat() {
       }
     }
   }, [messages, activeWidget]);
+
+  /**
+   * Dynamically size the bottom spacer so it fills exactly the remaining viewport
+   * height below the last section divider. This lets the header anchor to the top
+   * without leaving extra scrollable empty space beneath it.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: messages and activeWidget trigger spacer recalc
+  useLayoutEffect(() => {
+    const el = chatRef.current;
+    const spacer = spacerRef.current;
+    if (!el || !spacer) return;
+
+    if (state.completed) {
+      spacer.style.height = "28px";
+      return;
+    }
+
+    const dividerEls = el.querySelectorAll<HTMLElement>(".ob-divider[data-step]");
+    let lastDivider: HTMLElement | null = null;
+    for (const div of dividerEls) {
+      const step = div.getAttribute("data-step");
+      if (step && Number.parseInt(step, 10) > 0) lastDivider = div;
+    }
+
+    if (!lastDivider) {
+      spacer.style.height = "0px";
+      return;
+    }
+
+    // Measure content height from last divider start to spacer start (before spacer)
+    const contentFromDivider = spacer.offsetTop - lastDivider.offsetTop;
+    const needed = Math.max(0, el.clientHeight - contentFromDivider - 20);
+    spacer.style.height = `${needed}px`;
+  }, [messages, activeWidget, state.completed]);
 
   const renderMessage = (msg: ChatMessage, index: number) => {
     switch (msg.kind) {
@@ -458,7 +493,7 @@ export function OnboardingChat() {
         <div className="ob-chat" ref={chatRef} onWheel={handleWheel} onTouchMove={handleWheel}>
           {messages.map(renderMessage)}
           {renderActiveWidget()}
-          <div className="ob-bottom-spacer" data-completed={state.completed} />
+          <div ref={spacerRef} className="ob-bottom-spacer" data-completed={state.completed} />
         </div>
       </div>
     </div>

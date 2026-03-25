@@ -1060,12 +1060,7 @@
    below the last real content. */
 
 .ob-bottom-spacer {
-  min-height: 60vh;
   flex-shrink: 0;
-}
-
-.ob-bottom-spacer[data-completed="true"] {
-  min-height: 28px;
 }
 
 /* ── Dark mode ── */
