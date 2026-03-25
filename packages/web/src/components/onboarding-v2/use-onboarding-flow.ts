@@ -266,6 +266,12 @@ export function useOnboardingFlow() {
       setActiveWidget(null);
       enqueue([
         { type: "delay", ms: 600 },
+        {
+          type: "sketch-message",
+          text: "Almost done. I'll need an API key next — that's what gives me my smarts. Takes 30 seconds.",
+          step: 2,
+        },
+        { type: "delay", ms: 500 },
         { type: "widget", widgetType: "section-continue", step: 2, props: { label: "Continue to API Key" } },
       ]);
     },
