@@ -736,6 +736,22 @@
   height: 100% !important;
 }
 
+.ob-qr-container[data-verifying="true"] svg {
+  opacity: 0.15;
+  filter: blur(1px);
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+.ob-qr-verifying-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+}
+
 .ob-qr-wa-logo {
   position: absolute;
   width: 32px;

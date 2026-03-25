@@ -248,6 +248,8 @@ export function useOnboardingFlow() {
     setState((prev) => ({ ...prev, whatsappConnected: true }));
     setActiveWidget(null);
     enqueue([
+      { type: "delay", ms: 600 },
+      { type: "sketch-message", text: "WhatsApp connected. I'll be there whenever your team needs me.", step: 2 },
       { type: "delay", ms: 800 },
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
