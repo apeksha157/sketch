@@ -482,7 +482,6 @@ export function OnboardingChat() {
                 </svg>
               )}
             </button>
-            <span className="ob-header-setup">SETUP</span>
           </div>
         </div>
 
