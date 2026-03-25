@@ -12,8 +12,6 @@ const DEMO_WORKSPACE_SLACK = {
   channels: 12,
   email: "",
   role: "Admin",
-  iconDark: "/logos/canvas-light.png",
-  iconLight: "/logos/canvas-dark.png",
 };
 
 const DEMO_WORKSPACE_GOOGLE = {
@@ -22,8 +20,6 @@ const DEMO_WORKSPACE_GOOGLE = {
   channels: 0,
   email: "you@canvas.ai",
   role: "Admin",
-  iconDark: "/logos/canvas-light.png",
-  iconLight: "/logos/canvas-dark.png",
 };
 
 export function useOnboardingFlow() {
