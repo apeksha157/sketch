@@ -56,7 +56,7 @@ describe("OnboardingChat", () => {
 
     expect(screen.getByText("Sign In")).toBeInTheDocument();
     expect(screen.getByText("Workspace")).toBeInTheDocument();
-    expect(screen.getByText("Channels")).toBeInTheDocument();
+    expect(screen.getByText("Platforms")).toBeInTheDocument();
     expect(screen.getByText("API Key")).toBeInTheDocument();
   });
 
