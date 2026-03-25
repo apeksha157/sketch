@@ -57,4 +57,4 @@ export interface OnboardingState {
   } | null;
 }
 
-export const STEP_LABELS = ["Sign In", "Workspace", "Channels", "API Key"] as const;
+export const STEP_LABELS = ["Sign In", "Workspace", "Platforms", "API Key"] as const;

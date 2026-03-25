@@ -207,7 +207,7 @@ export function useOnboardingFlow() {
         step: 1,
       },
       { type: "delay", ms: 700 },
-      { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Channels" } },
+      { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Platforms" } },
     ]);
   }, [appendMessage, enqueue, state.authMethod, state.isAdmin, state.workspace]);
 
@@ -217,9 +217,9 @@ export function useOnboardingFlow() {
     const method = state.authMethod;
     setActiveWidget(null);
     enqueue([
-      { type: "user-message", text: "Go to Channels", step: 1 },
+      { type: "user-message", text: "Go to Platforms", step: 1 },
       { type: "action", action: "set-step", step: 2 },
-      { type: "divider", label: "Channels", step: 2 },
+      { type: "divider", label: "Platforms", step: 2 },
       {
         type: "sketch-message",
         text:
