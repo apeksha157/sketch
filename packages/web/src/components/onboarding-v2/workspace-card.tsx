@@ -48,12 +48,7 @@ function WorkspaceIcon({
       </span>
     );
   }
-  const letter = name.trim()[0]?.toUpperCase() ?? "W";
-  return (
-    <span className="ob-ws-icon" style={{ width: size, height: size }} aria-hidden="true">
-      {letter}
-    </span>
-  );
+  return null;
 }
 
 /** Animated card revealing workspace info section by section. Frozen mode shows all at once. */
