@@ -1,3 +1,4 @@
+import { useTheme } from "@/hooks/use-theme";
 import { useEffect, useRef, useState } from "react";
 import { ThemedSketchIcon } from "./spark-icon";
 import type { AuthMethod } from "./types";
@@ -10,6 +11,9 @@ interface WorkspaceCardProps {
     channels: number;
     email?: string;
     role?: string;
+    /** Icon shown in the workspace logo square — provide both variants for theme switching. */
+    iconDark?: string;
+    iconLight?: string;
   };
   isAdmin: boolean;
   onComplete?: () => void;
@@ -69,8 +73,17 @@ function ChannelChips({ total }: { total: number }) {
   );
 }
 
-/** Workspace logo — first letter of name in a rounded square. */
-function WorkspaceLogo({ name }: { name: string }) {
+/** Workspace logo — icon image if provided, otherwise first letter of name in a rounded square. */
+function WorkspaceLogo({ name, iconDark, iconLight }: { name: string; iconDark?: string; iconLight?: string }) {
+  const { resolvedTheme } = useTheme();
+  const iconSrc = resolvedTheme === "dark" ? iconDark : iconLight;
+  if (iconSrc) {
+    return (
+      <span className="ob-ws-logo ob-ws-logo-img" aria-hidden="true">
+        <img src={iconSrc} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 6 }} />
+      </span>
+    );
+  }
   const letter = name.trim()[0]?.toUpperCase() ?? "W";
   return (
     <span className="ob-ws-logo" aria-hidden="true">
@@ -119,7 +132,7 @@ export function WorkspaceCard({ authMethod, data, isAdmin, onComplete, frozen = 
             <span className="ob-workspace-row-value ob-ws-name-value">
               {authMethod === "slack" ? (
                 <>
-                  <WorkspaceLogo name={data.name} />
+                  <WorkspaceLogo name={data.name} iconDark={data.iconDark} iconLight={data.iconLight} />
                   {data.name}
                 </>
               ) : (
@@ -143,7 +156,7 @@ export function WorkspaceCard({ authMethod, data, isAdmin, onComplete, frozen = 
                 <MemberAvatars count={data.members} />
               ) : (
                 <>
-                  <WorkspaceLogo name={data.name} />
+                  <WorkspaceLogo name={data.name} iconDark={data.iconDark} iconLight={data.iconLight} />
                   {data.name}
                 </>
               )}

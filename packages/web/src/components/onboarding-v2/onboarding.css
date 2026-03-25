@@ -437,6 +437,12 @@
   flex-shrink: 0;
 }
 
+.ob-ws-logo.ob-ws-logo-img {
+  background: transparent;
+  padding: 0;
+  overflow: hidden;
+}
+
 /* Google auth — user profile avatar (circle) */
 .ob-user-avatar {
   display: inline-flex;
