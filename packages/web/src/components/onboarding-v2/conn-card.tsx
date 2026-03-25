@@ -24,11 +24,13 @@ export function ConnCard({ authMethod, onComplete }: ConnCardProps) {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDone(true);
-      onComplete();
-    }, 2000);
-    return () => clearTimeout(timer);
+    // Show confirmation first, then proceed after a 2s pause
+    const t1 = setTimeout(() => setDone(true), 2000);
+    const t2 = setTimeout(() => onComplete(), 4000);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [onComplete]);
 
   const { loading, success, detail } = copy[authMethod];
