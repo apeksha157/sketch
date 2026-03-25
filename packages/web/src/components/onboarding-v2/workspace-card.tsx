@@ -128,8 +128,14 @@ export function WorkspaceCard({ authMethod, data, isAdmin, onComplete, frozen = 
                   </div>
                 </div>
                 <div className="ob-ws-stat-chip">
-                  <div className="ob-ws-stat-number">{data.channels}</div>
-                  <div className="ob-ws-stat-label">CHANNELS</div>
+                  <div>
+                    <div className="ob-ws-stat-number">{data.channels}</div>
+                    <div className="ob-ws-stat-label">CHANNELS</div>
+                  </div>
+                  <div className="ob-ws-stat-chips">
+                    <span className="ob-ws-mini-chip">#general</span>
+                    <span className="ob-ws-mini-chip">#random</span>
+                  </div>
                 </div>
               </div>
             )}
