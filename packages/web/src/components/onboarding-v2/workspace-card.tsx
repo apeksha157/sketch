@@ -140,10 +140,10 @@ export function WorkspaceCard({ authMethod, data, isAdmin, onComplete, frozen = 
             {/* Section 1: Account row */}
             {visibleSections >= 1 && (
               <div className="ob-account-row ob-animate-row">
+                <span className="ob-account-email">{data.email}</span>
                 <span className="ob-user-avatar" aria-hidden="true">
                   {(data.email || data.name).trim()[0].toUpperCase()}
                 </span>
-                <span className="ob-account-email">{data.email}</span>
               </div>
             )}
 
