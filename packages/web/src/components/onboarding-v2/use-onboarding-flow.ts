@@ -54,7 +54,7 @@ export function useOnboardingFlow() {
 
       switch (item.type) {
         case "sketch-message":
-          appendMessage({ id: nextId(), kind: "sketch-message", step: item.step, text: item.text });
+          appendMessage({ id: nextId(), kind: "sketch-message", step: item.step, text: item.text, dim: item.dim });
           break;
         case "user-message":
           appendMessage({
@@ -228,14 +228,7 @@ export function useOnboardingFlow() {
       { type: "user-message", text: "Go to Platforms", step: 1 },
       { type: "action", action: "set-step", step: 2 },
       { type: "divider", label: "Platforms", step: 2 },
-      {
-        type: "sketch-message",
-        text:
-          method === "slack"
-            ? "You can also reach me on WhatsApp — scan a code and you're set."
-            : "Let's connect WhatsApp. That's where I'll live.",
-        step: 2,
-      },
+      { type: "sketch-message", text: "Scan the QR with your phone to link WhatsApp.", step: 2 },
       { type: "delay", ms: 400 },
       { type: "widget", widgetType: "whatsapp-picker", step: 2, props: { canSkip: method === "slack" } },
     ]);
@@ -268,7 +261,7 @@ export function useOnboardingFlow() {
         { type: "delay", ms: 600 },
         {
           type: "sketch-message",
-          text: "Almost done. I'll need an API key next — that's what gives me my smarts. Takes 30 seconds.",
+          text: "Almost there — just need an API key.",
           step: 2,
         },
         { type: "delay", ms: 500 },
@@ -286,6 +279,7 @@ export function useOnboardingFlow() {
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
       { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
+      { type: "sketch-message", text: "I run on Claude under the hood — it's why I'm good at reading between the lines.", step: 3, dim: true },
       { type: "delay", ms: 350 },
       { type: "widget", widgetType: "api-key-input", step: 3 },
     ]);
@@ -301,6 +295,7 @@ export function useOnboardingFlow() {
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
       { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
+      { type: "sketch-message", text: "I run on Claude under the hood — it's why I'm good at reading between the lines.", step: 3, dim: true },
       { type: "delay", ms: 350 },
       { type: "widget", widgetType: "api-key-input", step: 3 },
     ]);

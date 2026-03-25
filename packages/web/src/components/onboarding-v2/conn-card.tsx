@@ -22,7 +22,7 @@ const copy = {
   whatsapp: {
     loading: "Connecting WhatsApp...",
     success: "WhatsApp connected.",
-    detail: "I'll be there whenever your team needs me.",
+    detail: "Ready to go.",
   },
 };
 
@@ -42,7 +42,7 @@ export function ConnCard({ authMethod, onComplete, frozen = false, phone }: Conn
   }, [frozen, onComplete]);
 
   const { loading, success, detail } = copy[authMethod];
-  const detailText = authMethod === "whatsapp" && phone ? `${phone} — ${detail}` : detail;
+  const isWhatsApp = authMethod === "whatsapp" && phone;
 
   return (
     <div className="ob-msg ob-animate-in" data-step={0}>
@@ -52,9 +52,15 @@ export function ConnCard({ authMethod, onComplete, frozen = false, phone }: Conn
       </div>
       <div className="ob-msg-body ob-msg-body-sketch">
         {done ? (
-          <>
-            <span className="ob-conn-green">{success}</span> {detailText}
-          </>
+          isWhatsApp ? (
+            <>
+              <span className="ob-conn-green">{phone} connected.</span> {detail}
+            </>
+          ) : (
+            <>
+              <span className="ob-conn-green">{success}</span> {detail}
+            </>
+          )
         ) : (
           <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
             <span className="ob-spinner" />

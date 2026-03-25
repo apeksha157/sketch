@@ -114,7 +114,10 @@ const EXAMPLE_PROMPTS = [
 function isSketchOrigin(msg: ChatMessage | undefined): boolean {
   if (!msg) return false;
   if (msg.kind === "sketch-message") return true;
-  if (msg.kind === "widget" && (msg.widgetType === "example-prompts" || msg.widgetType === "workspace-card"))
+  if (
+    msg.kind === "widget" &&
+    (msg.widgetType === "example-prompts" || msg.widgetType === "workspace-card" || msg.widgetType === "conn-card")
+  )
     return true;
   return false;
 }
@@ -305,7 +308,7 @@ export function OnboardingChat() {
     switch (msg.kind) {
       case "sketch-message": {
         const hideLabel = isSketchOrigin(messages[index - 1]);
-        return <SketchMessage key={msg.id} text={msg.text || ""} step={msg.step} hideLabel={hideLabel} />;
+        return <SketchMessage key={msg.id} text={msg.text || ""} step={msg.step} hideLabel={hideLabel} dim={msg.dim} />;
       }
       case "user-message": {
         const iconKey = msg.widgetProps?.icon as string | undefined;

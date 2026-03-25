@@ -36,21 +36,38 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
 
   const canValidate = provider === "bedrock" ? accessKeyId.trim() && secretKey.trim() : apiKey.trim();
 
+  const validate = (): string | null => {
+    if (provider === "anthropic") {
+      const key = apiKey.trim();
+      if (!key.startsWith("sk-ant-")) return "Anthropic keys start with sk-ant-";
+      if (key.length < 20) return "Key looks too short — double-check it.";
+      return null;
+    }
+    // bedrock
+    const akid = accessKeyId.trim();
+    if (!/^(AKIA|ASIA)[A-Z0-9]{16}$/.test(akid))
+      return "Access Key ID should be 20 chars starting with AKIA or ASIA.";
+    if (secretKey.trim().length < 40) return "Secret Access Key looks too short — double-check it.";
+    return null;
+  };
+
   const handleValidate = async () => {
     if (!canValidate) return;
-    setState("loading");
     setErrorMsg("");
 
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setState("success");
-      setTimeout(() => {
-        onValidated(provider);
-      }, 600);
-    } catch {
+    const err = validate();
+    if (err) {
       setState("error");
-      setErrorMsg("Invalid credentials. Check and try again.");
+      setErrorMsg(err);
+      return;
     }
+
+    setState("loading");
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    setState("success");
+    setTimeout(() => {
+      onValidated(provider);
+    }, 600);
   };
 
   const resetFields = () => {

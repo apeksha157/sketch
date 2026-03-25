@@ -5,10 +5,12 @@ interface SketchMessageProps {
   step: number;
   /** When true, omit the avatar + label row (message is a continuation of the previous batch). */
   hideLabel?: boolean;
+  /** When true, renders as smaller dimmed tertiary copy. */
+  dim?: boolean;
 }
 
 /** Left-aligned message from Sketch. Hides avatar/label when it's a continuation of a batch. */
-export function SketchMessage({ text, step, hideLabel = false }: SketchMessageProps) {
+export function SketchMessage({ text, step, hideLabel = false, dim = false }: SketchMessageProps) {
   return (
     <div className={`ob-msg ob-animate-in${hideLabel ? " ob-msg-continued" : ""}`} data-step={step}>
       {!hideLabel && (
@@ -17,7 +19,7 @@ export function SketchMessage({ text, step, hideLabel = false }: SketchMessagePr
           SKETCH
         </div>
       )}
-      <div className="ob-msg-body ob-msg-body-sketch">{text}</div>
+      <div className={`ob-msg-body ob-msg-body-sketch${dim ? " ob-msg-body-dim" : ""}`}>{text}</div>
     </div>
   );
 }

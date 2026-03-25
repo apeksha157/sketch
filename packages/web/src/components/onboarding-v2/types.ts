@@ -9,6 +9,8 @@ export interface ChatMessage {
   kind: "sketch-message" | "user-message" | "divider" | "widget";
   step: number;
   text?: string;
+  /** When true, renders as smaller dimmed tertiary copy */
+  dim?: boolean;
   /** For dividers */
   label?: string;
   /** For widgets rendered inline in the chat history (after user interacts) */
@@ -31,7 +33,7 @@ export type WidgetType =
 
 /** An instruction in the message queue (not yet processed). */
 export type QueueItem =
-  | { type: "sketch-message"; text: string; step: number }
+  | { type: "sketch-message"; text: string; step: number; dim?: boolean }
   | { type: "user-message"; text: string; step: number; icon?: string }
   | { type: "divider"; label: string; step: number }
   | { type: "delay"; ms: number }

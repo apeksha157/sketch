@@ -262,6 +262,12 @@
   padding-left: 32px;
 }
 
+.ob-msg-body-dim {
+  font-size: 12px;
+  color: var(--ob-text-muted);
+  line-height: 1.5;
+}
+
 /* Continuation message — no label row, align body with the batch above */
 .ob-msg-continued {
   margin-top: 4px;
@@ -1087,18 +1093,18 @@
 
 .dark .onboarding-root {
   --ob-yellow-fg: var(--ob-yellow);
-  --ob-bg: #0f0f0d;
-  --ob-container-bg: #1a1a18;
-  --ob-card: linear-gradient(180deg, #222220 0%, #1d1d1b 100%);
-  --ob-card-border: #2e2e2c;
-  --ob-text: #f5f5f0;
-  --ob-text-dim: #c8c8c0;
-  --ob-text-muted: #7a7a70;
-  --ob-divider: #2e2e2c;
-  --ob-green: #3dd68c;
+  --ob-bg: #040404;
+  --ob-container-bg: #111110;
+  --ob-card: linear-gradient(180deg, #1c1c1a 0%, #111110 100%);
+  --ob-card-border: #2c2c2a;
+  --ob-text: #fafaf8;
+  --ob-text-dim: #b0b0aa;
+  --ob-text-muted: #5f5e5a;
+  --ob-divider: #2c2c2a;
+  --ob-green: #30d158;
   --ob-error: rgba(255, 59, 48, 0.8);
   --ob-error-border: rgba(255, 59, 48, 0.35);
-  --ob-green-border: rgba(61, 214, 140, 0.35);
+  --ob-green-border: rgba(48, 209, 88, 0.35);
 }
 
 .dark .ob-container {
