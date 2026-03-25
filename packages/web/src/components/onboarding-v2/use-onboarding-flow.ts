@@ -244,13 +244,29 @@ export function useOnboardingFlow() {
     ]);
   }, [enqueue]);
 
-  const handleWhatsAppConnected = useCallback(() => {
-    setState((prev) => ({ ...prev, whatsappConnected: true }));
+  const handleWhatsAppConnected = useCallback(
+    (phone: string) => {
+      setState((prev) => ({ ...prev, whatsappConnected: true }));
+      setActiveWidget(null);
+      enqueue([
+        { type: "delay", ms: 600 },
+        {
+          type: "sketch-message",
+          text: `WhatsApp connected — ${phone}. I'll be there whenever your team needs me.`,
+          step: 2,
+        },
+        { type: "delay", ms: 600 },
+        { type: "widget", widgetType: "section-continue", step: 2, props: { label: "Continue to API Key" } },
+      ]);
+    },
+    [enqueue],
+  );
+
+  const handlePlatformsContinue = useCallback(() => {
     setActiveWidget(null);
     enqueue([
-      { type: "delay", ms: 600 },
-      { type: "sketch-message", text: "WhatsApp connected. I'll be there whenever your team needs me.", step: 2 },
-      { type: "delay", ms: 800 },
+      { type: "user-message", text: "Continue to API Key", step: 2 },
+      { type: "delay", ms: 400 },
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
       { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
@@ -336,6 +352,7 @@ export function useOnboardingFlow() {
     handleConnComplete,
     handleWorkspaceComplete,
     handleWorkspaceContinue,
+    handlePlatformsContinue,
     handleWhatsAppConnect,
     handleWhatsAppConnected,
     handleWhatsAppSkip,

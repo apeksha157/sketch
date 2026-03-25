@@ -2,7 +2,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 interface QRCardProps {
-  onConnected: () => void;
+  onConnected: (phone: string) => void;
   demo?: boolean;
 }
 
@@ -35,7 +35,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
     const t1 = setTimeout(() => setStatus("verifying"), 2500);
     const t2 = setTimeout(() => {
       setStatus("connected");
-      onConnected();
+      onConnected("+1 (555) 234-5678");
     }, 4500);
     return () => {
       clearTimeout(t1);

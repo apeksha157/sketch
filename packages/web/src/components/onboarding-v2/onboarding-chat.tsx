@@ -173,6 +173,7 @@ export function OnboardingChat() {
     handleConnComplete,
     handleWorkspaceComplete,
     handleWorkspaceContinue,
+    handlePlatformsContinue,
     handleWhatsAppConnect,
     handleWhatsAppConnected,
     handleWhatsAppSkip,
@@ -404,12 +405,13 @@ export function OnboardingChat() {
         return <WhatsAppPicker canSkip={canSkip} onConnect={handleWhatsAppConnect} onSkip={handleWhatsAppSkip} />;
       }
       case "qr-card":
-        return <QRCard onConnected={handleWhatsAppConnected} demo />;
+        return <QRCard onConnected={(phone) => handleWhatsAppConnected(phone)} demo />;
       case "section-continue": {
         const label = (activeWidget.widgetProps?.label as string) ?? "Continue";
+        const onClick = activeWidget.step === 2 ? handlePlatformsContinue : handleWorkspaceContinue;
         return (
           <div className="ob-widget ob-animate-in">
-            <button type="button" className="ob-btn ob-btn-ghost" onClick={handleWorkspaceContinue}>
+            <button type="button" className="ob-btn ob-btn-ghost" onClick={onClick}>
               {label}
             </button>
           </div>
