@@ -45,8 +45,7 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
     }
     // bedrock
     const akid = accessKeyId.trim();
-    if (!/^(AKIA|ASIA)[A-Z0-9]{16}$/.test(akid))
-      return "Access Key ID should be 20 chars starting with AKIA or ASIA.";
+    if (!/^(AKIA|ASIA)[A-Z0-9]{16}$/.test(akid)) return "Access Key ID should be 20 chars starting with AKIA or ASIA.";
     if (secretKey.trim().length < 40) return "Secret Access Key looks too short — double-check it.";
     return null;
   };

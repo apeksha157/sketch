@@ -279,7 +279,12 @@ export function useOnboardingFlow() {
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
       { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
-      { type: "sketch-message", text: "I run on Claude under the hood — it's why I'm good at reading between the lines.", step: 3, dim: true },
+      {
+        type: "sketch-message",
+        text: "I run on Claude under the hood — it's why I'm good at reading between the lines.",
+        step: 3,
+        dim: true,
+      },
       { type: "delay", ms: 350 },
       { type: "widget", widgetType: "api-key-input", step: 3 },
     ]);
@@ -295,7 +300,12 @@ export function useOnboardingFlow() {
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
       { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
-      { type: "sketch-message", text: "I run on Claude under the hood — it's why I'm good at reading between the lines.", step: 3, dim: true },
+      {
+        type: "sketch-message",
+        text: "I run on Claude under the hood — it's why I'm good at reading between the lines.",
+        step: 3,
+        dim: true,
+      },
       { type: "delay", ms: 350 },
       { type: "widget", widgetType: "api-key-input", step: 3 },
     ]);
