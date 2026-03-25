@@ -202,7 +202,14 @@ export function useOnboardingFlow() {
       { type: "delay", ms: 900 },
       { type: "sketch-message", text: confirmMsg, step: 1 },
       { type: "delay", ms: 1200 },
-      { type: "sketch-message", text: "Now let's connect your channels.", step: 1 },
+      {
+        type: "sketch-message",
+        text:
+          state.authMethod === "slack"
+            ? "You can also reach me on WhatsApp — scan a code and you're set."
+            : "Let's connect WhatsApp. That's where I'll live.",
+        step: 1,
+      },
       { type: "delay", ms: 700 },
       { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Channels" } },
     ]);
@@ -221,8 +228,8 @@ export function useOnboardingFlow() {
         type: "sketch-message",
         text:
           method === "slack"
-            ? "You're on Slack. Want Sketch on your phone too?"
-            : "Let's connect WhatsApp — that's where you'll talk to me.",
+            ? "You can also reach me on WhatsApp — scan a code and you're set."
+            : "Let's connect WhatsApp. That's where I'll live.",
         step: 2,
       },
       { type: "delay", ms: 400 },
