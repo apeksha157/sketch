@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Courier New', monospace;
+    background: #1a1a18;
+    display: flex;
+    gap: 32px;
+    padding: 40px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  /* ── DARK MODE ── */
+  .card {
+    background: linear-gradient(180deg, #2a2a26 0%, #222220 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 20px 24px 24px;
+    width: 340px;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #feed01;
+    margin-bottom: 20px;
+  }
+  .card-header img { width: 16px; height: 16px; opacity: 0.9; }
+
+  /* Identity hero */
+  .ws-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  .ws-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: rgba(254,237,1,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ws-icon img { width: 100%; height: 100%; object-fit: contain; }
+  .ws-icon-letter {
+    font-size: 22px;
+    font-weight: 700;
+    color: #feed01;
+  }
+  .ws-identity-info { flex: 1; min-width: 0; }
+  .ws-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: #f5f5f0;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ws-sub {
+    font-size: 11px;
+    color: rgba(245,245,240,0.45);
+    margin-top: 3px;
+    letter-spacing: 0.03em;
+  }
+  .ws-role-badge {
+    background: rgba(254,237,1,0.12);
+    color: #feed01;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  /* Divider */
+  .divider {
+    height: 1px;
+    background: rgba(255,255,255,0.06);
+    margin-bottom: 16px;
+  }
+
+  /* Stats row */
+  .stats-row {
+    display: flex;
+    gap: 8px;
+  }
+  .stat-chip {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 8px;
+    padding: 8px 12px;
+    flex: 1;
+  }
+  .stat-number {
+    font-size: 18px;
+    font-weight: 700;
+    color: #f5f5f0;
+    line-height: 1;
+  }
+  .stat-label {
+    font-size: 10px;
+    color: rgba(245,245,240,0.4);
+    letter-spacing: 0.06em;
+    line-height: 1.2;
+    margin-top: 1px;
+  }
+
+  /* Channels chips */
+  .channels-area { margin-top: 8px; }
+  .channels-label {
+    font-size: 10px;
+    color: rgba(245,245,240,0.35);
+    letter-spacing: 0.08em;
+    margin-bottom: 7px;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .chip {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 6px;
+    padding: 4px 9px;
+    font-size: 11px;
+    color: rgba(245,245,240,0.55);
+    font-family: inherit;
+  }
+  .chip-more {
+    color: rgba(245,245,240,0.3);
+    background: transparent;
+    border-color: transparent;
+  }
+
+  /* Avatars */
+  .avatars { display: flex; align-items: center; }
+  .avatar {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; color: white;
+    border: 2px solid #222220;
+    margin-left: -6px;
+  }
+  .avatar:first-child { margin-left: 0; }
+  .avatars-count {
+    font-size: 12px;
+    color: rgba(245,245,240,0.5);
+    margin-left: 8px;
+  }
+
+  /* Account email */
+  .account-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 9px 12px;
+    margin-bottom: 16px;
+  }
+  .account-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: #5B8DEF;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: white;
+    flex-shrink: 0;
+  }
+  .account-email {
+    font-size: 12px;
+    color: rgba(245,245,240,0.65);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ── LIGHT MODE ── */
+  .light { background: #f7f7f5; }
+
+  .card-light {
+    background: linear-gradient(180deg, #ffffff 0%, #f4f4f2 100%);
+    border: 1px solid #d5d5d3;
+    border-radius: 16px;
+    padding: 20px 24px 24px;
+    width: 340px;
+  }
+  .card-light .card-header { color: #6b6200; }
+  .card-light .ws-name { color: #040404; }
+  .card-light .ws-sub { color: rgba(4,4,4,0.4); }
+  .card-light .ws-role-badge { background: rgba(107,98,0,0.1); color: #6b6200; }
+  .card-light .ws-icon { background: rgba(107,98,0,0.08); }
+  .card-light .ws-icon-letter { color: #6b6200; }
+  .card-light .divider { background: rgba(0,0,0,0.07); }
+  .card-light .stat-chip { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.07); }
+  .card-light .stat-number { color: #040404; }
+  .card-light .stat-label { color: rgba(4,4,4,0.4); }
+  .card-light .channels-label { color: rgba(4,4,4,0.35); }
+  .card-light .chip { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.07); color: rgba(4,4,4,0.55); }
+  .card-light .chip-more { color: rgba(4,4,4,0.3); background: transparent; border-color: transparent; }
+  .card-light .avatars-count { color: rgba(4,4,4,0.5); }
+  .card-light .avatar { border-color: #f4f4f2; }
+  .card-light .account-row { background: rgba(0,0,0,0.03); border-color: rgba(0,0,0,0.07); }
+  .card-light .account-email { color: rgba(4,4,4,0.65); }
+
+  h3 { font-family: monospace; font-size: 11px; letter-spacing: 0.1em; margin-bottom: 12px; }
+  .dark-label { color: rgba(255,255,255,0.3); }
+  .light-label { color: rgba(0,0,0,0.4); }
+
+  .col { display: flex; flex-direction: column; gap: 12px; }
+</style>
+</head>
+<body>
+  <!-- DARK: Slack -->
+  <div class="col">
+    <h3 class="dark-label">DARK · SLACK</h3>
+    <div class="card">
+      <div class="card-header">
+        <img src="/logos/sketch-icon-dark.png" />
+        SETTING UP WORKSPACE
+      </div>
+
+      <div class="ws-identity">
+        <div class="ws-icon">
+          <img src="/logos/canvas-light.png" />
+        </div>
+        <div class="ws-identity-info">
+          <div class="ws-name">Canvas AI</div>
+          <div class="ws-sub">canvas.ai</div>
+        </div>
+        <div class="ws-role-badge">ADMIN</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="stats-row">
+        <div class="stat-chip">
+          <div>
+            <div class="stat-number">4</div>
+            <div class="stat-label">MEMBERS</div>
+          </div>
+          <div class="avatars" style="margin-left:auto">
+            <span class="avatar" style="background:#5B8DEF">A</span>
+            <span class="avatar" style="background:#9B6DFF">B</span>
+            <span class="avatar" style="background:#F0A050">C</span>
+          </div>
+        </div>
+        <div class="stat-chip">
+          <div>
+            <div class="stat-number">12</div>
+            <div class="stat-label">CHANNELS</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="channels-area">
+        <div class="channels-label" style="margin-top:12px">CHANNELS</div>
+        <div class="chips">
+          <span class="chip"># general</span>
+          <span class="chip"># random</span>
+          <span class="chip chip-more">+10 more</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DARK: Google -->
+  <div class="col">
+    <h3 class="dark-label">DARK · GOOGLE</h3>
+    <div class="card">
+      <div class="card-header">
+        <img src="/logos/sketch-icon-dark.png" />
+        SETTING UP WORKSPACE
+      </div>
+
+      <div class="account-row">
+        <div class="account-avatar">Y</div>
+        <div class="account-email">you@canvas.ai</div>
+      </div>
+
+      <div class="ws-identity">
+        <div class="ws-icon">
+          <img src="/logos/canvas-light.png" />
+        </div>
+        <div class="ws-identity-info">
+          <div class="ws-name">Canvas AI</div>
+          <div class="ws-sub">1 member</div>
+        </div>
+        <div class="ws-role-badge">ADMIN</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── LIGHT ── -->
+  <div class="light" style="background:#f0f0ee; padding:40px; border-radius:16px; display:flex; gap:32px; flex-wrap:wrap; align-items:flex-start;">
+
+    <!-- LIGHT: Slack -->
+    <div class="col">
+      <h3 class="light-label">LIGHT · SLACK</h3>
+      <div class="card-light">
+        <div class="card-header">
+          <img src="/logos/sketch-icon-light.png" style="width:16px;height:16px" />
+          SETTING UP WORKSPACE
+        </div>
+
+        <div class="ws-identity">
+          <div class="ws-icon" style="background:rgba(107,98,0,0.08)">
+            <img src="/logos/canvas-dark.png" />
+          </div>
+          <div class="ws-identity-info">
+            <div class="ws-name" style="color:#040404">Canvas AI</div>
+            <div class="ws-sub" style="color:rgba(4,4,4,0.4)">canvas.ai</div>
+          </div>
+          <div class="ws-role-badge" style="background:rgba(107,98,0,0.1);color:#6b6200">ADMIN</div>
+        </div>
+
+        <div class="divider" style="background:rgba(0,0,0,0.07)"></div>
+
+        <div class="stats-row">
+          <div class="stat-chip" style="background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.07)">
+            <div>
+              <div class="stat-number" style="color:#040404">4</div>
+              <div class="stat-label" style="color:rgba(4,4,4,0.4)">MEMBERS</div>
+            </div>
+            <div class="avatars" style="margin-left:auto">
+              <span class="avatar" style="background:#5B8DEF;border-color:#f4f4f2">A</span>
+              <span class="avatar" style="background:#9B6DFF;border-color:#f4f4f2">B</span>
+              <span class="avatar" style="background:#F0A050;border-color:#f4f4f2">C</span>
+            </div>
+          </div>
+          <div class="stat-chip" style="background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.07)">
+            <div>
+              <div class="stat-number" style="color:#040404">12</div>
+              <div class="stat-label" style="color:rgba(4,4,4,0.4)">CHANNELS</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="channels-area">
+          <div class="channels-label" style="margin-top:12px;color:rgba(4,4,4,0.35)">CHANNELS</div>
+          <div class="chips">
+            <span class="chip" style="background:rgba(0,0,0,0.04);border-color:rgba(0,0,0,0.07);color:rgba(4,4,4,0.55)"># general</span>
+            <span class="chip" style="background:rgba(0,0,0,0.04);border-color:rgba(0,0,0,0.07);color:rgba(4,4,4,0.55)"># random</span>
+            <span class="chip chip-more" style="color:rgba(4,4,4,0.3)">+10 more</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LIGHT: Google -->
+    <div class="col">
+      <h3 class="light-label">LIGHT · GOOGLE</h3>
+      <div class="card-light">
+        <div class="card-header">
+          <img src="/logos/sketch-icon-light.png" style="width:16px;height:16px" />
+          SETTING UP WORKSPACE
+        </div>
+
+        <div class="account-row" style="background:rgba(0,0,0,0.03);border-color:rgba(0,0,0,0.07)">
+          <div class="account-avatar">Y</div>
+          <div class="account-email" style="color:rgba(4,4,4,0.65)">you@canvas.ai</div>
+        </div>
+
+        <div class="ws-identity">
+          <div class="ws-icon" style="background:rgba(107,98,0,0.08)">
+            <img src="/logos/canvas-dark.png" />
+          </div>
+          <div class="ws-identity-info">
+            <div class="ws-name" style="color:#040404">Canvas AI</div>
+            <div class="ws-sub" style="color:rgba(4,4,4,0.4)">1 member</div>
+          </div>
+          <div class="ws-role-badge" style="background:rgba(107,98,0,0.1);color:#6b6200">ADMIN</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

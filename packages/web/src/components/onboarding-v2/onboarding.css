@@ -369,8 +369,8 @@
   background: var(--ob-card);
   border: 1px solid var(--ob-card-border);
   border-radius: 16px;
-  padding: 24px;
-  max-width: 320px;
+  padding: 20px 24px 24px;
+  max-width: 340px;
 }
 
 .ob-workspace-header {
@@ -378,7 +378,7 @@
   align-items: center;
   gap: 8px;
   padding-bottom: 14px;
-  margin-bottom: 2px;
+  margin-bottom: 16px;
   border-bottom: 1px solid var(--ob-divider);
   font-family: var(--ob-font-mono);
   font-size: var(--ob-fs-xs);
@@ -388,59 +388,115 @@
   color: var(--ob-yellow-fg);
 }
 
-.ob-workspace-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 0;
-}
-
-.ob-workspace-row + .ob-workspace-row {
-  border-top: 1px solid var(--ob-divider);
-}
-
-.ob-workspace-row-label {
-  font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-sm);
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--ob-text-muted);
-}
-
-.ob-workspace-row-value {
-  font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-xl);
-  font-weight: 600;
-  color: var(--ob-text);
-}
-
-/* Workspace name with logo */
-.ob-ws-name-value {
+/* Identity hero — large icon + name + role badge */
+.ob-ws-identity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 14px;
+  margin-bottom: 16px;
 }
 
-.ob-ws-logo {
+.ob-ws-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: rgba(107, 98, 0, 0.1);
+  border-radius: 12px;
+  background: rgba(107, 98, 0, 0.08);
   color: var(--ob-yellow-fg);
   font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-base);
+  font-size: 20px;
   font-weight: 700;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
-.ob-ws-logo.ob-ws-logo-img {
+.ob-ws-icon.ob-ws-icon-img {
   background: transparent;
-  padding: 0;
+}
+
+.ob-ws-identity-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ob-ws-identity-name {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xl);
+  font-weight: 700;
+  color: var(--ob-text);
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ob-ws-identity-sub {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  margin-top: 3px;
+  letter-spacing: 0.03em;
+}
+
+/* Stats chips row */
+.ob-ws-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.ob-ws-stat-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  background: rgba(4, 4, 4, 0.04);
+  border: 1px solid rgba(4, 4, 4, 0.07);
+  border-radius: 10px;
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.ob-ws-stat-number {
+  font-family: var(--ob-font-body);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ob-text);
+  line-height: 1;
+}
+
+.ob-ws-stat-label {
+  font-family: var(--ob-font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ob-text-muted);
+  margin-top: 3px;
+}
+
+.ob-ws-stat-avatars {
+  display: flex;
+  align-items: center;
+}
+
+/* Google auth — account email row */
+.ob-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(4, 4, 4, 0.04);
+  border: 1px solid rgba(4, 4, 4, 0.07);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.ob-account-email {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Google auth — user profile avatar (circle) */
@@ -448,8 +504,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: #4285f4;
   color: #fff;
@@ -464,7 +520,7 @@
   display: inline-flex;
   align-items: center;
   padding: 3px 10px;
-  border-radius: 20px;
+  border-radius: 6px;
   background: rgba(4, 4, 4, 0.05);
   color: var(--ob-text-dim);
   font-family: var(--ob-font-mono);
@@ -472,6 +528,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  flex-shrink: 0;
 }
 
 .ob-role-badge-admin {
@@ -479,78 +536,25 @@
   color: var(--ob-yellow-fg);
 }
 
-/* Stacked member avatars */
-.ob-avatars {
-  display: flex;
-  align-items: center;
-  gap: 0;
-}
-
+/* Stacked member avatars (used inside stat chip) */
 .ob-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   border: 2px solid var(--ob-container-bg);
   font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-xs);
+  font-size: 9px;
   font-weight: 700;
   color: #fff;
-  margin-left: -6px;
+  margin-left: -5px;
   flex-shrink: 0;
 }
 
-.ob-avatars .ob-avatar:first-child {
+.ob-ws-stat-avatars .ob-avatar:first-child {
   margin-left: 0;
-}
-
-.ob-avatar-extra {
-  background: rgba(4, 4, 4, 0.06);
-  color: var(--ob-text-dim);
-  font-size: var(--ob-fs-xs);
-}
-
-.ob-avatars-label {
-  font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-lg);
-  font-weight: 600;
-  color: var(--ob-text);
-  margin-left: 10px;
-}
-
-/* Channel chips */
-.ob-channel-chips {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.ob-channel-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: rgba(4, 4, 4, 0.05);
-  font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-sm);
-  font-weight: 500;
-  color: var(--ob-text-dim);
-}
-
-.ob-channel-hash {
-  color: var(--ob-text-muted);
-  font-weight: 400;
-}
-
-.ob-channel-chip-more {
-  color: var(--ob-text-muted);
-  background: transparent;
-  padding-left: 2px;
 }
 
 /* ── Unified button system ── */
@@ -1092,8 +1096,18 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
 }
 
-.dark .ob-ws-logo {
-  background: rgba(254, 237, 1, 0.1);
+.dark .ob-ws-icon {
+  background: rgba(254, 237, 1, 0.08);
+}
+
+.dark .ob-ws-stat-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+.dark .ob-account-row {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
 }
 
 .dark .ob-role-badge {
@@ -1104,13 +1118,8 @@
   background: rgba(254, 237, 1, 0.1);
 }
 
-.dark .ob-avatar-extra {
-  background: rgba(245, 245, 240, 0.08);
-  color: var(--ob-text-dim);
-}
-
-.dark .ob-channel-chip {
-  background: rgba(245, 245, 240, 0.05);
+.dark .ob-avatar {
+  border-color: var(--ob-container-bg);
 }
 
 .dark .ob-btn-ghost {
