@@ -159,6 +159,14 @@ export function useOnboardingFlow() {
       isAdmin: true,
     }));
 
+    // Freeze the confirmation into message history so it doesn't disappear
+    appendMessage({
+      id: nextId(),
+      kind: "widget",
+      step: 0,
+      widgetType: "conn-card",
+      widgetProps: { authMethod: method, frozen: true },
+    });
     setActiveWidget(null);
     enqueue([
       { type: "delay", ms: 500 },
@@ -171,7 +179,7 @@ export function useOnboardingFlow() {
         props: { authMethod: method, data: workspace, isAdmin: true },
       },
     ]);
-  }, [enqueue, state.authMethod]);
+  }, [appendMessage, enqueue, state.authMethod]);
 
   // ── Step 1: Workspace discovery complete ──
 
@@ -247,19 +255,21 @@ export function useOnboardingFlow() {
   const handleWhatsAppConnected = useCallback(
     (phone: string) => {
       setState((prev) => ({ ...prev, whatsappConnected: true }));
+      // Freeze WhatsApp confirmation into message history (same UI as Slack/Google conn-card)
+      appendMessage({
+        id: nextId(),
+        kind: "widget",
+        step: 2,
+        widgetType: "conn-card",
+        widgetProps: { authMethod: "whatsapp", phone, frozen: true },
+      });
       setActiveWidget(null);
       enqueue([
-        { type: "delay", ms: 600 },
-        {
-          type: "sketch-message",
-          text: `WhatsApp connected — ${phone}. I'll be there whenever your team needs me.`,
-          step: 2,
-        },
         { type: "delay", ms: 600 },
         { type: "widget", widgetType: "section-continue", step: 2, props: { label: "Continue to API Key" } },
       ]);
     },
-    [enqueue],
+    [appendMessage, enqueue],
   );
 
   const handlePlatformsContinue = useCallback(() => {

@@ -329,6 +329,10 @@ export function OnboardingChat() {
 
   const renderInlineWidget = (msg: ChatMessage, index = 0) => {
     switch (msg.widgetType) {
+      case "conn-card": {
+        const props = msg.widgetProps as { authMethod: "slack" | "google" | "whatsapp"; phone?: string };
+        return <ConnCard key={msg.id} authMethod={props.authMethod} phone={props.phone} onComplete={() => {}} frozen />;
+      }
       case "workspace-card": {
         const props = msg.widgetProps as {
           authMethod: "slack" | "google";
