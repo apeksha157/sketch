@@ -20,7 +20,6 @@ interface WorkspaceCardProps {
   frozen?: boolean;
 }
 
-
 /** Workspace icon — image if provided, fallback to first letter. */
 function WorkspaceIcon({
   name,

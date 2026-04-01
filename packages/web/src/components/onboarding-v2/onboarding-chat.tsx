@@ -185,7 +185,6 @@ export function OnboardingChat() {
     }, 2000);
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: messages and activeWidget intentionally trigger scroll
   useEffect(() => {
     const el = chatRef.current;
     if (!el) return;
