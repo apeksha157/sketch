@@ -342,8 +342,14 @@ export function OnboardingChat() {
       case "auth-picker":
         return <AuthPicker onSelect={handleAuthSelect} />;
       case "conn-card": {
-        const props = activeWidget.widgetProps as { authMethod: "slack" | "google" };
-        return <ConnCard authMethod={props.authMethod} onComplete={handleConnComplete} />;
+        const props = activeWidget.widgetProps as { authMethod: "slack" | "google"; skipSuccess?: boolean };
+        return (
+          <ConnCard
+            authMethod={props.authMethod}
+            onComplete={handleConnComplete}
+            skipSuccess={props.skipSuccess}
+          />
+        );
       }
       case "workspace-card": {
         const props = activeWidget.widgetProps as {

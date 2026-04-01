@@ -6,6 +6,8 @@ interface ConnCardProps {
   onComplete: () => void;
   frozen?: boolean;
   phone?: string;
+  /** When true, skip the success state and call onComplete after loading. Used for error flows. */
+  skipSuccess?: boolean;
 }
 
 const copy = {
@@ -27,11 +29,16 @@ const copy = {
 };
 
 /** Connection card that shows a loading spinner then transitions to a success message in-place. */
-export function ConnCard({ authMethod, onComplete, frozen = false, phone }: ConnCardProps) {
+export function ConnCard({ authMethod, onComplete, frozen = false, phone, skipSuccess = false }: ConnCardProps) {
   const [done, setDone] = useState(frozen);
 
   useEffect(() => {
     if (frozen) return;
+    if (skipSuccess) {
+      // Skip success state — call onComplete after loading period only
+      const t = setTimeout(() => onComplete(), 2000);
+      return () => clearTimeout(t);
+    }
     // Show confirmation first, then proceed after a 2s pause
     const t1 = setTimeout(() => setDone(true), 2000);
     const t2 = setTimeout(() => onComplete(), 4000);
@@ -39,7 +46,7 @@ export function ConnCard({ authMethod, onComplete, frozen = false, phone }: Conn
       clearTimeout(t1);
       clearTimeout(t2);
     };
-  }, [frozen, onComplete]);
+  }, [frozen, skipSuccess, onComplete]);
 
   const { loading, success, detail } = copy[authMethod];
   const isWhatsApp = authMethod === "whatsapp" && phone;

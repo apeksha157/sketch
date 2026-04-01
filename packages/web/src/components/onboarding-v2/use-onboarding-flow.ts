@@ -131,6 +131,10 @@ export function useOnboardingFlow() {
 
       const label = method === "slack" ? "Continue with Slack" : "Sign in with Google";
 
+      // Peek at detection to skip success animation for error flows
+      const detection = getMockDetectionResult(method);
+      const willError = detection && (!detection.isCompanyEmail || detection.accountExists);
+
       enqueue([
         { type: "user-message", text: label, step: 0, icon: method },
         { type: "delay", ms: 500 },
@@ -138,7 +142,7 @@ export function useOnboardingFlow() {
           type: "widget",
           widgetType: "conn-card",
           step: 0,
-          props: { authMethod: method },
+          props: { authMethod: method, skipSuccess: !!willError },
         },
       ]);
     },
@@ -149,7 +153,28 @@ export function useOnboardingFlow() {
   const handleConnComplete = useCallback(() => {
     const method = state.authMethod || "slack";
 
-    // Freeze the confirmation into message history
+    // Run detection first (mock layer in dev, real API in production)
+    const detection = getMockDetectionResult(method);
+
+    // For error states, don't show the "connected" success — go straight to the error
+    if (detection && !detection.isCompanyEmail) {
+      setActiveWidget(null);
+      setState((prev) => ({ ...prev, errorState: "generic-email" }));
+      enqueue([
+        { type: "delay", ms: 500 },
+        {
+          type: "sketch-message",
+          text: "Sketch is built for teams — I couldn't find a workspace for that email. Try again with your work email to get started.",
+          step: 0,
+          danger: true,
+        },
+        { type: "delay", ms: 400 },
+        { type: "widget", widgetType: "error-state", step: 0, props: { errorType: "generic-email" } },
+      ]);
+      return;
+    }
+
+    // Freeze the confirmation into message history (only for non-error flows)
     appendMessage({
       id: nextId(),
       kind: "widget",
@@ -159,26 +184,7 @@ export function useOnboardingFlow() {
     });
     setActiveWidget(null);
 
-    // Run detection (mock layer in dev, real API in production)
-    const detection = getMockDetectionResult(method);
-
     if (detection) {
-      // ── Generic email error ──
-      if (!detection.isCompanyEmail) {
-        setState((prev) => ({ ...prev, errorState: "generic-email" }));
-        enqueue([
-          { type: "delay", ms: 500 },
-          {
-            type: "sketch-message",
-            text: "Sketch is built for teams — I couldn't find a workspace for that email. Try again with your work email to get started.",
-            step: 0,
-            danger: true,
-          },
-          { type: "delay", ms: 400 },
-          { type: "widget", widgetType: "error-state", step: 0, props: { errorType: "generic-email" } },
-        ]);
-        return;
-      }
 
       // ── Already registered ──
       if (detection.accountExists) {
