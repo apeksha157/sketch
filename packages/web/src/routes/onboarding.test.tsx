@@ -55,8 +55,9 @@ describe("OnboardingChat", () => {
     renderWithProviders(<OnboardingChat />);
 
     // Step track should not be visible before auth — role is not yet known
-    expect(screen.queryByText("Account")).not.toBeInTheDocument();
-    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    // "Account" now appears as a section divider, so check for step track-only labels
+    expect(screen.queryByRole("button", { name: /Account/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ready/i })).not.toBeInTheDocument();
   });
 
   it("renders header with sketch logo image", () => {
