@@ -185,7 +185,6 @@ export function useOnboardingFlow() {
     setActiveWidget(null);
 
     if (detection) {
-
       // ── Already registered ──
       if (detection.accountExists) {
         const name = detection.userName || "there";

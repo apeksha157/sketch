@@ -344,11 +344,7 @@ export function OnboardingChat() {
       case "conn-card": {
         const props = activeWidget.widgetProps as { authMethod: "slack" | "google"; skipSuccess?: boolean };
         return (
-          <ConnCard
-            authMethod={props.authMethod}
-            onComplete={handleConnComplete}
-            skipSuccess={props.skipSuccess}
-          />
+          <ConnCard authMethod={props.authMethod} onComplete={handleConnComplete} skipSuccess={props.skipSuccess} />
         );
       }
       case "workspace-card": {
