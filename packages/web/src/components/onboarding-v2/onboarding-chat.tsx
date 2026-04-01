@@ -5,6 +5,7 @@ import "./onboarding.css";
 import { ApiKeyInput } from "./api-key-input";
 import { AuthPicker } from "./auth-picker";
 import { ConnCard } from "./conn-card";
+import { ErrorState } from "./error-state";
 import { QRCard } from "./qr-card";
 import { SectionDivider } from "./section-divider";
 import { SketchMessage } from "./sketch-message";
@@ -104,12 +105,6 @@ const BRAND_ICONS: Record<string, ReactNode> = {
   anthropic: <AnthropicMiniIcon />,
 };
 
-const EXAMPLE_PROMPTS = [
-  "Summarize what happened across the company this week.",
-  "Show deals stuck in negotiation 2+ weeks.",
-  "Monitor competitor blogs. Alert me when they publish.",
-];
-
 /** Returns true if a message is Sketch-originated (counts as continuation for batching). */
 function isSketchOrigin(msg: ChatMessage | undefined): boolean {
   if (!msg) return false;
@@ -122,33 +117,17 @@ function isSketchOrigin(msg: ChatMessage | undefined): boolean {
   return false;
 }
 
-/** Example prompts — static text list, auto-advances after a beat. */
-function ExamplePrompts({ onDone, hideLabel = false }: { onDone: () => void; hideLabel?: boolean }) {
-  useEffect(() => {
-    const t = setTimeout(onDone, 1000);
-    return () => clearTimeout(t);
-  }, [onDone]);
-
+/** Renders admin email as an inline pill with amber styling. */
+function renderAdminEmailMessage(text: string) {
+  const match = text.match(/^(.*)##(.+?)##(.*)$/);
+  if (!match) return text;
+  const [, before, email, after] = match;
   return (
-    <div className={hideLabel ? "ob-msg-continued" : "ob-animate-in"} style={{ marginBottom: 12 }}>
-      {!hideLabel && (
-        <div className="ob-msg-label ob-msg-label-sketch" style={{ marginBottom: 6 }}>
-          <SparkAvatar size={24} />
-          SKETCH
-        </div>
-      )}
-      <div className="ob-msg-body ob-msg-body-sketch" style={{ marginBottom: 10 }}>
-        Here are some things to try:
-      </div>
-      <div className="ob-prompts">
-        {EXAMPLE_PROMPTS.map((prompt) => (
-          <div key={prompt} className="ob-prompt-item">
-            <span className="ob-prompt-arrow">→</span>
-            <span>{prompt}</span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <>
+      {before}
+      <span className="ob-admin-email-pill">{email}</span>
+      {after}
+    </>
   );
 }
 
@@ -166,6 +145,8 @@ export function OnboardingChat() {
   const seenDividersRef = useRef(new Set<string>());
   /** Timer used to delay divider scroll so it fires after any same-batch fallback. */
   const dividerScrollTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** Tracks the last active widget ID to skip scroll on internal widget re-renders (e.g. tab switch). */
+  const lastActiveWidgetIdRef = useRef<string | null>(null);
 
   const {
     messages,
@@ -181,8 +162,10 @@ export function OnboardingChat() {
     handleWhatsAppConnected,
     handleWhatsAppSkip,
     handleApiKeyValidated,
-    handleExamplePromptsDone,
     handleFinishCta,
+    handleDashboard,
+    handleRetryAuth,
+    handleGoToLogin,
     handleStepClick,
   } = useOnboardingFlow();
 
@@ -194,10 +177,6 @@ export function OnboardingChat() {
     startFlow();
   }, [startFlow]);
 
-  /**
-   * Detect user scrolling via wheel/touch (NOT from programmatic scrollTo).
-   * When the user scrolls manually, we pause auto-scrolling until 2s of idle.
-   */
   const handleWheel = useCallback(() => {
     userScrollingRef.current = true;
     clearTimeout(userScrollTimerRef.current);
@@ -206,24 +185,17 @@ export function OnboardingChat() {
     }, 2000);
   }, []);
 
-  /**
-   * Scroll rules:
-   * 1. New section divider → scroll it to the top and lock that position as the anchor floor.
-   * 2. New content within a section → only scroll if the content is off-screen below the
-   *    viewport, and never scroll above the anchor floor (keeps header pinned to top).
-   * 3. Section overflows (content taller than viewport) → follow latest content naturally.
-   * 4. New section starts → new anchor floor, repeat from rule 1.
-   *
-   * Uses spacer top (not scrollHeight) as the content boundary to avoid the 60vh spacer
-   * inflating scroll targets and pushing the section header off screen prematurely.
-   */
   // biome-ignore lint/correctness/useExhaustiveDependencies: messages and activeWidget intentionally trigger scroll
   useEffect(() => {
     const el = chatRef.current;
     if (!el) return;
     if (userScrollingRef.current) return;
 
-    // Detect any newly-added section divider
+    // Skip scroll if the active widget is the same (e.g. tab switch within API key card)
+    const currentWidgetId = activeWidget?.id ?? null;
+    const widgetChanged = currentWidgetId !== lastActiveWidgetIdRef.current;
+    lastActiveWidgetIdRef.current = currentWidgetId;
+
     const dividerEls = el.querySelectorAll<HTMLElement>(".ob-divider[data-step]");
     let newDivider: HTMLElement | null = null;
     for (const div of dividerEls) {
@@ -239,9 +211,9 @@ export function OnboardingChat() {
 
     if (newDivider) {
       const targetDiv = newDivider;
-      // Fire after 50ms so this overrides any same-batch fallback scroll that may have
-      // started (a new scrollTo call cancels an in-progress smooth scroll).
       clearTimeout(dividerScrollTimerRef.current);
+      // Reset anchor floor so new divider can scroll freely
+      anchorScrollFloorRef.current = 0;
       dividerScrollTimerRef.current = setTimeout(() => {
         const el2 = chatRef.current;
         if (!el2) return;
@@ -249,20 +221,20 @@ export function OnboardingChat() {
         const target = Math.max(0, el2.scrollTop + relTop - 20);
         anchorScrollFloorRef.current = target;
         el2.scrollTo({ top: target, behavior: "smooth" });
-      }, 50);
+      }, 150);
       return;
     }
 
-    // Content boundary = top of the spacer (excludes the 60vh spacer from scroll math)
+    // Only run fallback scroll when messages changed or a new widget appeared
+    if (!widgetChanged && messages.length > 0) return;
+
     const spacerEl = el.querySelector<HTMLElement>(".ob-bottom-spacer");
     const contentEndY = spacerEl
       ? spacerEl.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
       : el.scrollHeight;
 
-    // Only scroll if content is actually off-screen below the viewport
     const viewportBottom = el.scrollTop + el.clientHeight;
     if (contentEndY > viewportBottom + 10) {
-      // Never scroll above the section anchor (would push header off top)
       const target = Math.max(contentEndY - el.clientHeight + 20, anchorScrollFloorRef.current);
       if (target > el.scrollTop + 1) {
         el.scrollTo({ top: target, behavior: "smooth" });
@@ -270,11 +242,6 @@ export function OnboardingChat() {
     }
   }, [messages, activeWidget]);
 
-  /**
-   * Dynamically size the bottom spacer so it fills exactly the remaining viewport
-   * height below the last section divider. This lets the header anchor to the top
-   * without leaving extra scrollable empty space beneath it.
-   */
   // biome-ignore lint/correctness/useExhaustiveDependencies: messages and activeWidget trigger spacer recalc
   useLayoutEffect(() => {
     const el = chatRef.current;
@@ -298,7 +265,6 @@ export function OnboardingChat() {
       return;
     }
 
-    // Measure content height from last divider start to spacer start (before spacer)
     const contentFromDivider = spacer.offsetTop - lastDivider.offsetTop;
     const needed = Math.max(0, el.clientHeight - contentFromDivider - 20);
     spacer.style.height = `${needed}px`;
@@ -308,7 +274,19 @@ export function OnboardingChat() {
     switch (msg.kind) {
       case "sketch-message": {
         const hideLabel = isSketchOrigin(messages[index - 1]);
-        return <SketchMessage key={msg.id} text={msg.text || ""} step={msg.step} hideLabel={hideLabel} dim={msg.dim} />;
+        const hasAdminEmail = msg.text?.includes("##");
+        return (
+          <SketchMessage
+            key={msg.id}
+            text={hasAdminEmail ? "" : msg.text || ""}
+            step={msg.step}
+            hideLabel={hideLabel}
+            dim={msg.dim}
+            danger={msg.danger}
+          >
+            {hasAdminEmail ? renderAdminEmailMessage(msg.text || "") : undefined}
+          </SketchMessage>
+        );
       }
       case "user-message": {
         const iconKey = msg.widgetProps?.icon as string | undefined;
@@ -330,7 +308,7 @@ export function OnboardingChat() {
     }
   };
 
-  const renderInlineWidget = (msg: ChatMessage, index = 0) => {
+  const renderInlineWidget = (msg: ChatMessage, _index = 0) => {
     switch (msg.widgetType) {
       case "conn-card": {
         const props = msg.widgetProps as { authMethod: "slack" | "google" | "whatsapp"; phone?: string };
@@ -351,30 +329,6 @@ export function OnboardingChat() {
             isAdmin={props.isAdmin}
             frozen={props.frozen}
           />
-        );
-      }
-      case "example-prompts": {
-        const hideLabel = isSketchOrigin(messages[index - 1]);
-        return (
-          <div key={msg.id} className={hideLabel ? "ob-msg-continued" : "ob-animate-in"} style={{ marginBottom: 12 }}>
-            {!hideLabel && (
-              <div className="ob-msg-label ob-msg-label-sketch" style={{ marginBottom: 6 }}>
-                <SparkAvatar size={24} />
-                SKETCH
-              </div>
-            )}
-            <div className="ob-msg-body ob-msg-body-sketch" style={{ marginBottom: 10 }}>
-              Here are some things to try:
-            </div>
-            <div className="ob-prompts">
-              {EXAMPLE_PROMPTS.map((prompt) => (
-                <div key={prompt} className="ob-prompt-item">
-                  <span className="ob-prompt-arrow">→</span>
-                  <span>{prompt}</span>
-                </div>
-              ))}
-            </div>
-          </div>
         );
       }
       default:
@@ -426,16 +380,37 @@ export function OnboardingChat() {
       }
       case "api-key-input":
         return <ApiKeyInput onValidated={handleApiKeyValidated} />;
-      case "example-prompts":
+      case "error-state": {
+        const props = activeWidget.widgetProps as {
+          errorType: "generic-email" | "already-registered" | "workspace-not-ready";
+          name?: string;
+        };
         return (
-          <ExamplePrompts onDone={handleExamplePromptsDone} hideLabel={isSketchOrigin(messages[messages.length - 1])} />
+          <ErrorState
+            errorType={props.errorType}
+            name={props.name}
+            onRetry={handleRetryAuth}
+            onLogin={handleGoToLogin}
+          />
         );
-      case "yellow-finish":
+      }
+      case "yellow-finish": {
+        const isMember = activeWidget.widgetProps?.isMember as boolean | undefined;
+        const slackConnected = state.authMethod === "slack";
+        const whatsappConnected = state.whatsappConnected;
         return (
-          <div className="ob-animate-finish" style={{ marginBottom: 12 }} data-step={3}>
-            <YellowFinish authMethod={state.authMethod || "slack"} onCta={handleFinishCta} />
+          <div className="ob-animate-finish" style={{ marginBottom: 12 }} data-step={activeWidget.step}>
+            <YellowFinish
+              isAdmin={!isMember}
+              slackConnected={isMember ? slackConnected : slackConnected}
+              whatsappConnected={isMember ? whatsappConnected : whatsappConnected}
+              onOpenSlack={handleFinishCta}
+              onOpenWhatsApp={handleFinishCta}
+              onDashboard={handleDashboard}
+            />
           </div>
         );
+      }
       default:
         return null;
     }
@@ -494,8 +469,10 @@ export function OnboardingChat() {
           </div>
         </div>
 
-        {/* Step indicator */}
-        <StepTrack currentStep={state.currentStep} maxReached={state.maxReached} onStepClick={handleStepClick} />
+        {/* Step indicator — only visible for admin flow after role is confirmed */}
+        {state.showStepTrack && (
+          <StepTrack currentStep={state.currentStep} maxReached={state.maxReached} onStepClick={handleStepClick} />
+        )}
 
         {/* Chat area */}
         <div className="ob-chat" ref={chatRef} onWheel={handleWheel} onTouchMove={handleWheel}>

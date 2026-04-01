@@ -1,26 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 import type { ApiProvider, AuthMethod, ChatMessage, OnboardingState, QueueItem } from "./types";
+import { MOCK_WORKSPACE, getMockDetectionResult } from "./use-mock-detection";
 
 let msgId = 0;
 function nextId() {
   return `msg-${++msgId}`;
 }
-
-const DEMO_WORKSPACE_SLACK = {
-  name: "Canvas AI",
-  members: 4,
-  channels: 12,
-  email: "",
-  role: "Admin",
-};
-
-const DEMO_WORKSPACE_GOOGLE = {
-  name: "Canvas AI",
-  members: 1,
-  channels: 0,
-  email: "you@canvas.ai",
-  role: "Admin",
-};
 
 export function useOnboardingFlow() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -34,6 +19,10 @@ export function useOnboardingFlow() {
     apiProvider: null,
     apiKeyValidated: false,
     completed: false,
+    showStepTrack: false,
+    errorState: null,
+    userName: null,
+    adminEmail: null,
     workspace: null,
   });
 
@@ -54,7 +43,14 @@ export function useOnboardingFlow() {
 
       switch (item.type) {
         case "sketch-message":
-          appendMessage({ id: nextId(), kind: "sketch-message", step: item.step, text: item.text, dim: item.dim });
+          appendMessage({
+            id: nextId(),
+            kind: "sketch-message",
+            step: item.step,
+            text: item.text,
+            dim: item.dim,
+            danger: item.danger,
+          });
           break;
         case "user-message":
           appendMessage({
@@ -117,6 +113,7 @@ export function useOnboardingFlow() {
   const startFlow = useCallback(() => {
     msgId = 0;
     enqueue([
+      { type: "divider", label: "Account", step: 0 },
       { type: "sketch-message", text: "Hey! I'm Sketch — your new AI coworker.", step: 0 },
       { type: "delay", ms: 1000 },
       { type: "sketch-message", text: "Let's get you set up. Takes about 2 minutes.", step: 0 },
@@ -132,7 +129,7 @@ export function useOnboardingFlow() {
       setState((prev) => ({ ...prev, authMethod: method }));
       setActiveWidget(null);
 
-      const label = method === "slack" ? "Add to Slack" : "Sign in with Google";
+      const label = method === "slack" ? "Continue with Slack" : "Sign in with Google";
 
       enqueue([
         { type: "user-message", text: label, step: 0, icon: method },
@@ -148,18 +145,11 @@ export function useOnboardingFlow() {
     [enqueue],
   );
 
-  /** Called by ConnCard after its 2s loading → success transition. */
+  /** Called by ConnCard after its loading → success transition. Runs detection checks. */
   const handleConnComplete = useCallback(() => {
     const method = state.authMethod || "slack";
-    const workspace = method === "slack" ? DEMO_WORKSPACE_SLACK : DEMO_WORKSPACE_GOOGLE;
 
-    setState((prev) => ({
-      ...prev,
-      workspace,
-      isAdmin: true,
-    }));
-
-    // Freeze the confirmation into message history so it doesn't disappear
+    // Freeze the confirmation into message history
     appendMessage({
       id: nextId(),
       kind: "widget",
@@ -168,10 +158,144 @@ export function useOnboardingFlow() {
       widgetProps: { authMethod: method, frozen: true },
     });
     setActiveWidget(null);
+
+    // Run detection (mock layer in dev, real API in production)
+    const detection = getMockDetectionResult(method);
+
+    if (detection) {
+      // ── Generic email error ──
+      if (!detection.isCompanyEmail) {
+        setState((prev) => ({ ...prev, errorState: "generic-email" }));
+        enqueue([
+          { type: "delay", ms: 500 },
+          {
+            type: "sketch-message",
+            text: "Sketch is built for teams — I couldn't find a workspace for that email. Try again with your work email to get started.",
+            step: 0,
+            danger: true,
+          },
+          { type: "delay", ms: 400 },
+          { type: "widget", widgetType: "error-state", step: 0, props: { errorType: "generic-email" } },
+        ]);
+        return;
+      }
+
+      // ── Already registered ──
+      if (detection.accountExists) {
+        const name = detection.userName || "there";
+        setState((prev) => ({ ...prev, errorState: "already-registered", userName: name }));
+        enqueue([
+          { type: "delay", ms: 500 },
+          {
+            type: "sketch-message",
+            text: `Hey ${name}, good to see you again! Looks like you already have an account — head over to login to get back in.`,
+            step: 0,
+          },
+          { type: "delay", ms: 400 },
+          {
+            type: "widget",
+            widgetType: "error-state",
+            step: 0,
+            props: { errorType: "already-registered", name },
+          },
+        ]);
+        return;
+      }
+
+      // ── Workspace exists but admin not ready ──
+      if (detection.workspaceExists && !detection.workspaceReady) {
+        const name = detection.userName || "there";
+        const adminEmail = detection.adminEmail || "your admin";
+        setState((prev) => ({
+          ...prev,
+          errorState: "workspace-not-ready",
+          userName: name,
+          adminEmail,
+        }));
+        enqueue([
+          { type: "delay", ms: 500 },
+          {
+            type: "sketch-message",
+            text: `I'm almost ready for you, ${name} — I just need ##${adminEmail}## to finish setting me up first. Check back soon!`,
+            step: 0,
+          },
+        ]);
+        return;
+      }
+
+      // ── Member flow: workspace exists, ready, no account ──
+      if (detection.workspaceExists && detection.workspaceReady && !detection.accountExists) {
+        setState((prev) => ({
+          ...prev,
+          isAdmin: false,
+          completed: true,
+        }));
+        enqueue([
+          { type: "delay", ms: 500 },
+          { type: "sketch-message", text: "Your team is already on Sketch.", step: 0 },
+          { type: "delay", ms: 600 },
+          {
+            type: "widget",
+            widgetType: "yellow-finish",
+            step: 0,
+            props: { isMember: true },
+          },
+        ]);
+        return;
+      }
+
+      // ── Admin flow: no workspace exists ──
+      if (!detection.workspaceExists) {
+        const workspace = method === "slack" ? MOCK_WORKSPACE.slack : MOCK_WORKSPACE.google;
+        setState((prev) => ({
+          ...prev,
+          isAdmin: true,
+          workspace,
+          showStepTrack: true,
+          currentStep: 1,
+          maxReached: 1,
+        }));
+        enqueue([
+          { type: "delay", ms: 500 },
+          { type: "action", action: "set-step", step: 1 },
+          { type: "divider", label: "Workspace", step: 1 },
+          {
+            type: "sketch-message",
+            text: `Got it, I can see your whole team at ${workspace.name}. Two more steps and I'll be ready for them.`,
+            step: 1,
+          },
+          { type: "delay", ms: 400 },
+          {
+            type: "widget",
+            widgetType: "workspace-card",
+            step: 1,
+            props: { authMethod: method, data: workspace, isAdmin: true },
+          },
+        ]);
+        return;
+      }
+    }
+
+    // Fallback: no mock, no detection — default to admin flow with demo data
+    const workspace = method === "slack" ? MOCK_WORKSPACE.slack : MOCK_WORKSPACE.google;
+    setState((prev) => ({
+      ...prev,
+      workspace,
+      isAdmin: true,
+      showStepTrack: true,
+      currentStep: 1,
+      maxReached: 1,
+    }));
     enqueue([
       { type: "delay", ms: 500 },
       { type: "action", action: "set-step", step: 1 },
       { type: "divider", label: "Workspace", step: 1 },
+      {
+        type: "sketch-message",
+        text: `Got it, I can see your whole team at ${workspace.name}. Two more steps and I'll be ready for them.`,
+        step: 1,
+      },
+      { type: "delay", ms: 400 },
       {
         type: "widget",
         widgetType: "workspace-card",
@@ -185,41 +309,34 @@ export function useOnboardingFlow() {
 
   const handleWorkspaceComplete = useCallback(() => {
     const method = state.authMethod;
-    const isAdmin = state.isAdmin;
     const workspace = state.workspace;
 
-    const confirmMsg = isAdmin
-      ? "You're the admin. Teammates join with the same email domain."
-      : `You're joining ${workspace?.name}.`;
-
-    // Persist the completed workspace card as a frozen inline message before clearing it.
+    // Persist the completed workspace card as a frozen inline message
     appendMessage({
       id: nextId(),
       kind: "widget",
       step: 1,
       widgetType: "workspace-card",
-      widgetProps: { authMethod: method, data: workspace, isAdmin, frozen: true },
+      widgetProps: { authMethod: method, data: workspace, isAdmin: true, frozen: true },
     });
 
     setActiveWidget(null);
     enqueue([
       { type: "delay", ms: 900 },
-      { type: "sketch-message", text: confirmMsg, step: 1 },
-      { type: "delay", ms: 1200 },
       {
         type: "sketch-message",
         text:
           state.authMethod === "slack"
-            ? "You can also reach me on WhatsApp — scan a code and you're set."
-            : "Let's connect WhatsApp. That's where I'll live.",
+            ? "One more way to reach me — connect WhatsApp and your team can message me there too."
+            : "This is how your team will reach me — let's get WhatsApp connected.",
         step: 1,
       },
       { type: "delay", ms: 700 },
       { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Platforms" } },
     ]);
-  }, [appendMessage, enqueue, state.authMethod, state.isAdmin, state.workspace]);
+  }, [appendMessage, enqueue, state.authMethod, state.workspace]);
 
-  // ── Step 1 → 2: User clicks "Next: Channels" ──
+  // ── Step 1 → 2: User clicks "Go to Platforms" ──
 
   const handleWorkspaceContinue = useCallback(() => {
     const method = state.authMethod;
@@ -228,7 +345,14 @@ export function useOnboardingFlow() {
       { type: "user-message", text: "Go to Platforms", step: 1 },
       { type: "action", action: "set-step", step: 2 },
       { type: "divider", label: "Platforms", step: 2 },
-      { type: "sketch-message", text: "Scan the QR with your phone to link WhatsApp.", step: 2 },
+      {
+        type: "sketch-message",
+        text:
+          method === "slack"
+            ? "One more way to reach me — connect WhatsApp and your team can message me there too."
+            : "This is how your team will reach me — let's get WhatsApp connected.",
+        step: 2,
+      },
       { type: "delay", ms: 400 },
       { type: "widget", widgetType: "whatsapp-picker", step: 2, props: { canSkip: method === "slack" } },
     ]);
@@ -248,7 +372,7 @@ export function useOnboardingFlow() {
   const handleWhatsAppConnected = useCallback(
     (phone: string) => {
       setState((prev) => ({ ...prev, whatsappConnected: true }));
-      // Freeze WhatsApp confirmation into message history (same UI as Slack/Google conn-card)
+      // Freeze WhatsApp confirmation into message history
       appendMessage({
         id: nextId(),
         kind: "widget",
@@ -261,7 +385,7 @@ export function useOnboardingFlow() {
         { type: "delay", ms: 600 },
         {
           type: "sketch-message",
-          text: "Almost there — just need an API key.",
+          text: "WhatsApp is all set. Last step — let's get my brain connected.",
           step: 2,
         },
         { type: "delay", ms: 500 },
@@ -278,7 +402,11 @@ export function useOnboardingFlow() {
       { type: "delay", ms: 400 },
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
-      { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
+      {
+        type: "sketch-message",
+        text: "Almost done — I just need to know which AI provider to run on.",
+        step: 3,
+      },
       {
         type: "sketch-message",
         text: "I run on Claude under the hood — it's why I'm good at reading between the lines.",
@@ -299,7 +427,11 @@ export function useOnboardingFlow() {
       { type: "delay", ms: 1000 },
       { type: "action", action: "set-step", step: 3 },
       { type: "divider", label: "API Key", step: 3 },
-      { type: "sketch-message", text: "Last step — connect your AI provider so I can power the brains.", step: 3 },
+      {
+        type: "sketch-message",
+        text: "Almost done — I just need to know which AI provider to run on.",
+        step: 3,
+      },
       {
         type: "sketch-message",
         text: "I run on Claude under the hood — it's why I'm good at reading between the lines.",
@@ -324,35 +456,41 @@ export function useOnboardingFlow() {
       enqueue([
         { type: "user-message", text: `${providerLabel} connected ✓`, step: 3, icon: iconKey },
         { type: "delay", ms: 400 },
-        { type: "sketch-message", text: "Verified. You're all set.", step: 3 },
-        { type: "delay", ms: 1000 },
-        { type: "widget", widgetType: "example-prompts", step: 3 },
+        { type: "sketch-message", text: "Perfect, that's everything. Let's go.", step: 3 },
+        { type: "delay", ms: 800 },
+        { type: "action", action: "set-step", step: 4 },
+        { type: "widget", widgetType: "yellow-finish", step: 4 },
       ]);
+      setState((prev) => ({ ...prev, completed: true }));
     },
     [enqueue],
   );
 
   // ── Completion ──
 
-  const handleExamplePromptsDone = useCallback(() => {
-    appendMessage({
-      id: nextId(),
-      kind: "widget",
-      step: 3,
-      widgetType: "example-prompts",
-      widgetProps: { frozen: true },
-    });
-    setActiveWidget(null);
-    enqueue([
-      { type: "sketch-message", text: "Mention @Sketch in any channel, or DM me directly.", step: 3 },
-      { type: "delay", ms: 500 },
-      { type: "widget", widgetType: "yellow-finish", step: 3 },
-    ]);
-    setState((prev) => ({ ...prev, completed: true }));
-  }, [appendMessage, enqueue]);
-
   const handleFinishCta = useCallback(() => {
     // In production: deep link to Slack DM or WhatsApp conversation
+  }, []);
+
+  const handleDashboard = useCallback(() => {
+    window.location.href = "/dashboard";
+  }, []);
+
+  // ── Error state handlers ──
+
+  const handleRetryAuth = useCallback(() => {
+    setState((prev) => ({ ...prev, errorState: null }));
+    setActiveWidget(null);
+    enqueue([
+      { type: "delay", ms: 300 },
+      { type: "sketch-message", text: "How would you like to sign in?", step: 0 },
+      { type: "delay", ms: 400 },
+      { type: "widget", widgetType: "auth-picker", step: 0 },
+    ]);
+  }, [enqueue]);
+
+  const handleGoToLogin = useCallback(() => {
+    window.location.href = "/login";
   }, []);
 
   // ── Scroll to step ──
@@ -378,8 +516,10 @@ export function useOnboardingFlow() {
     handleWhatsAppConnected,
     handleWhatsAppSkip,
     handleApiKeyValidated,
-    handleExamplePromptsDone,
     handleFinishCta,
+    handleDashboard,
+    handleRetryAuth,
+    handleGoToLogin,
     handleStepClick,
   };
 }

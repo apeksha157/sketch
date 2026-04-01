@@ -26,7 +26,7 @@ describe("OnboardingChat", () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText("Add to Slack")).toBeInTheDocument();
+        expect(screen.getByText("Continue with Slack")).toBeInTheDocument();
         expect(screen.getByText("Sign in with Google")).toBeInTheDocument();
       },
       { timeout: 5000 },
@@ -39,25 +39,24 @@ describe("OnboardingChat", () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText("Add to Slack")).toBeInTheDocument();
+        expect(screen.getByText("Continue with Slack")).toBeInTheDocument();
       },
       { timeout: 5000 },
     );
 
-    await user.click(screen.getByText("Add to Slack"));
+    await user.click(screen.getByText("Continue with Slack"));
 
     await waitFor(() => {
       expect(screen.getByText("Connecting to Slack...")).toBeInTheDocument();
     });
   });
 
-  it("renders the step indicator with all 4 steps", async () => {
+  it("step track is hidden on initial signup page", async () => {
     renderWithProviders(<OnboardingChat />);
 
-    expect(screen.getByText("Sign In")).toBeInTheDocument();
-    expect(screen.getByText("Workspace")).toBeInTheDocument();
-    expect(screen.getByText("Platforms")).toBeInTheDocument();
-    expect(screen.getByText("API Key")).toBeInTheDocument();
+    // Step track should not be visible before auth — role is not yet known
+    expect(screen.queryByText("Account")).not.toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
 
   it("renders header with sketch logo image", () => {

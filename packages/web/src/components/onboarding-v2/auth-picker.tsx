@@ -61,7 +61,7 @@ export function AuthPicker({ onSelect }: AuthPickerProps) {
           <SlackLogo size={24} />
         </div>
         <div>
-          <div className="ob-auth-title">Add to Slack</div>
+          <div className="ob-auth-title">Continue with Slack</div>
           <div className="ob-auth-subtitle">Recommended</div>
         </div>
       </button>

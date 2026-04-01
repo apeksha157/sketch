@@ -141,12 +141,25 @@
 /* ── Step track ── */
 
 .ob-track {
-  padding: 8px 28px 20px;
+  padding: 8px 28px 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0;
   background: var(--ob-container-bg);
+  position: relative;
+}
+
+.ob-track::after {
+  content: "";
+  position: absolute;
+  bottom: -20px;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(to bottom, var(--ob-container-bg), transparent);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .ob-track-pill {
@@ -155,6 +168,7 @@
   gap: 6px;
   padding: 5px 10px;
   border-radius: 100px;
+  white-space: nowrap;
   border: none;
   background: transparent;
   cursor: default;
@@ -219,7 +233,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 28px 0;
+  padding: 0 28px 8px;
   scroll-behavior: smooth;
 }
 
@@ -303,7 +317,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 24px 0;
+  padding: 14px 0;
 }
 
 .ob-divider-line {
@@ -455,8 +469,8 @@
 
 .ob-ws-stat-chip {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
   flex: 1;
   background: rgba(4, 4, 4, 0.04);
   border: 1px solid rgba(4, 4, 4, 0.07);
@@ -780,7 +794,7 @@
 
 .ob-qr-connected {
   color: var(--ob-green);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .ob-qr-subtext {
@@ -933,7 +947,7 @@
   color: #0a0a0a;
 }
 
-.ob-api-btn[data-state="default"]:hover {
+.ob-api-btn[data-state="default"]:not(:disabled):hover {
   opacity: 0.88;
 }
 
@@ -1050,7 +1064,7 @@
 
 .ob-conn-green {
   color: var(--ob-green);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 /* ── Example prompts ── */

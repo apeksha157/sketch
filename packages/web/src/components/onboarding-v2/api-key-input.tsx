@@ -80,6 +80,17 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
 
   const btnState = state === "loading" ? "loading" : state === "success" ? "success" : "default";
 
+  /** Lock scroll position when switching tabs so content above doesn't shift into view. */
+  const switchTab = (next: ApiProvider) => {
+    const scrollParent = document.querySelector(".ob-chat");
+    const scrollTop = scrollParent?.scrollTop ?? 0;
+    setProvider(next);
+    resetFields();
+    requestAnimationFrame(() => {
+      if (scrollParent) scrollParent.scrollTop = scrollTop;
+    });
+  };
+
   return (
     <div className="ob-widget ob-animate-in">
       <div className="ob-api-card">
@@ -89,10 +100,7 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
             type="button"
             className="ob-api-toggle-tab"
             data-active={provider === "bedrock"}
-            onClick={() => {
-              setProvider("bedrock");
-              resetFields();
-            }}
+            onClick={() => switchTab("bedrock")}
           >
             <AwsMark size={14} />
             AWS Bedrock
@@ -101,10 +109,7 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
             type="button"
             className="ob-api-toggle-tab"
             data-active={provider === "anthropic"}
-            onClick={() => {
-              setProvider("anthropic");
-              resetFields();
-            }}
+            onClick={() => switchTab("anthropic")}
           >
             <AnthropicMark size={14} />
             Anthropic

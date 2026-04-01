@@ -20,7 +20,7 @@ function CheckSvg() {
   );
 }
 
-/** 4-step pill indicator: Sign in -> Workspace -> Channels -> API key. */
+/** 5-step pill indicator: Account -> Workspace -> Platforms -> API Key -> Ready. */
 export function StepTrack({ currentStep, maxReached, onStepClick }: StepTrackProps) {
   return (
     <div className="ob-track">

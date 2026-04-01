@@ -2,6 +2,19 @@
 
 export type AuthMethod = "slack" | "google";
 export type ApiProvider = "bedrock" | "anthropic";
+export type UserRole = "admin" | "member";
+export type ErrorType = "generic-email" | "already-registered" | "workspace-not-ready";
+
+/** Result of post-auth detection checks. */
+export interface DetectionResult {
+  isCompanyEmail: boolean;
+  workspaceExists: boolean;
+  accountExists: boolean;
+  workspaceReady: boolean;
+  role: UserRole | null;
+  userName?: string;
+  adminEmail?: string;
+}
 
 /** A visible message in the chat. */
 export interface ChatMessage {
@@ -11,6 +24,8 @@ export interface ChatMessage {
   text?: string;
   /** When true, renders as smaller dimmed tertiary copy */
   dim?: boolean;
+  /** When set, renders in danger color */
+  danger?: boolean;
   /** For dividers */
   label?: string;
   /** For widgets rendered inline in the chat history (after user interacts) */
@@ -29,11 +44,12 @@ export type WidgetType =
   | "yellow-finish"
   | "example-prompts"
   | "section-continue"
+  | "error-state"
   | "loading";
 
 /** An instruction in the message queue (not yet processed). */
 export type QueueItem =
-  | { type: "sketch-message"; text: string; step: number; dim?: boolean }
+  | { type: "sketch-message"; text: string; step: number; dim?: boolean; danger?: boolean }
   | { type: "user-message"; text: string; step: number; icon?: string }
   | { type: "divider"; label: string; step: number }
   | { type: "delay"; ms: number }
@@ -49,6 +65,14 @@ export interface OnboardingState {
   apiProvider: ApiProvider | null;
   apiKeyValidated: boolean;
   completed: boolean;
+  /** Tracks whether step track should be visible (only after role is confirmed as admin). */
+  showStepTrack: boolean;
+  /** Error/edge state detected after auth. */
+  errorState: ErrorType | null;
+  /** Detected user name from auth. */
+  userName: string | null;
+  /** Admin email for holding screen. */
+  adminEmail: string | null;
   workspace: {
     name: string;
     members: number;
@@ -59,4 +83,4 @@ export interface OnboardingState {
   } | null;
 }
 
-export const STEP_LABELS = ["Sign In", "Workspace", "Platforms", "API Key"] as const;
+export const STEP_LABELS = ["Account", "Workspace", "Platforms", "API Key", "Ready"] as const;
