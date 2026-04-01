@@ -20,20 +20,24 @@ export function YellowFinish({
 
   return (
     <div className="ob-finish ob-animate-finish">
-      <img src="/logos/sketch-logo-dark.png" alt="Sketch" style={{ height: 48, width: "auto" }} />
-      <div className="ob-finish-heading">Ready.</div>
+      <div className="ob-finish-heading">
+        <img src="/logos/sketch-icon-light.png" alt="" aria-hidden="true" className="ob-finish-icon" />
+        is now ready.
+      </div>
       <div className="ob-finish-subtitle">{subtitle}</div>
       <div className="ob-finish-ctas">
-        {slackConnected && (
-          <button type="button" className="ob-btn ob-btn-dark" onClick={onOpenSlack}>
-            Open Slack
-          </button>
-        )}
-        {whatsappConnected && (
-          <button type="button" className="ob-btn ob-btn-dark" onClick={onOpenWhatsApp}>
-            Open WhatsApp
-          </button>
-        )}
+        <div className="ob-finish-ctas-row">
+          {slackConnected && (
+            <button type="button" className="ob-btn ob-btn-dark" onClick={onOpenSlack}>
+              Open Slack
+            </button>
+          )}
+          {whatsappConnected && (
+            <button type="button" className="ob-btn ob-btn-dark" onClick={onOpenWhatsApp}>
+              Open WhatsApp
+            </button>
+          )}
+        </div>
         <button type="button" className="ob-btn ob-btn-ghost ob-btn-ghost-on-yellow" onClick={onDashboard}>
           Go to dashboard
         </button>
