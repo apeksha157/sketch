@@ -1258,16 +1258,17 @@
 .ob-admin-email-pill {
   display: inline;
   font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-sm);
-  background: rgba(217, 119, 6, 0.12);
-  color: #b45309;
+  font-size: var(--ob-fs-lg);
+  font-weight: 400;
+  background: rgba(107, 98, 0, 0.08);
+  color: var(--ob-yellow-fg);
   border-radius: 4px;
   padding: 2px 6px;
 }
 
 .dark .ob-admin-email-pill {
-  background: rgba(251, 191, 36, 0.12);
-  color: #fbbf24;
+  background: rgba(254, 237, 1, 0.1);
+  color: var(--ob-yellow-fg);
 }
 
 /* ── Finish card CTA row ── */
