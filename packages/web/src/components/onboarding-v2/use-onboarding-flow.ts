@@ -174,6 +174,29 @@ export function useOnboardingFlow() {
       return;
     }
 
+    // Already registered — skip success confirmation, go straight to greeting
+    if (detection?.accountExists) {
+      setActiveWidget(null);
+      const name = detection.userName || "there";
+      setState((prev) => ({ ...prev, errorState: "already-registered", userName: name }));
+      enqueue([
+        { type: "delay", ms: 500 },
+        {
+          type: "sketch-message",
+          text: `Hey ${name}, good to see you again! Looks like you already have an account — head over to login to get back in.`,
+          step: 0,
+        },
+        { type: "delay", ms: 400 },
+        {
+          type: "widget",
+          widgetType: "error-state",
+          step: 0,
+          props: { errorType: "already-registered", name },
+        },
+      ]);
+      return;
+    }
+
     // Freeze the confirmation into message history (only for non-error flows)
     appendMessage({
       id: nextId(),
@@ -185,28 +208,6 @@ export function useOnboardingFlow() {
     setActiveWidget(null);
 
     if (detection) {
-      // ── Already registered ──
-      if (detection.accountExists) {
-        const name = detection.userName || "there";
-        setState((prev) => ({ ...prev, errorState: "already-registered", userName: name }));
-        enqueue([
-          { type: "delay", ms: 500 },
-          {
-            type: "sketch-message",
-            text: `Hey ${name}, good to see you again! Looks like you already have an account — head over to login to get back in.`,
-            step: 0,
-          },
-          { type: "delay", ms: 400 },
-          {
-            type: "widget",
-            widgetType: "error-state",
-            step: 0,
-            props: { errorType: "already-registered", name },
-          },
-        ]);
-        return;
-      }
-
       // ── Workspace exists but admin not ready ──
       if (detection.workspaceExists && !detection.workspaceReady) {
         const name = detection.userName || "there";
