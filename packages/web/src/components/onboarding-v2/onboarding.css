@@ -347,8 +347,8 @@
 }
 
 .ob-auth-card:hover {
-  border-color: #9c9a92;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  border-color: rgba(107, 98, 0, 0.28);
+  box-shadow: 0 4px 16px rgba(107, 98, 0, 0.04);
 }
 
 .ob-auth-icon-container {
@@ -1132,8 +1132,8 @@
 }
 
 .dark .ob-auth-card:hover {
-  border-color: rgba(245, 245, 240, 0.2);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border-color: rgba(254, 237, 1, 0.28);
+  box-shadow: 0 4px 16px rgba(254, 237, 1, 0.06);
 }
 
 .dark .ob-ws-icon {
@@ -1217,7 +1217,7 @@
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: var(--ob-text-muted);
+  color: var(--ob-text-dim);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
   flex-shrink: 0;
@@ -1225,10 +1225,124 @@
 
 .ob-theme-toggle:hover {
   background: rgba(4, 4, 4, 0.06);
-  color: var(--ob-text);
+  color: var(--ob-yellow-fg);
 }
 
 .dark .ob-theme-toggle:hover {
   background: rgba(245, 245, 240, 0.08);
+  color: var(--ob-yellow-fg);
+}
+
+/* ── Danger message body ── */
+
+.ob-msg-body-danger {
+  color: var(--ob-error);
+}
+
+/* ── Admin email pill (inline in holding screen) ── */
+
+.ob-admin-email-pill {
+  display: inline;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.dark .ob-admin-email-pill {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+}
+
+/* ── Finish card CTA row ── */
+
+.ob-finish-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+/* Ghost button on yellow background needs dark border */
+.ob-btn-ghost-on-yellow {
+  border-color: rgba(10, 10, 10, 0.18);
+  color: rgba(10, 10, 10, 0.6);
+}
+
+.ob-btn-ghost-on-yellow:not(:disabled):hover {
+  border-color: rgba(10, 10, 10, 0.35);
+  color: #0a0a0a;
+  background: rgba(10, 10, 10, 0.06);
+}
+
+/* ── Login page ── */
+
+.ob-login-container {
+  height: auto;
+  min-height: 0;
+  max-height: min(740px, 90vh);
+}
+
+.ob-login-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 28px 36px;
+  gap: 0;
+}
+
+.ob-login-greeting {
+  font-family: var(--ob-font-deco);
+  font-size: 28px;
+  font-weight: 400;
   color: var(--ob-text);
+  text-align: center;
+  line-height: 1.3;
+  margin-bottom: 28px;
+}
+
+.ob-login-auth-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 340px;
+  margin-bottom: 24px;
+}
+
+.ob-login-footer {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  color: var(--ob-text-muted);
+  text-align: center;
+}
+
+.ob-login-signup-link {
+  color: var(--ob-text-dim);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.ob-login-signup-link:hover {
+  color: var(--ob-yellow-fg);
+}
+
+/* Subtle brand-tinted background for login page (light mode only) */
+.onboarding-root:has(.ob-login-container) {
+  background: color-mix(in srgb, #feed01 3%, #f7f7f5);
+}
+.onboarding-root:has(.ob-login-container) .ob-container {
+  background: linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, #feed01 5%, #ffffff) 100%);
+  border: 1px solid rgba(254, 237, 1, 0.1);
+}
+.dark .onboarding-root:has(.ob-login-container) {
+  background: color-mix(in srgb, #feed01 2%, #040404);
+}
+.dark .onboarding-root:has(.ob-login-container) .ob-container {
+  background: linear-gradient(180deg, #111110 0%, color-mix(in srgb, #feed01 3%, #111110) 100%);
+  border: 1px solid rgba(254, 237, 1, 0.06);
 }
