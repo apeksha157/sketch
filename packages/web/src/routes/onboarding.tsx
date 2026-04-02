@@ -17,5 +17,6 @@ export const onboardingRoute = createRoute({
   component: OnboardingRoutePage,
 });
 
+function OnboardingRoutePage() {
   return <OnboardingChat />;
 }

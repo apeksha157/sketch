@@ -213,7 +213,6 @@ function OrgChartNode({ node }: { node: TreeNode }) {
             })}
           </ul>
         </>
-
       )}
     </div>
   );
