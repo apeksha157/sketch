@@ -1,4 +1,4 @@
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@sketch/ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 interface QRCardProps {

@@ -1,4 +1,4 @@
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@sketch/ui";
 import "@/components/onboarding-v2/onboarding.css";
 import { AuthPicker } from "@/components/onboarding-v2/auth-picker";
 import { SectionDivider } from "@/components/onboarding-v2/section-divider";

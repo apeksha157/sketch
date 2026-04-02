@@ -1,4 +1,4 @@
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@sketch/ui";
 import { useEffect, useRef } from "react";
 import { ThemedSketchIcon } from "./spark-icon";
 import type { AuthMethod } from "./types";

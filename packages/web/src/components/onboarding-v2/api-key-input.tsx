@@ -1,4 +1,4 @@
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@sketch/ui";
 import { useState } from "react";
 import type { ApiProvider } from "./types";
 

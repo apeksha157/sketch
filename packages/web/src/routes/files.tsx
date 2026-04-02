@@ -18,37 +18,6 @@ import {
   SharedDrivePicker,
 } from "@/components/connect-integration-dialog";
 import { ConnectorLogo } from "@/components/connector-logos";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import type { ConnectorConfig, ConnectorFile, FileAccess, FileContent, SearchResult, UnifiedFile } from "@/lib/api";
 import { api } from "@/lib/api";
 import { INTEGRATIONS, type IntegrationDefinition, type IntegrationType, getIntegration } from "@/lib/integrations";
@@ -80,6 +49,37 @@ import {
   WarningCircleIcon,
   XIcon,
 } from "@phosphor-icons/react";
+import { Badge } from "@sketch/ui";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@sketch/ui/components/alert-dialog";
+import { Button } from "@sketch/ui/components/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@sketch/ui/components/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@sketch/ui/components/dropdown-menu";
+import { Input } from "@sketch/ui/components/input";
+import { Label } from "@sketch/ui/components/label";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@sketch/ui/components/sheet";
+import { Skeleton } from "@sketch/ui/components/skeleton";
+import { Switch } from "@sketch/ui/components/switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -372,7 +372,7 @@ function FilesPage() {
           <MagnifyingGlassIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
             placeholder="Search files..."
             className="pl-9 text-sm"
           />
@@ -742,7 +742,7 @@ function SearchSettingsSheet({ open, onOpenChange }: { open: boolean; onOpenChan
 
   useEffect(() => {
     if (data) {
-      setGeminiKey(data.geminiApiKey ?? "");
+      setGeminiKey(data.geminiApiKeyConfigured ? "••••••••" : "");
       setEnrichmentEnabled(data.enrichmentEnabled === 1);
       setDirty(false);
       setShowRunPrompt(false);
@@ -777,7 +777,7 @@ function SearchSettingsSheet({ open, onOpenChange }: { open: boolean; onOpenChan
 
   function handleSave() {
     const updates: { geminiApiKey?: string | null; enrichmentEnabled?: boolean } = {};
-    if (geminiKey !== (data?.geminiApiKey ?? "")) updates.geminiApiKey = geminiKey || null;
+    if (geminiKey !== "••••••••" && geminiKey !== "") updates.geminiApiKey = geminiKey || null;
     if (enrichmentEnabled !== (data?.enrichmentEnabled === 1)) updates.enrichmentEnabled = enrichmentEnabled;
     mutation.mutate(updates);
   }
@@ -787,7 +787,7 @@ function SearchSettingsSheet({ open, onOpenChange }: { open: boolean; onOpenChan
   return (
     <Dialog
       open={open}
-      onOpenChange={(v) => {
+      onOpenChange={(v: boolean) => {
         if (!v) setShowRunPrompt(false);
         onOpenChange(v);
       }}
@@ -840,7 +840,7 @@ function SearchSettingsSheet({ open, onOpenChange }: { open: boolean; onOpenChan
               <Switch
                 id="enrichment-toggle"
                 checked={enrichmentEnabled}
-                onCheckedChange={(checked) => {
+                onCheckedChange={(checked: boolean) => {
                   setEnrichmentEnabled(checked);
                   setDirty(true);
                 }}
@@ -872,7 +872,7 @@ function SearchSettingsSheet({ open, onOpenChange }: { open: boolean; onOpenChan
                       id="gemini-key"
                       type={showKey ? "text" : "password"}
                       value={geminiKey}
-                      onChange={(e) => {
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                         setGeminiKey(e.target.value);
                         setDirty(true);
                       }}
@@ -1673,7 +1673,7 @@ function FileDetailSheet({ fileId, onClose }: { fileId: string | null; onClose: 
   const access = data?.access;
 
   return (
-    <Sheet open={!!fileId} onOpenChange={(open) => !open && onClose()}>
+    <Sheet open={!!fileId} onOpenChange={(open: boolean) => !open && onClose()}>
       <SheetContent side="right" className="flex w-full flex-col sm:max-w-lg">
         <SheetHeader>
           <SheetTitle className="text-base">{isLoading ? "Loading..." : (file?.fileName ?? "File")}</SheetTitle>

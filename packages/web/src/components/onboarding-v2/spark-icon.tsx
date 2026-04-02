@@ -1,4 +1,4 @@
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@sketch/ui";
 
 /**
  * Sketch brand icon — hand-drawn spark with "S" in the center.

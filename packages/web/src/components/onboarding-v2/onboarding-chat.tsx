@@ -1,4 +1,4 @@
-import { useTheme } from "@/hooks/use-theme";
+import { useTheme } from "@sketch/ui";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import "./onboarding.css";
 

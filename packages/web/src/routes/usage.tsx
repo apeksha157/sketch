@@ -1,7 +1,7 @@
-import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
 import { useDashboardAuth } from "@/routes/dashboard";
 import { ArrowDownIcon, ArrowUpIcon, CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { Badge } from "@sketch/ui";
+import { cn } from "@sketch/ui";
 import { createRoute } from "@tanstack/react-router";
 import {
   CategoryScale,
