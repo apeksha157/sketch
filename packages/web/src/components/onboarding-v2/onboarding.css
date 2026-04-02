@@ -240,7 +240,7 @@
 /* ── Messages ── */
 
 .ob-msg {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .ob-msg-label {
@@ -284,7 +284,7 @@
 
 /* Continuation message — no label row, align body with the batch above */
 .ob-msg-continued {
-  margin-top: 4px;
+  margin-top: 0;
 }
 
 .ob-msg-continued .ob-msg-body {
@@ -340,7 +340,8 @@
 
 .ob-widget {
   padding-left: 32px;
-  margin-bottom: 12px;
+  margin-top: 8px;
+  margin-bottom: 0;
 }
 
 /* ── Auth picker ── */
@@ -354,7 +355,7 @@
   gap: 14px;
   cursor: pointer;
   border: 1px solid var(--ob-card-border);
-  width: 100%;
+  max-width: 340px;
   text-align: left;
   transition: border-color 0.2s, box-shadow 0.2s;
   color: var(--ob-text);
@@ -366,8 +367,8 @@
 }
 
 .ob-auth-icon-container {
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1336,32 +1337,9 @@
   gap: 0;
 }
 
-/* Tighter gap between Sketch messages, more space before cards */
-.ob-login-body .ob-msg {
-  margin-bottom: 8px;
-}
-
-.ob-login-body .ob-msg-continued {
-  margin-top: 0;
-}
-
-.ob-login-body .ob-widget {
-  margin-top: 8px;
-  margin-bottom: 0;
-}
-
 /* Space between auth cards and error message that follows */
-.ob-login-body .ob-widget + .ob-msg {
+.ob-widget + .ob-msg {
   margin-top: 16px;
-}
-
-.ob-login-body .ob-auth-card {
-  max-width: 340px;
-}
-
-.ob-login-body .ob-auth-icon-container {
-  width: 28px;
-  height: 28px;
 }
 
 .ob-login-footer {
