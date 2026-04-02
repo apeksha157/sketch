@@ -33,14 +33,14 @@ describe("runMigrations — full sequence", () => {
     await expect(runMigrations(db)).resolves.not.toThrow();
   });
 
-  it("records all 26 migration entries in the kysely_migration table", async () => {
+  it("records all 27 migration entries in the kysely_migration table", async () => {
     await runMigrations(db);
 
     const rows = await sql<{ name: string }>`
       SELECT name FROM kysely_migration ORDER BY name ASC
     `.execute(db);
 
-    expect(rows.rows).toHaveLength(26);
+    expect(rows.rows).toHaveLength(27);
   });
 
   it("records migrations with the correct names in order", async () => {
@@ -169,7 +169,7 @@ describe("runMigrations — full sequence", () => {
     `.execute(db);
 
     // Still exactly 27, not 54
-    expect(rows.rows).toHaveLength(26);
+    expect(rows.rows).toHaveLength(27);
   });
 });
 
@@ -201,6 +201,6 @@ describe("runMigrations — incremental upgrade", () => {
     const rows = await sql<{ name: string }>`
       SELECT name FROM kysely_migration ORDER BY name ASC
     `.execute(db);
-    expect(rows.rows).toHaveLength(26);
+    expect(rows.rows).toHaveLength(27);
   });
 });
