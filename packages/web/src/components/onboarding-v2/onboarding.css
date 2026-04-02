@@ -340,7 +340,7 @@
 
 .ob-widget {
   padding-left: 32px;
-  margin-top: 8px;
+  margin-top: 16px;
   margin-bottom: 0;
 }
 
@@ -1335,6 +1335,10 @@
   flex-direction: column;
   padding: 0 28px 28px;
   gap: 0;
+}
+
+.ob-login-body .ob-widget {
+  margin-top: 8px;
 }
 
 /* Space between auth cards and error message that follows */

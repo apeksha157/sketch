@@ -399,12 +399,13 @@ export function OnboardingChat() {
         const isMember = activeWidget.widgetProps?.isMember as boolean | undefined;
         const slackConnected = state.authMethod === "slack";
         const whatsappConnected = state.whatsappConnected;
+        const googleMember = isMember && state.authMethod === "google";
         return (
           <div className="ob-animate-finish" style={{ marginBottom: 12 }} data-step={activeWidget.step}>
             <YellowFinish
               isAdmin={!isMember}
-              slackConnected={isMember ? slackConnected : slackConnected}
-              whatsappConnected={isMember ? whatsappConnected : whatsappConnected}
+              slackConnected={slackConnected}
+              whatsappConnected={whatsappConnected || googleMember}
               onOpenSlack={handleFinishCta}
               onOpenWhatsApp={handleFinishCta}
               onDashboard={handleDashboard}
