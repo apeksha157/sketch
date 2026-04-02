@@ -1350,6 +1350,11 @@
   margin-bottom: 0;
 }
 
+/* Space between auth cards and error message that follows */
+.ob-login-body .ob-widget + .ob-msg {
+  margin-top: 16px;
+}
+
 .ob-login-body .ob-auth-card {
   max-width: 340px;
 }
@@ -1376,20 +1381,4 @@
 
 .ob-login-signup-link:hover {
   color: var(--ob-yellow-fg);
-}
-
-/* Subtle brand-tinted background for login page (light mode only) */
-.onboarding-root:has(.ob-login-container) {
-  background: color-mix(in srgb, #feed01 3%, #f7f7f5);
-}
-.onboarding-root:has(.ob-login-container) .ob-container {
-  background: linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, #feed01 5%, #ffffff) 100%);
-  border: 1px solid rgba(254, 237, 1, 0.1);
-}
-.dark .onboarding-root:has(.ob-login-container) {
-  background: color-mix(in srgb, #feed01 2%, #040404);
-}
-.dark .onboarding-root:has(.ob-login-container) .ob-container {
-  background: linear-gradient(180deg, #111110 0%, color-mix(in srgb, #feed01 3%, #111110) 100%);
-  border: 1px solid rgba(254, 237, 1, 0.06);
 }

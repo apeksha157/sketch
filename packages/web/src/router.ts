@@ -5,6 +5,7 @@ import { dashboardRoute } from "./routes/dashboard";
 import { filesRoute } from "./routes/files";
 import { indexRoute } from "./routes/index";
 import { loginRoute } from "./routes/login";
+import { loginErrorRoute } from "./routes/login-error";
 import { onboardingRoute } from "./routes/onboarding";
 import { rootRoute } from "./routes/root";
 import { scheduledTasksRoute } from "./routes/scheduled-tasks";
@@ -14,6 +15,7 @@ import { usageRoute } from "./routes/usage";
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
+  loginErrorRoute,
   onboardingRoute,
   indexRoute,
   dashboardRoute.addChildren([
