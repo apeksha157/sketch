@@ -2,11 +2,14 @@
  * Connectors and indexed files infrastructure.
  *
  * Creates connector_configs, indexed_files (with enrichment + embedding columns),
- * and FTS5 full-text search with triggers.
+ * and FTS5 full-text search with triggers (SQLite only).
  */
 import { type Kysely, sql } from "kysely";
+import { isPg } from "../dialect";
 
 export async function up(db: Kysely<unknown>): Promise<void> {
+  const isPostgres = isPg(db);
+
   await db.schema
     .createTable("connector_configs")
     .addColumn("id", "text", (col) => col.primaryKey())
@@ -67,7 +70,22 @@ export async function up(db: Kysely<unknown>): Promise<void> {
 
   await db.schema.createIndex("idx_indexed_files_not_archived").on("indexed_files").columns(["is_archived"]).execute();
 
-  // FTS5 virtual table for full-text search over file name, summary, tags, source, and source_path
+  if (isPostgres) {
+    await sql`ALTER TABLE indexed_files ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (
+      to_tsvector('english',
+        regexp_replace(coalesce(file_name, ''), '[._\\-/]', ' ', 'g') || ' ' ||
+        coalesce(summary, '') || ' ' ||
+        coalesce(tags, '') || ' ' ||
+        coalesce(source, '') || ' ' ||
+        coalesce(source_path, '')
+      )
+    ) STORED`.execute(db);
+
+    await sql`CREATE INDEX idx_indexed_files_search_vector ON indexed_files USING GIN (search_vector)`.execute(db);
+    return;
+  }
+
+  // SQLite: FTS5 virtual table for full-text search over file name, summary, tags, source, and source_path
   await sql`
 		CREATE VIRTUAL TABLE indexed_files_fts USING fts5(
 			file_name,
@@ -106,10 +124,15 @@ export async function up(db: Kysely<unknown>): Promise<void> {
 }
 
 export async function down(db: Kysely<unknown>): Promise<void> {
-  await sql`DROP TRIGGER IF EXISTS indexed_files_au`.execute(db);
-  await sql`DROP TRIGGER IF EXISTS indexed_files_ad`.execute(db);
-  await sql`DROP TRIGGER IF EXISTS indexed_files_ai`.execute(db);
-  await sql`DROP TABLE IF EXISTS indexed_files_fts`.execute(db);
+  const isPostgres = isPg(db);
+
+  if (!isPostgres) {
+    await sql`DROP TRIGGER IF EXISTS indexed_files_au`.execute(db);
+    await sql`DROP TRIGGER IF EXISTS indexed_files_ad`.execute(db);
+    await sql`DROP TRIGGER IF EXISTS indexed_files_ai`.execute(db);
+    await sql`DROP TABLE IF EXISTS indexed_files_fts`.execute(db);
+  }
+
   await db.schema.dropTable("indexed_files").execute();
   await db.schema.dropTable("connector_configs").execute();
 }

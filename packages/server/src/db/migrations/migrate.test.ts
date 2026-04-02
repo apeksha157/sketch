@@ -3,8 +3,8 @@
  *
  * Uses a fresh in-memory SQLite database and runs all 027 migrations through the
  * actual runMigrations() function. Tests verify that all migrations are recorded in
- * the kysely_migration table, that key tables exist after migration, and that a DB
- * with migrations 001-018 already applied can be upgraded with only 019-027.
+ * the kysely_migration table, that key tables exist after migration, and that
+ * running migrations twice is idempotent.
  */
 import SQLite from "better-sqlite3";
 import { Kysely, SqliteDialect, sql } from "kysely";
@@ -33,14 +33,14 @@ describe("runMigrations — full sequence", () => {
     await expect(runMigrations(db)).resolves.not.toThrow();
   });
 
-  it("records all 27 migration entries in the kysely_migration table", async () => {
+  it("records all 26 migration entries in the kysely_migration table", async () => {
     await runMigrations(db);
 
     const rows = await sql<{ name: string }>`
       SELECT name FROM kysely_migration ORDER BY name ASC
     `.execute(db);
 
-    expect(rows.rows).toHaveLength(27);
+    expect(rows.rows).toHaveLength(26);
   });
 
   it("records migrations with the correct names in order", async () => {
@@ -54,16 +54,15 @@ describe("runMigrations — full sequence", () => {
 
     expect(names[0]).toBe("001-initial");
     expect(names[1]).toBe("002-channels");
-    expect(names[17]).toBe("018-user-type-role-hierarchy");
-    expect(names[18]).toBe("019-connectors");
-    expect(names[19]).toBe("020-user-provider-identities");
-    expect(names[20]).toBe("021-file-access");
-    expect(names[21]).toBe("022-settings-extended");
-    expect(names[22]).toBe("023-semantic-search");
-    expect(names[23]).toBe("024-settings-enrichment");
-    expect(names[24]).toBe("025-agent-usage");
-    expect(names[25]).toBe("026-normalize-created-at");
-    expect(names[26]).toBe("027-entities");
+    expect(names[17]).toBe("017-outreach-messages");
+    expect(names[18]).toBe("018-scheduled-tasks");
+    expect(names[19]).toBe("018-user-type-role-hierarchy");
+    expect(names[20]).toBe("019-chat-sessions-thread-key-sentinel");
+    expect(names[21]).toBe("020-whatsapp-groups");
+    expect(names[22]).toBe("021-settings-enrichment");
+    expect(names[23]).toBe("025-agent-usage");
+    expect(names[24]).toBe("026-normalize-created-at");
+    expect(names[25]).toBe("027-entities");
   });
 
   it("creates the users table", async () => {
@@ -170,7 +169,7 @@ describe("runMigrations — full sequence", () => {
     `.execute(db);
 
     // Still exactly 27, not 54
-    expect(rows.rows).toHaveLength(27);
+    expect(rows.rows).toHaveLength(26);
   });
 });
 
@@ -185,7 +184,7 @@ describe("runMigrations — incremental upgrade", () => {
     await db.destroy();
   });
 
-  it("applies only 019-027 when 001-018 are already present", async () => {
+  it("is idempotent when all migrations are already present", async () => {
     // Simulate a DB that already has 001-018 applied by running the full migration
     // sequence once, then seeding a user row to represent existing data.
     await runMigrations(db);
@@ -202,6 +201,6 @@ describe("runMigrations — incremental upgrade", () => {
     const rows = await sql<{ name: string }>`
       SELECT name FROM kysely_migration ORDER BY name ASC
     `.execute(db);
-    expect(rows.rows).toHaveLength(27);
+    expect(rows.rows).toHaveLength(26);
   });
 });
