@@ -28,7 +28,6 @@ import * as m018b from "./migrations/018-user-type-role-hierarchy";
 import * as m019 from "./migrations/019-chat-sessions-thread-key-sentinel";
 import * as m020 from "./migrations/020-whatsapp-groups";
 import * as m021 from "./migrations/021-settings-enrichment";
-import * as m024 from "./migrations/024-settings-enrichment";
 import * as m025 from "./migrations/025-agent-usage";
 import * as m026 from "./migrations/026-normalize-created-at";
 import * as m027 from "./migrations/027-entities";
@@ -64,7 +63,6 @@ export async function runMigrations(db: Kysely<DB>): Promise<void> {
           "019-chat-sessions-thread-key-sentinel": m019,
           "020-whatsapp-groups": m020,
           "021-settings-enrichment": m021,
-          "024-settings-enrichment": m024,
           "025-agent-usage": m025,
           "026-normalize-created-at": m026,
           "027-entities": m027,
