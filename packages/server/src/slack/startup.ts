@@ -1,4 +1,5 @@
 import type { Logger } from "../logger";
+import { resolveSlackTokens } from "./tokens";
 
 type SlackTokenSource = {
   botToken: string | null | undefined;
@@ -7,7 +8,7 @@ type SlackTokenSource = {
 
 type StartupTokens = {
   botToken: string;
-  appToken: string;
+  appToken?: string;
 };
 
 type SlackRuntimeBot = {
@@ -17,8 +18,9 @@ type SlackRuntimeBot = {
 
 interface SlackStartupDeps<TBot extends SlackRuntimeBot> {
   logger: Pick<Logger, "info" | "warn" | "error">;
+  slackMode?: "socket" | "http";
   getSettingsTokens: () => Promise<SlackTokenSource | null>;
-  validateTokens: (botToken: string, appToken: string) => Promise<void>;
+  validateTokens: (botToken: string, appToken?: string) => Promise<void>;
   getCurrentBot: () => TBot | null;
   setCurrentBot: (bot: TBot | null) => void;
   createBot: (tokens: StartupTokens) => TBot;
@@ -34,17 +36,24 @@ export function createSlackStartupManager<TBot extends SlackRuntimeBot>(deps: Sl
 
     startupPromise = (async () => {
       try {
-        const settingsTokens = tokens ? null : await deps.getSettingsTokens();
-        const botToken = tokens?.botToken ?? settingsTokens?.botToken;
-        const appToken = tokens?.appToken ?? settingsTokens?.appToken;
-        const hasSlackTokens = Boolean(botToken && appToken);
-        if (!hasSlackTokens) {
+        const mode = deps.slackMode ?? "socket";
+
+        const resolved = tokens
+          ? { botToken: tokens.botToken, ...(tokens.appToken ? { appToken: tokens.appToken } : {}) }
+          : await resolveSlackTokens(mode, async () => {
+              const settingsTokens = await deps.getSettingsTokens();
+              return settingsTokens ? { botToken: settingsTokens.botToken, appToken: settingsTokens.appToken } : null;
+            });
+
+        if (!resolved) {
           deps.logger.info("Slack tokens not configured — skipping Slack bot startup");
           return;
         }
 
+        const { botToken, appToken } = resolved;
+
         try {
-          await deps.validateTokens(botToken as string, appToken as string);
+          await deps.validateTokens(botToken, appToken);
         } catch (err) {
           deps.logger.warn({ err }, "Slack tokens failed validation");
           throw new Error("Invalid Slack tokens");
@@ -57,8 +66,8 @@ export function createSlackStartupManager<TBot extends SlackRuntimeBot>(deps: Sl
         }
 
         const nextBot = deps.createBot({
-          botToken: botToken as string,
-          appToken: appToken as string,
+          botToken,
+          ...(appToken ? { appToken } : {}),
         });
         deps.setCurrentBot(nextBot);
 

@@ -1,6 +1,6 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { api } from "@/lib/api";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
 import { Outlet, createRoute, redirect, useRouteContext } from "@tanstack/react-router";
 import { rootRoute } from "./root";
 
@@ -65,7 +65,7 @@ function DashboardLayout() {
       <AppSidebar displayName={auth.displayName} displayIdentifier={auth.displayIdentifier} role={auth.role} />
       <SidebarInset>
         <SidebarTrigger className="absolute left-3 top-3 z-20" />
-        <main className="flex-1 overflow-auto pt-10">
+        <main className="flex-1 overflow-auto pt-[52px]">
           <Outlet />
         </main>
       </SidebarInset>

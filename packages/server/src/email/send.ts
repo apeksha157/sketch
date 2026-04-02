@@ -8,7 +8,7 @@ export interface SmtpConfig {
   host: string;
   port: number;
   user: string;
-  pass: string;
+  password: string;
   from: string;
   secure: boolean;
 }
@@ -20,7 +20,7 @@ function buildTransport(config: SmtpConfig): Transporter {
     secure: config.secure,
     auth: {
       user: config.user,
-      pass: config.pass,
+      pass: config.password,
     },
   });
 }

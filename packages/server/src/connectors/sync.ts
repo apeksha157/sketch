@@ -8,6 +8,7 @@
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { createConnectorRepository } from "../db/repositories/connectors";
+import { createEntityRepository } from "../db/repositories/entities";
 import type { DB } from "../db/schema";
 import { createClickUpConnector } from "./clickup";
 import { type EmbeddingProviderConfig, createEmbeddingProvider } from "./embeddings";
@@ -58,6 +59,7 @@ function serializeCredentials(credentials: ConnectorCredentials): string {
  */
 export async function runConnectorSync(db: Kysely<DB>, connectorConfigId: string, logger: Logger): Promise<SyncResult> {
   const repo = createConnectorRepository(db);
+  const entityRepo = createEntityRepository(db);
   const config = await repo.findConfigById(connectorConfigId);
 
   if (!config) {
@@ -101,6 +103,12 @@ export async function runConnectorSync(db: Kysely<DB>, connectorConfigId: string
       scopeConfig,
       cursor: config.sync_cursor,
       logger: syncLogger,
+      onEntitySeed: async (seed) => {
+        await entityRepo.upsertEntityFromTool(seed);
+      },
+      onPersonSeed: async (seed) => {
+        await entityRepo.upsertPersonEntity(seed);
+      },
     })) {
       try {
         seenProviderFileIds.add(item.providerFileId);
@@ -109,41 +117,101 @@ export async function runConnectorSync(db: Kysely<DB>, connectorConfigId: string
           continue;
         }
 
-        const upsertResult = await repo.upsertFile({
-          connectorConfigId: config.id,
-          source: config.connector_type,
-          providerFileId: item.providerFileId,
-          providerUrl: item.providerUrl,
-          fileName: item.fileName,
-          fileType: item.fileType,
-          contentCategory: item.contentCategory,
-          content: item.content,
-          summary: null,
-          tags: JSON.stringify([config.connector_type, item.fileType].filter(Boolean)),
-          sourcePath: item.sourcePath,
-          contentHash: item.contentHash,
-          sourceCreatedAt: item.sourceCreatedAt,
-          sourceUpdatedAt: item.sourceUpdatedAt,
-          mimeType: item.mimeType,
+        // Wrap all per-item DB writes in a transaction so a crash mid-item
+        // leaves no partial records.
+        const itemResult = await db.transaction().execute(async (trx) => {
+          const txRepo = createConnectorRepository(trx);
+
+          const upsertResult = await txRepo.upsertFile({
+            connectorConfigId: config.id,
+            source: config.connector_type,
+            providerFileId: item.providerFileId,
+            providerUrl: item.providerUrl,
+            fileName: item.fileName,
+            fileType: item.fileType,
+            contentCategory: item.contentCategory,
+            content: item.content,
+            summary: null,
+            tags: JSON.stringify([config.connector_type, item.fileType].filter(Boolean)),
+            sourcePath: item.sourcePath,
+            contentHash: item.contentHash,
+            sourceCreatedAt: item.sourceCreatedAt,
+            sourceUpdatedAt: item.sourceUpdatedAt,
+            mimeType: item.mimeType,
+          });
+
+          // Clear enrichment data if content changed (will be re-enriched)
+          if (upsertResult.contentChanged) {
+            await clearEnrichmentData(trx, upsertResult.id);
+          }
+
+          // Track which connector discovered this file
+          await txRepo.linkConnectorFile(config.id, upsertResult.id);
+
+          // Promote items to entities (Linear projects, Notion databases)
+          const ENTITY_PROMOTING_TYPES: Record<string, string[]> = {
+            linear: ["project"],
+            notion: ["database"],
+          };
+          const promotable = ENTITY_PROMOTING_TYPES[config.connector_type] ?? [];
+          if (item.fileType && promotable.includes(item.fileType)) {
+            await entityRepo.upsertEntityFromTool({
+              name: item.fileName,
+              sourceType: `${config.connector_type}_${item.fileType}`,
+              source: config.connector_type,
+              sourceId: item.providerFileId,
+              sourceUrl: item.providerUrl ?? undefined,
+              sourceRefId: upsertResult.id,
+              metadata: item.sourcePath ? { path: item.sourcePath } : undefined,
+            });
+          }
+
+          // Seed person entities from Fireflies attendee emails
+          if (config.connector_type === "fireflies" && item.accessEmails) {
+            for (const email of item.accessEmails) {
+              await entityRepo.upsertPersonEntity({
+                name: email,
+                email,
+                subtype: "external",
+                source: "fireflies",
+                sourceId: `${item.providerFileId}:${email}`,
+              });
+            }
+          }
+
+          // Link assignees to person entities (deterministic, no LLM)
+          if (item.assignees && item.assignees.length > 0) {
+            for (const assignee of item.assignees) {
+              const personEntity = await entityRepo.getEntityBySourceRef(
+                config.connector_type,
+                config.connector_type === "clickup" ? `assignee:${assignee.name}` : `user:${assignee.name}`,
+              );
+              // Fall back to name search if source ref doesn't match
+              const entity =
+                personEntity ??
+                (await entityRepo.searchEntities(assignee.name, { sourceTypes: ["person"], limit: 1 }))[0];
+              if (entity) {
+                await entityRepo.createMention({
+                  entityId: entity.id,
+                  indexedFileId: upsertResult.id,
+                  contextSnippet: `Assigned to ${assignee.name}`,
+                });
+              }
+            }
+          }
+
+          // Set access: scope-level or per-file emails
+          if (item.accessScope) {
+            const scopeId = await txRepo.upsertAccessScope(config.id, item.accessScope);
+            await txRepo.setFileAccessScope(upsertResult.id, scopeId);
+          } else if (item.accessEmails && item.accessEmails.length > 0) {
+            await txRepo.syncFileAccessEmails(upsertResult.id, item.accessEmails);
+          }
+
+          return upsertResult;
         });
 
-        // Clear enrichment data if content changed (will be re-enriched)
-        if (upsertResult.contentChanged) {
-          await clearEnrichmentData(db, upsertResult.id);
-        }
-
-        // Track which connector discovered this file
-        await repo.linkConnectorFile(config.id, upsertResult.id);
-
-        // Set access: scope-level or per-file emails
-        if (item.accessScope) {
-          const scopeId = await repo.upsertAccessScope(config.id, item.accessScope);
-          await repo.setFileAccessScope(upsertResult.id, scopeId);
-        } else if (item.accessEmails && item.accessEmails.length > 0) {
-          await repo.syncFileAccessEmails(upsertResult.id, item.accessEmails);
-        }
-
-        if (upsertResult.created) {
+        if (itemResult.created) {
           result.itemsCreated++;
         } else {
           result.itemsUpdated++;
@@ -158,6 +226,9 @@ export async function runConnectorSync(db: Kysely<DB>, connectorConfigId: string
 
     if (!config.sync_cursor && seenProviderFileIds.size > 0) {
       result.itemsArchived = await repo.archiveStaleFiles(config.id, seenProviderFileIds);
+      if (result.itemsArchived > 0) {
+        await entityRepo.archiveEntitiesForArchivedFiles();
+      }
     }
 
     result.newCursor = await connector.getCursor({
@@ -216,6 +287,26 @@ export async function runAllSyncs(db: Kysely<DB>, logger: Logger, deps?: SyncSch
 
   logger.info({ connectorCount: configs.length }, "Starting scheduled sync run");
 
+  // Seed person entities from team directory (users table)
+  try {
+    const entityRepo = createEntityRepository(db);
+    const users = await db.selectFrom("users").selectAll().execute();
+    for (const user of users) {
+      await entityRepo.upsertPersonEntity({
+        name: user.name,
+        email: user.email ?? undefined,
+        subtype: "internal",
+        source: "team",
+        sourceId: user.id,
+      });
+    }
+    if (users.length > 0) {
+      logger.debug({ count: users.length }, "Team directory entities seeded");
+    }
+  } catch (err) {
+    logger.error({ err }, "Failed to seed team directory entities");
+  }
+
   for (const config of configs) {
     try {
       await runConnectorSync(db, config.id, logger);
@@ -263,6 +354,17 @@ export async function runAllSyncs(db: Kysely<DB>, logger: Logger, deps?: SyncSch
   } catch (err) {
     logger.error({ err }, "Post-sync enrichment failed");
   }
+
+  // Recompute entity hotness (decay for entities not recently mentioned)
+  try {
+    const entityRepo = createEntityRepository(db);
+    const count = await entityRepo.recomputeAllHotness();
+    if (count > 0) {
+      logger.debug({ entities: count }, "Entity hotness recomputed");
+    }
+  } catch (err) {
+    logger.error({ err }, "Entity hotness recomputation failed");
+  }
 }
 
 /**
@@ -292,25 +394,33 @@ async function recoverStaleSyncs(db: Kysely<DB>, logger: Logger): Promise<void> 
  * Recovers any stuck syncs on startup, then runs periodically.
  * Returns a cleanup function to stop the scheduler.
  */
+export interface SyncSchedulerHandle {
+  stop(): Promise<void>;
+}
+
 export function startSyncScheduler(
   db: Kysely<DB>,
   logger: Logger,
   intervalMs = 30 * 60 * 1000,
   deps?: SyncSchedulerDeps,
-): () => void {
+): SyncSchedulerHandle {
+  let aborted = false;
+
   // Recover any connectors stuck in "syncing" from a previous crash
   recoverStaleSyncs(db, logger).catch((err) => {
     logger.error({ err }, "Failed to recover stale syncs on startup");
   });
 
-  // Run enrichment immediately for any pending files (without triggering a full sync)
-  (async () => {
+  // Run enrichment immediately for any pending files (without triggering a full sync).
+  // We track the promise so stop() can await it before the DB is destroyed.
+  const startupPromise = (async () => {
     try {
       const settings = await db
         .selectFrom("settings")
         .select(["gemini_api_key", "org_name", "enrichment_enabled"])
         .where("id", "=", "default")
         .executeTakeFirst();
+      if (aborted) return;
       if (settings?.enrichment_enabled === 0) {
         logger.info("Enrichment disabled, skipping startup enrichment");
         return;
@@ -330,11 +440,14 @@ export function startSyncScheduler(
         logger.info({ enriched: result.filesProcessed, failed: result.filesFailed }, "Startup enrichment complete");
       }
     } catch (err) {
-      logger.error({ err }, "Startup enrichment failed");
+      if (!aborted) {
+        logger.error({ err }, "Startup enrichment failed");
+      }
     }
   })();
 
   const timer = setInterval(() => {
+    if (aborted) return;
     runAllSyncs(db, logger, deps).catch((err) => {
       logger.error({ err }, "Sync scheduler tick failed");
     });
@@ -342,17 +455,20 @@ export function startSyncScheduler(
 
   logger.info({ intervalMs }, "Sync scheduler started");
 
-  return () => {
-    clearInterval(timer);
-    logger.info("Sync scheduler stopped");
+  return {
+    async stop() {
+      aborted = true;
+      clearInterval(timer);
+      await startupPromise;
+      logger.info("Sync scheduler stopped");
+    },
   };
 }
 
 /**
  * Build org context string for the tagging prompt.
- * TODO: Replace with admin-configurable org brief from a settings field.
+ * Uses the org name from settings when available.
  */
-function buildOrgContext(_orgName: string | null): string {
-  // Hardcoded org brief for now — move to settings UI later
-  return "His Canvas builds Sketch, an AI assistant platform for organisations. Previously operated as Apperture (a low-code data engineering platform — pitched to investors in 2023, did not raise). Pivoted to workflow automation / AI assistants in 2024. Key past clients from the Apperture era included Sangeetha Mobiles, WIOM, and Urbanpiper. The team works across engineering, marketing, and product. Documents span both the Apperture era and current His Canvas work.";
+function buildOrgContext(orgName: string | null): string {
+  return orgName ? `Organization: ${orgName}` : "";
 }

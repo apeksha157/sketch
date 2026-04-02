@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 
 import { ChatCircleIcon } from "@phosphor-icons/react";
 
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@sketch/ui/components/button";
+import { Input } from "@sketch/ui/components/input";
+import { Label } from "@sketch/ui/components/label";
 
 interface StepBotIdentityProps {
   onNext: (data: { organizationName: string; botName: string }) => void;
@@ -12,6 +12,7 @@ interface StepBotIdentityProps {
   initialBotName?: string;
   isSubmitting?: boolean;
   onDraftChange?: (data: { organizationName: string; botName: string }) => void;
+  botNameReadOnly?: boolean;
 }
 
 export function StepBotIdentity({
@@ -20,6 +21,7 @@ export function StepBotIdentity({
   initialBotName,
   isSubmitting,
   onDraftChange,
+  botNameReadOnly,
 }: StepBotIdentityProps) {
   const [organizationName, setOrganizationName] = useState(initialOrganizationName ?? "");
   const [botName, setBotName] = useState(initialBotName ?? "Sketch");
@@ -80,11 +82,11 @@ export function StepBotIdentity({
           <Label htmlFor="botName">Bot Name</Label>
           <Input
             id="botName"
-            value={botName}
+            value={botNameReadOnly ? "Sketch" : botName}
             onChange={(e) => setBotName(e.target.value)}
             placeholder="Sketch"
             aria-invalid={!!errors.botName}
-            disabled={Boolean(isSubmitting)}
+            disabled={Boolean(isSubmitting) || Boolean(botNameReadOnly)}
           />
           {errors.botName && <p className="text-xs text-destructive">{errors.botName}</p>}
         </div>

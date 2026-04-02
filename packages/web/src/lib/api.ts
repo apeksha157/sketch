@@ -4,7 +4,9 @@
  */
 
 import type { SkillCategory } from "@/lib/skills-data";
-import type { IntegrationApp, IntegrationConnection, McpServerRecord, PageInfo } from "@sketch/shared";
+import type { FileMetadata, IntegrationApp, IntegrationConnection, McpServerRecord, PageInfo } from "@sketch/shared";
+
+export type WorkspaceScope = "personal" | "org";
 
 export interface ApiError {
   error: { code: string; message: string };
@@ -17,6 +19,10 @@ export interface User {
   email_verified_at: string | null;
   slack_user_id: string | null;
   whatsapp_number: string | null;
+  description: string | null;
+  type: string;
+  role: string | null;
+  reports_to: string | null;
   created_at: string;
 }
 
@@ -47,7 +53,8 @@ export interface ScheduledTaskListItem {
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...((options?.headers as Record<string, string>) ?? {}) };
-  if (options?.body) {
+  // Skip Content-Type for FormData — the browser sets it automatically with the correct multipart boundary
+  if (options?.body && !(options.body instanceof FormData)) {
     headers["Content-Type"] = "application/json";
   }
   const res = await fetch(url, {
@@ -81,6 +88,23 @@ export interface SetupStatus {
   slackConnected: boolean;
   llmConnected: boolean;
   llmProvider: "anthropic" | "bedrock" | null;
+  managedUrl?: string;
+  experimentalFlag?: boolean;
+}
+
+export interface EntityListItem {
+  id: string;
+  name: string;
+  sourceType: string;
+  subtype: string | null;
+  aliases: string[];
+  metadata: Record<string, unknown> | null;
+  status: string;
+  hotness: number;
+  mentionCount: number;
+  lastMentionAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ConnectorConfig {
@@ -106,6 +130,7 @@ export interface ConnectorFile {
   sourcePath: string | null;
   providerUrl: string | null;
   syncedAt: string;
+  sourceCreatedAt: string | null;
   sourceUpdatedAt: string | null;
   hasSummary: boolean;
   accessScope: "restricted" | "unrestricted";
@@ -132,6 +157,13 @@ export interface FileAccessMember {
   userId: string | null;
   source: "scope" | "file";
   mapped: boolean;
+}
+
+export interface LinkedEntity {
+  id: string;
+  name: string;
+  sourceType: string;
+  subtype: string | null;
 }
 
 /** A file returned by the paginated all-files endpoint. */
@@ -285,13 +317,13 @@ export const api = {
   },
   email: {
     configure(data: { host: string; port: number; user: string; pass: string; from: string; secure: boolean }) {
-      return request<{ success: boolean }>("/api/channels/email/configure", {
-        method: "POST",
+      return request<{ success: boolean }>("/api/channels/email/config", {
+        method: "PUT",
         body: JSON.stringify(data),
       });
     },
     disconnect() {
-      return request<{ success: boolean }>("/api/channels/email/configure", { method: "DELETE" });
+      return request<{ success: boolean }>("/api/channels/email/config", { method: "DELETE" });
     },
   },
   whatsapp: {
@@ -307,16 +339,16 @@ export const api = {
       return request<{ orgName: string | null; botName: string }>("/api/settings/identity");
     },
     searchConfig() {
-      return request<{ geminiApiKey: string | null; enrichmentEnabled: number }>("/api/settings/search");
+      return request<{ geminiApiKeyConfigured: boolean; enrichmentEnabled: number }>("/api/settings/search");
     },
     updateSearchConfig(data: { geminiApiKey?: string | null; enrichmentEnabled?: boolean }) {
-      return request<{ geminiApiKey: string | null; enrichmentEnabled: number }>("/api/settings/search", {
+      return request<{ geminiApiKeyConfigured: boolean; enrichmentEnabled: number }>("/api/settings/search", {
         method: "PUT",
         body: JSON.stringify(data),
       });
     },
     runEnrichment() {
-      return request<{ success: boolean; message: string }>("/api/settings/search/run-enrichment", {
+      return request<{ success: boolean; message: string }>("/api/settings/search/enrichments", {
         method: "POST",
       });
     },
@@ -343,7 +375,9 @@ export const api = {
       return request<{ success: boolean }>(`/api/connectors/${id}`, { method: "DELETE" });
     },
     sync(id: string) {
-      return request<{ message: string; connectorId: string }>(`/api/connectors/${id}/sync`, { method: "POST" });
+      return request<{ sync: { connectorId: string; status: string } }>(`/api/connectors/${id}/syncs`, {
+        method: "POST",
+      });
     },
     files(id: string) {
       return request<{ files: ConnectorFile[] }>(`/api/connectors/${id}/files`);
@@ -367,18 +401,26 @@ export const api = {
       return request<{ results: SearchResult[] }>(`/api/connectors/search?${params.toString()}`);
     },
     fileContent(fileId: string) {
-      return request<{ file: FileContent; access: FileAccess }>(`/api/connectors/files/${fileId}/content`);
+      return request<{ file: FileContent; access: FileAccess; entities: LinkedEntity[] }>(
+        `/api/connectors/files/${fileId}/content`,
+      );
     },
     enrich(id: string, data: { fileIds: string[]; instruction: string }) {
-      return request<{ success: boolean; jobId: string }>(`/api/connectors/${id}/enrich`, {
-        method: "POST",
-        body: JSON.stringify(data),
-      });
+      return request<{ enrichment: { jobId: string; connectorId: string; fileCount: number } }>(
+        `/api/connectors/${id}/enrichments`,
+        {
+          method: "POST",
+          body: JSON.stringify(data),
+        },
+      );
     },
     enrichFile(fileId: string) {
-      return request<{ success: boolean; fileId: string; fileName: string }>(`/api/connectors/files/${fileId}/enrich`, {
-        method: "POST",
-      });
+      return request<{ success: boolean; fileId: string; fileName: string }>(
+        `/api/connectors/files/${fileId}/enrichments`,
+        {
+          method: "POST",
+        },
+      );
     },
     browseGoogleDrive(credentials: { client_id: string; client_secret: string; refresh_token: string }) {
       return request<{
@@ -416,8 +458,8 @@ export const api = {
       );
     },
     configure(clientId: string, clientSecret: string) {
-      return request<{ success: boolean }>("/api/oauth/google/configure", {
-        method: "POST",
+      return request<{ success: boolean }>("/api/oauth/google/config", {
+        method: "PUT",
         body: JSON.stringify({ clientId, clientSecret }),
       });
     },
@@ -430,7 +472,7 @@ export const api = {
       return request<{ identities: ProviderIdentity[] }>(`/api/identities/user/${userId}`);
     },
     connect(data: { userId: string; provider: string; providerUserId: string; providerEmail?: string | null }) {
-      return request<{ identity: ProviderIdentity }>("/api/identities/connect", {
+      return request<{ identity: ProviderIdentity }>("/api/identities", {
         method: "POST",
         body: JSON.stringify(data),
       });
@@ -445,13 +487,31 @@ export const api = {
     list() {
       return request<{ users: User[] }>("/api/users");
     },
-    create(data: { name: string; email?: string | null; whatsappNumber?: string | null }) {
+    create(data: {
+      name: string;
+      email?: string | null;
+      whatsappNumber?: string | null;
+      description?: string | null;
+      type?: string;
+      role?: string | null;
+      reportsTo?: string | null;
+    }) {
       return request<{ user: User; verificationSent?: boolean }>("/api/users", {
         method: "POST",
         body: JSON.stringify(data),
       });
     },
-    update(id: string, data: { name?: string; email?: string | null; whatsappNumber?: string | null }) {
+    update(
+      id: string,
+      data: {
+        name?: string;
+        email?: string | null;
+        whatsappNumber?: string | null;
+        description?: string | null;
+        role?: string | null;
+        reportsTo?: string | null;
+      },
+    ) {
       return request<{ user: User; verificationSent?: boolean }>(`/api/users/${id}`, {
         method: "PATCH",
         body: JSON.stringify(data),
@@ -590,6 +650,224 @@ export const api = {
       return request<void>(`/api/mcp-servers/${providerId}/connections/${connectionId}`, {
         method: "DELETE",
       });
+    },
+  },
+  entities: {
+    get(id: string) {
+      return request<{
+        entity: EntityListItem;
+        sourceRefs: Array<{
+          id: string;
+          source: string;
+          sourceId: string;
+          sourceUrl: string | null;
+          lastSeenAt: string;
+        }>;
+      }>(`/api/entities/${id}`);
+    },
+    mentions(id: string, opts?: { source?: string; since?: string; limit?: number; offset?: number }) {
+      const params = new URLSearchParams();
+      if (opts?.source) params.set("source", opts.source);
+      if (opts?.since) params.set("since", opts.since);
+      if (opts?.limit) params.set("limit", String(opts.limit));
+      if (opts?.offset) params.set("offset", String(opts.offset));
+      const qs = params.toString();
+      return request<{
+        mentions: Array<{
+          id: string;
+          contextSnippet: string | null;
+          chunkIndex: number | null;
+          mentionedAt: string;
+          file: {
+            id: string;
+            fileName: string;
+            fileType: string | null;
+            source: string;
+            sourcePath: string | null;
+            providerUrl: string | null;
+          };
+        }>;
+        total: number;
+      }>(`/api/entities/${id}/mentions${qs ? `?${qs}` : ""}`);
+    },
+    create(data: { name: string; sourceType: string; subtype?: string; aliases?: string[] }) {
+      return request<{ entity: EntityListItem }>("/api/entities", {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+    },
+    deleteTentative() {
+      return request<{ message: string; count: number }>("/api/entities/tentative", { method: "DELETE" });
+    },
+    update(id: string, data: { name?: string; sourceType?: string; status?: string; aliases?: string[] }) {
+      return request<{ entity: EntityListItem }>(`/api/entities/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
+    },
+    remove(id: string) {
+      return request<{ success: boolean }>(`/api/entities/${id}`, { method: "DELETE" });
+    },
+    list(opts?: { type?: string; source?: string; search?: string; sort?: string; limit?: number; offset?: number }) {
+      const params = new URLSearchParams();
+      if (opts?.type) params.set("type", opts.type);
+      if (opts?.source) params.set("source", opts.source);
+      if (opts?.search) params.set("search", opts.search);
+      if (opts?.sort) params.set("sort", opts.sort);
+      if (opts?.limit) params.set("limit", String(opts.limit));
+      if (opts?.offset) params.set("offset", String(opts.offset));
+      const qs = params.toString();
+      return request<{
+        entities: EntityListItem[];
+        total: number;
+      }>(`/api/entities${qs ? `?${qs}` : ""}`);
+    },
+  },
+  usage: {
+    me(opts?: { period?: "weekly" | "monthly" | "quarterly"; date?: string }) {
+      const params = new URLSearchParams();
+      if (opts?.period) params.set("period", opts.period);
+      if (opts?.date) params.set("date", opts.date);
+      const qs = params.toString();
+      return request<{
+        period: { from: string; to: string; type: "weekly" | "monthly" | "quarterly" };
+        messages: { total: number; by_platform: { platform: string; count: number }[] };
+        spend: { total_cost_usd: number };
+        skills: { total: number; by_skill: { name: string; count: number }[] };
+        daily_breakdown: { date: string; messages: number; skills: number }[];
+      }>(`/api/usage/me${qs ? `?${qs}` : ""}`);
+    },
+    summary(opts?: { period?: "weekly" | "monthly" | "quarterly"; date?: string }) {
+      const params = new URLSearchParams();
+      if (opts?.period) params.set("period", opts.period);
+      if (opts?.date) params.set("date", opts.date);
+      const qs = params.toString();
+      return request<{
+        period: { from: string; to: string; type: "weekly" | "monthly" | "quarterly" };
+        messages: { total: number; by_platform: { platform: string; count: number }[] };
+        spend: { total_cost_usd: number };
+        skills: { total: number; by_skill: { name: string; count: number }[] };
+        by_user: {
+          userId: string;
+          userName: string | null;
+          userType: string;
+          messageCount: number;
+          costUsd: number;
+          skillCount: number;
+          lastRunAt: string | null;
+        }[];
+        by_group: {
+          workspaceKey: string;
+          name: string;
+          platform: "slack" | "whatsapp";
+          messageCount: number;
+          skillCount: number;
+          lastRunAt: string | null;
+        }[];
+      }>(`/api/usage/summary${qs ? `?${qs}` : ""}`);
+    },
+  },
+  workspace: {
+    // List directory contents
+    async listFiles(scope: WorkspaceScope, path: string): Promise<{ files: FileMetadata[] }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      return request<{ files: FileMetadata[] }>(`/api/workspace/files?${params.toString()}`);
+    },
+
+    // Get file content (text or metadata for binary)
+    async getFileContent(
+      scope: WorkspaceScope,
+      path: string,
+    ): Promise<{ content: string; isText: boolean; size: number; mimeType: string | null }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      return request<{ content: string; isText: boolean; size: number; mimeType: string | null }>(
+        `/api/workspace/files/content?${params.toString()}`,
+      );
+    },
+
+    // Save file content
+    async saveFile(scope: WorkspaceScope, path: string, content: string): Promise<{ success: boolean }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      return request<{ success: boolean }>(`/api/workspace/files/content?${params.toString()}`, {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      });
+    },
+
+    // Upload file
+    async uploadFile(scope: WorkspaceScope, path: string, formData: FormData): Promise<{ success: boolean }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      return request<{ success: boolean }>(`/api/workspace/files?${params.toString()}`, {
+        method: "POST",
+        body: formData,
+      });
+    },
+
+    // Create folder
+    async createFolder(scope: WorkspaceScope, path: string): Promise<{ success: boolean }> {
+      return request<{ success: boolean }>(`/api/workspace/folders?scope=${scope}`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      });
+    },
+
+    // Create empty file
+    async createFile(scope: WorkspaceScope, path: string): Promise<{ success: boolean }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      return request<{ success: boolean }>(`/api/workspace/files/content?${params.toString()}`, {
+        method: "PUT",
+        body: JSON.stringify({ content: "" }),
+      });
+    },
+
+    // Delete file or folder
+    async deleteFile(scope: WorkspaceScope, path: string): Promise<{ success: boolean }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      return request<{ success: boolean }>(`/api/workspace/files?${params.toString()}`, {
+        method: "DELETE",
+      });
+    },
+
+    // Rename file or folder
+    async renameFile(scope: WorkspaceScope, oldPath: string, newPath: string): Promise<{ success: boolean }> {
+      return request<{ success: boolean }>(`/api/workspace/files/rename?scope=${scope}`, {
+        method: "PATCH",
+        body: JSON.stringify({ oldPath, newPath }),
+      });
+    },
+
+    // Search files recursively
+    async searchFiles(scope: WorkspaceScope, query: string): Promise<{ files: FileMetadata[] }> {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("q", query);
+      return request<{ files: FileMetadata[] }>(`/api/workspace/files/search?${params.toString()}`);
+    },
+
+    // Download file (triggers browser download for all file types without navigating away)
+    downloadFile(scope: WorkspaceScope, path: string): void {
+      const params = new URLSearchParams();
+      params.set("scope", scope);
+      params.set("path", path);
+      params.set("download", "true");
+      const a = document.createElement("a");
+      a.href = `/api/workspace/files/content?${params.toString()}`;
+      a.download = path.split("/").pop() || "download";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
     },
   },
 };

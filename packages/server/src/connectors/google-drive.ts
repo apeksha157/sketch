@@ -289,7 +289,8 @@ function truncateAndHash(text: string, file: DriveFile, logger: Logger): { conte
   return { content: trimmed, hash: contentHash(trimmed) };
 }
 
-function fileToSyncedItem(
+/** Exported for testing. */
+export function fileToSyncedItem(
   file: DriveFile,
   content: string | null,
   hash: string | null,
@@ -309,6 +310,7 @@ function fileToSyncedItem(
     contentHash: hash,
     sourceCreatedAt: file.createdTime ?? null,
     sourceUpdatedAt: file.modifiedTime ?? null,
+    mimeType: file.mimeType,
     accessScope: access.scope,
     accessEmails: access.emails,
   };
@@ -366,11 +368,17 @@ export interface FolderContentItem {
   isFolder: boolean;
 }
 
+const SAFE_FOLDER_ID = /^[a-zA-Z0-9_-]+$/;
+
 /**
  * List immediate children of a folder (files and subfolders).
  * Used by the browse API to let users preview folder contents before syncing.
  */
 export async function listFolderContents(accessToken: string, folderId: string): Promise<FolderContentItem[]> {
+  if (!SAFE_FOLDER_ID.test(folderId)) {
+    throw new Error(`Invalid folderId: "${folderId}" contains characters not allowed in a Drive folder ID`);
+  }
+
   const items: FolderContentItem[] = [];
   let pageToken: string | undefined;
 
@@ -486,8 +494,9 @@ function extractFilePermissionEmails(file: DriveFile): string[] {
 /**
  * Resolve folder ID → name for building sourcePath.
  * Caches results to avoid repeated lookups.
+ * Exported for testing.
  */
-async function resolveFolderPath(
+export async function resolveFolderPath(
   file: DriveFile,
   driveName: string,
   accessToken: string,
@@ -502,8 +511,11 @@ async function resolveFolderPath(
   // Walk parent chain (usually 1-3 levels deep)
   let currentParentId = file.parents[0];
   const chain: string[] = [];
+  const MAX_FOLDER_DEPTH = 20;
+  let depth = 0;
 
-  while (currentParentId) {
+  while (currentParentId && depth < MAX_FOLDER_DEPTH) {
+    depth++;
     // Check cache first
     if (folderCache.has(currentParentId)) {
       const cached = folderCache.get(currentParentId);

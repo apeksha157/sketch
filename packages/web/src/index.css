@@ -1,133 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "@sketch/ui/theme.css";
+@import "@sketch/ui/styles.css";
 
 @custom-variant dark (&:is(.dark *));
-
-@theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
-  --font-display: "Gloria Hallelujah", cursive;
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-info: var(--info);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-}
-
-:root {
-  --radius: 0.625rem;
-  --background: #f7f7f5;
-  --foreground: #040404;
-  --card: #f4f4f2;
-  --card-foreground: #040404;
-  --popover: #f2f2ef;
-  --popover-foreground: #040404;
-  --primary: #040404;
-  --primary-foreground: #fafaf8;
-  --secondary: #ebebea;
-  --secondary-foreground: #3d3d39;
-  --muted: #ebebea;
-  --muted-foreground: #5f5e5a;
-  --accent: #f0f0ee;
-  --accent-foreground: #6b6200;
-  --destructive: #dc2626;
-  --destructive-foreground: #ffffff;
-  --success: #1a7f37;
-  --warning: #92400e;
-  --info: #0040dd;
-  --border: #d5d5d3;
-  --input: #d5d5d3;
-  --ring: #6b6200;
-  --chart-1: #d4c400;
-  --chart-2: #1a7f37;
-  --chart-3: #0040dd;
-  --chart-4: #92400e;
-  --chart-5: #991b1b;
-  --sidebar: #f2f2ef;
-  --sidebar-foreground: #040404;
-  --sidebar-primary: #040404;
-  --sidebar-primary-foreground: #fafaf8;
-  --sidebar-accent: #fefdf5;
-  --sidebar-accent-foreground: #6b6200;
-  --sidebar-border: #e4e4e2;
-  --sidebar-ring: #6b6200;
-}
-
-.dark {
-  --background: #040404;
-  --foreground: #fafaf8;
-  --card: #111110;
-  --card-foreground: #fafaf8;
-  --popover: #1c1c1a;
-  --popover-foreground: #fafaf8;
-  --primary: #fafaf8;
-  --primary-foreground: #040404;
-  --secondary: #111110;
-  --secondary-foreground: #b0b0aa;
-  --muted: #111110;
-  --muted-foreground: #9c9a92;
-  --accent: #1c1c1a;
-  --accent-foreground: #feed01;
-  --destructive: #fca5a5;
-  --destructive-foreground: #ffffff;
-  --success: #30d158;
-  --warning: #fb923c;
-  --info: #0a84ff;
-  --border: #2c2c2a;
-  --input: #2c2c2a;
-  --ring: #feed01;
-  --chart-1: #feed01;
-  --chart-2: #30d158;
-  --chart-3: #0a84ff;
-  --chart-4: #fb923c;
-  --chart-5: #fca5a5;
-  --sidebar: #0a0a09;
-  --sidebar-foreground: #fafaf8;
-  --sidebar-primary: #fafaf8;
-  --sidebar-primary-foreground: #040404;
-  --sidebar-accent: #1d1b04;
-  --sidebar-accent-foreground: #feed01;
-  --sidebar-border: #181818;
-  --sidebar-ring: #feed01;
-}
 
 @layer base {
   * {
@@ -213,6 +90,11 @@
 
 .animate-search-expand {
   animation: search-expand 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+/* ── ConnectionsBanner icon parallax transition ── */
+.cb-icon {
+  transition: transform 0.8s ease-out;
 }
 
 /* ── Hide scrollbar for chip rows ── */

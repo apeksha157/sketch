@@ -45,7 +45,6 @@ export const connectionsCallbackRoute = createRoute({
 
 function ConnectionsCallback() {
   useEffect(() => {
-    window.opener?.postMessage({ type: "oauth-result", status: "success" }, window.location.origin);
     window.close();
   }, []);
 

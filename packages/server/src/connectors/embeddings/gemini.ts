@@ -39,6 +39,7 @@ export function createGeminiEmbeddingProvider(apiKey: string): EmbeddingProvider
       const text = await res.text();
       throw new Error(`Gemini Embedding API error (${res.status}): ${text}`);
     }
+    throw new Error("Gemini: retries exhausted");
   }
 
   return {

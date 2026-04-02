@@ -1,7 +1,28 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterAll, afterEach, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import { server } from "./msw";
+
+/**
+ * Stub heavy icon libraries. Their barrel exports pull in thousands of files
+ * that dominate import time, and no test asserts on icon rendering.
+ * Returns a minimal <svg> so querySelector("svg") still works in tests.
+ */
+const { createElement } = await import("react");
+const iconStub = () => createElement("svg");
+const iconProxy = new Proxy(
+  {},
+  {
+    get: (_, name) => {
+      if (name === "__esModule") return true;
+      if (typeof name === "symbol" || name === "then" || name === "default") return undefined;
+      return iconStub;
+    },
+    has: (_, name) => name !== "then" && name !== "default" && typeof name === "string",
+  },
+);
+vi.mock("@phosphor-icons/react", () => iconProxy);
+vi.mock("lucide-react", () => iconProxy);
 
 // IntersectionObserver is not available in jsdom — provide a no-op stub so
 // components that use scroll detection don't crash when rendered in tests.
@@ -45,7 +66,25 @@ if (typeof globalThis.EventSource === "undefined") {
   } as unknown as typeof EventSource;
 }
 
-beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+// window.matchMedia is not available in jsdom — stub it so hooks that use
+// matchMedia (useTheme system mode, useIsMobile) do not throw.
+if (typeof window.matchMedia === "undefined") {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
+beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
 afterEach(() => {
   cleanup();
   server.resetHandlers();

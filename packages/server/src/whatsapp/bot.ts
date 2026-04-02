@@ -68,6 +68,7 @@ export interface WhatsAppGroupMessage extends WhatsAppBaseMessage {
   type: "group";
   isMentioned: boolean;
   senderJid: string;
+  senderPhone: string | null;
 }
 
 export type WhatsAppMessage = WhatsAppDmMessage | WhatsAppGroupMessage;
@@ -500,6 +501,10 @@ export class WhatsAppBot {
       cleanText = stripBotMention(cleanText, this.sock?.user?.name);
     }
 
+    const senderPhone = senderJid.endsWith("@lid")
+      ? await this.resolveLidToPhone(senderJid)
+      : jidToPhoneNumber(senderJid);
+
     if (this.handler) {
       this.lastMessageAt = Date.now();
       await this.handler({
@@ -512,6 +517,7 @@ export class WhatsAppBot {
         mediaType: hasMedia ? (messageType ?? undefined) : undefined,
         isMentioned,
         senderJid,
+        senderPhone,
       });
     }
   }

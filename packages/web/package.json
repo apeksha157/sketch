@@ -1,6 +1,6 @@
 {
   "name": "@sketch/web",
-  "version": "0.11.0",
+  "version": "0.15.0-alpha.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,8 +11,10 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@phosphor-icons/react": "^2.1.10",
     "@sketch/shared": "workspace:*",
+    "@sketch/ui": "workspace:*",
     "@tanstack/react-query": "^5.90.21",
     "@tanstack/react-router": "^1.163.2",
     "chart.js": "^4.5.1",

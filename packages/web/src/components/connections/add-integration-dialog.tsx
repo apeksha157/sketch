@@ -1,7 +1,10 @@
+import { api } from "@/lib/api";
+import { CheckIcon, MagnifyingGlassIcon, SpinnerGapIcon, WarningIcon, XCircleIcon } from "@phosphor-icons/react";
+import type { IntegrationApp } from "@sketch/shared";
 /**
  * Add Integration dialog: catalog search with infinite scroll + OAuth popup flow.
  */
-import { Button } from "@/components/ui/button";
+import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
   DialogClose,
@@ -10,16 +13,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api";
-import { getAbbreviation } from "@/lib/utils";
-import { CheckIcon, MagnifyingGlassIcon, SpinnerGapIcon, WarningIcon, XCircleIcon } from "@phosphor-icons/react";
-import type { IntegrationApp } from "@sketch/shared";
+} from "@sketch/ui/components/dialog";
+import { Input } from "@sketch/ui/components/input";
+import { getAbbreviation } from "@sketch/ui/lib/utils";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-
-type OAuthResultMessage = { type: "oauth-result"; status: "success" };
 
 type AddIntegrationStep =
   | { kind: "search" }
@@ -52,11 +50,11 @@ export function AddIntegrationDialog({
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const oauthWindowRef = useRef<Window | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
-  const oauthCleanupRef = useRef<(() => void) | null>(null);
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
     return () => {
-      oauthCleanupRef.current?.();
+      cancelledRef.current = true;
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
@@ -121,8 +119,7 @@ export function AddIntegrationDialog({
   }, [hasMore, isLoadingApps, search, endCursor, step.kind, loadApps]);
 
   const resetAndClose = () => {
-    oauthCleanupRef.current?.();
-    oauthCleanupRef.current = null;
+    cancelledRef.current = true;
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = undefined;
@@ -154,35 +151,34 @@ export function AddIntegrationDialog({
       }
 
       oauthWindowRef.current = popup;
-      let oauthResolved = false;
+      cancelledRef.current = false;
 
-      const cleanup = () => {
-        window.removeEventListener("message", onMessage);
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = undefined;
+      const verifyConnection = async () => {
+        try {
+          const connections = await api.mcpServers.listConnections(providerId);
+          const connected = connections.some((c) => c.appId === app.id);
+          if (cancelledRef.current) return;
+          if (connected) {
+            toast.success("App connected successfully!");
+            onSuccess();
+            resetAndClose();
+          } else {
+            toast.error("App connection cancelled");
+            setStep({ kind: "oauth_cancelled", app });
+          }
+        } catch {
+          if (cancelledRef.current) return;
+          toast.error("Could not verify connection status");
+          setStep({ kind: "oauth_cancelled", app });
         }
       };
 
-      const onMessage = (e: MessageEvent<OAuthResultMessage>) => {
-        if (e.origin !== window.location.origin || e.data?.type !== "oauth-result") return;
-        oauthResolved = true;
-        cleanup();
-        oauthWindowRef.current = null;
-        toast.success("App connected successfully!");
-        onSuccess();
-        resetAndClose();
-      };
-
-      window.addEventListener("message", onMessage);
-      oauthCleanupRef.current = cleanup;
-
       pollIntervalRef.current = setInterval(() => {
-        if (popup.closed && !oauthResolved) {
-          cleanup();
+        if (popup.closed) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = undefined;
           oauthWindowRef.current = null;
-          toast.error("App connection cancelled");
-          setStep({ kind: "oauth_cancelled", app });
+          verifyConnection();
         }
       }, 500);
     } catch (err) {

@@ -85,6 +85,10 @@ sketch/
 - Static migration imports instead of FileMigrationProvider (for tsdown bundler compatibility)
 - `CURRENT_TIMESTAMP` in migrations for cross-dialect compatibility (SQLite + Postgres)
 
+## Related Repos
+
+- **sketch-platform** (`~/Projects/sketch-platform/`, `canvasxai/sketch-platform`, private): Management plane for the managed offering. Separate pnpm monorepo with `packages/api/` (backend), `packages/web/` (frontend), `packages/infra/` (CDK, planned). Planning docs for both repos live here in `.planning/`.
+
 ## Dev Workflow
 
 Internal planning docs live in `.planning/` (git submodule, separate private repo `sketch-internal-planning`):

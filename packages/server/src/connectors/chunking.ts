@@ -90,7 +90,8 @@ export function chunkText(text: string, opts?: ChunkOptions): Chunk[] {
           if (segment.length > maxChars) {
             let pos = 0;
             while (pos < segment.length) {
-              const slice = segment.slice(pos, pos + maxChars - (current ? current.length + 1 : 0));
+              const available = Math.max(1, maxChars - (current ? current.length + 1 : 0));
+              const slice = segment.slice(pos, pos + available);
               if (current.length + slice.length + 1 > maxChars && current.length > overlapChars) {
                 flushChunk();
               }

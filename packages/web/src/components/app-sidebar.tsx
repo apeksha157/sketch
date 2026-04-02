@@ -1,3 +1,25 @@
+import { api } from "@/lib/api";
+/**
+ * App sidebar — navigation, branding, and user actions.
+ * Follows the designer's sidebar structure with Phosphor icons.
+ */
+import {
+  ArrowSquareOutIcon,
+  BrainIcon,
+  CalendarDotsIcon,
+  CaretUpDownIcon,
+  ChartBarIcon,
+  ChatCircleIcon,
+  DesktopIcon,
+  FolderIcon,
+  FolderSimpleIcon,
+  GearIcon,
+  LinkSimpleIcon,
+  MoonIcon,
+  SignOutIcon,
+  SunIcon,
+  UsersThreeIcon,
+} from "@phosphor-icons/react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,7 +31,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@sketch/ui/components/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
@@ -20,29 +42,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@/components/ui/sidebar";
-import { useTheme } from "@/hooks/use-theme";
-import { api } from "@/lib/api";
-import { getInitials } from "@/lib/utils";
-/**
- * App sidebar — navigation, branding, and user actions.
- * Follows the designer's sidebar structure with Phosphor icons.
- */
-import {
-  BrainIcon,
-  CalendarDotsIcon,
-  CaretUpDownIcon,
-  ChartBarIcon,
-  ChatCircleIcon,
-  DesktopIcon,
-  FolderSimpleIcon,
-  GearIcon,
-  LinkSimpleIcon,
-  MoonIcon,
-  SignOutIcon,
-  SunIcon,
-  UsersThreeIcon,
-} from "@phosphor-icons/react";
+} from "@sketch/ui/components/sidebar";
+import { useTheme } from "@sketch/ui/hooks/use-theme";
+import { getInitials } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -53,13 +55,16 @@ interface NavItem {
   disabled?: boolean;
 }
 
-const primaryNav: NavItem[] = [
+const experimentalNavLabels = new Set(["Files", "Connections"]);
+
+const allPrimaryNav: NavItem[] = [
   { label: "Channels", icon: <ChatCircleIcon size={18} />, href: "/channels" },
   { label: "Files", icon: <FolderSimpleIcon size={18} />, href: "/files" },
   { label: "Team", icon: <UsersThreeIcon size={18} />, href: "/team" },
   { label: "Scheduled Tasks", icon: <CalendarDotsIcon size={18} />, href: "/scheduled-tasks" },
   { label: "Skills", icon: <BrainIcon size={18} />, href: "/skills" },
   { label: "Usage", icon: <ChartBarIcon size={18} />, href: "/usage" },
+  { label: "Workspace", icon: <FolderIcon size={18} />, href: "/workspace" },
   { label: "Connections", icon: <LinkSimpleIcon size={18} />, href: "/connections" },
 ];
 
@@ -86,6 +91,15 @@ export function AppSidebar({
     queryKey: ["settings", "identity"],
     queryFn: () => api.settings.identity(),
   });
+
+  const { data: setupStatus } = useQuery({
+    queryKey: ["setup", "status"],
+    queryFn: () => api.setup.status(),
+  });
+
+  const primaryNav = setupStatus?.experimentalFlag
+    ? allPrimaryNav
+    : allPrimaryNav.filter((item) => !experimentalNavLabels.has(item.label));
 
   const logoutMutation = useMutation({
     mutationFn: () => api.auth.logout(),
@@ -134,6 +148,16 @@ export function AppSidebar({
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+              {setupStatus?.managedUrl ? (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild tooltip="Account">
+                    <a href={setupStatus.managedUrl} target="_blank" rel="noopener noreferrer">
+                      <ArrowSquareOutIcon size={18} />
+                      <span>Account</span>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ) : null}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

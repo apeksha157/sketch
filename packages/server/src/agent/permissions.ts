@@ -4,7 +4,7 @@
  *
  * Three security layers:
  * 1. Tool allowlist — only permitted tools can execute
- * 2. File path validation — file tools restricted to workspace + ~/.claude (read-only)
+ * 2. File path validation — file tools restricted to workspace + ~/.claude (read-write)
  * 3. Bash path validation — commands blocked if they reference absolute paths outside workspace/~/.claude
  */
 import { homedir } from "node:os";

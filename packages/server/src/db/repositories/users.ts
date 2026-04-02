@@ -30,6 +30,10 @@ export function createUserRepository(db: Kysely<DB>) {
       whatsappNumber?: string;
       email?: string | null;
       emailVerified?: boolean;
+      description?: string;
+      type?: string;
+      role?: string;
+      reportsTo?: string;
     }) {
       const id = randomUUID();
       await db
@@ -41,6 +45,10 @@ export function createUserRepository(db: Kysely<DB>) {
           email_verified_at: data.email && data.emailVerified ? new Date().toISOString() : null,
           slack_user_id: data.slackUserId ?? null,
           whatsapp_number: data.whatsappNumber ?? null,
+          description: data.description ?? null,
+          type: data.type ?? "human",
+          role: data.role ?? null,
+          reports_to: data.reportsTo ?? null,
         })
         .execute();
 
@@ -55,6 +63,9 @@ export function createUserRepository(db: Kysely<DB>) {
         emailVerified?: boolean;
         whatsappNumber?: string | null;
         slackUserId?: string | null;
+        description?: string | null;
+        role?: string | null;
+        reportsTo?: string | null;
       },
     ) {
       const values: Record<string, unknown> = {};
@@ -75,6 +86,9 @@ export function createUserRepository(db: Kysely<DB>) {
       }
       if (data.whatsappNumber !== undefined) values.whatsapp_number = data.whatsappNumber;
       if (data.slackUserId !== undefined) values.slack_user_id = data.slackUserId;
+      if (data.description !== undefined) values.description = data.description;
+      if (data.role !== undefined) values.role = data.role;
+      if (data.reportsTo !== undefined) values.reports_to = data.reportsTo;
 
       if (Object.keys(values).length > 0) {
         await db.updateTable("users").set(values).where("id", "=", id).execute();

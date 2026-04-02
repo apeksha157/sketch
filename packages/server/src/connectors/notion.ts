@@ -17,6 +17,10 @@ import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import type { Connector, ConnectorCredentials, OAuthCredentials, SyncedItem } from "./types";
 
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 1000;
+const REQUEST_TIMEOUT_MS = 30_000;
+
 const NOTION_API = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
 const TOKEN_ENDPOINT = "https://api.notion.com/v1/oauth/token";
@@ -25,24 +29,6 @@ const RATE_LIMIT_REQUESTS = 3;
 const RATE_LIMIT_PERIOD_MS = 1000;
 const PAGE_SIZE = 100;
 const MAX_BLOCK_DEPTH = 5;
-
-const requestTimes: number[] = [];
-
-async function waitForRateLimit(): Promise<void> {
-  const now = Date.now();
-  const cutoff = now - RATE_LIMIT_PERIOD_MS;
-  while (requestTimes.length > 0 && requestTimes[0] < cutoff) {
-    requestTimes.shift();
-  }
-  if (requestTimes.length >= RATE_LIMIT_REQUESTS) {
-    const oldest = requestTimes[0];
-    const waitMs = oldest + RATE_LIMIT_PERIOD_MS - now + 10;
-    if (waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
-  }
-  requestTimes.push(Date.now());
-}
 
 function getAccessToken(credentials: ConnectorCredentials): string {
   if (credentials.type === "api_key") return credentials.api_key;
@@ -58,48 +44,112 @@ function notionHeaders(token: string): Record<string, string> {
   };
 }
 
-async function notionGet(path: string, token: string): Promise<unknown> {
-  await waitForRateLimit();
-  const response = await fetch(`${NOTION_API}${path}`, {
-    headers: notionHeaders(token),
-  });
+/**
+ * Create per-connector-instance rate limiter and request helpers.
+ * Keeps requestTimes in closure so concurrent connector syncs don't share state.
+ */
+function makeNotionRequests() {
+  const requestTimes: number[] = [];
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get("Retry-After");
-    const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 2000;
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-    return notionGet(path, token);
+  async function waitForRateLimit(): Promise<void> {
+    const now = Date.now();
+    const cutoff = now - RATE_LIMIT_PERIOD_MS;
+    while (requestTimes.length > 0 && requestTimes[0] < cutoff) {
+      requestTimes.shift();
+    }
+    if (requestTimes.length >= RATE_LIMIT_REQUESTS) {
+      const oldest = requestTimes[0];
+      const waitMs = oldest + RATE_LIMIT_PERIOD_MS - now + 10;
+      if (waitMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    }
+    requestTimes.push(Date.now());
   }
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Notion API GET ${path} failed (${response.status}): ${body}`);
+  async function notionGet(path: string, token: string, attempt = 1): Promise<unknown> {
+    await waitForRateLimit();
+
+    let response: Response;
+    try {
+      response = await fetch(`${NOTION_API}${path}`, {
+        headers: notionHeaders(token),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const cause = err instanceof Error && "cause" in err ? ((err.cause as Error)?.message ?? "") : "";
+      const detail = cause ? `${(err as Error).message} (${cause})` : (err as Error).message;
+
+      if (attempt < MAX_RETRIES) {
+        const waitMs = RETRY_BASE_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        return notionGet(path, token, attempt + 1);
+      }
+
+      throw new Error(`Notion API GET ${path} network error after ${MAX_RETRIES} attempts: ${detail}`);
+    }
+
+    if (response.status === 429) {
+      if (attempt >= MAX_RETRIES) {
+        throw new Error(`Notion API GET ${path} rate limited after ${MAX_RETRIES} attempts`);
+      }
+      const retryAfter = response.headers.get("Retry-After");
+      const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 2000;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      return notionGet(path, token, attempt + 1);
+    }
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Notion API GET ${path} failed (${response.status}): ${body}`);
+    }
+
+    return response.json();
   }
 
-  return response.json();
-}
+  async function notionPost(path: string, token: string, body: unknown, attempt = 1): Promise<unknown> {
+    await waitForRateLimit();
 
-async function notionPost(path: string, token: string, body: unknown): Promise<unknown> {
-  await waitForRateLimit();
-  const response = await fetch(`${NOTION_API}${path}`, {
-    method: "POST",
-    headers: notionHeaders(token),
-    body: JSON.stringify(body),
-  });
+    let response: Response;
+    try {
+      response = await fetch(`${NOTION_API}${path}`, {
+        method: "POST",
+        headers: notionHeaders(token),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const cause = err instanceof Error && "cause" in err ? ((err.cause as Error)?.message ?? "") : "";
+      const detail = cause ? `${(err as Error).message} (${cause})` : (err as Error).message;
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get("Retry-After");
-    const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 2000;
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-    return notionPost(path, token, body);
+      if (attempt < MAX_RETRIES) {
+        const waitMs = RETRY_BASE_MS * 2 ** (attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        return notionPost(path, token, body, attempt + 1);
+      }
+
+      throw new Error(`Notion API POST ${path} network error after ${MAX_RETRIES} attempts: ${detail}`);
+    }
+
+    if (response.status === 429) {
+      if (attempt >= MAX_RETRIES) {
+        throw new Error(`Notion API POST ${path} rate limited after ${MAX_RETRIES} attempts`);
+      }
+      const retryAfter = response.headers.get("Retry-After");
+      const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 2000;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      return notionPost(path, token, body, attempt + 1);
+    }
+
+    if (!response.ok) {
+      const body2 = await response.text();
+      throw new Error(`Notion API POST ${path} failed (${response.status}): ${body2}`);
+    }
+
+    return response.json();
   }
 
-  if (!response.ok) {
-    const body2 = await response.text();
-    throw new Error(`Notion API POST ${path} failed (${response.status}): ${body2}`);
-  }
-
-  return response.json();
+  return { notionGet, notionPost };
 }
 
 function contentHash(content: string): string {
@@ -197,8 +247,17 @@ function blockToMarkdown(block: { type: string; [key: string]: unknown }, depth:
   }
 }
 
+type NotionGetFn = ReturnType<typeof makeNotionRequests>["notionGet"];
+type NotionPostFn = ReturnType<typeof makeNotionRequests>["notionPost"];
+
 /** Recursively fetch blocks and convert to markdown. */
-async function extractPageContent(pageId: string, token: string, logger: Logger, depth = 0): Promise<string[]> {
+async function extractPageContent(
+  pageId: string,
+  token: string,
+  logger: Logger,
+  notionGet: NotionGetFn,
+  depth = 0,
+): Promise<string[]> {
   if (depth > MAX_BLOCK_DEPTH) return [];
 
   const lines: string[] = [];
@@ -223,7 +282,7 @@ async function extractPageContent(pageId: string, token: string, logger: Logger,
       if (md) lines.push(md);
 
       if (block.has_children && block.type !== "child_page" && block.type !== "child_database") {
-        const childLines = await extractPageContent(block.id as string, token, logger, depth + 1);
+        const childLines = await extractPageContent(block.id as string, token, logger, notionGet, depth + 1);
         lines.push(...childLines);
       }
     }
@@ -322,6 +381,9 @@ async function refreshNotionToken(credentials: OAuthCredentials): Promise<OAuthC
 }
 
 export function createNotionConnector(): Connector {
+  // Per-connector-instance rate limiter state — not shared across concurrent syncs
+  const { notionGet, notionPost } = makeNotionRequests();
+
   return {
     type: "notion",
 
@@ -334,8 +396,8 @@ export function createNotionConnector(): Connector {
       const token = getAccessToken(credentials);
       const sinceCursor = cursor ?? null;
 
-      yield* syncDatabases(token, sinceCursor, logger);
-      yield* syncPages(token, sinceCursor, logger);
+      yield* syncDatabases(token, sinceCursor, logger, notionGet, notionPost);
+      yield* syncPages(token, sinceCursor, logger, notionGet, notionPost);
     },
 
     async getCursor({ currentCursor }) {
@@ -343,13 +405,22 @@ export function createNotionConnector(): Connector {
     },
 
     async refreshTokens(credentials) {
+      if (credentials.expires_at && new Date(credentials.expires_at) > new Date()) {
+        return null;
+      }
       return refreshNotionToken(credentials);
     },
   };
 }
 
 /** Discover and sync all databases + their page entries. */
-async function* syncDatabases(token: string, since: string | null, logger: Logger): AsyncGenerator<SyncedItem> {
+async function* syncDatabases(
+  token: string,
+  since: string | null,
+  logger: Logger,
+  notionGet: NotionGetFn,
+  notionPost: NotionPostFn,
+): AsyncGenerator<SyncedItem> {
   let startCursor: string | undefined;
   let hasMore = true;
 
@@ -391,7 +462,7 @@ async function* syncDatabases(token: string, since: string | null, logger: Logge
         // Notion API doesn't expose per-page permissions — no access restrictions
       };
 
-      yield* syncDatabasePages(dbId, title, token, since, logger);
+      yield* syncDatabasePages(dbId, title, token, since, logger, notionPost);
     }
 
     hasMore = response.has_more;
@@ -406,6 +477,7 @@ async function* syncDatabasePages(
   token: string,
   since: string | null,
   logger: Logger,
+  notionPost: NotionPostFn,
 ): AsyncGenerator<SyncedItem> {
   let startCursor: string | undefined;
   let hasMore = true;
@@ -465,7 +537,13 @@ async function* syncDatabasePages(
 }
 
 /** Discover and sync standalone pages (not in a database). */
-async function* syncPages(token: string, since: string | null, logger: Logger): AsyncGenerator<SyncedItem> {
+async function* syncPages(
+  token: string,
+  since: string | null,
+  logger: Logger,
+  notionGet: NotionGetFn,
+  notionPost: NotionPostFn,
+): AsyncGenerator<SyncedItem> {
   let startCursor: string | undefined;
   let hasMore = true;
 
@@ -498,7 +576,7 @@ async function* syncPages(token: string, since: string | null, logger: Logger): 
 
       let content: string;
       try {
-        const lines = await extractPageContent(pageId, token, logger);
+        const lines = await extractPageContent(pageId, token, logger, notionGet);
         content = lines.length > 0 ? `${title}\n\n${lines.join("\n\n")}` : title;
       } catch (err) {
         logger.warn({ err, pageId }, "Failed to extract page content");

@@ -5,13 +5,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { authRoutes } from "./api/auth";
 import { channelRoutes } from "./api/channels";
 import { connectorRoutes } from "./api/connectors";
 import { emailRoutes } from "./api/email";
+import { entityRoutes } from "./api/entities";
 import { healthRoutes } from "./api/health";
 import { mcpServerRoutes } from "./api/mcp-servers";
 import { createAuthMiddleware } from "./api/middleware";
@@ -22,8 +24,11 @@ import { setupRoutes } from "./api/setup";
 import { skillsRoutes } from "./api/skills";
 
 import { oauthRoutes } from "./api/oauth";
+import { systemRoutes } from "./api/system";
+import { usageRoutes } from "./api/usage";
 import { userRoutes } from "./api/users";
 import { whatsappRoutes } from "./api/whatsapp";
+import { createWorkspaceApi } from "./api/workspace";
 import type { Config } from "./config";
 import { createConnectorRepository } from "./db/repositories/connectors";
 import { createMcpServerRepository } from "./db/repositories/mcp-servers";
@@ -49,29 +54,72 @@ interface AppDeps {
 
 export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
   const app = new Hono();
-  const settings = createSettingsRepository(db);
+  const settings = createSettingsRepository(db, config.ENCRYPTION_KEY);
   const users = createUserRepository(db);
   const connectors = createConnectorRepository(db);
   const mcpServers = createMcpServerRepository(db);
   const logger = deps?.logger ?? (console as unknown as Logger);
 
+  // Slack HTTP events endpoint — must come before auth middleware so it doesn't
+  // require JWT authentication. Only registered when SLACK_MODE=http.
+  if (config.SLACK_MODE === "http") {
+    app.post("/slack/events", async (c) => {
+      const slack = deps?.getSlack?.();
+      if (!slack) {
+        return c.json({ error: "Slack not configured" }, 503);
+      }
+
+      const rawBody = await c.req.text();
+      const headers: Record<string, string> = {};
+      c.req.raw.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+
+      try {
+        const result = await slack.processHttpRequest(rawBody, headers);
+        return c.json(result);
+      } catch (_err) {
+        return c.json({ error: "Invalid request" }, 401);
+      }
+    });
+  }
+
   // Auth middleware on all /api/* routes (with setup mode + auth checks)
-  app.use("/api/*", createAuthMiddleware(settings));
+  app.use(
+    "/api/*",
+    createAuthMiddleware(settings, {
+      managedAuthSecret: config.MANAGED_AUTH_SECRET,
+      managedUrl: config.MANAGED_URL,
+      findUserByEmail: config.MANAGED_AUTH_SECRET
+        ? async (email) => {
+            const user = await users.findByEmail(email);
+            if (!user) return null;
+            return { id: user.id, role: user.role as "admin" | "member" };
+          }
+        : undefined,
+    }),
+  );
 
   // API routes
   app.route("/api/health", healthRoutes(db));
   app.route("/api/auth", authRoutes(settings, db, { config, logger }));
   app.route(
     "/api/setup",
-    setupRoutes(settings, {
-      onSlackTokensUpdated: deps?.onSlackTokensUpdated,
-      onLlmSettingsUpdated: deps?.onLlmSettingsUpdated,
-    }),
+    setupRoutes(
+      settings,
+      {
+        managedUrl: config.MANAGED_URL,
+        onSlackTokensUpdated: deps?.onSlackTokensUpdated,
+        onLlmSettingsUpdated: deps?.onLlmSettingsUpdated,
+      },
+      config.EXPERIMENTAL_FLAG,
+    ),
   );
   app.route("/api/settings", settingsRoutes(settings, db, deps?.logger));
   app.route("/api/skills", skillsRoutes(config));
   app.route("/api/users", userRoutes(users, { settings, db, logger, config }));
   app.route("/api/mcp-servers", mcpServerRoutes(mcpServers, users));
+  app.route("/api/workspace", createWorkspaceApi({ config }));
   if (deps?.scheduler) {
     app.route("/api/scheduled-tasks", scheduledTaskRoutes(db, deps.scheduler));
   }
@@ -92,6 +140,12 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
 
   app.route("/api/channels/email", emailRoutes(settings));
 
+  app.route("/api/usage", usageRoutes(db));
+
+  if (config.EXPERIMENTAL_FLAG) {
+    app.route("/api/entities", entityRoutes(db));
+  }
+
   if (deps?.logger) {
     app.route("/api/connectors", connectorRoutes(connectors, db, deps.logger));
   }
@@ -101,6 +155,62 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
 
   if (deps?.logger) {
     app.route("/api/oauth", oauthRoutes(settings, identities, connectors, users, db, deps.logger, config.BASE_URL));
+  }
+
+  if (config.SYSTEM_SECRET) {
+    const onSlackTokensUpdated = deps?.onSlackTokensUpdated;
+    const whatsapp = deps?.whatsapp;
+
+    let pairingInProgress = false;
+    let pairingSettled: Promise<void> | null = null;
+
+    app.route(
+      "/api/system",
+      systemRoutes(settings, {
+        systemSecret: config.SYSTEM_SECRET,
+        onSlackTokensUpdated: onSlackTokensUpdated ? () => onSlackTokensUpdated() : undefined,
+        userRepo: users,
+        startWhatsAppPairing: whatsapp
+          ? (c: Context) => {
+              if (whatsapp.isConnected) {
+                return c.json({ error: { code: "ALREADY_CONNECTED", message: "WhatsApp is already connected" } }, 400);
+              }
+              if (pairingInProgress) {
+                return c.json(
+                  { error: { code: "PAIRING_IN_PROGRESS", message: "A pairing attempt is already active" } },
+                  409,
+                );
+              }
+              pairingInProgress = true;
+
+              return streamSSE(c, async (stream) => {
+                try {
+                  pairingSettled = whatsapp.startPairing({
+                    onQr: async (qr) => {
+                      await stream.writeSSE({ event: "qr", data: JSON.stringify({ qr }) });
+                    },
+                    onConnected: async (phoneNumber) => {
+                      await stream.writeSSE({ event: "connected", data: JSON.stringify({ phoneNumber }) });
+                    },
+                    onError: async (message) => {
+                      await stream.writeSSE({ event: "error", data: JSON.stringify({ message }) });
+                    },
+                  });
+                  await pairingSettled;
+                } finally {
+                  pairingInProgress = false;
+                  pairingSettled = null;
+                }
+              });
+            }
+          : undefined,
+        cancelWhatsAppPairing: whatsapp
+          ? () => {
+              whatsapp.cancelPairing();
+            }
+          : undefined,
+      }),
+    );
   }
 
   // Static file serving for the SPA (production only — dev uses Vite dev server)

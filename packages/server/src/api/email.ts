@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { createSettingsRepository } from "../db/repositories/settings";
 import type { SmtpConfig } from "../email/send";
 import { sendVerificationCode, verifySmtp } from "../email/send";
+import { requireAdmin } from "./middleware";
 
 type SettingsRepo = ReturnType<typeof createSettingsRepository>;
 
@@ -14,7 +15,7 @@ const smtpSchema = z.object({
   host: z.string().min(1, "SMTP host is required"),
   port: z.coerce.number().int().min(1).max(65535),
   user: z.string().min(1, "SMTP username is required"),
-  pass: z.string().min(1, "SMTP password is required"),
+  password: z.string().min(1, "SMTP password is required"),
   from: z.string().min(1, "From address is required"),
   secure: z.boolean().default(true),
 });
@@ -41,7 +42,7 @@ export function getSmtpConfig(
     host: row.smtp_host,
     port: row.smtp_port,
     user: row.smtp_user,
-    pass: row.smtp_password,
+    password: row.smtp_password,
     from: row.smtp_from,
     secure: row.smtp_secure === 1,
   };
@@ -76,12 +77,12 @@ export function emailRoutes(settings: SettingsRepo) {
   const routes = new Hono();
 
   /** Test SMTP connection without saving. */
-  routes.post("/verify", async (c) => {
+  routes.post("/verification", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = smtpSchema.safeParse(body);
     if (!parsed.success) {
       const message = parsed.error.issues.map((i) => i.message).join(", ");
-      return c.json({ error: { code: "BAD_REQUEST", message } }, 400);
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
     try {
@@ -94,12 +95,12 @@ export function emailRoutes(settings: SettingsRepo) {
   });
 
   /** Save SMTP configuration (verifies first). */
-  routes.post("/configure", async (c) => {
+  routes.put("/config", requireAdmin(), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = smtpSchema.safeParse(body);
     if (!parsed.success) {
       const message = parsed.error.issues.map((i) => i.message).join(", ");
-      return c.json({ error: { code: "BAD_REQUEST", message } }, 400);
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
     try {
@@ -113,7 +114,7 @@ export function emailRoutes(settings: SettingsRepo) {
       smtpHost: parsed.data.host,
       smtpPort: parsed.data.port,
       smtpUser: parsed.data.user,
-      smtpPassword: parsed.data.pass,
+      smtpPassword: parsed.data.password,
       smtpFrom: parsed.data.from,
       smtpSecure: parsed.data.secure ? 1 : 0,
     });
@@ -122,7 +123,7 @@ export function emailRoutes(settings: SettingsRepo) {
   });
 
   /** Remove SMTP configuration. */
-  routes.delete("/configure", async (c) => {
+  routes.delete("/config", requireAdmin(), async (c) => {
     await settings.update({
       smtpHost: null,
       smtpPort: null,
@@ -135,7 +136,7 @@ export function emailRoutes(settings: SettingsRepo) {
   });
 
   /** Send a verification code to an email address. Requires SMTP to be configured. */
-  routes.post("/send-code", async (c) => {
+  routes.post("/verification-codes", async (c) => {
     const row = await settings.get();
     const smtp = getSmtpConfig(row);
     if (!smtp) {
@@ -146,7 +147,7 @@ export function emailRoutes(settings: SettingsRepo) {
     const parsed = sendCodeSchema.safeParse(body);
     if (!parsed.success) {
       const message = parsed.error.issues.map((i) => i.message).join(", ");
-      return c.json({ error: { code: "BAD_REQUEST", message } }, 400);
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
     const code = generateCode();
@@ -168,12 +169,12 @@ export function emailRoutes(settings: SettingsRepo) {
   });
 
   /** Verify a code that was sent to an email. */
-  routes.post("/verify-code", async (c) => {
+  routes.post("/verification-codes/verify", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = z.object({ email: z.string().email(), code: z.string().length(6) }).safeParse(body);
     if (!parsed.success) {
       const message = parsed.error.issues.map((i) => i.message).join(", ");
-      return c.json({ error: { code: "BAD_REQUEST", message } }, 400);
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
     const valid = verifyCode(parsed.data.email, parsed.data.code);

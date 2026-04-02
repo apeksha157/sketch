@@ -51,4 +51,31 @@ describe("JWT sign and verify", () => {
     const payload = await verifyJwt(token, SECRET);
     expect(payload).toEqual({ sub: "admin@example.com", role: "admin" });
   });
+
+  it("verifyJwt() returns email field when present in JWT payload", async () => {
+    const { SignJWT } = await import("jose");
+    const token = await new SignJWT({
+      sub: "550e8400-e29b-41d4-a716-446655440000",
+      role: "admin",
+      email: "admin@example.com",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setExpirationTime("7d")
+      .sign(new TextEncoder().encode(SECRET));
+
+    const payload = await verifyJwt(token, SECRET);
+    expect(payload).toEqual({
+      sub: "550e8400-e29b-41d4-a716-446655440000",
+      role: "admin",
+      email: "admin@example.com",
+    });
+  });
+
+  it("verifyJwt() omits email field when not present in JWT payload", async () => {
+    const token = await signJwt("admin@example.com", "admin", SECRET);
+    const payload = await verifyJwt(token, SECRET);
+    expect(payload).toEqual({ sub: "admin@example.com", role: "admin" });
+    expect(payload).not.toHaveProperty("email");
+  });
 });

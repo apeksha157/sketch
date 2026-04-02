@@ -140,8 +140,12 @@ describe("TeamPage", () => {
       await waitFor(() => {
         expect(createFn).toHaveBeenCalledWith({
           name: "Charlie",
+          type: "human",
+          role: null,
+          reportsTo: null,
           email: "charlie@test.com",
           whatsappNumber: "+14155551234",
+          description: null,
         });
       });
     });

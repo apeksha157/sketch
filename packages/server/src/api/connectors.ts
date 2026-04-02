@@ -23,6 +23,7 @@ import { getConnector, runConnectorSync } from "../connectors/sync";
 import type { ConnectorCredentials, OAuthCredentials } from "../connectors/types";
 import type { createConnectorRepository } from "../db/repositories/connectors";
 import type { DB } from "../db/schema";
+import { requireAdmin } from "./middleware";
 
 type ConnectorRepo = ReturnType<typeof createConnectorRepository>;
 
@@ -119,7 +120,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
   });
 
   /** Create a new connector — validates credentials then auto-triggers first sync. */
-  routes.post("/", async (c) => {
+  routes.post("/", requireAdmin(), async (c) => {
     const body = await c.req.json();
     const parsed = createConnectorSchema.safeParse(body);
     if (!parsed.success) {
@@ -198,6 +199,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
           sourcePath: f.source_path,
           providerUrl: f.provider_url,
           syncedAt: f.synced_at,
+          sourceCreatedAt: f.source_created_at,
           sourceUpdatedAt: f.source_updated_at,
           hasSummary: !!f.summary,
           accessScope: accessInfo ? "restricted" : "unrestricted",
@@ -251,7 +253,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
     return c.json({ results });
   });
 
-  /** Get full content of a file, including who has access. */
+  /** Get full content of a file, including who has access and linked entities. */
   routes.get("/files/:fileId/content", async (c) => {
     const fileId = c.req.param("fileId");
     const file = await getFileContent(db, fileId);
@@ -260,6 +262,36 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
     }
 
     const accessDetails = await connectorRepo.getFileAccessDetails(fileId);
+
+    // Get entities linked to this file via entity_mentions
+    const mentions = await db
+      .selectFrom("entity_mentions")
+      .innerJoin("entities", "entities.id", "entity_mentions.entity_id")
+      .select([
+        "entities.id",
+        "entities.name",
+        "entities.source_type",
+        "entities.subtype",
+        "entity_mentions.context_snippet",
+      ])
+      .where("entity_mentions.indexed_file_id", "=", fileId)
+      .execute();
+
+    // Dedupe entities (a file may mention same entity in multiple chunks)
+    const seenIds = new Set<string>();
+    const linkedEntities = mentions
+      .filter((m) => {
+        if (seenIds.has(m.id)) return false;
+        seenIds.add(m.id);
+        return true;
+      })
+      .map((m) => ({
+        id: m.id,
+        name: m.name,
+        sourceType: m.source_type,
+        subtype: m.subtype,
+      }));
+
     return c.json({
       file,
       access: {
@@ -272,6 +304,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
           mapped: !!a.userId,
         })),
       },
+      entities: linkedEntities,
     });
   });
 
@@ -282,7 +315,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
   });
 
   /** Browse Google Drive shared drives for the folder picker. */
-  routes.post("/google-drive/browse", async (c) => {
+  routes.post("/google-drive/browse", requireAdmin(), async (c) => {
     const body = await c.req.json();
     const parsed = browseGoogleDriveSchema.safeParse(body);
     if (!parsed.success) {
@@ -419,7 +452,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
   });
 
   /** Delete a connector. */
-  routes.delete("/:id", async (c) => {
+  routes.delete("/:id", requireAdmin(), async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));
     if (!config) {
       return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
@@ -429,7 +462,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
   });
 
   /** Update connector scope config (add/remove drives, folders, etc.). */
-  routes.patch("/:id/scope", async (c) => {
+  routes.patch("/:id/scope", requireAdmin(), async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));
     if (!config) {
       return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
@@ -466,8 +499,8 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
     });
   });
 
-  /** Trigger a manual sync. */
-  routes.post("/:id/sync", async (c) => {
+  /** Trigger a manual sync (creates a sync job). */
+  routes.post("/:id/syncs", requireAdmin(), async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));
     if (!config) {
       return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
@@ -482,7 +515,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
     // Run sync then enrichment in background
     syncThenEnrich(db, config.id, logger);
 
-    return c.json({ message: "Sync started", connectorId: config.id });
+    return c.json({ sync: { connectorId: config.id, status: "started" } }, 201);
   });
 
   /** List files for a connector, including access scope info. */
@@ -508,6 +541,7 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
           sourcePath: f.source_path,
           providerUrl: f.provider_url,
           syncedAt: f.synced_at,
+          sourceCreatedAt: f.source_created_at,
           sourceUpdatedAt: f.source_updated_at,
           hasSummary: !!f.summary,
           accessScope: accessInfo ? "restricted" : "unrestricted",
@@ -517,8 +551,8 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
     });
   });
 
-  /** Enrich files with AI-generated summaries and context. */
-  routes.post("/:id/enrich", async (c) => {
+  /** Enrich files with AI-generated summaries and context (creates an enrichment job). */
+  routes.post("/:id/enrichments", requireAdmin(), async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));
     if (!config) {
       return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
@@ -537,11 +571,11 @@ export function connectorRoutes(connectorRepo: ConnectorRepo, db: Kysely<DB>, lo
     const jobId = `enrich-${Date.now()}`;
     logger.info({ jobId, connectorId: config.id, fileCount: parsed.data.fileIds.length }, "Enrichment requested");
 
-    return c.json({ success: true, jobId });
+    return c.json({ enrichment: { jobId, connectorId: config.id, fileCount: parsed.data.fileIds.length } }, 201);
   });
 
   /** Enrich a single file (tagging + embedding). For testing/debugging. */
-  routes.post("/files/:fileId/enrich", async (c) => {
+  routes.post("/files/:fileId/enrichments", requireAdmin(), async (c) => {
     const fileId = c.req.param("fileId");
     const file = await db
       .selectFrom("indexed_files")

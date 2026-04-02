@@ -350,7 +350,7 @@ describe("slack/adapter", () => {
       await flush();
 
       const agentCall = vi.mocked(deps.runAgent).mock.calls[0][0];
-      expect(agentCall.userMessage).toContain("[Alice | alice@test.com]:");
+      expect(agentCall.userMessage).toContain("<sender>Alice (alice@test.com)</sender>");
     });
 
     it("posts thread reply with thinking indicator", async () => {

@@ -1,5 +1,9 @@
 node_modules/
 dist/
 .env
+data
 data/
 .claude/
+.agents/
+skills/
+skills-lock.json

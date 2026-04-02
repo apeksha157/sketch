@@ -7,6 +7,10 @@ export interface UsersTable {
   email_verified_at: string | null;
   slack_user_id: string | null;
   whatsapp_number: string | null;
+  description: string | null;
+  type: Generated<string>;
+  role: string | null;
+  reports_to: string | null;
   created_at: Generated<string>;
 }
 
@@ -106,6 +110,16 @@ export interface IndexedFilesTable {
   access_scope_id: string | null;
   mime_type: string | null;
   embedding_status: Generated<string>;
+}
+
+export interface ChunkEmbeddingsTable {
+  chunk_id: string;
+  embedding: string;
+}
+
+export interface FileEmbeddingsTable {
+  indexed_file_id: string;
+  embedding: string;
 }
 
 export interface DocumentChunksTable {
@@ -215,6 +229,87 @@ export interface ScheduledTasksTable {
   created_at: Generated<string>;
 }
 
+export interface OutreachMessagesTable {
+  id: string;
+  requester_user_id: string;
+  recipient_user_id: string;
+  message: string;
+  task_context: string | null;
+  response: string | null;
+  status: Generated<string>;
+  platform: string;
+  channel_id: string | null;
+  message_ref: string | null;
+  requester_platform: string;
+  requester_channel: string;
+  requester_thread_ts: string | null;
+  created_at: Generated<string>;
+  responded_at: string | null;
+}
+
+export interface EntitiesTable {
+  id: string;
+  name: string;
+  source_type: string;
+  subtype: string | null;
+  aliases: string | null;
+  metadata: string | null;
+  source_ref_id: string | null;
+  status: string;
+  hotness: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EntitySourceRefsTable {
+  id: string;
+  entity_id: string;
+  source: string;
+  source_id: string;
+  source_url: string | null;
+  last_seen_at: string;
+}
+
+export interface EntityMentionsTable {
+  id: string;
+  entity_id: string;
+  indexed_file_id: string;
+  chunk_index: number | null;
+  context_snippet: string | null;
+  mentioned_at: string;
+}
+
+export interface AgentRunsTable {
+  id: Generated<string>;
+  trace_id: string;
+  span_id: string | null;
+  user_id: string | null;
+  platform: string;
+  context_type: string;
+  cost_usd: number;
+  is_error: Generated<number>;
+  duration_ms: number | null;
+  created_at: Generated<string>;
+  attributes: Generated<string>;
+}
+
+export interface ToolCallsTable {
+  id: Generated<number>;
+  agent_run_id: string;
+  tool_name: string;
+  skill_name: string | null;
+  attributes: Generated<string>;
+  outcome: string | null;
+  denial_reason: string | null;
+  is_mcp: number | null;
+  mcp_server: string | null;
+  app_slug: string | null;
+  component_key: string | null;
+  component_type: string | null;
+  auth_type: string | null;
+  execution_outcome: string | null;
+}
+
 export interface DB {
   users: UsersTable;
   channels: ChannelsTable;
@@ -229,6 +324,8 @@ export interface DB {
   connector_files: ConnectorFilesTable;
   document_chunks: DocumentChunksTable;
   document_timeframes: DocumentTimeframesTable;
+  chunk_embeddings: ChunkEmbeddingsTable;
+  file_embeddings: FileEmbeddingsTable;
   user_provider_identities: UserProviderIdentitiesTable;
   file_access: FileAccessTable;
   email_verification_tokens: EmailVerificationTokensTable;
@@ -236,4 +333,10 @@ export interface DB {
   mcp_servers: McpServersTable;
   chat_sessions: ChatSessionsTable;
   scheduled_tasks: ScheduledTasksTable;
+  outreach_messages: OutreachMessagesTable;
+  entities: EntitiesTable;
+  entity_source_refs: EntitySourceRefsTable;
+  entity_mentions: EntityMentionsTable;
+  agent_runs: AgentRunsTable;
+  tool_calls: ToolCallsTable;
 }

@@ -85,11 +85,12 @@ async function verifyAnthropicApiKey(apiKey: string): Promise<void> {
 type SettingsRepo = ReturnType<typeof createSettingsRepository>;
 
 interface SetupDeps {
+  managedUrl?: string;
   onSlackTokensUpdated?: (tokens?: { botToken: string; appToken: string }) => Promise<void>;
   onLlmSettingsUpdated?: () => Promise<void>;
 }
 
-export function setupRoutes(settings: SettingsRepo, deps: SetupDeps = {}) {
+export function setupRoutes(settings: SettingsRepo, deps: SetupDeps = {}, experimentalFlag = false) {
   const routes = new Hono();
 
   routes.get("/status", async (c) => {
@@ -103,7 +104,19 @@ export function setupRoutes(settings: SettingsRepo, deps: SetupDeps = {}) {
       Boolean(row?.aws_access_key_id?.trim() && row?.aws_secret_access_key?.trim() && row?.aws_region?.trim());
     const hasLlm = Boolean(hasAnthropic || hasBedrock);
     const isCompleted = Boolean(row?.onboarding_completed_at);
-    const currentStep = isCompleted ? 5 : hasLlm ? 5 : hasSlack ? 4 : hasIdentity ? 3 : hasAdmin ? 2 : 0;
+    const isManaged = Boolean(deps.managedUrl);
+    let currentStep: number;
+    if (isCompleted) {
+      currentStep = 5;
+    } else if (hasLlm) {
+      currentStep = 5;
+    } else if (isManaged) {
+      // Managed: skip Slack step (3), go directly from Identity (2) to LLM (4)
+      currentStep = hasIdentity ? 4 : hasAdmin ? 2 : 0;
+    } else {
+      // Self-hosted: full flow
+      currentStep = hasSlack ? 4 : hasIdentity ? 3 : hasAdmin ? 2 : 0;
+    }
     return c.json({
       completed: isCompleted,
       currentStep,
@@ -113,10 +126,16 @@ export function setupRoutes(settings: SettingsRepo, deps: SetupDeps = {}) {
       slackConnected: hasSlack,
       llmConnected: hasLlm,
       llmProvider: row?.llm_provider === "bedrock" ? "bedrock" : row?.llm_provider === "anthropic" ? "anthropic" : null,
+      ...(deps.managedUrl ? { managedUrl: deps.managedUrl } : {}),
+      experimentalFlag,
     });
   });
 
   routes.post("/slack/verify", async (c) => {
+    if (deps.managedUrl) {
+      return c.json({ error: { code: "FORBIDDEN", message: "Slack is managed via Marketplace" } }, 403);
+    }
+
     const body = await c.req.json().catch(() => ({}));
     const parsed = slackSchema.safeParse(body);
     if (!parsed.success) {
@@ -189,13 +208,17 @@ export function setupRoutes(settings: SettingsRepo, deps: SetupDeps = {}) {
 
     await settings.update({
       orgName: parsed.data.orgName.trim(),
-      botName: parsed.data.botName.trim(),
+      botName: deps.managedUrl ? "Sketch" : parsed.data.botName.trim(),
     });
 
     return c.json({ success: true });
   });
 
   routes.post("/slack", async (c) => {
+    if (deps.managedUrl) {
+      return c.json({ error: { code: "FORBIDDEN", message: "Slack is managed via Marketplace" } }, 403);
+    }
+
     const existing = await settings.get();
     if (!existing?.admin_email) {
       return c.json(

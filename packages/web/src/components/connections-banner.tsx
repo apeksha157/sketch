@@ -3,7 +3,7 @@
  *
  * Static text block (left) with a decorative field of floating app icons (right column + bottom).
  * An ambient gradient orb animates idly and follows the cursor on hover. Icons repel from
- * the cursor with a spring transition.
+ * the cursor with a spring transition (via the .cb-icon CSS class in index.css).
  *
  * All animation runs via requestAnimationFrame with direct DOM manipulation (no React re-renders).
  */
@@ -291,169 +291,100 @@ export function ConnectionsBanner({ onConnect }: { onConnect: () => void }) {
   }, [resetIcons]);
 
   return (
-    <>
-      {/* Smooth CSS transition for icon movement */}
-      <style>{`
-        .cb-icon {
-          transition: transform 0.8s ease-out;
-        }
-      `}</style>
+    <div
+      ref={bannerRef}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+      className="relative w-full overflow-hidden rounded-2xl border bg-[#111110]"
+      style={{ borderColor: "rgba(254, 237, 1, 0.15)" }}
+    >
+      {/* Ambient gradient orb — background set dynamically by rAF */}
+      <div ref={orbRef} className="pointer-events-none absolute inset-0" />
 
-      <div
-        ref={bannerRef}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        style={{
-          position: "relative",
-          width: "100%",
-          borderRadius: 16,
-          border: "1px solid rgba(254, 237, 1, 0.15)",
-          background: "#111110",
-          overflow: "hidden",
-        }}
-      >
-        {/* Ambient gradient orb */}
+      {/* Floating icons — position/size/rotation/bg come from ICONS data */}
+      {ICONS.map((icon, i) => (
         <div
-          ref={orbRef}
-          style={{
-            position: "absolute",
-            inset: 0,
-            pointerEvents: "none",
+          key={`${icon.name}-${icon.x}-${icon.y}`}
+          ref={(el) => {
+            iconRefs.current[i] = el;
           }}
-        />
-
-        {/* Floating icons */}
-        {ICONS.map((icon, i) => (
-          <div
-            key={`${icon.name}-${icon.x}-${icon.y}`}
-            ref={(el) => {
-              iconRefs.current[i] = el;
-            }}
-            className="cb-icon"
-            style={{
-              position: "absolute",
-              left: `${icon.x}%`,
-              top: `${icon.y}%`,
-              width: icon.size,
-              height: icon.size,
-              borderRadius: Math.floor(icon.size * 0.26),
-              background: icon.bg,
-              opacity: 0.82,
-              border: "1px solid rgba(255, 255, 255, 0.08)",
-              boxShadow: "0 4px 18px rgba(0, 0, 0, 0.50)",
-              transform: `rotate(${icon.rotation}deg)`,
-              pointerEvents: "none",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-            }}
-          >
-            <BrandSvg name={icon.name} size={icon.size} />
-          </div>
-        ))}
-
-        {/* Horizontal gradient mask — protects text from icon bleed */}
-        <div
+          className="cb-icon pointer-events-none absolute flex items-center justify-center overflow-hidden"
           style={{
-            position: "absolute",
-            inset: 0,
-            background:
-              "linear-gradient(to right, #111110 55%, rgba(17,17,16,0.60) 63%, rgba(17,17,16,0.15) 72%, transparent 82%)",
-            pointerEvents: "none",
-          }}
-        />
-
-        {/* Vertical gradient mask — fades icons into bottom edge */}
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            background:
-              "linear-gradient(to bottom, transparent 55%, rgba(17,17,16,0.25) 68%, rgba(17,17,16,0.55) 88%, rgba(17,17,16,0.75) 100%)",
-            pointerEvents: "none",
-          }}
-        />
-
-        {/* Text content */}
-        <div
-          style={{
-            position: "relative",
-            padding: "24px 32px",
-            maxWidth: "60%",
-            zIndex: 10,
+            left: `${icon.x}%`,
+            top: `${icon.y}%`,
+            width: icon.size,
+            height: icon.size,
+            borderRadius: Math.floor(icon.size * 0.26),
+            background: icon.bg,
+            opacity: 0.82,
+            border: "1px solid rgba(255, 255, 255, 0.08)",
+            boxShadow: "0 4px 18px rgba(0, 0, 0, 0.50)",
+            transform: `rotate(${icon.rotation}deg)`,
           }}
         >
-          {/* Heading */}
-          <h2
-            style={{
-              fontSize: 20,
-              lineHeight: 1.35,
-              letterSpacing: "-0.01em",
-              marginBottom: 10,
-              whiteSpace: "nowrap",
-              color: "#ffffff",
-              fontWeight: 600,
-              fontFamily: "'Instrument Sans', sans-serif",
-            }}
-          >
-            Let your team connect their{" "}
-            <span
-              style={{
-                fontFamily: "Palatino, 'Palatino Linotype', 'Book Antiqua', serif",
-                fontWeight: 700,
-                fontStyle: "italic",
-                background: "linear-gradient(to right, #ffffff 0%, #FEED01 100%)",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
-                color: "transparent",
-              }}
-            >
-              own apps, securely.
-            </span>
-          </h2>
-
-          {/* Body */}
-          <p
-            style={{
-              fontSize: 13.5,
-              color: "#9ca3af",
-              lineHeight: 1.6,
-              margin: "12px 0 18px",
-              fontWeight: 400,
-              fontFamily: "'Instrument Sans', sans-serif",
-            }}
-          >
-            Each member authorizes with their own credentials —
-            <br />
-            no shared access, no admin bottlenecks.
-          </p>
-
-          {/* CTA */}
-          <button
-            type="button"
-            onClick={onConnect}
-            className="group"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              padding: 0,
-              fontFamily: "'Instrument Sans', sans-serif",
-            }}
-          >
-            <span className="text-[#FEED01] group-hover:text-white transition-colors duration-200 text-[13.5px] font-semibold">
-              Connect
-            </span>
-            <span className="text-[#FEED01] group-hover:text-white transition-all duration-200 text-[16px] ml-[6px] group-hover:ml-[10px]">
-              &rarr;
-            </span>
-          </button>
+          <BrandSvg name={icon.name} size={icon.size} />
         </div>
+      ))}
+
+      {/* Horizontal gradient mask — protects text from icon bleed */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(to right, #111110 55%, rgba(17,17,16,0.60) 63%, rgba(17,17,16,0.15) 72%, transparent 82%)",
+        }}
+      />
+
+      {/* Vertical gradient mask — fades icons into bottom edge */}
+      <div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(to bottom, transparent 55%, rgba(17,17,16,0.25) 68%, rgba(17,17,16,0.55) 88%, rgba(17,17,16,0.75) 100%)",
+        }}
+      />
+
+      {/* Text content */}
+      <div className="relative z-10 max-w-[60%] px-8 py-6">
+        {/* Heading */}
+        <h2
+          className="mb-2.5 text-xl font-semibold leading-snug tracking-tight whitespace-nowrap text-white"
+          style={{ fontFamily: "'Instrument Sans', sans-serif" }}
+        >
+          Let your team connect their{" "}
+          <span
+            className="bg-gradient-to-r from-white to-[#FEED01] bg-clip-text font-bold italic text-transparent"
+            style={{ fontFamily: "Palatino, 'Palatino Linotype', 'Book Antiqua', serif" }}
+          >
+            own apps, securely.
+          </span>
+        </h2>
+
+        {/* Body */}
+        <p
+          className="my-3 text-[13.5px] font-normal leading-relaxed text-[#9ca3af]"
+          style={{ fontFamily: "'Instrument Sans', sans-serif" }}
+        >
+          Each member authorizes with their own credentials —
+          <br />
+          no shared access, no admin bottlenecks.
+        </p>
+
+        {/* CTA */}
+        <button
+          type="button"
+          onClick={onConnect}
+          className="group inline-flex cursor-pointer items-center border-none bg-transparent p-0"
+          style={{ fontFamily: "'Instrument Sans', sans-serif" }}
+        >
+          <span className="text-[13.5px] font-semibold text-[#FEED01] transition-colors duration-200 group-hover:text-white">
+            Connect
+          </span>
+          <span className="ml-1.5 text-base text-[#FEED01] transition-all duration-200 group-hover:ml-2.5 group-hover:text-white">
+            &rarr;
+          </span>
+        </button>
       </div>
-    </>
+    </div>
   );
 }

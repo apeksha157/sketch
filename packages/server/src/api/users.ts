@@ -31,17 +31,27 @@ const createUserSchema = z.object({
   name: z.string().min(1, "Name is required"),
   email: emailSchema.nullable().optional(),
   whatsappNumber: whatsappNumberSchema.nullable().optional(),
+  description: z.string().max(500).nullable().optional(),
+  type: z.enum(["human", "agent"]).optional(),
+  role: z.string().max(100).nullable().optional(),
+  reportsTo: z.string().nullable().optional(),
 });
 
 const updateUserSchema = z.object({
   name: z.string().min(1, "Name is required").optional(),
   email: emailSchema.nullable().optional(),
   whatsappNumber: whatsappNumberSchema.nullable().optional(),
+  description: z.string().max(500).nullable().optional(),
+  role: z.string().max(100).nullable().optional(),
+  reportsTo: z.string().nullable().optional(),
 });
 
 const memberUpdateSchema = z.object({
   name: z.string().min(1, "Name is required").optional(),
   whatsappNumber: whatsappNumberSchema.nullable().optional(),
+  description: z.string().max(500).nullable().optional(),
+  role: z.string().max(100).nullable().optional(),
+  reportsTo: z.string().nullable().optional(),
 });
 
 async function sendOrLogVerification(
@@ -83,16 +93,31 @@ export function userRoutes(users: UserRepo, deps: UserRoutesDeps) {
       return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
+    const reportsTo = parsed.data.reportsTo ?? null;
+    if (reportsTo) {
+      const manager = await users.findById(reportsTo);
+      if (!manager) {
+        return c.json(
+          { error: { code: "VALIDATION_ERROR", message: "reportsTo references a user that does not exist" } },
+          400,
+        );
+      }
+    }
+
     try {
       const user = await users.create({
         name: parsed.data.name,
         email: parsed.data.email ?? undefined,
         whatsappNumber: parsed.data.whatsappNumber ?? undefined,
+        description: parsed.data.description ?? undefined,
+        type: parsed.data.type ?? "human",
+        role: parsed.data.role ?? undefined,
+        reportsTo: reportsTo ?? undefined,
       });
 
-      // Send verification email when email is provided
+      // Agents do not have email auth flows — skip verification
       let verificationSent = false;
-      if (user.email) {
+      if (user.email && user.type !== "agent") {
         const baseUrl = resolveBaseUrl(c, deps.config);
         const result = await sendOrLogVerification(deps, user.id, user.email, baseUrl);
         verificationSent = result.sent;
@@ -134,6 +159,20 @@ export function userRoutes(users: UserRepo, deps: UserRoutesDeps) {
       return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
+    const reportsToValue = parsed.data.reportsTo;
+    if (reportsToValue != null) {
+      if (reportsToValue === id) {
+        return c.json({ error: { code: "VALIDATION_ERROR", message: "Cannot report to yourself" } }, 400);
+      }
+      const manager = await users.findById(reportsToValue);
+      if (!manager) {
+        return c.json(
+          { error: { code: "VALIDATION_ERROR", message: "reportsTo references a user that does not exist" } },
+          400,
+        );
+      }
+    }
+
     try {
       const emailValue = role === "member" ? undefined : (parsed.data as { email?: string | null }).email;
       const emailChanged = emailValue !== undefined && emailValue !== (existing.email ?? null);
@@ -142,6 +181,9 @@ export function userRoutes(users: UserRepo, deps: UserRoutesDeps) {
         name: parsed.data.name,
         email: emailValue,
         whatsappNumber: parsed.data.whatsappNumber,
+        description: parsed.data.description,
+        role: parsed.data.role,
+        reportsTo: reportsToValue,
       });
 
       // Send verification email when email changes to a non-null value

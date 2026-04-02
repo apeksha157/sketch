@@ -1,22 +1,47 @@
 import { randomBytes } from "node:crypto";
 import type { Kysely } from "kysely";
+import { decrypt, encrypt } from "../../auth/encryption";
 import type { DB } from "../schema";
 
-export function createSettingsRepository(db: Kysely<DB>) {
+const SENSITIVE_FIELDS = new Set<string>([
+  "slack_bot_token",
+  "slack_app_token",
+  "anthropic_api_key",
+  "aws_secret_access_key",
+  "gemini_api_key",
+  "smtp_password",
+  "google_oauth_client_secret",
+  "jwt_secret",
+]);
+
+export function createSettingsRepository(db: Kysely<DB>, encryptionKey?: string) {
   return {
     async get() {
       const row = await db.selectFrom("settings").selectAll().where("id", "=", "default").executeTakeFirst();
-      return row ?? null;
+      if (!row) return null;
+      for (const field of SENSITIVE_FIELDS) {
+        const value = (row as Record<string, unknown>)[field];
+        if (typeof value === "string" && value.startsWith("enc:")) {
+          if (!encryptionKey) {
+            throw new Error(`Encrypted value found for ${field} but ENCRYPTION_KEY is not set`);
+          }
+          (row as Record<string, unknown>)[field] = decrypt(value, encryptionKey);
+        }
+      }
+      return row;
     },
 
-    async create(data: { adminEmail: string; adminPasswordHash: string }) {
+    async create(data: { adminEmail: string; adminPasswordHash: string; orgName?: string; botName?: string }) {
+      const jwtSecret = randomBytes(32).toString("hex");
       await db
         .insertInto("settings")
         .values({
           id: "default",
           admin_email: data.adminEmail,
           admin_password_hash: data.adminPasswordHash,
-          jwt_secret: randomBytes(32).toString("hex"),
+          jwt_secret: encryptionKey ? encrypt(jwtSecret, encryptionKey) : jwtSecret,
+          ...(data.orgName !== undefined ? { org_name: data.orgName } : {}),
+          ...(data.botName !== undefined ? { bot_name: data.botName } : {}),
         })
         .execute();
 
@@ -76,6 +101,15 @@ export function createSettingsRepository(db: Kysely<DB>) {
       if (data.enrichmentEnabled !== undefined) updates.enrichment_enabled = data.enrichmentEnabled;
 
       if (Object.keys(updates).length === 0) return;
+
+      if (encryptionKey) {
+        for (const field of SENSITIVE_FIELDS) {
+          const value = updates[field];
+          if (typeof value === "string") {
+            updates[field] = encrypt(value, encryptionKey);
+          }
+        }
+      }
 
       await db.updateTable("settings").set(updates).where("id", "=", "default").execute();
     },

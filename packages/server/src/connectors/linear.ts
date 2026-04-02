@@ -14,7 +14,7 @@
  * efficient filtering via `updatedAt: { gte: timestamp }`.
  */
 import { createHash } from "node:crypto";
-import type { Logger } from "pino";
+import pino, { type Logger } from "pino";
 import type { Connector, ConnectorCredentials, OAuthCredentials, SyncedItem } from "./types";
 
 const LINEAR_API = "https://api.linear.app/graphql";
@@ -25,6 +25,10 @@ const PAGE_SIZE = 50;
 
 /** Rate limit: ~1,500 req/hour, we stay conservative at ~20 req/s. */
 const MIN_REQUEST_INTERVAL_MS = 50;
+
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 1000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 interface LinearIssue {
   id: string;
@@ -70,56 +74,76 @@ interface PageInfo {
   endCursor: string | null;
 }
 
-let lastRequestTime = 0;
-
 function getAccessToken(credentials: ConnectorCredentials): string {
   if (credentials.type === "api_key") return credentials.api_key;
   if (credentials.type === "oauth") return credentials.access_token;
   throw new Error("Linear connector requires api_key or oauth credentials");
 }
 
-async function linearRequest<T>(
-  query: string,
-  variables: Record<string, unknown>,
-  token: string,
-  logger: Logger,
-): Promise<T> {
-  const now = Date.now();
-  const elapsed = now - lastRequestTime;
-  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-    await new Promise((resolve) => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed));
-  }
-  lastRequestTime = Date.now();
+function makeLinearRequest(getLastRequestTime: () => number, setLastRequestTime: (t: number) => void) {
+  return async function linearRequest<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    token: string,
+    logger: Logger,
+    attempt = 1,
+  ): Promise<T> {
+    const now = Date.now();
+    const elapsed = now - getLastRequestTime();
+    if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed));
+    }
+    setLastRequestTime(Date.now());
 
-  const response = await fetch(LINEAR_API, {
-    method: "POST",
-    headers: {
-      Authorization: token,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+    let response: Response;
+    try {
+      response = await fetch(LINEAR_API, {
+        method: "POST",
+        headers: {
+          Authorization: token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const cause = err instanceof Error && "cause" in err ? ((err.cause as Error)?.message ?? "") : "";
+      const detail = cause ? `${(err as Error).message} (${cause})` : (err as Error).message;
 
-  if (response.status === 429) {
-    const retryAfter = response.headers.get("Retry-After");
-    const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 10_000;
-    logger.debug({ waitMs }, "Rate limited, waiting");
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-    return linearRequest(query, variables, token, logger);
-  }
+      if (attempt < MAX_RETRIES) {
+        const waitMs = RETRY_BASE_MS * 2 ** (attempt - 1);
+        logger.warn({ attempt, detail, waitMs }, "Linear network error, retrying");
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        return linearRequest(query, variables, token, logger, attempt + 1);
+      }
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Linear API failed (${response.status}): ${body}`);
-  }
+      throw new Error(`Linear API network error after ${MAX_RETRIES} attempts: ${detail}`);
+    }
 
-  const result = (await response.json()) as GraphQLResponse<T>;
+    if (response.status === 429) {
+      if (attempt >= MAX_RETRIES) {
+        throw new Error(`Linear API rate limited after ${MAX_RETRIES} attempts`);
+      }
+      const retryAfter = response.headers.get("Retry-After");
+      const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 10_000;
+      logger.debug({ waitMs }, "Rate limited, waiting");
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      return linearRequest(query, variables, token, logger, attempt + 1);
+    }
 
-  if (result.errors && result.errors.length > 0) {
-    throw new Error(`Linear GraphQL errors: ${result.errors.map((e) => e.message).join(", ")}`);
-  }
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`Linear API failed (${response.status}): ${body}`);
+    }
 
-  return result.data;
+    const result = (await response.json()) as GraphQLResponse<T>;
+
+    if (result.errors && result.errors.length > 0) {
+      throw new Error(`Linear GraphQL errors: ${result.errors.map((e) => e.message).join(", ")}`);
+    }
+
+    return result.data;
+  };
 }
 
 function contentHash(content: string): string {
@@ -175,6 +199,7 @@ function issueToSyncedItem(issue: LinearIssue): SyncedItem {
     contentHash: contentHash(content),
     sourceCreatedAt: issue.createdAt,
     sourceUpdatedAt: issue.updatedAt,
+    assignees: issue.assignee ? [{ name: issue.assignee.displayName }] : [],
     // TODO: populate access scope from team membership + privacy
   };
 }
@@ -301,13 +326,22 @@ query Projects($first: Int!, $after: String, $filter: ProjectFilter) {
 }`;
 
 export function createLinearConnector(): Connector {
+  // Per-connector instance rate limiter state — not shared across concurrent syncs
+  let lastRequestTime = 0;
+  const linearRequest = makeLinearRequest(
+    () => lastRequestTime,
+    (t) => {
+      lastRequestTime = t;
+    },
+  );
+
   return {
     type: "linear",
 
     async validateCredentials(credentials) {
       const token = getAccessToken(credentials);
       const query = "query { viewer { id name } }";
-      await linearRequest(query, {}, token, { debug: () => {}, warn: () => {} } as unknown as Logger);
+      await linearRequest(query, {}, token, pino({ level: "silent" }));
     },
 
     async *sync({ credentials, scopeConfig, cursor, logger }) {
@@ -315,8 +349,8 @@ export function createLinearConnector(): Connector {
       const allowedTeams = (scopeConfig.teams as string[] | undefined) ?? [];
       const sinceDate = cursor ?? null;
 
-      yield* syncIssues(token, sinceDate, allowedTeams, logger);
-      yield* syncProjects(token, sinceDate, logger);
+      yield* syncIssues(token, sinceDate, allowedTeams, logger, linearRequest);
+      yield* syncProjects(token, sinceDate, logger, linearRequest);
     },
 
     async getCursor({ currentCursor }) {
@@ -324,16 +358,22 @@ export function createLinearConnector(): Connector {
     },
 
     async refreshTokens(credentials) {
+      if (credentials.expires_at && new Date(credentials.expires_at) > new Date()) {
+        return null;
+      }
       return refreshLinearToken(credentials);
     },
   };
 }
+
+type LinearRequestFn = ReturnType<typeof makeLinearRequest>;
 
 async function* syncIssues(
   token: string,
   since: string | null,
   allowedTeams: string[],
   logger: Logger,
+  linearRequest: LinearRequestFn,
 ): AsyncGenerator<SyncedItem> {
   let afterCursor: string | null = null;
   let totalIssues = 0;
@@ -369,7 +409,12 @@ async function* syncIssues(
   logger.info({ totalIssues }, "Issues sync complete");
 }
 
-async function* syncProjects(token: string, since: string | null, logger: Logger): AsyncGenerator<SyncedItem> {
+async function* syncProjects(
+  token: string,
+  since: string | null,
+  logger: Logger,
+  linearRequest: LinearRequestFn,
+): AsyncGenerator<SyncedItem> {
   let afterCursor: string | null = null;
   let totalProjects = 0;
 

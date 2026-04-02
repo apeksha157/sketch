@@ -19,6 +19,34 @@ export const configSchema = z.object({
 
   // Files
   MAX_FILE_SIZE_MB: z.coerce.number().default(20),
+  MAX_UPLOAD_SIZE_MB: z.coerce.number().default(50),
+
+  // Feature flags
+  EXPERIMENTAL_FLAG: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+
+  // Slack mode
+  SLACK_MODE: z.enum(["socket", "http"]).default("socket"),
+  SLACK_SIGNING_SECRET: z.string().optional(),
+
+  // Security
+  ENCRYPTION_KEY: z.string().optional(),
+  SYSTEM_SECRET: z.string().optional(),
+
+  // Bootstrap (managed seed)
+  BOOTSTRAP_ADMIN_EMAIL: z.preprocess((v) => (v === "" ? undefined : v), z.string().email().optional()),
+  BOOTSTRAP_ADMIN_PASSWORD_HASH: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
+  BOOTSTRAP_SLACK_BOT_TOKEN: z.preprocess((v) => (v === "" ? undefined : v), z.string().optional()),
+
+  // Managed mode
+  MANAGED_URL: z.string().optional(),
+  MANAGED_AUTH_SECRET: z.string().optional(),
+
+  // PostHog (optional, enables LLM Analytics via OpenTelemetry)
+  POSTHOG_API_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().default("https://us.i.posthog.com"),
 
   // Server
   // Public-facing base URL (used for OAuth redirect URIs, email links, etc.)
@@ -62,6 +90,10 @@ export function loadConfig(): Config {
 export function validateConfig(config: Config): void {
   if (config.DB_TYPE === "postgres" && !config.DATABASE_URL) {
     console.error("DB_TYPE=postgres requires DATABASE_URL");
+    process.exit(1);
+  }
+  if (config.SLACK_MODE === "http" && !config.SLACK_SIGNING_SECRET) {
+    console.error("SLACK_MODE=http requires SLACK_SIGNING_SECRET");
     process.exit(1);
   }
 }

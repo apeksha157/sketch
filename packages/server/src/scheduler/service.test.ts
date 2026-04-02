@@ -219,6 +219,24 @@ describe("addTask()", () => {
     expect(cronCallCount).toBe(1);
     expect(mockCronInstances).toHaveLength(1);
   });
+
+  it("converts large interval (>= 60 min) to a valid hourly cron expression", async () => {
+    const deps = buildDeps(db);
+    const scheduler = new TaskScheduler(deps as never);
+
+    await scheduler.addTask({
+      platform: "slack",
+      contextType: "dm",
+      deliveryTarget: "U_USER1",
+      prompt: "Every 6 hours",
+      scheduleType: "interval",
+      scheduleValue: "21600",
+      createdBy: "U_USER1",
+    });
+
+    const instance = mockCronInstances[mockCronInstances.length - 1];
+    expect(instance.pattern).toBe("0 */6 * * *");
+  });
 });
 
 describe("removeTask()", () => {

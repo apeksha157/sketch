@@ -1,11 +1,18 @@
 import { Hono } from "hono";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
+import { z } from "zod";
 import { createEmbeddingProvider } from "../connectors/embeddings";
 import { runEnrichment } from "../connectors/enrichment";
 import { createLlmCallFn } from "../connectors/llm";
 import type { createSettingsRepository } from "../db/repositories/settings";
 import type { DB } from "../db/schema";
+import { requireAdmin } from "./middleware";
+
+const searchConfigSchema = z.object({
+  geminiApiKey: z.string().nullable().optional(),
+  enrichmentEnabled: z.boolean().optional(),
+});
 
 type SettingsRepo = ReturnType<typeof createSettingsRepository>;
 
@@ -24,30 +31,32 @@ export function settingsRoutes(settings: SettingsRepo, db?: Kysely<DB>, logger?:
   routes.get("/search", async (c) => {
     const row = await settings.get();
     return c.json({
-      geminiApiKey: row?.gemini_api_key ?? null,
+      geminiApiKeyConfigured: !!row?.gemini_api_key,
       enrichmentEnabled: row?.enrichment_enabled ?? 1,
     });
   });
 
-  routes.put("/search", async (c) => {
-    const body = await c.req.json<{
-      geminiApiKey?: string | null;
-      enrichmentEnabled?: boolean;
-    }>();
+  routes.put("/search", requireAdmin(), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = searchConfigSchema.safeParse(body);
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
 
     const updates: Parameters<typeof settings.update>[0] = {};
-    if (body.geminiApiKey !== undefined) updates.geminiApiKey = body.geminiApiKey;
-    if (body.enrichmentEnabled !== undefined) updates.enrichmentEnabled = body.enrichmentEnabled ? 1 : 0;
+    if (parsed.data.geminiApiKey !== undefined) updates.geminiApiKey = parsed.data.geminiApiKey;
+    if (parsed.data.enrichmentEnabled !== undefined) updates.enrichmentEnabled = parsed.data.enrichmentEnabled ? 1 : 0;
 
     await settings.update(updates);
     const row = await settings.get();
     return c.json({
-      geminiApiKey: row?.gemini_api_key ?? null,
+      geminiApiKeyConfigured: !!row?.gemini_api_key,
       enrichmentEnabled: row?.enrichment_enabled ?? 1,
     });
   });
 
-  routes.post("/search/run-enrichment", async (c) => {
+  routes.post("/search/enrichments", requireAdmin(), async (c) => {
     if (!db || !logger) {
       return c.json({ error: { code: "NOT_AVAILABLE", message: "Enrichment not available" } }, 500);
     }

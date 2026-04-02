@@ -2,6 +2,61 @@
 
 All notable changes to this project are documented here.
 
+## [0.15.0-alpha.1] — 2026-03-31
+
+- Managed onboarding system API: PUT /system/identity (admin account + user row), PUT /system/llm (Anthropic/Bedrock with verification), GET/DELETE /system/whatsapp/pair (SSE pairing), POST /system/onboarding/complete
+- Fix managed SSO auth: use JWT `email` claim for user lookup instead of `sub` (UUID)
+- Wire system route deps: userRepo and WhatsApp pairing functions passed to systemRoutes
+- Extend settings.create() with optional orgName and botName fields
+- Anthropic API key verification on LLM credential save
+- Usage analytics API and dashboard with team adoption table
+- PostHog LLM analytics integration
+- Files feature with entity explorer (experimental)
+- Agent run timestamp normalization migration
+- 1,223 tests (1,121 server + 102 frontend)
+
+## [0.14.0] — 2026-03-24
+
+- Connectors: Google Drive, ClickUp, Notion, and Linear file sync with hybrid semantic search (LLM tagging + vector embeddings) and auto-enrichment pipeline
+- Connections UI: integration catalog with OAuth flow, per-tool permissions, MCP server management
+- Email channel (SMTP) with magic link verification
+- Fix WhatsApp group LID resolution: sender JIDs using LID format now correctly resolve to phone numbers for user identity and integration auth
+- WhatsApp phone number in agent context: phone appears in `<sender>` tag (groups) and `## User` section (DMs) alongside email
+- One-command self-hosting setup script
+- Test performance: mock icon libraries (72% import speedup), template DB cloning, fast scrypt
+- 1,096 tests (994 server + 102 frontend)
+
+## [0.13.1] — 2026-03-18
+
+- Fix interval-to-cron conversion crash for intervals >= 60 minutes (e.g., 6-hour intervals produced invalid `*/360` cron expressions that crashed croner on startup)
+- Simplify Information Discovery prompt for autonomous outreach
+- Improve system prompt for autonomous outreach and org directory access
+- 883 tests (781 server + 102 frontend)
+
+## [0.13.0] — 2026-03-15
+
+- Agent outreach: Sketch can discover team members (GetTeamDirectory), send tracked DMs (SendMessageToUser), and collect responses (RespondToOutreach) to complete multi-person tasks
+- Event-driven response loop: recipient's agent sees outreach in `<context>` block, responds naturally, response auto-delivers to requester via synthetic message enqueue
+- GetOutreachStatus tool for on-demand outreach status checks
+- Standardized `<context>` XML protocol for all platform-injected context (outreach, thread buffer, sender attribution), replacing ad-hoc `[Current sender:]` format
+- Org chart: Team page with List/Chart tab toggle, CSS tree rendering from `reports_to` relationships
+- Agent entities: `type` column (human/agent) on users table, agents as first-class team members with Robot icon and Agent badge
+- Role and reports_to fields on users for team hierarchy
+- User description field for agent team discovery
+- 878 tests (776 server + 102 frontend)
+
+## [0.12.1] — 2026-03-14
+
+- Fix sender attribution in shared contexts: current user's message now prefixed with `[Current sender:]` to prevent the agent from confusing users in channel/group bootstrap history
+
+## [0.12.0] — 2026-03-14
+
+- Workspace file browser: split-pane file manager with Monaco editor, lazy-loaded folder tree, drag-drop upload, inline create/rename, Ctrl+S save
+- Personal/Organization scope switcher to browse user workspace or org workspace (`~/.claude/`)
+- Backend workspace API: file CRUD, upload, download, search, folder management with path traversal protection
+- Modular workspace components: file tree with React context (eliminates 19-prop drilling), extracted editor pane, file icons, and utilities
+- 912 tests (810 server + 102 frontend)
+
 ## [0.11.0] — 2026-03-13
 
 - Scheduled tasks control plane: dashboard page with role-scoped visibility and pause/resume/delete actions

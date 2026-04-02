@@ -467,15 +467,26 @@ export function createConnectorRepository(db: Kysely<DB>) {
     /**
      * Search indexed files using FTS5.
      * For the full search API with sanitization, use connectors/search.ts instead.
+     * This method sanitizes the query to prevent FTS5 syntax errors.
      */
     async searchFiles(query: string, opts?: { source?: string; limit?: number }) {
       const limit = opts?.limit ?? 20;
+
+      // Sanitize: strip FTS5 special characters to prevent syntax errors.
+      // Strips operators and punctuation that cause MATCH to throw.
+      const sanitized = query
+        .replace(/[*"()+\-]/g, " ")
+        .replace(/\b(OR|AND|NOT|NEAR)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!sanitized) return [];
 
       const results = await sql`
 				SELECT indexed_files.*, rank as relevance
 				FROM indexed_files
 				INNER JOIN indexed_files_fts ON indexed_files.rowid = indexed_files_fts.rowid
-				WHERE indexed_files_fts MATCH ${query}
+				WHERE indexed_files_fts MATCH ${sanitized}
 				AND indexed_files.is_archived = 0
 				${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
 				ORDER BY rank
@@ -533,6 +544,7 @@ export function createConnectorRepository(db: Kysely<DB>) {
           "indexed_files.source_path",
           "indexed_files.provider_url",
           "indexed_files.synced_at",
+          "indexed_files.source_created_at",
           "indexed_files.source_updated_at",
           "indexed_files.summary",
           "indexed_files.access_scope_id",

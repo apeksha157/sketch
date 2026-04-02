@@ -374,6 +374,112 @@ describe("WhatsAppBot group metadata persistence", () => {
   });
 });
 
+describe("WhatsAppBot handleGroupMessage LID resolution", () => {
+  let db: Kysely<DB>;
+
+  beforeEach(async () => {
+    db = await createTestDb();
+  });
+
+  afterEach(async () => {
+    await db.destroy();
+  });
+
+  /**
+   * Builds a bot with a mock socket wired for message handling, a mock resolveLidToPhone,
+   * and a captured handler from onMessage. Calls registerMessageHandler() directly to
+   * avoid needing a real Baileys socket/connection.
+   */
+  function createBotWithMockSocket(resolveLidToPhoneImpl: (lid: string) => Promise<string | null>) {
+    const handlers = new Map<string, (payload: unknown) => Promise<void>>();
+    const bot = new WhatsAppBot({ db, logger: createTestLogger() });
+
+    const mockSock = {
+      user: { id: "99999@s.whatsapp.net", name: "Sketch", lid: undefined },
+      ev: {
+        on: (event: string, handler: (payload: unknown) => Promise<void>) => {
+          handlers.set(event, handler);
+        },
+      },
+    };
+
+    (bot as unknown as { sock: typeof mockSock }).sock = mockSock;
+
+    // Inject a mock resolveLidToPhone to control LID resolution without Baileys
+    (bot as unknown as { resolveLidToPhone: (lid: string) => Promise<string | null> }).resolveLidToPhone =
+      resolveLidToPhoneImpl;
+
+    // Register the message handler directly (avoids makeWASocket)
+    (bot as unknown as { registerMessageHandler: () => void }).registerMessageHandler();
+
+    const captured: unknown[] = [];
+    bot.onMessage(async (msg) => {
+      captured.push(msg);
+    });
+
+    const fire = (payload: unknown) => handlers.get("messages.upsert")?.(payload);
+
+    return { bot, fire, captured };
+  }
+
+  function makeGroupMsg(participantJid: string): proto.IWebMessageInfo {
+    return {
+      key: {
+        remoteJid: "group-1@g.us",
+        fromMe: false,
+        id: "msg-001",
+        participant: participantJid,
+      },
+      message: { conversation: "hello @Sketch" },
+      pushName: "Charlie",
+    } as proto.IWebMessageInfo;
+  }
+
+  it("resolves LID senderJid to phone number via resolveLidToPhone", async () => {
+    const { fire, captured } = createBotWithMockSocket(async () => "+15550001111");
+
+    await fire({
+      type: "notify",
+      messages: [makeGroupMsg("86702773280883@lid")],
+    });
+
+    expect(captured).toHaveLength(1);
+    const msg = captured[0] as { type: string; senderPhone: string | null };
+    expect(msg.type).toBe("group");
+    expect(msg.senderPhone).toBe("+15550001111");
+  });
+
+  it("passes standard phone JID as senderPhone directly without calling resolveLidToPhone", async () => {
+    const resolveLid = vi.fn().mockResolvedValue(null);
+    const { fire, captured } = createBotWithMockSocket(resolveLid);
+
+    await fire({
+      type: "notify",
+      messages: [makeGroupMsg("14155238886@s.whatsapp.net")],
+    });
+
+    expect(captured).toHaveLength(1);
+    const msg = captured[0] as { type: string; senderPhone: string | null };
+    expect(msg.type).toBe("group");
+    expect(msg.senderPhone).toBe("+14155238886");
+    expect(resolveLid).not.toHaveBeenCalled();
+  });
+
+  it("passes null senderPhone when LID resolution fails", async () => {
+    const { fire, captured } = createBotWithMockSocket(async () => null);
+
+    await fire({
+      type: "notify",
+      messages: [makeGroupMsg("86702773280883@lid")],
+    });
+
+    expect(captured).toHaveLength(1);
+    const msg = captured[0] as { type: string; senderPhone: string | null };
+    expect(msg.type).toBe("group");
+    expect(msg.senderPhone).toBeNull();
+  });
+});
+
 describe("extractContextInfo", () => {
   it("returns contextInfo from extendedTextMessage", () => {
     const msg: proto.IMessage = {

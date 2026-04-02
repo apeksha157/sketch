@@ -14,6 +14,7 @@ import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
+import { z } from "zod";
 import { verifyJwt } from "../auth/jwt";
 import { ensureValidToken } from "../connectors/google-drive";
 import type { OAuthCredentials } from "../connectors/types";
@@ -23,11 +24,17 @@ import type { createSettingsRepository } from "../db/repositories/settings";
 import type { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { SESSION_COOKIE } from "./auth";
+import { requireAdmin } from "./middleware";
 
 type SettingsRepo = ReturnType<typeof createSettingsRepository>;
 type IdentityRepo = ReturnType<typeof createProviderIdentityRepository>;
 type ConnectorRepo = ReturnType<typeof createConnectorRepository>;
 type UserRepo = ReturnType<typeof createUserRepository>;
+
+const googleConfigSchema = z.object({
+  clientId: z.string().min(1, "clientId is required"),
+  clientSecret: z.string().min(1, "clientSecret is required"),
+});
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -247,19 +254,18 @@ export function oauthRoutes(
     });
   });
 
-  /** POST /google/configure — save Google OAuth client_id + client_secret. */
-  routes.post("/google/configure", async (c) => {
-    const body = await c.req.json();
-    const clientId = body.clientId as string | undefined;
-    const clientSecret = body.clientSecret as string | undefined;
-
-    if (!clientId?.trim() || !clientSecret?.trim()) {
-      return c.json({ error: { code: "VALIDATION_ERROR", message: "clientId and clientSecret are required" } }, 400);
+  /** PUT /google/config — save Google OAuth client_id + client_secret. */
+  routes.put("/google/config", requireAdmin(), async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = googleConfigSchema.safeParse(body);
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
     }
 
     await settings.update({
-      googleOauthClientId: clientId.trim(),
-      googleOauthClientSecret: clientSecret.trim(),
+      googleOauthClientId: parsed.data.clientId.trim(),
+      googleOauthClientSecret: parsed.data.clientSecret.trim(),
     });
 
     return c.json({ success: true });
