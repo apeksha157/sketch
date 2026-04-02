@@ -54,15 +54,16 @@ describe("runMigrations — full sequence", () => {
 
     expect(names[0]).toBe("001-initial");
     expect(names[1]).toBe("002-channels");
-    expect(names[17]).toBe("017-outreach-messages");
-    expect(names[18]).toBe("018-scheduled-tasks");
-    expect(names[19]).toBe("018-user-type-role-hierarchy");
-    expect(names[20]).toBe("019-chat-sessions-thread-key-sentinel");
-    expect(names[21]).toBe("020-whatsapp-groups");
-    expect(names[22]).toBe("021-settings-enrichment");
-    expect(names[23]).toBe("025-agent-usage");
-    expect(names[24]).toBe("026-normalize-created-at");
-    expect(names[25]).toBe("027-entities");
+    expect(names[17]).toBe("017-chat-sessions");
+    expect(names[18]).toBe("017-outreach-messages");
+    expect(names[19]).toBe("018-scheduled-tasks");
+    expect(names[20]).toBe("018-user-type-role-hierarchy");
+    expect(names[21]).toBe("019-chat-sessions-thread-key-sentinel");
+    expect(names[22]).toBe("020-whatsapp-groups");
+    expect(names[23]).toBe("021-settings-enrichment");
+    expect(names[24]).toBe("025-agent-usage");
+    expect(names[25]).toBe("026-normalize-created-at");
+    expect(names[26]).toBe("027-entities");
   });
 
   it("creates the users table", async () => {
