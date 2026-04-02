@@ -83,7 +83,11 @@ function LoginPage() {
           <SketchMessage text="Good to have you back." step={0} />
           <SketchMessage text="How would you like to sign in?" step={0} hideLabel />
 
-          <AuthPicker onSelect={() => {/* TODO: real OAuth */}} />
+          <AuthPicker
+            onSelect={() => {
+              /* TODO: real OAuth */
+            }}
+          />
 
           <div className="ob-login-footer">
             Don't have an account?{" "}
