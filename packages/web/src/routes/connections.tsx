@@ -20,8 +20,8 @@ import { RemoveMcpDialog } from "@/components/connections/remove-mcp-dialog";
 import { LoadingSkeleton } from "@/components/connections/shared";
 import { api } from "@/lib/api";
 import { useDashboardAuth } from "@/routes/dashboard";
-import type { IntegrationConnection, McpServerRecord } from "@sketch/shared";
 import { PlusIcon } from "@phosphor-icons/react";
+import type { IntegrationConnection, McpServerRecord } from "@sketch/shared";
 import { cn } from "@sketch/ui";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
@@ -217,7 +217,11 @@ function ConnectionsPage() {
       </div>
 
       <div className="mt-6 flex items-center gap-6 border-b border-border">
-        <TabButton label="Applications" isActive={activeTab === "applications"} onClick={() => setActiveTab("applications")} />
+        <TabButton
+          label="Applications"
+          isActive={activeTab === "applications"}
+          onClick={() => setActiveTab("applications")}
+        />
         <TabButton label="MCPs" isActive={activeTab === "mcps"} onClick={() => setActiveTab("mcps")} />
       </div>
 
@@ -262,30 +266,30 @@ function ConnectionsPage() {
           </>
         ) : (
           <McpServersSection
-              servers={servers}
-              isAdmin={isAdmin}
-              onAdd={() => setShowAddMcpDialog(true)}
-              onEdit={(server) => {
-                if (server.type) {
-                  setEditingProvider(server);
+            servers={servers}
+            isAdmin={isAdmin}
+            onAdd={() => setShowAddMcpDialog(true)}
+            onEdit={(server) => {
+              if (server.type) {
+                setEditingProvider(server);
+              } else {
+                setEditingServer(server);
+              }
+            }}
+            onRemove={setRemovingServer}
+            onTestConnection={async (server) => {
+              try {
+                const result = await api.mcpServers.testConnectionById(server.id);
+                if (result.status === "ok") {
+                  toast.success(`Connection OK. ${result.toolCount} tools available.`);
                 } else {
-                  setEditingServer(server);
+                  toast.error(result.error ?? "Connection failed");
                 }
-              }}
-              onRemove={setRemovingServer}
-              onTestConnection={async (server) => {
-                try {
-                  const result = await api.mcpServers.testConnectionById(server.id);
-                  if (result.status === "ok") {
-                    toast.success(`Connection OK. ${result.toolCount} tools available.`);
-                  } else {
-                    toast.error(result.error ?? "Connection failed");
-                  }
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : "Connection test failed");
-                }
-              }}
-            />
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Connection test failed");
+              }
+            }}
+          />
         )}
       </div>
 

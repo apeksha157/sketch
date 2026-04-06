@@ -39,9 +39,15 @@ export function McpServersSection({
             {isAdmin ? "No MCP servers configured" : "No servers available yet"}
           </p>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            {isAdmin
-              ? <>Connect a custom MCP server to give<br />the agent access to your internal tools.</>
-              : "Your admin hasn't configured any MCP servers."}
+            {isAdmin ? (
+              <>
+                Connect a custom MCP server to give
+                <br />
+                the agent access to your internal tools.
+              </>
+            ) : (
+              "Your admin hasn't configured any MCP servers."
+            )}
           </p>
           {isAdmin && (
             <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
@@ -52,34 +58,34 @@ export function McpServersSection({
         </div>
       ) : (
         <>
-        <div className="mb-5 flex items-center justify-between">
-          <span className="text-xs text-muted-foreground">
-            {isAdmin ? `${servers.length} ${servers.length === 1 ? "server" : "servers"}` : "Available servers"}
-          </span>
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={onAdd}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <PlusIcon size={12} weight="bold" />
-              New server
-            </button>
-          )}
-        </div>
-        <div className="overflow-hidden rounded-lg border border-border bg-card">
-          {servers.map((server, i) => (
-            <McpServerRow
-              key={server.id}
-              server={server}
-              isLast={i === servers.length - 1}
-              isAdmin={isAdmin}
-              onEdit={() => onEdit(server)}
-              onRemove={() => onRemove(server)}
-              onTestConnection={() => onTestConnection(server)}
-            />
-          ))}
-        </div>
+          <div className="mb-5 flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">
+              {isAdmin ? `${servers.length} ${servers.length === 1 ? "server" : "servers"}` : "Available servers"}
+            </span>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={onAdd}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <PlusIcon size={12} weight="bold" />
+                New server
+              </button>
+            )}
+          </div>
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {servers.map((server, i) => (
+              <McpServerRow
+                key={server.id}
+                server={server}
+                isLast={i === servers.length - 1}
+                isAdmin={isAdmin}
+                onEdit={() => onEdit(server)}
+                onRemove={() => onRemove(server)}
+                onTestConnection={() => onTestConnection(server)}
+              />
+            ))}
+          </div>
         </>
       )}
     </div>

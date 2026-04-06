@@ -53,7 +53,6 @@ export function IntegrationsSection({
 
   return (
     <div>
-
       {isLoadingConnections ? (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
           {[1, 2, 3].map((i) => (
