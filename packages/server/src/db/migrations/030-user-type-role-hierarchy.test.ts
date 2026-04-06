@@ -10,7 +10,7 @@
 import SQLite from "better-sqlite3";
 import { Kysely, SqliteDialect, sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { down, up } from "./018-user-type-role-hierarchy";
+import { down, up } from "./030-user-type-role-hierarchy";
 
 type UserRow = {
   id: string;

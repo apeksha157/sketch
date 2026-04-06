@@ -9,7 +9,7 @@
 import SQLite from "better-sqlite3";
 import { Kysely, SqliteDialect, sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { up } from "./017-outreach-messages";
+import { up } from "./029-outreach-messages";
 
 type OutreachRow = {
   id: string;
