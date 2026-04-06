@@ -6,7 +6,20 @@ import { filesRoute } from "./routes/files";
 import { indexRoute } from "./routes/index";
 import { loginRoute } from "./routes/login";
 import { loginErrorRoute } from "./routes/login-error";
+import { loginMockRoute } from "./routes/login-mock";
 import { onboardingRoute } from "./routes/onboarding";
+import {
+  plansAdminBizLowRoute,
+  plansAdminBizRoute,
+  plansAdminTeamLowRoute,
+  plansAdminTeamRoute,
+  plansMemberBizLowRoute,
+  plansMemberBizRoute,
+  plansMemberTeamLowRoute,
+  plansMemberTeamRoute,
+  plansNewRoute,
+  plansRoute,
+} from "./routes/plans";
 import { rootRoute } from "./routes/root";
 import { scheduledTasksRoute } from "./routes/scheduled-tasks";
 import { skillsRoute } from "./routes/skills";
@@ -17,7 +30,17 @@ import { workspaceRoute } from "./routes/workspace";
 const routeTree = rootRoute.addChildren([
   loginRoute,
   loginErrorRoute,
+  loginMockRoute,
   onboardingRoute,
+  plansNewRoute,
+  plansMemberTeamRoute,
+  plansMemberTeamLowRoute,
+  plansAdminTeamRoute,
+  plansAdminTeamLowRoute,
+  plansMemberBizRoute,
+  plansMemberBizLowRoute,
+  plansAdminBizRoute,
+  plansAdminBizLowRoute,
   indexRoute,
   dashboardRoute.addChildren([
     channelsRoute,
@@ -27,8 +50,8 @@ const routeTree = rootRoute.addChildren([
     usageRoute,
     filesRoute,
     workspaceRoute,
+    plansRoute,
     connectionsRoute.addChildren([connectionsCallbackRoute]),
-    usageRoute,
   ]),
 ]);
 

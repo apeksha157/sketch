@@ -20,17 +20,17 @@ import * as m013 from "./migrations/013-email-verification";
 import * as m014 from "./migrations/014-magic-link-tokens";
 import * as m015 from "./migrations/015-mcp-servers";
 import * as m016a from "./migrations/016-mcp-server-mode";
-import * as m016b from "./migrations/016-user-description";
 import * as m017a from "./migrations/017-chat-sessions";
-import * as m017b from "./migrations/017-outreach-messages";
 import * as m018a from "./migrations/018-scheduled-tasks";
-import * as m018b from "./migrations/018-user-type-role-hierarchy";
 import * as m019 from "./migrations/019-chat-sessions-thread-key-sentinel";
 import * as m020 from "./migrations/020-whatsapp-groups";
 import * as m021 from "./migrations/021-settings-enrichment";
 import * as m025 from "./migrations/025-agent-usage";
 import * as m026 from "./migrations/026-normalize-created-at";
 import * as m027 from "./migrations/027-entities";
+import * as m028 from "./migrations/028-user-description";
+import * as m029 from "./migrations/029-outreach-messages";
+import * as m030 from "./migrations/030-user-type-role-hierarchy";
 import type { DB } from "./schema";
 
 export async function runMigrations(db: Kysely<DB>): Promise<void> {
@@ -55,17 +55,17 @@ export async function runMigrations(db: Kysely<DB>): Promise<void> {
           "014-magic-link-tokens": m014,
           "015-mcp-servers": m015,
           "016-mcp-server-mode": m016a,
-          "016-user-description": m016b,
           "017-chat-sessions": m017a,
-          "017-outreach-messages": m017b,
           "018-scheduled-tasks": m018a,
-          "018-user-type-role-hierarchy": m018b,
           "019-chat-sessions-thread-key-sentinel": m019,
           "020-whatsapp-groups": m020,
           "021-settings-enrichment": m021,
           "025-agent-usage": m025,
           "026-normalize-created-at": m026,
           "027-entities": m027,
+          "028-user-description": m028,
+          "029-outreach-messages": m029,
+          "030-user-type-role-hierarchy": m030,
         };
       },
     },
