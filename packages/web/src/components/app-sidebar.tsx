@@ -55,7 +55,7 @@ interface NavItem {
   disabled?: boolean;
 }
 
-const experimentalNavLabels = new Set(["Files", "Connections"]);
+const experimentalNavLabels = new Set(["Files"]);
 
 const allPrimaryNav: NavItem[] = [
   { label: "Channels", icon: <ChatCircleIcon size={18} />, href: "/channels" },
@@ -65,11 +65,11 @@ const allPrimaryNav: NavItem[] = [
   { label: "Skills", icon: <BrainIcon size={18} />, href: "/skills" },
   { label: "Usage", icon: <ChartBarIcon size={18} />, href: "/usage" },
   { label: "Workspace", icon: <FolderIcon size={18} />, href: "/plans" },
-  { label: "Connections", icon: <LinkSimpleIcon size={18} />, href: "/connections" },
+  { label: "Integrations", icon: <LinkSimpleIcon size={18} />, href: "/integrations" },
 ];
 
 const adminNav: NavItem[] = [
-  { label: "Connections", icon: <LinkSimpleIcon size={18} />, href: "/connections" },
+  { label: "Integrations", icon: <LinkSimpleIcon size={18} />, href: "/integrations" },
   { label: "Settings", icon: <GearIcon size={18} />, href: "/settings", disabled: true },
 ];
 

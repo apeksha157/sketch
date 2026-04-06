@@ -141,7 +141,7 @@ export function AddIntegrationDialog({
     setStep({ kind: "oauth", app });
 
     try {
-      const callbackUrl = `${window.location.origin}/connections/callback`;
+      const callbackUrl = `${window.location.origin}/integrations/callback`;
       const result = await api.mcpServers.createConnection(providerId, app.id, callbackUrl);
       const popup = window.open(result.redirectUrl, "_blank", "width=600,height=700");
 

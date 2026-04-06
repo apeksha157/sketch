@@ -15,12 +15,14 @@ import {
 
 export function McpServersSection({
   servers,
+  isAdmin = true,
   onAdd,
   onEdit,
   onRemove,
   onTestConnection,
 }: {
   servers: McpServerRecord[];
+  isAdmin?: boolean;
   onAdd: () => void;
   onEdit: (server: McpServerRecord) => void;
   onRemove: (server: McpServerRecord) => void;
@@ -28,41 +30,57 @@ export function McpServersSection({
 }) {
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-sm font-medium text-muted-foreground">MCP Servers</p>
-        <Button size="sm" className="gap-1.5" onClick={onAdd}>
-          <PlusIcon size={14} weight="bold" />
-          New server
-        </Button>
-      </div>
-
       {servers.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-            <GearIcon size={24} className="text-muted-foreground" />
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-[#FEED01]/[0.04] px-6 pt-8 pb-10 text-center">
+          <div className="flex size-12 items-center justify-center rounded-full bg-white border border-[#FEED01]">
+            <GearIcon size={24} className="text-[#8B7A00]" />
           </div>
-          <p className="mt-4 text-sm font-medium">No MCP servers configured</p>
-          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-            Connect a custom MCP server to give the agent access to your internal tools.
+          <p className="mt-3 text-sm font-medium">
+            {isAdmin ? "No MCP servers configured" : "No servers available yet"}
           </p>
-          <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
-            <PlusIcon size={14} weight="bold" />
-            New server
-          </Button>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            {isAdmin
+              ? <>Connect a custom MCP server to give<br />the agent access to your internal tools.</>
+              : "Your admin hasn't configured any MCP servers."}
+          </p>
+          {isAdmin && (
+            <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
+              <PlusIcon size={14} weight="bold" />
+              New server
+            </Button>
+          )}
         </div>
       ) : (
-        <div className="rounded-lg border border-border bg-card">
+        <>
+        <div className="mb-5 flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">
+            {isAdmin ? `${servers.length} ${servers.length === 1 ? "server" : "servers"}` : "Available servers"}
+          </span>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={onAdd}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <PlusIcon size={12} weight="bold" />
+              New server
+            </button>
+          )}
+        </div>
+        <div className="overflow-hidden rounded-lg border border-border bg-card">
           {servers.map((server, i) => (
             <McpServerRow
               key={server.id}
               server={server}
               isLast={i === servers.length - 1}
+              isAdmin={isAdmin}
               onEdit={() => onEdit(server)}
               onRemove={() => onRemove(server)}
               onTestConnection={() => onTestConnection(server)}
             />
           ))}
         </div>
+        </>
       )}
     </div>
   );
@@ -71,56 +89,61 @@ export function McpServersSection({
 function McpServerRow({
   server,
   isLast,
+  isAdmin = true,
   onEdit,
   onRemove,
   onTestConnection,
 }: {
   server: McpServerRecord;
   isLast: boolean;
+  isAdmin?: boolean;
   onEdit: () => void;
   onRemove: () => void;
   onTestConnection: () => void;
 }) {
   return (
     <div className={`flex items-center gap-4 px-4 py-4 ${isLast ? "" : "border-b border-border"}`}>
-      <div className="flex size-9 items-center justify-center rounded-full bg-muted">
-        <GearIcon size={16} className="text-muted-foreground" />
+      <div className="flex size-7 items-center justify-center rounded-full bg-muted">
+        <GearIcon size={14} className="text-muted-foreground" />
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium">{server.displayName}</span>
           {server.type && (
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#FEED01]/10 px-2 py-0.5 text-[10px] text-muted-foreground">
+              <span className="inline-block size-1 rounded-full bg-[#FEED01]" />
               {server.type}
-            </Badge>
+            </span>
           )}
         </div>
         <span className="truncate text-xs font-mono text-muted-foreground">{server.url}</span>
       </div>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" className="size-7">
-            <DotsThreeIcon size={16} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={onEdit}>
-            <PencilSimpleIcon size={14} className="mr-2" />
-            Edit
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={onTestConnection}>
-            <PlugIcon size={14} className="mr-2" />
-            Test connection
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="text-destructive" onClick={onRemove}>
-            <TrashIcon size={14} className="mr-2" />
-            Remove
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {isAdmin && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-7">
+              <DotsThreeIcon size={16} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onEdit}>
+              <PencilSimpleIcon size={14} className="mr-2" />
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onTestConnection}>
+              <PlugIcon size={14} className="mr-2" />
+              Test connection
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="text-destructive" onClick={onRemove}>
+              <TrashIcon size={14} className="mr-2" />
+              Remove
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }

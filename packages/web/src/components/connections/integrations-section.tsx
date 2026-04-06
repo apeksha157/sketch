@@ -1,5 +1,5 @@
 import { api } from "@/lib/api";
-import { PlugIcon, PlusIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
+import { DotsThreeIcon, PlugIcon, PlusIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
 import type { IntegrationConnection, McpServerRecord } from "@sketch/shared";
 /**
  * Integrations section: shows the user's connected apps via an integration provider.
@@ -7,6 +7,12 @@ import type { IntegrationConnection, McpServerRecord } from "@sketch/shared";
  */
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@sketch/ui/components/dropdown-menu";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { getAbbreviation } from "@sketch/ui/lib/utils";
 import { useState } from "react";
@@ -47,26 +53,12 @@ export function IntegrationsSection({
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-muted-foreground">Integrations</p>
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-            via {providerLabel}
-          </Badge>
-        </div>
-        {isMember && (
-          <Button size="sm" className="gap-1.5" onClick={onAdd}>
-            <PlusIcon size={14} weight="bold" />
-            Add integration
-          </Button>
-        )}
-      </div>
 
       {isLoadingConnections ? (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-4 px-4 py-4 border-b border-border last:border-b-0">
-              <Skeleton className="size-9 rounded-lg" />
+              <Skeleton className="size-7 rounded-md" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-4 w-32" />
                 <Skeleton className="h-3 w-48" />
@@ -76,24 +68,16 @@ export function IntegrationsSection({
           ))}
         </div>
       ) : connections.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-            <PlugIcon size={24} className="text-muted-foreground" />
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-[#FEED01]/[0.04] px-6 pt-8 pb-10 text-center">
+          <div className="flex size-12 items-center justify-center rounded-full bg-white border border-[#FEED01]">
+            <PlugIcon size={24} className="text-[#8B7A00]" />
           </div>
-          <p className="mt-4 text-sm font-medium">
-            {isMember ? "No apps connected yet" : "Integrations available for members"}
-          </p>
-          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-            {isMember
-              ? "Add an integration to connect your apps."
-              : "Members can connect their personal apps from this page."}
-          </p>
-          {isMember && (
-            <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
-              <PlusIcon size={14} weight="bold" />
-              Add integration
-            </Button>
-          )}
+          <p className="mt-3 text-sm font-medium">No apps connected yet</p>
+          <p className="mt-1.5 text-sm text-muted-foreground">Add an integration to connect your apps.</p>
+          <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
+            <PlusIcon size={14} weight="bold" />
+            Add integration
+          </Button>
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -132,18 +116,18 @@ function ConnectionRow({
   return (
     <div className={`flex items-center gap-4 px-4 py-4 ${isLast ? "" : "border-b border-border"}`}>
       {connection.icon ? (
-        <img src={connection.icon} alt={connection.appName} className="size-9 shrink-0 rounded-lg" />
+        <img src={connection.icon} alt={connection.appName} className="size-7 shrink-0" />
       ) : (
         <div
-          className="flex size-9 shrink-0 items-center justify-center rounded-lg text-[11px] font-bold text-white"
-          style={{ backgroundColor: "#6B7280", borderRadius: 8 }}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-[10px] font-bold text-white"
+          style={{ backgroundColor: "#6B7280" }}
         >
           {abbrev}
         </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="text-[15px] font-semibold">{connection.appName}</span>
+        <span className="text-sm font-medium">{connection.appName}</span>
         <span className="text-xs text-muted-foreground">
           {connection.accountName && <span>{connection.accountName} · </span>}
           Connected {new Date(connection.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
@@ -164,16 +148,24 @@ function ConnectionRow({
         )}
       </div>
 
-      {isMember && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-destructive"
-          onClick={onDisconnect}
-          disabled={isDisconnecting}
-        >
-          {isDisconnecting ? <SpinnerGapIcon size={14} className="animate-spin" /> : <TrashIcon size={14} />}
+      {isDisconnecting ? (
+        <Button variant="ghost" size="icon" className="size-7 text-muted-foreground" disabled>
+          <SpinnerGapIcon size={14} className="animate-spin" />
         </Button>
+      ) : (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-7">
+              <DotsThreeIcon size={16} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem className="text-destructive" onClick={onDisconnect}>
+              <TrashIcon size={14} className="mr-2" />
+              Disconnect
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       )}
     </div>
   );
