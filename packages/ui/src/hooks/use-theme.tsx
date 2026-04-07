@@ -69,10 +69,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const logoSrc = "/logos/sketch-icon-light.png";
 
-  const value = useMemo(
-    () => ({ theme, resolvedTheme, setTheme: setThemeState, logoSrc }),
-    [theme, resolvedTheme],
-  );
+  const value = useMemo(() => ({ theme, resolvedTheme, setTheme: setThemeState, logoSrc }), [theme, resolvedTheme]);
 
   return <ThemeContext value={value}>{children}</ThemeContext>;
 }
