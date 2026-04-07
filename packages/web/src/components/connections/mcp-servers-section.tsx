@@ -63,14 +63,10 @@ export function McpServersSection({
               {isAdmin ? `${servers.length} ${servers.length === 1 ? "server" : "servers"}` : "Available servers"}
             </span>
             {isAdmin && (
-              <button
-                type="button"
-                onClick={onAdd}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-              >
+              <Button size="sm" onClick={onAdd} className="h-7 gap-1.5 rounded-md px-2.5 text-xs">
                 <PlusIcon size={12} weight="bold" />
                 New server
-              </button>
+              </Button>
             )}
           </div>
           <div className="overflow-hidden rounded-lg border border-border bg-card">

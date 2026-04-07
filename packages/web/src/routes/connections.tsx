@@ -242,14 +242,14 @@ function ConnectionsPage() {
                       <span className="inline-block size-1.5 rounded-full bg-[#FEED01]" />
                       via {provider.type === "canvas" ? "Canvas" : (provider.type ?? "Provider")}
                     </span>
-                    <button
-                      type="button"
+                    <Button
+                      size="sm"
                       onClick={() => setShowAddIntegrationDialog(true)}
-                      className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                      className="h-7 gap-1.5 rounded-md px-2.5 text-xs"
                     >
                       <PlusIcon size={12} weight="bold" />
                       Add app
-                    </button>
+                    </Button>
                   </div>
                 )}
                 <IntegrationsSection
