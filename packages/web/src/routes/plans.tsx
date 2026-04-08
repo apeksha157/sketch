@@ -1,6 +1,16 @@
 import { AppSidebar } from "@/components/app-sidebar";
 import { useDashboardAuth } from "@/routes/dashboard";
-import { CaretDownIcon, CheckIcon, GiftIcon, MinusIcon, PlusIcon, UsersIcon, WarningIcon } from "@phosphor-icons/react";
+import {
+  BuildingsIcon,
+  CalendarCheckIcon,
+  CaretDownIcon,
+  CheckIcon,
+  CopySimpleIcon,
+  GiftIcon,
+  RocketLaunchIcon,
+  UsersIcon,
+  WarningIcon,
+} from "@phosphor-icons/react";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
 import { createRoute } from "@tanstack/react-router";
 import { forwardRef, useEffect, useRef, useState } from "react";
@@ -19,8 +29,8 @@ export const plansRoute = createRoute({
 function PreviewShell({
   view,
   lowCredit,
-  plan = "team",
-}: { view: PricingView; lowCredit: boolean; plan?: "team" | "business" | null }) {
+  plan = "startups",
+}: { view: PricingView; lowCredit: boolean; plan?: "startups" | "business" | null }) {
   return (
     <SidebarProvider>
       {/* biome-ignore lint/a11y/useValidAriaRole: role is a component prop, not an ARIA attribute */}
@@ -42,32 +52,25 @@ export const plansNewRoute = createRoute({
   component: () => <PreviewShell view="new" lowCredit={false} plan={null} />,
 });
 
-// Team plan — member
-export const plansMemberTeamRoute = createRoute({
+// Startups plan — member
+export const plansMemberStartupsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/plans/member-team",
-  component: () => <PreviewShell view="member" lowCredit={false} plan="team" />,
+  path: "/plans/member-startups",
+  component: () => <PreviewShell view="member" lowCredit={false} plan="startups" />,
 });
 
-// Team plan — member, low credit
-export const plansMemberTeamLowRoute = createRoute({
+// Startups plan — admin
+export const plansAdminStartupsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/plans/member-team-low",
-  component: () => <PreviewShell view="member" lowCredit={true} plan="team" />,
+  path: "/plans/admin-startups",
+  component: () => <PreviewShell view="admin" lowCredit={false} plan="startups" />,
 });
 
-// Team plan — admin
-export const plansAdminTeamRoute = createRoute({
+// Startups plan — admin, low credit
+export const plansAdminStartupsLowRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/plans/admin-team",
-  component: () => <PreviewShell view="admin" lowCredit={false} plan="team" />,
-});
-
-// Team plan — admin, low credit
-export const plansAdminTeamLowRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/plans/admin-team-low",
-  component: () => <PreviewShell view="admin" lowCredit={true} plan="team" />,
+  path: "/plans/admin-startups-low",
+  component: () => <PreviewShell view="admin" lowCredit={true} plan="startups" />,
 });
 
 // Business plan — member
@@ -75,13 +78,6 @@ export const plansMemberBizRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/plans/member-biz",
   component: () => <PreviewShell view="member" lowCredit={false} plan="business" />,
-});
-
-// Business plan — member, low credit
-export const plansMemberBizLowRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/plans/member-biz-low",
-  component: () => <PreviewShell view="member" lowCredit={true} plan="business" />,
 });
 
 // Business plan — admin
@@ -103,28 +99,28 @@ export const plansAdminBizLowRoute = createRoute({
 type PricingView = "new" | "member" | "admin";
 
 const MOCK_WORKSPACE = {
-  plan: "team" as "team" | "business" | null,
+  plan: "startups" as "startups" | "business" | null,
   credits: { total: 5000, remaining: 3100, used: 1900 },
   renewalDate: "May 1, 2026",
   members: 8,
 };
 
 const MOCK_WORKSPACE_LOW = {
-  plan: "team" as "team" | "business" | null,
+  plan: "startups" as "startups" | "business" | null,
   credits: { total: 5000, remaining: 800, used: 4200 },
   renewalDate: "May 1, 2026",
   members: 8,
 };
 
 const MOCK_WORKSPACE_BIZ = {
-  plan: "business" as "team" | "business" | null,
+  plan: "business" as "startups" | "business" | null,
   credits: { total: 15000, remaining: 9200, used: 5800 },
   renewalDate: "May 1, 2026",
   members: 22,
 };
 
 const MOCK_WORKSPACE_BIZ_LOW = {
-  plan: "business" as "team" | "business" | null,
+  plan: "business" as "startups" | "business" | null,
   credits: { total: 15000, remaining: 2400, used: 12600 },
   renewalDate: "May 1, 2026",
   members: 22,
@@ -138,34 +134,36 @@ interface CreditTier {
   price: number;
 }
 
-const TEAM_TIERS: CreditTier[] = [
+const STARTUPS_TIERS: CreditTier[] = [
   { credits: 5000, price: 50 },
   { credits: 10000, price: 90 },
   { credits: 20000, price: 160 },
+  { credits: 50000, price: 350 },
 ];
 
 const BUSINESS_TIERS: CreditTier[] = [
   { credits: 15000, price: 150 },
   { credits: 30000, price: 270 },
-  { credits: 50000, price: 400 },
+  { credits: 60000, price: 480 },
   { credits: 100000, price: 700 },
 ];
 
-const TEAM_FEATURES = [
-  "Slack, WhatsApp & Email",
-  "3,000+ integrations",
-  "Unlimited scheduled tasks & workflows",
+const STARTUPS_FEATURES = [
+  "Slack + WhatsApp + Email",
+  "3,000+ integrations (unlimited)",
+  "Unlimited workflows & scheduled tasks",
+  "BYO API keys — cloud or on-prem",
   "Email support",
 ];
 
-const BUSINESS_FEATURES = ["Up to 50 members (2.5×)", "15,000 credits per month", "Priority email support"];
-
-const USAGE_ITEMS = [
-  { label: "AI question (quick)", range: "20–50", barWidth: "17%" },
-  { label: "AI task (report, analysis)", range: "100–300", barWidth: "55%" },
-  { label: "Integration action", range: "5–15", barWidth: "6%" },
-  { label: "Scheduled task run", range: "10–50", barWidth: "14%" },
+const BUSINESS_FEATURES = [
+  "Slack + WhatsApp + Email",
+  "3,000+ integrations (unlimited)",
+  "Unlimited workflows & scheduled tasks",
+  "BYO API keys — cloud or on-prem",
+  "Priority email support",
 ];
+
 
 function getSuggestedTopUp(dailyBurnRate: number, remaining: number) {
   const creditsNeeded = dailyBurnRate * DAYS_UNTIL_RENEWAL - remaining;
@@ -183,11 +181,11 @@ export function PlansPageContent({
   userRole?: "admin" | "member";
   viewOverride?: PricingView;
   lowCreditOverride?: boolean;
-  planOverride?: "team" | "business" | null;
+  planOverride?: "startups" | "business" | null;
 }) {
   const topUpRef = useRef<HTMLDivElement>(null);
 
-  const plan = planOverride ?? "team";
+  const plan = planOverride ?? "startups";
   const useLowCredit = lowCreditOverride ?? false;
   const isBiz = plan === "business";
   const workspace = isBiz
@@ -206,48 +204,44 @@ export function PlansPageContent({
   const isLowCredit = creditPct <= 0.2;
   const suggestedTopUp = getSuggestedTopUp(dailyBurnRate, workspace.credits.remaining);
 
-  const scrollToTopUp = () => topUpRef.current?.scrollIntoView({ behavior: "smooth" });
-
   return (
     <div className="mx-auto max-w-4xl px-10 py-8 pb-20">
-      {/* Page header */}
-      <h1 className="text-2xl font-bold text-foreground">Plans & pricing</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Manage your workspace plan and credit usage.</p>
+      {/* 1. Page header */}
+      <h1 className="text-xl font-semibold text-foreground">Plans & pricing</h1>
+      <p className="mt-2 text-sm text-muted-foreground">Manage your workspace plan and credit usage.</p>
 
-      {/* Credit overview — member & admin */}
+      {/* 2. Credit overview — member & admin */}
       {view !== "new" && (
         <CreditOverview
           workspace={workspace}
-          dailyBurnRate={dailyBurnRate}
           daysRemaining={daysRemaining}
-          creditPct={creditPct}
           isLowCredit={isLowCredit}
-          isAdmin={view === "admin"}
-          onBuyCredits={scrollToTopUp}
         />
       )}
 
-      {/* Nudge banner — admin + low credit */}
-      {view === "admin" && isLowCredit && <NudgeBanner daysRemaining={daysRemaining} suggestedTopUp={suggestedTopUp} />}
+      {/* 4. Plan cards */}
+      <PlanCards view={view} currentPlan={workspace.plan} renewalDate={workspace.renewalDate} />
 
-      {/* Plan cards */}
-      <PlanCards view={view} currentPlan={workspace.plan} />
-
-      {/* Top-up section */}
-      {view === "new" && <TopUpStatic />}
-      {view === "admin" && (
-        <TopUpInteractive
-          ref={topUpRef}
-          isLowCredit={isLowCredit}
-          creditPct={creditPct}
-          suggestedTopUp={suggestedTopUp}
-        />
+      {/* 5. Top-up + what uses credits */}
+      {(view === "new" || view === "admin") && (
+        <div className="mt-8 rounded-xl border border-border bg-card">
+          <TopUpInteractive ref={topUpRef} />
+          <div className="mx-6 flex items-center gap-2.5 border-t border-border py-3.5">
+            <span className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">Credits per task</span>
+            {[
+              { label: "Quick tasks", range: "10–200" },
+              { label: "Workflows", range: "100–300" },
+              { label: "Projects", range: "500–750" },
+            ].map((item) => (
+              <span key={item.label} className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                {item.label} <span className="font-semibold tabular-nums text-foreground">{item.range}</span>
+              </span>
+            ))}
+          </div>
+        </div>
       )}
 
-      {/* What uses credits */}
-      <WhatUsesCredits />
-
-      {/* Referral */}
+      {/* 7. Referral */}
       <ReferralSection />
     </div>
   );
@@ -257,236 +251,211 @@ export function PlansPageContent({
 
 function CreditOverview({
   workspace,
-  dailyBurnRate,
   daysRemaining,
-  creditPct,
   isLowCredit,
-  isAdmin,
-  onBuyCredits,
 }: {
   workspace: typeof MOCK_WORKSPACE;
-  dailyBurnRate: number;
   daysRemaining: number;
-  creditPct: number;
   isLowCredit: boolean;
-  isAdmin: boolean;
-  onBuyCredits: () => void;
 }) {
-  const warn = isLowCredit;
-  const cardBase = warn
-    ? "flex flex-col rounded-lg border border-[#FDE68A] bg-[#FEF3C7] px-4 py-3.5 dark:border-white/[0.08] dark:bg-[#1D1B04]"
-    : "flex flex-col rounded-lg border border-border bg-card px-4 py-3.5";
-  const labelCls = warn
-    ? "font-mono text-[10px] font-medium uppercase tracking-[.08em] text-warning"
+  const warnLabel = isLowCredit
+    ? "font-mono text-[10px] font-medium uppercase tracking-[.08em] text-warning/70"
     : "font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground";
-  const numCls = warn
-    ? "mt-2 text-2xl font-bold leading-none tracking-tight text-warning"
-    : "mt-2 text-2xl font-bold leading-none tracking-tight text-foreground";
-  const subCls = warn ? "mt-1 text-[11px] text-warning/70" : "mt-1 text-[11px] text-muted-foreground";
+  const warnNum = "mt-1.5 text-3xl font-bold leading-none tracking-[-1px] text-foreground";
+  const subCls = "mt-1 whitespace-nowrap text-[11px] text-muted-foreground";
 
   return (
-    <div className="mt-6 grid grid-cols-3 gap-2.5">
-      {/* Credits remaining */}
-      <div className={cardBase}>
-        <p className={labelCls}>Credits remaining</p>
-        <p className={numCls}>{workspace.credits.remaining.toLocaleString()}</p>
-        <p className={subCls}>of {workspace.credits.total.toLocaleString()} this month</p>
-        <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-muted dark:bg-border">
-          <div
-            className={`h-full rounded-full transition-all duration-400 ${warn ? "bg-warning" : "bg-foreground"}`}
-            style={{ width: `${Math.max(creditPct * 100, 2)}%` }}
-          />
+    <div className="mt-6 rounded-xl border border-border bg-card">
+      <div className="grid grid-cols-3 px-1 py-4">
+        {/* Credits left */}
+        <div className="flex flex-col px-5">
+          <p className={warnLabel}>Credits left</p>
+          <p className={warnNum}>{workspace.credits.remaining.toLocaleString()}</p>
+          <p className={subCls}>of {workspace.credits.total.toLocaleString()} this month</p>
+        </div>
+
+        {/* Used this month */}
+        <div className="flex flex-col border-l border-border px-5">
+          <p className={warnLabel}>Credits used</p>
+          <p className={warnNum}>{workspace.credits.used.toLocaleString()}</p>
+          <p className={subCls}>{Math.round((workspace.credits.used / workspace.credits.total) * 100)}% of plan</p>
+        </div>
+
+        {/* Resets in */}
+        <div className="flex flex-col border-l border-border px-5">
+          <p className={warnLabel}>Credits reset</p>
+          <p className={warnNum}>{daysRemaining} days</p>
+          <p className={subCls}>{workspace.renewalDate}</p>
         </div>
       </div>
 
-      {/* Daily burn rate */}
-      <div className={cardBase}>
-        <p className={labelCls}>Daily burn rate</p>
-        <p className={numCls}>{dailyBurnRate}</p>
-        <p className={subCls}>credits per day avg.</p>
-      </div>
-
-      {/* Days remaining */}
-      <div className={cardBase}>
-        <p className={labelCls}>Days remaining</p>
-        <p className={numCls}>{daysRemaining}</p>
-        <p className={subCls}>at current pace · resets {workspace.renewalDate}</p>
-        {isAdmin && (
-          <button
-            type="button"
-            onClick={onBuyCredits}
-            className={`mt-3 h-8 w-full rounded-md text-[12px] font-medium transition-opacity hover:opacity-90 ${
-              warn ? "bg-warning text-white" : "bg-foreground text-background"
-            }`}
-          >
-            Buy credits
-          </button>
-        )}
-      </div>
+      {isLowCredit && (
+        <div className="mx-5 flex items-center gap-3 border-t border-border py-3">
+          <WarningIcon size={16} weight="fill" className="shrink-0 text-warning/60" />
+          <p className="text-[13px] text-muted-foreground">
+            <span className="font-semibold text-foreground">Running low</span> — {daysRemaining} day
+            {daysRemaining !== 1 ? "s" : ""} left at current pace. Top up credits below to avoid interruption.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
 
-/* ─── Nudge banner ─── */
-
-function NudgeBanner({
-  daysRemaining,
-  suggestedTopUp,
-}: {
-  daysRemaining: number;
-  suggestedTopUp: number;
-}) {
-  return (
-    <div className="mt-3 flex items-center gap-3 rounded-[10px] border border-[#FDE68A] bg-[#FEF3C7] px-4 py-3 dark:border-white/[0.08] dark:bg-[#1D1B04]">
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#FDE68A] dark:bg-[rgba(251,146,60,0.15)]">
-        <WarningIcon size={13} weight="fill" className="text-warning" />
-      </div>
-      <div>
-        <p className="text-[13px] font-semibold text-warning">
-          Running low — {daysRemaining} day{daysRemaining !== 1 ? "s" : ""} left at current pace
-        </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Top up {suggestedTopUp.toLocaleString()} credits to last the month, or upgrade to Business for 15,000 monthly
-          credits.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 /* ─── Plan cards ─── */
 
-function PlanCards({ view, currentPlan }: { view: PricingView; currentPlan: string | null }) {
+function PlanCards({ view, currentPlan, renewalDate }: { view: PricingView; currentPlan: string | null; renewalDate: string }) {
   return (
-    <div className="mt-8 grid grid-cols-2 gap-3">
-      <TeamCard view={view} isCurrent={currentPlan === "team"} />
-      <BusinessCard view={view} isCurrent={currentPlan === "business"} />
+    <div className="mt-8 grid grid-cols-2 gap-4">
+      <StartupsCard view={view} isCurrent={currentPlan === "startups"} renewalDate={renewalDate} />
+      <BusinessCard view={view} isCurrent={currentPlan === "business"} renewalDate={renewalDate} />
     </div>
   );
 }
 
-function TeamCard({ view, isCurrent }: { view: PricingView; isCurrent: boolean }) {
-  const showBadge = isCurrent && view !== "new";
+/* ─── Current plan badge (Prompt 3) ─── */
+
+function CurrentPlanRibbon() {
+  return (
+    <div className="absolute left-1/2 top-0 -translate-x-1/2 rounded-b-[10px] bg-foreground px-3.5 py-[3px] font-mono text-[10px] font-bold uppercase tracking-[.09em] text-background">
+      Current plan
+    </div>
+  );
+}
+
+function StartupsCard({ view, isCurrent, renewalDate }: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
   const [selectedTier, setSelectedTier] = useState(0);
-  const tier = TEAM_TIERS[selectedTier];
+  const tier = STARTUPS_TIERS[selectedTier];
+  const showBadge = isCurrent && view !== "new";
 
   return (
-    <div className="flex flex-col rounded-[10px] border border-border bg-card p-[22px]">
-      {/* Row 1: Badge — fixed 24px height */}
-      <div className="h-3">{showBadge && <CurrentPlanBadge />}</div>
+    <div
+      className={`group/card relative flex flex-col overflow-hidden rounded-[20px] border border-border bg-card px-7 pb-7 pt-9 transition-all duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${view === "member" ? "hover:-translate-y-[1px] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.2)]" : "hover:-translate-y-0.5 hover:border-[rgba(200,184,50,0.3)] hover:shadow-[0_4px_16px_rgba(200,184,50,0.06),0_0_30px_rgba(200,184,50,0.03)] dark:hover:border-[rgba(254,237,1,0.2)] dark:hover:shadow-[0_4px_20px_rgba(0,0,0,0.25),0_0_40px_rgba(254,237,1,0.06)]"}`}
+    >
+      {/* Current plan ribbon */}
+      {showBadge && <CurrentPlanRibbon />}
 
-      {/* Row 2: Name + tagline */}
-      <h3 className="mt-1 text-base font-semibold text-foreground">Team</h3>
-      <div className="mt-0.5 flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">For small teams getting started.</p>
+      {/* Name with icon */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <RocketLaunchIcon size={18} className="text-foreground" />
+          <h3 className="text-base font-semibold text-foreground">Startups</h3>
+        </div>
         <span className="flex items-center gap-1 text-muted-foreground">
           <UsersIcon size={12} />
           <span className="font-mono text-[11px]">20</span>
         </span>
       </div>
 
-      {/* Row 3: Price */}
-      <div className="mt-5 flex items-baseline gap-1">
+      {/* Price */}
+      <div className="mt-6 flex items-baseline gap-1">
         <span className="text-[42px] font-bold leading-none tracking-[-2px] text-foreground">${tier.price}</span>
-        <span className="text-[13px] text-muted-foreground">/ month</span>
+        <span className="text-[13px] text-muted-foreground">/month</span>
+      </div>
+      <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+        ${(tier.price / tier.credits).toFixed(3)} per credit
+      </p>
+
+      {/* Monthly credits label + selector */}
+      <div className="mt-6">
+        <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
+          Monthly credits
+        </p>
+        <CreditTierSelect tiers={STARTUPS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
       </div>
 
-      {/* Row 4: Credit selector */}
-      <div className="mt-4">
-        <CreditTierSelect tiers={TEAM_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} variant="light" />
-      </div>
-
-      {/* Row 5: CTA */}
-      <div className="mt-4">
+      {/* CTA or renewal info */}
+      <div className="mt-5">
         {view === "new" && (
           <button
             type="button"
-            className="h-10 w-full rounded-[6px] border border-border bg-transparent text-[13px] font-medium text-foreground transition-colors hover:bg-accent"
+            className="h-10 w-full rounded-[12px] bg-foreground text-[13px] font-semibold text-background transition-all hover:opacity-90 active:scale-[0.98]"
           >
             Get started
           </button>
         )}
         {view !== "new" && isCurrent && (
-          <>
-            <button
-              type="button"
-              disabled
-              className="h-10 w-full cursor-default rounded-[6px] border border-border bg-muted text-[13px] font-medium text-muted-foreground"
-            >
-              Current plan
-            </button>
-            {view === "admin" && (
-              <button
-                type="button"
-                className="mt-2 block w-full text-center text-xs text-muted-foreground underline underline-offset-2 hover:text-secondary-foreground"
-              >
-                Downgrade options
-              </button>
-            )}
-          </>
+          <div className="flex h-10 w-full items-center justify-center gap-2 rounded-[12px] border border-border bg-muted text-[13px] text-muted-foreground">
+            <CalendarCheckIcon weight="fill" className="h-4 w-4 text-muted-foreground/70" />
+            Renews {renewalDate}
+          </div>
+        )}
+        {view === "admin" && !isCurrent && (
+          <button
+            type="button"
+            className="flex h-10 w-full items-center justify-center rounded-[12px] border border-border text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Downgrade to Startups
+          </button>
+        )}
+        {view === "member" && !isCurrent && (
+          <p className="flex h-10 items-center justify-center text-xs text-muted-foreground/50">
+            Ask your admin to switch plans
+          </p>
         )}
       </div>
 
-      {/* Row 6: Features */}
-      <div className="mt-5">
-        <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">Includes</p>
-        <div className="mt-3 space-y-3">
-          {TEAM_FEATURES.map((f) => (
-            <FeatureItem key={f} text={f} />
-          ))}
-        </div>
+      {/* Features */}
+      <div className="mt-auto space-y-2.5 pt-5">
+        {STARTUPS_FEATURES.map((f) => (
+          <FeatureItem key={f} text={f} />
+        ))}
       </div>
     </div>
   );
 }
 
-function BusinessCard({ view, isCurrent }: { view: PricingView; isCurrent: boolean }) {
-  const showBadge = isCurrent && view !== "new";
+function BusinessCard({ view, isCurrent, renewalDate }: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
+  const showCurrentBadge = isCurrent && view !== "new";
   const [selectedTier, setSelectedTier] = useState(0);
   const tier = BUSINESS_TIERS[selectedTier];
 
   return (
-    <div className="relative flex flex-col overflow-hidden rounded-[10px] bg-[#040404] p-[22px] dark:bg-popover">
-      {/* Row 1: Badge — fixed 24px height */}
-      <div className="h-3">
-        {!showBadge && (
-          <div className="absolute left-1/2 top-0 -translate-x-1/2 rounded-b-[6px] bg-[#FEED01] px-3.5 py-[3px] font-mono text-[10px] font-bold uppercase tracking-[.09em] text-[#040404]">
-            Most popular
-          </div>
-        )}
-        {showBadge && <CurrentPlanBadge />}
-      </div>
+    <div
+      className={`group/card relative flex flex-col overflow-hidden rounded-[20px] border border-[#C8B832] bg-card px-7 pb-7 pt-9 transition-all duration-[250ms] ease-[cubic-bezier(0.4,0,0.2,1)] ${view === "member" ? "hover:-translate-y-[1px] hover:shadow-[0_2px_8px_rgba(200,184,50,0.04)] dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.2)]" : "hover:-translate-y-0.5 hover:border-[#C8B832] hover:shadow-[0_4px_16px_rgba(200,184,50,0.08),0_0_30px_rgba(200,184,50,0.04)] dark:hover:border-[rgba(254,237,1,0.4)] dark:hover:shadow-[0_4px_20px_rgba(0,0,0,0.25),0_0_40px_rgba(254,237,1,0.06)]"}`}
+    >
+      {/* Most popular ribbon — only when not showing current badge */}
+      {!showCurrentBadge && (
+        <div className="absolute left-1/2 top-0 -translate-x-1/2 rounded-b-[10px] bg-[#FEED01] px-3.5 py-[3px] font-mono text-[10px] font-bold uppercase tracking-[.09em] text-[#040404]">
+          Most popular
+        </div>
+      )}
 
-      {/* Row 2: Name + tagline */}
-      <h3 className="mt-1 text-base font-semibold text-[#FAFAF8] dark:text-foreground">Business</h3>
-      <div className="mt-0.5 flex items-center justify-between">
-        <p className="text-xs text-[#9C9A92] dark:text-muted-foreground">For teams that need serious scale.</p>
-        <span className="flex items-center gap-1 text-[#9C9A92] dark:text-muted-foreground">
+      {/* Current plan ribbon */}
+      {showCurrentBadge && <CurrentPlanRibbon />}
+
+      {/* Name with icon */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <BuildingsIcon size={18} className="text-foreground" />
+          <h3 className="text-base font-semibold text-foreground">Business</h3>
+        </div>
+        <span className="flex items-center gap-1 text-muted-foreground">
           <UsersIcon size={12} />
           <span className="font-mono text-[11px]">50</span>
         </span>
       </div>
 
-      {/* Row 3: Price */}
-      <div className="mt-5 flex items-baseline gap-1">
-        <span className="text-[42px] font-bold leading-none tracking-[-2px] text-[#FAFAF8] dark:text-foreground">
-          ${tier.price}
-        </span>
-        <span className="text-[13px] text-[#9C9A92] dark:text-muted-foreground">/ month</span>
+      {/* Price */}
+      <div className="mt-6 flex items-baseline gap-1">
+        <span className="text-[42px] font-bold leading-none tracking-[-2px] text-foreground">${tier.price}</span>
+        <span className="text-[13px] text-muted-foreground">/month</span>
+      </div>
+      <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
+        ${(tier.price / tier.credits).toFixed(3)} per credit
+      </p>
+
+      {/* Monthly credits label + selector */}
+      <div className="mt-6">
+        <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
+          Monthly credits
+        </p>
+        <CreditTierSelect tiers={BUSINESS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
       </div>
 
-      {/* Row 4: Credit selector */}
-      <div className="mt-4">
-        <CreditTierSelect
-          tiers={BUSINESS_TIERS}
-          selectedIndex={selectedTier}
-          onSelect={setSelectedTier}
-          variant="dark"
-        />
-      </div>
-
-      {/* Row 5: CTA */}
-      <div className="mt-4">
+      {/* CTA or renewal info */}
+      <div className="mt-5">
         {view === "new" && <YellowCta label="Get started" />}
         {view === "admin" && !isCurrent && <YellowCta label="Upgrade to Business" />}
         {view === "member" && !isCurrent && (
@@ -494,7 +463,7 @@ function BusinessCard({ view, isCurrent }: { view: PricingView; isCurrent: boole
             <button
               type="button"
               disabled
-              className="h-10 w-full cursor-not-allowed rounded-[6px] bg-[#FEED01] text-[13px] font-semibold text-[#040404] opacity-30"
+              className="h-10 w-full cursor-not-allowed rounded-[12px] bg-[#FEED01] text-[13px] font-semibold text-[#040404] opacity-30"
             >
               Upgrade to Business
             </button>
@@ -505,39 +474,18 @@ function BusinessCard({ view, isCurrent }: { view: PricingView; isCurrent: boole
           </div>
         )}
         {view !== "new" && isCurrent && (
-          <>
-            <button
-              type="button"
-              disabled
-              className="h-10 w-full cursor-default rounded-[6px] border border-[#2C2C2A] bg-[#111110] text-[13px] font-medium text-[#5F5E5A] dark:border-white/[0.08] dark:bg-[#2C2C2A] dark:text-muted-foreground"
-            >
-              Current plan
-            </button>
-            {view === "admin" && (
-              <button
-                type="button"
-                className="mt-2 block w-full text-center text-xs text-[#5F5E5A] underline underline-offset-2 hover:text-[#9C9A92] dark:text-muted-foreground dark:hover:text-secondary-foreground"
-              >
-                Downgrade options
-              </button>
-            )}
-          </>
+          <div className="flex h-10 w-full items-center justify-center gap-2 rounded-[12px] border border-[#C8B832]/30 bg-[#C8B832]/5 text-[13px] text-muted-foreground dark:border-[#FEED01]/15 dark:bg-[#FEED01]/[0.02]">
+            <CalendarCheckIcon weight="fill" className="h-4 w-4 text-[#C8B832] dark:text-[#E8D44D]" />
+            Renews {renewalDate}
+          </div>
         )}
       </div>
 
-      {/* Row 6: Features */}
-      <div className="mt-5">
-        <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-[#5F5E5A] dark:text-muted-foreground">
-          Everything in Team, plus
-        </p>
-        <div className="mt-3 space-y-3">
-          {BUSINESS_FEATURES.map((f) => (
-            <div key={f} className="flex items-start gap-2">
-              <CheckIcon size={14} weight="bold" className="mt-0.5 shrink-0 text-[#FEED01]" />
-              <span className="text-sm text-[#9C9A92] dark:text-muted-foreground">{f}</span>
-            </div>
-          ))}
-        </div>
+      {/* Features */}
+      <div className="mt-auto space-y-2.5 pt-5">
+        {BUSINESS_FEATURES.map((f) => (
+          <FeatureItem key={f} text={f} />
+        ))}
       </div>
     </div>
   );
@@ -545,31 +493,19 @@ function BusinessCard({ view, isCurrent }: { view: PricingView; isCurrent: boole
 
 /* ─── Shared plan card parts ─── */
 
-function CurrentPlanBadge() {
-  return (
-    <span className="inline-flex items-center gap-[5px] rounded-full bg-[#F0FDF4] px-2 py-0.5 dark:bg-[rgba(48,209,88,0.1)]">
-      <span className="size-[7px] rounded-full bg-success" />
-      <span className="font-mono text-[10px] font-semibold uppercase text-success">Current plan</span>
-    </span>
-  );
-}
-
 function CreditTierSelect({
   tiers,
   selectedIndex,
   onSelect,
-  variant,
 }: {
   tiers: CreditTier[];
   selectedIndex: number;
   onSelect: (i: number) => void;
-  variant: "light" | "dark";
 }) {
   const [open, setOpen] = useState(false);
   const selected = tiers[selectedIndex];
   const ref = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -579,61 +515,39 @@ function CreditTierSelect({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
-  const isDark = variant === "dark";
-  const triggerClass = isDark
-    ? "flex w-full cursor-pointer items-center gap-2 rounded-[6px] border border-[#2C2C2A] bg-[#111110] px-3 py-[7px] transition-colors hover:border-[#3D3530] dark:border-white/[0.08] dark:bg-[#2C2C2A] dark:hover:border-white/[0.15]"
-    : "flex w-full cursor-pointer items-center gap-2 rounded-[6px] border border-border bg-muted px-3 py-[7px] transition-colors hover:border-foreground/20";
-  const labelClass = isDark
-    ? "shrink-0 text-[13px] font-medium text-[#FAFAF8] dark:text-foreground"
-    : "shrink-0 text-[13px] font-medium text-foreground";
-  const subClass = isDark
-    ? "text-[11px] text-[#5F5E5A] dark:text-muted-foreground"
-    : "text-[11px] text-muted-foreground";
-  const caretClass = isDark ? "text-[#5F5E5A] dark:text-muted-foreground" : "text-muted-foreground";
-  const dropdownClass = isDark
-    ? "absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-[6px] border border-[#2C2C2A] bg-[#111110] shadow-lg dark:border-white/[0.08] dark:bg-[#2C2C2A]"
-    : "absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-[6px] border border-border bg-card shadow-lg";
-
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen(!open)} className={triggerClass}>
-        <span className={labelClass}>{selected.credits.toLocaleString()} credits</span>
-        <span className={`ml-auto ${subClass}`}>per month</span>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`group/trigger flex w-full cursor-pointer items-center gap-2 rounded-[14px] border px-4 py-[9px] transition-colors hover:border-[#C8B832] hover:bg-[#C8B832]/10 group-hover/card:border-[#C8B832] group-hover/card:bg-[#C8B832]/10 dark:hover:border-[#FEED01]/30 dark:hover:bg-[#FEED01]/[0.02] dark:group-hover/card:border-[#FEED01]/30 dark:group-hover/card:bg-[#FEED01]/[0.02] ${open ? "border-[#C8B832] bg-[#C8B832]/10 dark:!border-[#FEED01]/30 dark:!bg-[#FEED01]/[0.02]" : "border-border bg-muted"}`}
+      >
+        <span className="shrink-0 text-[13px] font-medium text-foreground">{selected.credits.toLocaleString()} credits</span>
+        <span className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}>${selected.price}</span>
         <CaretDownIcon
           size={12}
-          className={`shrink-0 transition-transform ${caretClass} ${open ? "rotate-180" : ""}`}
+          className={`ml-auto shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
         />
       </button>
 
       {open && (
-        <div className={dropdownClass}>
-          {tiers.map((t, i) => {
-            const isSelected = i === selectedIndex;
-            const itemHover = isDark ? "hover:bg-[#1C1C1A] dark:hover:bg-white/[0.05]" : "hover:bg-accent";
-            const accentBar = isDark ? "border-l-[#FEED01]" : "border-l-foreground";
-            const selectedLabel = isDark
-              ? "shrink-0 text-[13px] font-medium text-[#FEED01]"
-              : "shrink-0 text-[13px] font-medium text-foreground";
-            const selectedPrice = isDark ? "text-[11px] text-[#FEED01]/70" : "text-[11px] text-foreground/70";
-            return (
-              <button
-                key={t.credits}
-                type="button"
-                onClick={() => {
-                  onSelect(i);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center gap-2 border-l-2 px-3 py-2.5 text-left transition-colors ${
-                  isSelected ? accentBar : "border-l-transparent"
-                } ${itemHover}`}
-              >
-                <span className={isSelected ? selectedLabel : labelClass}>
-                  {t.credits.toLocaleString()} credits/month
-                </span>
-                <span className={`ml-auto tabular-nums ${isSelected ? selectedPrice : subClass}`}>${t.price}/mo</span>
-              </button>
-            );
-          })}
+        <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-[14px] border border-border bg-popover shadow-lg">
+          {tiers.map((t, i) => (
+            <button
+              key={t.credits}
+              type="button"
+              onClick={() => {
+                onSelect(i);
+                setOpen(false);
+              }}
+              className="group/row flex w-full items-center justify-between border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[#C8B832]/10 dark:hover:bg-[#FEED01]/[0.02]"
+            >
+              <span className="text-[13px] font-medium text-foreground">
+                {t.credits.toLocaleString()} credits monthly
+              </span>
+              <span className="tabular-nums text-[13px] font-medium text-muted-foreground/60 transition-colors group-hover/row:text-[#6b6200] dark:group-hover/row:text-[#E8D44D]">${t.price}</span>
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -644,7 +558,7 @@ function FeatureItem({ text }: { text: string }) {
   return (
     <div className="flex items-start gap-2">
       <CheckIcon size={14} weight="bold" className="mt-0.5 shrink-0 text-foreground" />
-      <span className="text-sm text-secondary-foreground">{text}</span>
+      <span className="text-sm text-muted-foreground">{text}</span>
     </div>
   );
 }
@@ -653,170 +567,113 @@ function YellowCta({ label }: { label: string }) {
   return (
     <button
       type="button"
-      className="h-10 w-full rounded-[6px] border-none bg-[#FEED01] text-[13px] font-semibold text-[#040404] transition-opacity hover:opacity-90"
+      className="h-10 w-full rounded-[12px] border-none bg-[#FEED01] text-[13px] font-semibold text-[#040404] transition-all hover:opacity-90 active:scale-[0.98]"
     >
       {label}
     </button>
   );
 }
 
-/* ─── Top-up (static — View A) ─── */
 
-function TopUpStatic() {
+
+/* ─── Top-up (interactive — admin, healthy credits) ─── */
+
+const CREDIT_OPTIONS = [1000, 5000, 10000, 25000, 50000, 100000];
+
+const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpInteractive(_props, ref) {
+  const [stepIndex, setStepIndex] = useState(0);
+  const credits = CREDIT_OPTIONS[stepIndex];
+  const price = (credits / 1000) * 15;
+  const [creditInput, setCreditInput] = useState(credits.toLocaleString());
+
+  const snapCredits = (raw: string) => {
+    const num = Number.parseInt(raw.replace(/,/g, ""), 10) || 0;
+    const closest = CREDIT_OPTIONS.reduce((prev, curr) =>
+      Math.abs(curr - num) < Math.abs(prev - num) ? curr : prev
+    );
+    const idx = CREDIT_OPTIONS.indexOf(closest);
+    setStepIndex(idx);
+    setCreditInput(closest.toLocaleString());
+  };
+
+  // Keep input in sync when slider changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: credits drives the sync
+  useEffect(() => {
+    setCreditInput(credits.toLocaleString());
+  }, [credits]);
+
   return (
-    <div className="mt-6 flex items-start justify-between rounded-lg border border-border bg-card px-5 py-5">
-      <div>
-        <h2 className="text-base font-semibold text-foreground">Need more credits?</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Top up any time. Credits never expire and require no plan change.
-        </p>
+    <div id="topup" ref={ref} className="px-6 py-5">
+      <div className="flex items-baseline justify-between">
+        <p className="text-[15px] font-semibold text-foreground">Top up credits</p>
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">$15 per 1,000 · no expiry</p>
       </div>
-      <div className="shrink-0 text-right">
-        <p className="text-3xl font-bold tracking-[-1px] text-foreground">$15</p>
-        <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">per 1,000 credits</p>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Top-up (interactive — View C) ─── */
-
-const TopUpInteractive = forwardRef<
-  HTMLDivElement,
-  { isLowCredit: boolean; creditPct: number; suggestedTopUp: number }
->(function TopUpInteractive({ isLowCredit, creditPct, suggestedTopUp }, ref) {
-  const [qty, setQty] = useState(1);
-  const clamp = (n: number) => Math.max(1, Math.min(100, n));
-
-  return (
-    <div id="topup" ref={ref} className="mt-8 rounded-[10px] border border-border bg-card px-5 py-[18px]">
-      {/* Header row */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-foreground">Top up credits</h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">
-            No expiry. No plan change. Added to your balance immediately.
-          </p>
-        </div>
-        <div className="shrink-0 text-right">
-          <p className="text-2xl font-bold tracking-[-0.3px] text-foreground">$15</p>
-          <p className="font-mono text-[11px] text-muted-foreground">per 1,000 credits</p>
-        </div>
-      </div>
-
-      {/* Divider */}
-      <div className="mt-3.5 border-t border-border" />
-
-      {/* Input row */}
-      <div className="mt-3.5 flex flex-wrap items-center gap-2.5">
-        {/* Qty control */}
-        <div className="flex items-center overflow-hidden rounded-[6px] border border-border">
-          <button
-            type="button"
-            onClick={() => setQty((q) => clamp(q - 1))}
-            className="flex size-[34px] items-center justify-center text-lg text-muted-foreground transition-colors hover:bg-accent"
-          >
-            <MinusIcon size={14} />
-          </button>
-          <span className="h-[34px] w-px bg-border" />
+      <div className="mt-3 flex items-center gap-4">
+        <div className="relative flex flex-1 items-center">
           <input
-            type="number"
-            min={1}
-            max={100}
-            value={qty}
-            onChange={(e) => setQty(clamp(Number.parseInt(e.target.value) || 1))}
-            className="w-[54px] bg-transparent py-2 text-center text-sm font-semibold text-foreground outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            type="range"
+            min={0}
+            max={CREDIT_OPTIONS.length - 1}
+            step={1}
+            value={stepIndex}
+            onChange={(e) => setStepIndex(Number.parseInt(e.target.value))}
+            className="relative z-10 h-1.5 w-full cursor-pointer appearance-none bg-transparent [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20 [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-[#FEED01] [&::-webkit-slider-thumb]:bg-[#FEED01] [&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgba(0,0,0,0.15)] [&::-webkit-slider-thumb]:transition-shadow [&::-webkit-slider-thumb]:hover:shadow-[0_0_0_4px_rgba(254,237,1,0.15)]"
           />
-          <span className="h-[34px] w-px bg-border" />
-          <button
-            type="button"
-            onClick={() => setQty((q) => clamp(q + 1))}
-            className="flex size-[34px] items-center justify-center text-lg text-muted-foreground transition-colors hover:bg-accent"
-          >
-            <PlusIcon size={14} />
-          </button>
+          <div className="pointer-events-none absolute inset-0 flex items-center">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-border">
+              <div className="h-full rounded-full" style={{ width: `${(stepIndex / (CREDIT_OPTIONS.length - 1)) * 100}%`, background: "linear-gradient(to right, #C8B832, #FEED01)" }} />
+            </div>
+          </div>
         </div>
-
-        {/* Summary */}
-        <span className="text-[13px] text-muted-foreground">
-          × 1,000 = <span className="font-semibold text-foreground">{(qty * 1000).toLocaleString()} credits</span>
-        </span>
-
-        {/* Price */}
-        <span className="ml-auto text-base font-bold tracking-[-0.3px] text-foreground">${qty * 15}</span>
-
-        {/* Buy now */}
+        <div className="group/credit flex items-center gap-1 rounded-full border border-border pl-2 pr-2.5 py-1 transition-all hover:border-[#C8B832]/40 hover:bg-[#C8B832]/5 focus-within:border-[#C8B832]/60 focus-within:bg-[#C8B832]/5 active:scale-[0.98]">
+          <input
+            type="text"
+            inputMode="numeric"
+            title="Available amounts: 1,000 · 5,000 · 10,000 · 25,000 · 50,000 · 100,000"
+            value={creditInput}
+            onChange={(e) => setCreditInput(e.target.value.replace(/[^\d,]/g, ""))}
+            onBlur={() => snapCredits(creditInput)}
+            onKeyDown={(e) => { if (e.key === "Enter") snapCredits(creditInput); }}
+            className="min-w-12 w-16 bg-transparent text-center text-sm font-semibold tabular-nums text-foreground outline-none"
+          />
+          <span className="text-xs text-muted-foreground transition-colors group-hover/credit:text-[#6b6200] dark:group-hover/credit:text-[#E8D44D]">credits</span>
+        </div>
+        <span className="min-w-[3.5rem] text-right text-lg font-bold tabular-nums tracking-[-0.5px] text-foreground">${price}</span>
         <button
           type="button"
-          className="h-9 whitespace-nowrap rounded-[6px] bg-foreground px-4 text-[13px] font-medium text-background transition-opacity hover:opacity-[.86]"
+          className="h-9 shrink-0 whitespace-nowrap rounded-[10px] bg-[#FEED01] px-5 text-[13px] font-semibold text-[#040404] transition-opacity hover:opacity-90"
         >
           Buy now
         </button>
       </div>
-
-      {/* Hint when low */}
-      {creditPct <= 0.3 && (
-        <p className="mt-2 text-[11px] text-warning">
-          Tip: {suggestedTopUp.toLocaleString()} credits would cover the rest of the month.
-        </p>
-      )}
     </div>
   );
 });
 
-/* ─── What uses credits ─── */
-
-function WhatUsesCredits() {
-  return (
-    <div className="mt-6 rounded-lg border border-border bg-card px-5 py-5">
-      <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
-        What uses credits
-      </p>
-      <div className="mt-3 grid grid-cols-2 gap-x-8">
-        {USAGE_ITEMS.map((item, i) => (
-          <div
-            key={item.label}
-            className={`flex items-center justify-between py-2.5 ${
-              i < USAGE_ITEMS.length - 2 ? "border-b border-border" : ""
-            }`}
-          >
-            <span className="text-sm text-muted-foreground">{item.label}</span>
-            <span className="shrink-0 text-sm font-bold tabular-nums text-foreground">
-              {item.range} <span className="font-normal text-muted-foreground">cr</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /* ─── Referral section ─── */
 
 function ReferralSection() {
   return (
-    <div className="mt-6 flex items-center justify-between rounded-lg border border-border bg-card px-5 py-5">
-      <div className="flex items-start gap-3">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-          <GiftIcon size={18} className="text-muted-foreground" />
-        </div>
+    <div className="mt-8 flex items-center justify-between border-t border-border pt-6">
+      <div className="flex items-center gap-3">
+        <GiftIcon size={18} className="text-[#C8B832]" />
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold text-foreground">Refer a teammate</h2>
-            <span className="rounded-full border border-border bg-muted px-2 py-0.5 font-mono text-[10px] font-semibold uppercase text-muted-foreground">
+            <span className="rounded-full bg-[#C8B832]/10 px-2 py-0.5 font-mono text-[10px] font-semibold uppercase text-[#8B7A1A] dark:text-[#E8D44D]">
               Coming soon
             </span>
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">Invite others to Sketch and earn credits together.</p>
         </div>
       </div>
-      <button
-        type="button"
-        disabled
-        className="h-10 shrink-0 whitespace-nowrap rounded-[6px] border border-border bg-transparent px-4 text-[13px] font-medium text-foreground opacity-40"
-      >
-        Copy link
-      </button>
+      <div title="Coming soon" className="flex items-center gap-0 rounded-full border border-border opacity-50">
+        <span className="pl-3 pr-2 text-[13px] text-muted-foreground">sketch.dev/refer/you</span>
+        <button type="button" disabled className="shrink-0 rounded-full p-2 transition-colors">
+          <CopySimpleIcon size={14} className="text-muted-foreground" />
+        </button>
+      </div>
     </div>
   );
 }

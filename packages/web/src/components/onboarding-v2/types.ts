@@ -1,7 +1,7 @@
 /** Message queue item types for the conversational onboarding flow. */
 
 export type AuthMethod = "slack" | "google";
-export type ApiProvider = "bedrock" | "anthropic";
+export type ApiProvider = "bedrock" | "anthropic" | "max";
 export type UserRole = "admin" | "member";
 export type ErrorType = "generic-email" | "already-registered" | "workspace-not-ready";
 

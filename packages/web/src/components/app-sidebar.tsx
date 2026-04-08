@@ -117,8 +117,8 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="pointer-events-none hover:bg-transparent active:bg-transparent">
-              <div className="flex size-8 shrink-0 items-center justify-center">
-                <img src={logoSrc} alt="Sketch" className="size-7" />
+              <div className="flex size-9 shrink-0 items-center justify-center">
+                <img src={logoSrc} alt="Sketch" className="size-9 dark:invert" />
               </div>
               <div className="flex min-w-0 flex-col text-left">
                 <span className="truncate text-base font-semibold tracking-tight">{identity?.botName ?? "Sketch"}</span>

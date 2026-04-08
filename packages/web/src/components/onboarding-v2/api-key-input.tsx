@@ -20,6 +20,12 @@ function AnthropicMark({ size = 16 }: { size?: number }) {
   return <img src="/logos/anthropic-logo.png" alt="Anthropic" style={{ height: size, width: "auto", filter }} />;
 }
 
+function ClaudeMark({ size = 16 }: { size?: number }) {
+  const { resolvedTheme } = useTheme();
+  const filter = resolvedTheme === "dark" ? "brightness(0) invert(1)" : "brightness(0)";
+  return <img src="/logos/Claude_AI_symbol.svg" alt="Claude" style={{ height: size, width: "auto", filter }} />;
+}
+
 /** API key input with AWS Bedrock and Anthropic tabs. */
 export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
   const [provider, setProvider] = useState<ApiProvider>("bedrock");
@@ -37,7 +43,7 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
   const canValidate = provider === "bedrock" ? accessKeyId.trim() && secretKey.trim() : apiKey.trim();
 
   const validate = (): string | null => {
-    if (provider === "anthropic") {
+    if (provider === "anthropic" || provider === "max") {
       const key = apiKey.trim();
       if (!key.startsWith("sk-ant-")) return "Anthropic keys start with sk-ant-";
       if (key.length < 20) return "Key looks too short — double-check it.";
@@ -114,9 +120,18 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
             <AnthropicMark size={14} />
             Anthropic
           </button>
+          <button
+            type="button"
+            className="ob-api-toggle-tab"
+            data-active={provider === "max"}
+            onClick={() => switchTab("max")}
+          >
+            <ClaudeMark size={14} />
+            Max
+          </button>
         </div>
 
-        {provider === "bedrock" ? (
+        {provider === "bedrock" && (
           <>
             <div className="ob-api-field-label">AWS Access Key ID</div>
             <input
@@ -167,9 +182,33 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
               ))}
             </select>
           </>
-        ) : (
+        )}
+
+        {provider === "anthropic" && (
           <>
             <div className="ob-api-field-label">Anthropic API Key</div>
+            <input
+              type="password"
+              className="ob-api-input"
+              data-state={state === "error" ? "error" : state === "success" ? "valid" : undefined}
+              placeholder="sk-ant-..."
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                if (state === "error") {
+                  setState("idle");
+                  setErrorMsg("");
+                }
+              }}
+              disabled={state === "loading" || state === "success"}
+              autoComplete="off"
+            />
+          </>
+        )}
+
+        {provider === "max" && (
+          <>
+            <div className="ob-api-field-label">Claude Max API Key</div>
             <input
               type="password"
               className="ob-api-input"
@@ -215,7 +254,8 @@ export function ApiKeyInput({ onValidated }: ApiKeyInputProps) {
               target="_blank"
               rel="noopener noreferrer"
             >
-              Get your {provider === "bedrock" ? "AWS Bedrock" : "Anthropic"} credentials →
+              Get your {provider === "bedrock" ? "AWS Bedrock" : provider === "max" ? "Claude Max" : "Anthropic"}{" "}
+              credentials →
             </a>
           </div>
         )}
