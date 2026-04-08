@@ -164,7 +164,6 @@ const BUSINESS_FEATURES = [
   "Priority email support",
 ];
 
-
 function getSuggestedTopUp(dailyBurnRate: number, remaining: number) {
   const creditsNeeded = dailyBurnRate * DAYS_UNTIL_RENEWAL - remaining;
   return Math.ceil(Math.max(creditsNeeded, 1000) / 1000) * 1000;
@@ -212,11 +211,7 @@ export function PlansPageContent({
 
       {/* 2. Credit overview — member & admin */}
       {view !== "new" && (
-        <CreditOverview
-          workspace={workspace}
-          daysRemaining={daysRemaining}
-          isLowCredit={isLowCredit}
-        />
+        <CreditOverview workspace={workspace} daysRemaining={daysRemaining} isLowCredit={isLowCredit} />
       )}
 
       {/* 4. Plan cards */}
@@ -227,7 +222,9 @@ export function PlansPageContent({
         <div className="mt-8 rounded-xl border border-border bg-card">
           <TopUpInteractive ref={topUpRef} />
           <div className="mx-6 flex items-center gap-2.5 border-t border-border py-3.5">
-            <span className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">Credits per task</span>
+            <span className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
+              Credits per task
+            </span>
             {[
               { label: "Quick tasks", range: "10–200" },
               { label: "Workflows", range: "100–300" },
@@ -302,10 +299,13 @@ function CreditOverview({
   );
 }
 
-
 /* ─── Plan cards ─── */
 
-function PlanCards({ view, currentPlan, renewalDate }: { view: PricingView; currentPlan: string | null; renewalDate: string }) {
+function PlanCards({
+  view,
+  currentPlan,
+  renewalDate,
+}: { view: PricingView; currentPlan: string | null; renewalDate: string }) {
   return (
     <div className="mt-8 grid grid-cols-2 gap-4">
       <StartupsCard view={view} isCurrent={currentPlan === "startups"} renewalDate={renewalDate} />
@@ -324,7 +324,11 @@ function CurrentPlanRibbon() {
   );
 }
 
-function StartupsCard({ view, isCurrent, renewalDate }: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
+function StartupsCard({
+  view,
+  isCurrent,
+  renewalDate,
+}: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
   const [selectedTier, setSelectedTier] = useState(0);
   const tier = STARTUPS_TIERS[selectedTier];
   const showBadge = isCurrent && view !== "new";
@@ -406,7 +410,11 @@ function StartupsCard({ view, isCurrent, renewalDate }: { view: PricingView; isC
   );
 }
 
-function BusinessCard({ view, isCurrent, renewalDate }: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
+function BusinessCard({
+  view,
+  isCurrent,
+  renewalDate,
+}: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
   const showCurrentBadge = isCurrent && view !== "new";
   const [selectedTier, setSelectedTier] = useState(0);
   const tier = BUSINESS_TIERS[selectedTier];
@@ -522,8 +530,14 @@ function CreditTierSelect({
         onClick={() => setOpen(!open)}
         className={`group/trigger flex w-full cursor-pointer items-center gap-2 rounded-[14px] border px-4 py-[9px] transition-colors hover:border-[#C8B832] hover:bg-[#C8B832]/10 group-hover/card:border-[#C8B832] group-hover/card:bg-[#C8B832]/10 dark:hover:border-[#FEED01]/30 dark:hover:bg-[#FEED01]/[0.02] dark:group-hover/card:border-[#FEED01]/30 dark:group-hover/card:bg-[#FEED01]/[0.02] ${open ? "border-[#C8B832] bg-[#C8B832]/10 dark:!border-[#FEED01]/30 dark:!bg-[#FEED01]/[0.02]" : "border-border bg-muted"}`}
       >
-        <span className="shrink-0 text-[13px] font-medium text-foreground">{selected.credits.toLocaleString()} credits</span>
-        <span className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}>${selected.price}</span>
+        <span className="shrink-0 text-[13px] font-medium text-foreground">
+          {selected.credits.toLocaleString()} credits
+        </span>
+        <span
+          className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}
+        >
+          ${selected.price}
+        </span>
         <CaretDownIcon
           size={12}
           className={`ml-auto shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
@@ -545,7 +559,9 @@ function CreditTierSelect({
               <span className="text-[13px] font-medium text-foreground">
                 {t.credits.toLocaleString()} credits monthly
               </span>
-              <span className="tabular-nums text-[13px] font-medium text-muted-foreground/60 transition-colors group-hover/row:text-[#6b6200] dark:group-hover/row:text-[#E8D44D]">${t.price}</span>
+              <span className="tabular-nums text-[13px] font-medium text-muted-foreground/60 transition-colors group-hover/row:text-[#6b6200] dark:group-hover/row:text-[#E8D44D]">
+                ${t.price}
+              </span>
             </button>
           ))}
         </div>
@@ -574,8 +590,6 @@ function YellowCta({ label }: { label: string }) {
   );
 }
 
-
-
 /* ─── Top-up (interactive — admin, healthy credits) ─── */
 
 const CREDIT_OPTIONS = [1000, 5000, 10000, 25000, 50000, 100000];
@@ -588,16 +602,13 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
 
   const snapCredits = (raw: string) => {
     const num = Number.parseInt(raw.replace(/,/g, ""), 10) || 0;
-    const closest = CREDIT_OPTIONS.reduce((prev, curr) =>
-      Math.abs(curr - num) < Math.abs(prev - num) ? curr : prev
-    );
+    const closest = CREDIT_OPTIONS.reduce((prev, curr) => (Math.abs(curr - num) < Math.abs(prev - num) ? curr : prev));
     const idx = CREDIT_OPTIONS.indexOf(closest);
     setStepIndex(idx);
     setCreditInput(closest.toLocaleString());
   };
 
   // Keep input in sync when slider changes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: credits drives the sync
   useEffect(() => {
     setCreditInput(credits.toLocaleString());
   }, [credits]);
@@ -606,7 +617,9 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
     <div id="topup" ref={ref} className="px-6 py-5">
       <div className="flex items-baseline justify-between">
         <p className="text-[15px] font-semibold text-foreground">Top up credits</p>
-        <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">$15 per 1,000 · no expiry</p>
+        <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
+          $15 per 1,000 · no expiry
+        </p>
       </div>
       <div className="mt-3 flex items-center gap-4">
         <div className="relative flex flex-1 items-center">
@@ -621,7 +634,13 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
           />
           <div className="pointer-events-none absolute inset-0 flex items-center">
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-border">
-              <div className="h-full rounded-full" style={{ width: `${(stepIndex / (CREDIT_OPTIONS.length - 1)) * 100}%`, background: "linear-gradient(to right, #C8B832, #FEED01)" }} />
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${(stepIndex / (CREDIT_OPTIONS.length - 1)) * 100}%`,
+                  background: "linear-gradient(to right, #C8B832, #FEED01)",
+                }}
+              />
             </div>
           </div>
         </div>
@@ -633,12 +652,18 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
             value={creditInput}
             onChange={(e) => setCreditInput(e.target.value.replace(/[^\d,]/g, ""))}
             onBlur={() => snapCredits(creditInput)}
-            onKeyDown={(e) => { if (e.key === "Enter") snapCredits(creditInput); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") snapCredits(creditInput);
+            }}
             className="min-w-12 w-16 bg-transparent text-center text-sm font-semibold tabular-nums text-foreground outline-none"
           />
-          <span className="text-xs text-muted-foreground transition-colors group-hover/credit:text-[#6b6200] dark:group-hover/credit:text-[#E8D44D]">credits</span>
+          <span className="text-xs text-muted-foreground transition-colors group-hover/credit:text-[#6b6200] dark:group-hover/credit:text-[#E8D44D]">
+            credits
+          </span>
         </div>
-        <span className="min-w-[3.5rem] text-right text-lg font-bold tabular-nums tracking-[-0.5px] text-foreground">${price}</span>
+        <span className="min-w-[3.5rem] text-right text-lg font-bold tabular-nums tracking-[-0.5px] text-foreground">
+          ${price}
+        </span>
         <button
           type="button"
           className="h-9 shrink-0 whitespace-nowrap rounded-[10px] bg-[#FEED01] px-5 text-[13px] font-semibold text-[#040404] transition-opacity hover:opacity-90"
@@ -649,7 +674,6 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
     </div>
   );
 });
-
 
 /* ─── Referral section ─── */
 
