@@ -134,18 +134,20 @@ interface CreditTier {
   price: number;
 }
 
+const STARTUPS_BASE_PRICE = 100;
 const STARTUPS_TIERS: CreditTier[] = [
   { credits: 5000, price: 50 },
-  { credits: 10000, price: 90 },
-  { credits: 20000, price: 160 },
-  { credits: 50000, price: 350 },
+  { credits: 10000, price: 96 },
+  { credits: 15000, price: 138 },
+  { credits: 25000, price: 220 },
 ];
 
+const BUSINESS_BASE_PRICE = 250;
 const BUSINESS_TIERS: CreditTier[] = [
-  { credits: 15000, price: 150 },
-  { credits: 30000, price: 270 },
-  { credits: 60000, price: 480 },
-  { credits: 100000, price: 700 },
+  { credits: 15000, price: 138 },
+  { credits: 25000, price: 220 },
+  { credits: 50000, price: 420 },
+  { credits: 100000, price: 800 },
 ];
 
 const STARTUPS_FEATURES = [
@@ -329,8 +331,11 @@ function StartupsCard({
   isCurrent,
   renewalDate,
 }: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
-  const [selectedTier, setSelectedTier] = useState(0);
-  const tier = STARTUPS_TIERS[selectedTier];
+  const [selectedTier, setSelectedTier] = useState<number | null>(0);
+  const tier = selectedTier != null ? STARTUPS_TIERS[selectedTier] : null;
+  const addOnPrice = tier?.price ?? 0;
+  const totalPrice = STARTUPS_BASE_PRICE + addOnPrice;
+  const totalCredits = tier?.credits ?? 0;
   const showBadge = isCurrent && view !== "new";
 
   return (
@@ -354,11 +359,11 @@ function StartupsCard({
 
       {/* Price */}
       <div className="mt-6 flex items-baseline gap-1">
-        <span className="text-[42px] font-bold leading-none tracking-[-2px] text-foreground">${tier.price}</span>
+        <span className="text-[42px] font-bold leading-none tracking-[-2px] text-foreground">${totalPrice}</span>
         <span className="text-[13px] text-muted-foreground">/month</span>
       </div>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-        ${(tier.price / tier.credits).toFixed(3)} per credit
+        {totalCredits > 0 ? `$${(totalPrice / totalCredits).toFixed(3)} per credit` : "Add credits below"}
       </p>
 
       {/* Monthly credits label + selector */}
@@ -416,8 +421,11 @@ function BusinessCard({
   renewalDate,
 }: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
   const showCurrentBadge = isCurrent && view !== "new";
-  const [selectedTier, setSelectedTier] = useState(0);
-  const tier = BUSINESS_TIERS[selectedTier];
+  const [selectedTier, setSelectedTier] = useState<number | null>(0);
+  const tier = selectedTier != null ? BUSINESS_TIERS[selectedTier] : null;
+  const addOnPrice = tier?.price ?? 0;
+  const totalPrice = BUSINESS_BASE_PRICE + addOnPrice;
+  const totalCredits = tier?.credits ?? 0;
 
   return (
     <div
@@ -447,11 +455,11 @@ function BusinessCard({
 
       {/* Price */}
       <div className="mt-6 flex items-baseline gap-1">
-        <span className="text-[42px] font-bold leading-none tracking-[-2px] text-foreground">${tier.price}</span>
+        <span className="text-[42px] font-bold leading-none tracking-[-2px] text-foreground">${totalPrice}</span>
         <span className="text-[13px] text-muted-foreground">/month</span>
       </div>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-        ${(tier.price / tier.credits).toFixed(3)} per credit
+        {totalCredits > 0 ? `$${(totalPrice / totalCredits).toFixed(3)} per credit` : "Add credits below"}
       </p>
 
       {/* Monthly credits label + selector */}
@@ -507,11 +515,11 @@ function CreditTierSelect({
   onSelect,
 }: {
   tiers: CreditTier[];
-  selectedIndex: number;
-  onSelect: (i: number) => void;
+  selectedIndex: number | null;
+  onSelect: (i: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const selected = tiers[selectedIndex];
+  const selected = selectedIndex != null ? tiers[selectedIndex] : null;
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -531,13 +539,15 @@ function CreditTierSelect({
         className={`group/trigger flex w-full cursor-pointer items-center gap-2 rounded-[14px] border px-4 py-[9px] transition-colors hover:border-[#C8B832] hover:bg-[#C8B832]/10 group-hover/card:border-[#C8B832] group-hover/card:bg-[#C8B832]/10 dark:hover:border-[#FEED01]/30 dark:hover:bg-[#FEED01]/[0.02] dark:group-hover/card:border-[#FEED01]/30 dark:group-hover/card:bg-[#FEED01]/[0.02] ${open ? "border-[#C8B832] bg-[#C8B832]/10 dark:!border-[#FEED01]/30 dark:!bg-[#FEED01]/[0.02]" : "border-border bg-muted"}`}
       >
         <span className="shrink-0 text-[13px] font-medium text-foreground">
-          {selected.credits.toLocaleString()} credits
+          {selected ? `${selected.credits.toLocaleString()} credits` : "No add-on"}
         </span>
-        <span
-          className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}
-        >
-          ${selected.price}
-        </span>
+        {selected && (
+          <span
+            className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}
+          >
+            +${selected.price}
+          </span>
+        )}
         <CaretDownIcon
           size={12}
           className={`ml-auto shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
@@ -546,6 +556,17 @@ function CreditTierSelect({
 
       {open && (
         <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-[14px] border border-border bg-popover shadow-lg">
+          <button
+            type="button"
+            onClick={() => {
+              onSelect(null);
+              setOpen(false);
+            }}
+            className={`group/row flex w-full items-center justify-between border-b border-border px-4 py-3 text-left transition-colors hover:bg-[#C8B832]/10 dark:hover:bg-[#FEED01]/[0.02] ${selectedIndex == null ? "bg-[#C8B832]/5 dark:bg-[#FEED01]/[0.01]" : ""}`}
+          >
+            <span className="text-[13px] font-medium text-foreground">No add-on</span>
+            <span className="tabular-nums text-[13px] font-medium text-muted-foreground/60">Base plan only</span>
+          </button>
           {tiers.map((t, i) => (
             <button
               key={t.credits}
@@ -554,13 +575,13 @@ function CreditTierSelect({
                 onSelect(i);
                 setOpen(false);
               }}
-              className="group/row flex w-full items-center justify-between border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[#C8B832]/10 dark:hover:bg-[#FEED01]/[0.02]"
+              className={`group/row flex w-full items-center justify-between border-b border-border px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[#C8B832]/10 dark:hover:bg-[#FEED01]/[0.02] ${selectedIndex === i ? "bg-[#C8B832]/5 dark:bg-[#FEED01]/[0.01]" : ""}`}
             >
               <span className="text-[13px] font-medium text-foreground">
                 {t.credits.toLocaleString()} credits monthly
               </span>
               <span className="tabular-nums text-[13px] font-medium text-muted-foreground/60 transition-colors group-hover/row:text-[#6b6200] dark:group-hover/row:text-[#E8D44D]">
-                ${t.price}
+                +${t.price}
               </span>
             </button>
           ))}
@@ -592,12 +613,21 @@ function YellowCta({ label }: { label: string }) {
 
 /* ─── Top-up (interactive — admin, healthy credits) ─── */
 
-const CREDIT_OPTIONS = [1000, 5000, 10000, 25000, 50000, 100000];
+const TOP_UP_PACKS = [
+  { credits: 5000, price: 50 },
+  { credits: 10000, price: 96 },
+  { credits: 15000, price: 138 },
+  { credits: 25000, price: 220 },
+  { credits: 50000, price: 420 },
+  { credits: 100000, price: 800 },
+];
+const CREDIT_OPTIONS = TOP_UP_PACKS.map((p) => p.credits);
 
 const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpInteractive(_props, ref) {
   const [stepIndex, setStepIndex] = useState(0);
-  const credits = CREDIT_OPTIONS[stepIndex];
-  const price = (credits / 1000) * 15;
+  const pack = TOP_UP_PACKS[stepIndex];
+  const credits = pack.credits;
+  const price = pack.price;
   const [creditInput, setCreditInput] = useState(credits.toLocaleString());
 
   const snapCredits = (raw: string) => {
@@ -618,7 +648,7 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
       <div className="flex items-baseline justify-between">
         <p className="text-[15px] font-semibold text-foreground">Top up credits</p>
         <p className="font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
-          $15 per 1,000 · no expiry
+          From $0.008/credit · no expiry
         </p>
       </div>
       <div className="mt-3 flex items-center gap-4">
@@ -648,7 +678,7 @@ const TopUpInteractive = forwardRef<HTMLDivElement, object>(function TopUpIntera
           <input
             type="text"
             inputMode="numeric"
-            title="Available amounts: 1,000 · 5,000 · 10,000 · 25,000 · 50,000 · 100,000"
+            title="Available packs: 5,000 · 10,000 · 15,000 · 25,000 · 50,000 · 100,000"
             value={creditInput}
             onChange={(e) => setCreditInput(e.target.value.replace(/[^\d,]/g, ""))}
             onBlur={() => snapCredits(creditInput)}
