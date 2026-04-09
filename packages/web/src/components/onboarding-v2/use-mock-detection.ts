@@ -43,7 +43,7 @@ export const MOCK_WORKSPACE = {
     name: "Canvas AI",
     members: 4,
     channels: 12,
-    email: "",
+    email: "apeksha@canvas.ai",
     role: "Admin",
   },
   google: {

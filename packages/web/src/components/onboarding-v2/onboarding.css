@@ -1019,6 +1019,211 @@
   color: var(--ob-text-muted);
 }
 
+/* ── Provisioning card ── */
+
+/* Outer shell — matches workspace-card / api-card / qr-card exactly */
+.ob-provision-card {
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 400px;
+}
+
+/* ── Interior: headline + copy ── */
+
+.ob-provision-headline {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 700;
+  color: var(--ob-text);
+  margin-bottom: 10px;
+}
+
+.ob-provision-subhead {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  line-height: 1.55;
+  margin: 0 0 10px 0;
+}
+
+.ob-provision-eta {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  letter-spacing: 0.04em;
+  margin: 0 0 20px 0;
+}
+
+/* ── Interior: progress block ── */
+
+.ob-provision-progress {
+  margin-bottom: 20px;
+}
+
+.ob-provision-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.ob-provision-progress-label {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+}
+
+.ob-provision-timer {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  letter-spacing: 0.04em;
+}
+
+.ob-provision-bar-track {
+  height: 8px;
+  background: #ebebea;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ob-provision-bar-fill {
+  height: 100%;
+  background: var(--ob-yellow);
+  border-radius: 4px;
+  transition: width 1s linear;
+}
+
+.ob-provision-bar-fill[data-complete="true"] {
+  background: var(--ob-green);
+}
+
+.ob-provision-status {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  margin-bottom: 8px;
+  animation: ob-fadeIn 0.4s ease;
+}
+
+/* ── Interior: footnote ── */
+
+.ob-provision-footnote {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  line-height: 1.5;
+  margin: 0 0 20px 0;
+}
+
+/* ── Interior: "while you wait" nested card ── */
+
+.ob-provision-wait-card {
+  overflow: hidden;
+  background: #f8f5e6;
+  border: 1px solid #d9d4c7;
+  border-radius: 12px;
+}
+
+.ob-provision-wait-content {
+  padding: 16px 18px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ob-provision-wait-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.ob-provision-wait-label {
+  font-family: var(--ob-font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow-fg);
+  margin-bottom: 2px;
+}
+
+.ob-provision-wait-title {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  color: var(--ob-text);
+}
+
+.ob-provision-wait-body {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-dim);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.ob-provision-wait-cta {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ob-text);
+  background: #fdf8d8;
+  border: 1px solid #d9d4c7;
+  border-radius: 10px;
+  padding: 8px 16px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ob-provision-wait-cta:hover {
+  color: #1a1a00;
+  background: var(--ob-yellow);
+  border-color: var(--ob-yellow);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(254, 237, 1, 0.3);
+}
+
+.ob-provision-wait-cta:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* dark overrides */
+.dark .ob-provision-bar-track {
+  background: #2a2a28;
+}
+
+.dark .ob-provision-wait-card {
+  background: linear-gradient(135deg, #1a1c14 0%, #1c1a18 100%);
+  border: 1px solid rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-provision-wait-cta {
+  color: var(--ob-text);
+  background: rgba(254, 237, 1, 0.08);
+  border-color: rgba(254, 237, 1, 0.2);
+}
+.dark .ob-provision-wait-cta:hover {
+  color: #1a1a00;
+  background: var(--ob-yellow);
+  border-color: var(--ob-yellow);
+  box-shadow: 0 2px 12px rgba(254, 237, 1, 0.2);
+}
+
 /* ── Yellow finish card ── */
 
 .ob-finish {

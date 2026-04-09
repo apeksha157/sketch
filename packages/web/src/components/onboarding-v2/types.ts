@@ -45,6 +45,7 @@ export type WidgetType =
   | "example-prompts"
   | "section-continue"
   | "error-state"
+  | "provisioning-card"
   | "loading";
 
 /** An instruction in the message queue (not yet processed). */

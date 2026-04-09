@@ -330,6 +330,36 @@ export function useOnboardingFlow() {
     enqueue([
       { type: "delay", ms: 900 },
       {
+        type: "widget",
+        widgetType: "provisioning-card",
+        step: 1,
+        props: {
+          companyName: workspace?.name ?? "your company",
+          email: workspace?.email ?? "your registered email",
+        },
+      },
+    ]);
+  }, [appendMessage, enqueue, state.authMethod, state.workspace]);
+
+  /** Called when provisioning card completes — continue to platforms. */
+  const handleProvisioningComplete = useCallback(() => {
+    // Freeze the provisioning card into message history
+    const workspace = state.workspace;
+    appendMessage({
+      id: nextId(),
+      kind: "widget",
+      step: 1,
+      widgetType: "provisioning-card",
+      widgetProps: {
+        companyName: workspace?.name ?? "your company",
+        email: workspace?.email ?? "your registered email",
+        frozen: true,
+      },
+    });
+    setActiveWidget(null);
+    enqueue([
+      { type: "delay", ms: 600 },
+      {
         type: "sketch-message",
         text:
           state.authMethod === "slack"
@@ -516,6 +546,7 @@ export function useOnboardingFlow() {
     handleAuthSelect,
     handleConnComplete,
     handleWorkspaceComplete,
+    handleProvisioningComplete,
     handleWorkspaceContinue,
     handlePlatformsContinue,
     handleWhatsAppConnect,

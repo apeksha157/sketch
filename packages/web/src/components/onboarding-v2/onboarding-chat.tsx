@@ -6,6 +6,7 @@ import { ApiKeyInput } from "./api-key-input";
 import { AuthPicker } from "./auth-picker";
 import { ConnCard } from "./conn-card";
 import { ErrorState } from "./error-state";
+import { ProvisioningCard } from "./provisioning-card";
 import { QRCard } from "./qr-card";
 import { SectionDivider } from "./section-divider";
 import { SketchMessage } from "./sketch-message";
@@ -111,7 +112,10 @@ function isSketchOrigin(msg: ChatMessage | undefined): boolean {
   if (msg.kind === "sketch-message") return true;
   if (
     msg.kind === "widget" &&
-    (msg.widgetType === "example-prompts" || msg.widgetType === "workspace-card" || msg.widgetType === "conn-card")
+    (msg.widgetType === "example-prompts" ||
+      msg.widgetType === "workspace-card" ||
+      msg.widgetType === "conn-card" ||
+      msg.widgetType === "provisioning-card")
   )
     return true;
   return false;
@@ -156,6 +160,7 @@ export function OnboardingChat() {
     handleAuthSelect,
     handleConnComplete,
     handleWorkspaceComplete,
+    handleProvisioningComplete,
     handleWorkspaceContinue,
     handlePlatformsContinue,
     handleWhatsAppConnect,
@@ -330,6 +335,18 @@ export function OnboardingChat() {
           />
         );
       }
+      case "provisioning-card": {
+        const props = msg.widgetProps as { companyName: string; email: string };
+        return (
+          <ProvisioningCard
+            key={msg.id}
+            companyName={props.companyName}
+            email={props.email}
+            onComplete={() => {}}
+            duration={0}
+          />
+        );
+      }
       default:
         return null;
     }
@@ -359,6 +376,17 @@ export function OnboardingChat() {
             data={props.data}
             isAdmin={props.isAdmin}
             onComplete={handleWorkspaceComplete}
+          />
+        );
+      }
+      case "provisioning-card": {
+        const props = activeWidget.widgetProps as { companyName: string; email: string };
+        return (
+          <ProvisioningCard
+            companyName={props.companyName}
+            email={props.email}
+            onComplete={handleProvisioningComplete}
+            duration={15_000}
           />
         );
       }
