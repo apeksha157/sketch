@@ -131,10 +131,11 @@ function ConfettiField({ isDark, popped }: { isDark: boolean; popped: boolean })
 // ---------------------------------------------------------------------------
 
 function GiftBoxGraphic({ isDark, hovered }: { isDark: boolean; hovered: boolean; setHovered: (v: boolean) => void }) {
-  const box1 = isDark ? "#504D48" : "#262524";
-  const box2 = isDark ? "#3D3A36" : "#1C1B1A";
-  const box3 = isDark ? "#5C5954" : "#302E2C";
-  const boxS = isDark ? "#6B6862" : "#3A3836";
+  // Stone palette grays from theme
+  const box1 = isDark ? "#57534E" : "#262524";
+  const box2 = isDark ? "#44403C" : "#1C1B1A";
+  const box3 = isDark ? "#78716C" : "#302E2C";
+  const boxS = isDark ? "#78716C" : "#3A3836";
   const rb = isDark ? "#FEED01" : "#FFFFFF";
   const rbL = isDark ? "#FFF566" : "#FFFFFF";
   const rbD = isDark ? "#C9BE00" : "#C8C8C8";
@@ -393,21 +394,21 @@ function GiftBoxGraphic({ isDark, hovered }: { isDark: boolean; hovered: boolean
 // ---------------------------------------------------------------------------
 
 function CalendarGraphic({ daysElapsed, isDark }: { daysElapsed: number; isDark: boolean }) {
-  const cell = 14;
-  const gap = 2.5;
+  const cell = 16;
+  const gap = 3;
   const cols = 5;
-  const pad = 8;
-  const headerH = 22;
+  const pad = 9;
+  const headerH = 24;
   const gridW = cols * (cell + gap) - gap;
   const w = gridW + pad * 2;
   const h = headerH + pad + 3 * (cell + gap) - gap + pad;
 
-  // Same palette as gift box
-  const box1 = isDark ? "#504D48" : "#262524";
-  const box2 = isDark ? "#3D3A36" : "#1C1B1A";
-  const boxS = isDark ? "#6B6862" : "#3A3836";
-  const accent = isDark ? "#FEED01" : "#FFFFFF";
-  const accentDim = isDark ? "#C9BE00" : "#C8C8C8";
+  // Stone palette grays from theme
+  const box1 = isDark ? "#57534E" : "#44403C";
+  const box2 = isDark ? "#44403C" : "#292524";
+  const boxS = isDark ? "#78716C" : "#57534E";
+  const accent = isDark ? "#FEED01" : "#1C1917";
+  const accentDim = isDark ? "#C9BE00" : "#44403C";
 
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="none" aria-hidden="true">
@@ -417,8 +418,8 @@ function CalendarGraphic({ daysElapsed, isDark }: { daysElapsed: number; isDark:
           <stop offset="100%" stopColor={box2} />
         </linearGradient>
         <linearGradient id="calHeader" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={isDark ? "#5C5954" : "#302E2C"} />
-          <stop offset="100%" stopColor={box1} />
+          <stop offset="0%" stopColor={isDark ? "#78716C" : "#1C1917"} />
+          <stop offset="100%" stopColor={isDark ? "#57534E" : "#292524"} />
         </linearGradient>
       </defs>
       {/* Shadow */}
@@ -445,7 +446,7 @@ function CalendarGraphic({ daysElapsed, isDark }: { daysElapsed: number; isDark:
       ))}
       {/* Header */}
       <rect x="0.5" y="0.5" width={w - 1} height={headerH} rx="6" fill="url(#calHeader)" />
-      <rect x="0.5" y={headerH - 5} width={w - 1} height="6" fill={isDark ? "#504D48" : "#262524"} />
+      <rect x="0.5" y={headerH - 5} width={w - 1} height="6" fill={isDark ? "#57534E" : "#262524"} />
       {/* Header highlight */}
       <rect x="3" y="1.5" width={w - 7} height="1.5" rx="0.75" fill="white" opacity={isDark ? "0.08" : "0.12"} />
       {/* Header stitch lines */}
@@ -464,8 +465,8 @@ function CalendarGraphic({ daysElapsed, isDark }: { daysElapsed: number; isDark:
         y={headerH / 2 + 1}
         textAnchor="middle"
         dominantBaseline="central"
-        fill={accent}
-        fontSize="7"
+        fill={isDark ? accent : "#F5F5F4"}
+        fontSize="9"
         fontFamily="'IBM Plex Mono', monospace"
         fontWeight="700"
         letterSpacing="0.08em"
@@ -479,47 +480,65 @@ function CalendarGraphic({ daysElapsed, isDark }: { daysElapsed: number; isDark:
         const x = pad + col * (cell + gap);
         const y = headerH + pad + row * (cell + gap);
         const day = i + 1;
-        const consumed = day <= daysElapsed;
         const today = day === daysElapsed;
-        const remaining = !consumed;
+        const past = day < daysElapsed;
+        const future = day > daysElapsed;
         return (
           <g key={day}>
-            {/* Cell shadow for remaining days */}
-            {remaining && <rect x={x + 1} y={y + 1.5} width={cell} height={cell} rx="3" fill="black" opacity="0.1" />}
+            {/* Cell shadow for future + today */}
+            {!past && <rect x={x + 1} y={y + 1.5} width={cell} height={cell} rx="3" fill="black" opacity="0.1" />}
             <rect
               x={x}
               y={y}
               width={cell}
               height={cell}
               rx="3"
-              fill={consumed ? (isDark ? "#2A2826" : "#1C1B1A") : accent}
-              stroke={today ? accent : consumed ? (isDark ? "#3D3A36" : "#262524") : accentDim}
-              strokeWidth={today ? 1.5 : 0.4}
-              opacity={consumed && !today ? 0.45 : 1}
+              fill={
+                today
+                  ? "#FEED01"
+                  : past
+                    ? isDark
+                      ? "#292524"
+                      : "#78716C"
+                    : isDark
+                      ? "rgba(254,237,1,0.12)"
+                      : "#FEF9C3"
+              }
+              stroke={today ? "#FEED01" : past ? (isDark ? "#44403C" : "#A8A29E") : isDark ? accentDim : "#D4C800"}
+              strokeWidth={today ? 1.5 : future ? 0.8 : 0.4}
+              opacity={past ? 0.45 : 1}
             />
-            {/* Cell highlight for remaining */}
-            {remaining && (
-              <rect x={x + 1} y={y + 0.5} width={cell - 2} height="1.5" rx="0.75" fill="white" opacity="0.2" />
+            {/* Cell highlight for future + today */}
+            {!past && (
+              <rect
+                x={x + 1}
+                y={y + 0.5}
+                width={cell - 2}
+                height="1.5"
+                rx="0.75"
+                fill="white"
+                opacity={today ? "0.2" : "0.1"}
+              />
             )}
             <text
               x={x + cell / 2}
               y={y + cell / 2 + 0.5}
               textAnchor="middle"
               dominantBaseline="central"
-              fill={consumed ? (isDark ? "#5C5954" : "#A8A29E") : isDark ? "#1C1917" : "#1C1917"}
+              fill={today ? "#1C1917" : past ? (isDark ? "#57534E" : "#D6D3D1") : isDark ? "#FEED01" : "#44403C"}
               fontSize="7"
               fontFamily="system-ui"
-              fontWeight={today ? 700 : 500}
+              fontWeight={today ? 700 : future ? 600 : 500}
             >
               {day}
             </text>
-            {consumed && !today && (
+            {past && (
               <line
                 x1={x + 3}
                 y1={y + cell / 2}
                 x2={x + cell - 3}
                 y2={y + cell / 2}
-                stroke={isDark ? "#504D48" : "#A8A29E"}
+                stroke={isDark ? "#57534E" : "#A8A29E"}
                 strokeWidth="0.8"
                 strokeLinecap="round"
               />
@@ -536,197 +555,245 @@ function CalendarGraphic({ daysElapsed, isDark }: { daysElapsed: number; isDark:
 // ---------------------------------------------------------------------------
 
 function HourglassGraphic({ daysLeft, isDark }: { daysLeft: number; isDark: boolean }) {
-  // topFill: fraction of sand remaining in top bulb (1 = full, 0 = empty)
-  // bottomFill: inverse — how full the bottom is
   const topFill = Math.max(0, Math.min(1, (daysLeft - 1) / 14));
   const bottomFill = 1 - topFill;
 
-  // Same palette as gift box
-  const box1 = isDark ? "#504D48" : "#262524";
-  const box2 = isDark ? "#3D3A36" : "#1C1B1A";
-  const box3 = isDark ? "#5C5954" : "#302E2C";
-  const boxS = isDark ? "#6B6862" : "#3A3836";
+  // Stone palette grays from theme
+  const box1 = isDark ? "#57534E" : "#262524";
+  const box2 = isDark ? "#44403C" : "#1C1B1A";
+  const box3 = isDark ? "#78716C" : "#302E2C";
+  const boxS = isDark ? "#78716C" : "#3A3836";
   const accent = isDark ? "#FEED01" : "#FFFFFF";
   const accentDim = isDark ? "#C9BE00" : "#C8C8C8";
-  const glassTint = isDark ? "#3D3A36" : "#1C1B1A";
+  const glassTint = isDark ? "#44403C" : "#1C1B1A";
 
-  // Geometry — wider, rounder bulbs
-  // cx=36, top frame 6–14, bottom frame 66–74, glass 14–66, waist at y=40
-  // Glass curves out to x=8 / x=64 at widest (y≈22 top, y≈58 bottom)
-  const cx = 36;
-  const glassL = 8; // left extent
-  const glassR = 64; // right extent
-  const waistL = 31; // waist left
-  const waistR = 41; // waist right
+  // Elegant hourglass geometry — cubic bezier curves for smooth S-shape
+  const cx = 30;
+  const W = 60; // viewBox width
+  const glassL = 8;
+  const glassR = 52;
+  const waistL = 26;
+  const waistR = 34;
+  const waistY = 40;
 
-  // Top sand: flat surface drops as topFill decreases
-  // At topFill=1 surface is at y=16, at topFill=0 no sand
-  const topSandY = 16 + (1 - topFill) * 22; // surface y position (16 to 38)
-  // Width of glass at topSandY — linear interpolation between frame width and waist
-  const topFrac = (topSandY - 14) / (40 - 14); // 0 at top, 1 at waist
-  const topSandHL = glassL + topFrac * (waistL - glassL); // left x
-  const topSandHR = glassR - topFrac * (glassR - waistR); // right x
+  // Glass silhouette paths (cubic beziers for elegant curves)
+  const glassLeftPath = `M${glassL} 14 C${glassL} 24, ${glassL + 2} 32, ${waistL} ${waistY} C${glassL + 2} 48, ${glassL} 56, ${glassL} 66`;
+  const glassRightPath = `M${glassR} 14 C${glassR} 24, ${glassR - 2} 32, ${waistR} ${waistY} C${glassR - 2} 48, ${glassR} 56, ${glassR} 66`;
+  const glassFullPath = `M${glassL} 14 C${glassL} 24, ${glassL + 2} 32, ${waistL} ${waistY} C${glassL + 2} 48, ${glassL} 56, ${glassL} 66 L${glassR} 66 C${glassR} 56, ${glassR - 2} 48, ${waistR} ${waistY} C${glassR - 2} 32, ${glassR} 24, ${glassR} 14 Z`;
 
-  // Bottom sand: surface rises as bottomFill increases
-  // At bottomFill=0 no sand, at bottomFill=1 surface is at y=42
-  const botSandY = 66 - bottomFill * 24; // surface y (66 to 42)
-  const botFrac = (66 - botSandY) / (66 - 40); // 0 at bottom, 1 at waist
-  const botSandHL = glassL + (1 - botFrac) * (waistL - glassL) * 0.3; // left x at surface
-  const botSandHR = glassR - (1 - botFrac) * (glassR - waistR) * 0.3; // right x at surface
+  // Top sand
+  const topSandY = 20 + (1 - topFill) * 18;
+  const topFrac = (topSandY - 14) / (waistY - 14);
+  const topSandHL = glassL + topFrac * (waistL - glassL);
+  const topSandHR = glassR - topFrac * (glassR - waistR);
+
+  // Bottom sand
+  const botSandY = 66 - bottomFill * 18;
+  const botFrac = (66 - botSandY) / (66 - waistY);
+  const botSandHL = glassL + (1 - botFrac) * (waistL - glassL) * 0.3;
+  const botSandHR = glassR - (1 - botFrac) * (glassR - waistR) * 0.3;
 
   return (
-    <svg width="72" height="80" viewBox="0 0 72 80" fill="none" aria-hidden="true">
+    <svg width={W} height="80" viewBox={`0 0 ${W} 80`} fill="none" aria-hidden="true">
       <defs>
         <linearGradient id="hgFrame" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={box3} />
           <stop offset="100%" stopColor={box1} />
         </linearGradient>
-        <linearGradient id="hgGlass" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor={glassTint} stopOpacity="0.6" />
-          <stop offset="100%" stopColor={glassTint} stopOpacity="0.3" />
+        <linearGradient id="hgGlass" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor={glassTint} stopOpacity="0.45" />
+          <stop offset="35%" stopColor={glassTint} stopOpacity="0.18" />
+          <stop offset="65%" stopColor={glassTint} stopOpacity="0.18" />
+          <stop offset="100%" stopColor={glassTint} stopOpacity="0.4" />
         </linearGradient>
         <linearGradient id="hgSand" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={accent} />
           <stop offset="100%" stopColor={accentDim} />
         </linearGradient>
+        <radialGradient id="hgSandBot" cx="0.5" cy="0" r="1">
+          <stop offset="0%" stopColor={accent} />
+          <stop offset="80%" stopColor={accentDim} />
+        </radialGradient>
         <clipPath id="hgTopClip">
-          <path d={`M${glassL} 14 Q${glassL} 28 ${waistL} 40 L${waistR} 40 Q${glassR} 28 ${glassR} 14 Z`} />
+          <path
+            d={`M${glassL} 14 C${glassL} 24, ${glassL + 2} 32, ${waistL} ${waistY} L${waistR} ${waistY} C${glassR - 2} 32, ${glassR} 24, ${glassR} 14 Z`}
+          />
         </clipPath>
         <clipPath id="hgBotClip">
-          <path d={`M${waistL} 40 Q${glassL} 52 ${glassL} 66 L${glassR} 66 Q${glassR} 52 ${waistR} 40 Z`} />
+          <path
+            d={`M${waistL} ${waistY} C${glassL + 2} 48, ${glassL} 56, ${glassL} 66 L${glassR} 66 C${glassR} 56, ${glassR - 2} 48, ${waistR} ${waistY} Z`}
+          />
         </clipPath>
       </defs>
 
       {/* Shadow */}
-      <ellipse cx="38" cy="77" rx="18" ry="2.5" fill="black" opacity="0.18" />
+      <ellipse cx={cx} cy="77" rx="15" ry="2.5" fill="black" opacity="0.18" />
 
       {/* ── Top frame ── */}
-      <rect x="6" y="2" width="60" height="12" rx="4" fill="url(#hgFrame)" />
-      <rect x="6" y="2" width="60" height="12" rx="4" stroke={boxS} strokeWidth="0.5" fill="none" />
-      <rect x="9" y="3" width="54" height="2.5" rx="1.25" fill="white" opacity={isDark ? "0.08" : "0.12"} />
+      <rect x="6" y="2" width="48" height="12" rx="5" fill="url(#hgFrame)" />
+      <rect x="6" y="2" width="48" height="12" rx="5" stroke={boxS} strokeWidth="0.5" fill="none" />
+      <rect x="9" y="3" width="42" height="2" rx="1" fill="white" opacity={isDark ? "0.08" : "0.12"} />
       <line
         x1="9"
         y1="12"
-        x2="63"
+        x2="51"
         y2="12"
         stroke={accentDim}
         strokeWidth="0.3"
         opacity="0.12"
         strokeDasharray="2.5 2"
       />
-      <circle cx="10" cy="8" r="2" fill={box2} stroke={boxS} strokeWidth="0.3" />
-      <circle cx="62" cy="8" r="2" fill={box2} stroke={boxS} strokeWidth="0.3" />
+      {/* Decorative knobs */}
+      <circle cx="10" cy="8" r="2.5" fill={box2} stroke={boxS} strokeWidth="0.4" />
+      <circle cx="10" cy="7.5" r="0.8" fill="white" opacity="0.06" />
+      <circle cx="50" cy="8" r="2.5" fill={box2} stroke={boxS} strokeWidth="0.4" />
+      <circle cx="50" cy="7.5" r="0.8" fill="white" opacity="0.06" />
 
       {/* ── Bottom frame ── */}
-      <rect x="6" y="66" width="60" height="12" rx="4" fill="url(#hgFrame)" />
-      <rect x="6" y="66" width="60" height="12" rx="4" stroke={boxS} strokeWidth="0.5" fill="none" />
-      <rect x="9" y="67" width="54" height="2.5" rx="1.25" fill="white" opacity={isDark ? "0.08" : "0.12"} />
+      <rect x="6" y="66" width="48" height="12" rx="5" fill="url(#hgFrame)" />
+      <rect x="6" y="66" width="48" height="12" rx="5" stroke={boxS} strokeWidth="0.5" fill="none" />
+      <rect x="9" y="67" width="42" height="2" rx="1" fill="white" opacity={isDark ? "0.08" : "0.12"} />
       <line
         x1="9"
         y1="68"
-        x2="63"
+        x2="51"
         y2="68"
         stroke={accentDim}
         strokeWidth="0.3"
         opacity="0.12"
         strokeDasharray="2.5 2"
       />
-      <circle cx="10" cy="72" r="2" fill={box2} stroke={boxS} strokeWidth="0.3" />
-      <circle cx="62" cy="72" r="2" fill={box2} stroke={boxS} strokeWidth="0.3" />
+      <circle cx="10" cy="72" r="2.5" fill={box2} stroke={boxS} strokeWidth="0.4" />
+      <circle cx="10" cy="71.5" r="0.8" fill="white" opacity="0.06" />
+      <circle cx="50" cy="72" r="2.5" fill={box2} stroke={boxS} strokeWidth="0.4" />
+      <circle cx="50" cy="71.5" r="0.8" fill="white" opacity="0.06" />
 
-      {/* ── Glass body ── wide curves via quadratic beziers */}
+      {/* ── Glass body — elegant S-curves ── */}
+      <path d={glassFullPath} fill="url(#hgGlass)" />
+      {/* Glass outline — left */}
+      <path d={glassLeftPath} stroke={boxS} strokeWidth="1.2" fill="none" opacity="0.7" />
+      {/* Glass outline — right */}
+      <path d={glassRightPath} stroke={boxS} strokeWidth="1.2" fill="none" opacity="0.7" />
+      {/* Left reflection highlight */}
       <path
-        d={`M${glassL} 14 Q${glassL} 28 ${waistL} 40 Q${glassL} 52 ${glassL} 66 L${glassR} 66 Q${glassR} 52 ${waistR} 40 Q${glassR} 28 ${glassR} 14 Z`}
-        fill="url(#hgGlass)"
-      />
-      {/* Glass outline */}
-      <path
-        d={`M${glassL} 14 Q${glassL} 28 ${waistL} 40 Q${glassL} 52 ${glassL} 66`}
-        stroke={boxS}
-        strokeWidth="1"
-        fill="none"
-        opacity="0.6"
-      />
-      <path
-        d={`M${glassR} 14 Q${glassR} 28 ${waistR} 40 Q${glassR} 52 ${glassR} 66`}
-        stroke={boxS}
-        strokeWidth="1"
-        fill="none"
-        opacity="0.6"
-      />
-      {/* Glass left highlight */}
-      <path
-        d={`M${glassL + 2} 16 Q${glassL + 2} 27 ${waistL - 1} 38`}
+        d={`M${glassL + 4} 18 C${glassL + 4} 26, ${glassL + 5} 32, ${waistL + 2} 37`}
         stroke="white"
-        strokeWidth="0.8"
+        strokeWidth="1.5"
         fill="none"
-        opacity={isDark ? "0.08" : "0.14"}
+        opacity={isDark ? "0.1" : "0.18"}
+        strokeLinecap="round"
       />
-      {/* Glass right shadow */}
+      {/* Subtle right reflection */}
       <path
-        d={`M${glassR - 2} 16 Q${glassR - 2} 27 ${waistR + 1} 38`}
-        stroke="black"
+        d={`M${glassR - 4} 18 C${glassR - 4} 26, ${glassR - 5} 32, ${waistR - 2} 37`}
+        stroke="white"
         strokeWidth="0.5"
         fill="none"
-        opacity="0.06"
+        opacity={isDark ? "0.04" : "0.08"}
+      />
+      {/* Bottom left reflection */}
+      <path
+        d={`M${glassL + 4} 62 C${glassL + 4} 56, ${glassL + 5} 50, ${waistL + 2} 43`}
+        stroke="white"
+        strokeWidth="1"
+        fill="none"
+        opacity={isDark ? "0.06" : "0.1"}
+        strokeLinecap="round"
       />
 
-      {/* ── Top sand (clipped to top bulb) ── */}
+      {/* ── Top sand ── */}
       {topFill > 0.02 && (
         <g clipPath="url(#hgTopClip)">
           <rect
             x={topSandHL}
             y={topSandY}
             width={topSandHR - topSandHL}
-            height={40 - topSandY}
+            height={waistY - topSandY}
             fill="url(#hgSand)"
-            opacity="0.8"
+            opacity="0.9"
           />
-          {/* Surface highlight */}
           <line
             x1={topSandHL + 2}
             y1={topSandY + 0.5}
             x2={topSandHR - 2}
             y2={topSandY + 0.5}
             stroke="white"
-            strokeWidth="0.6"
-            opacity="0.18"
+            strokeWidth="0.8"
+            opacity="0.25"
+          />
+          <path
+            d={`M${topSandHL} ${topSandY} Q${cx} ${topSandY + 3} ${topSandHR} ${topSandY}`}
+            stroke={accentDim}
+            strokeWidth="0.4"
+            fill="none"
+            opacity="0.2"
           />
         </g>
       )}
 
-      {/* ── Bottom sand (clipped to bottom bulb) ── */}
+      {/* ── Bottom sand — cone pile ── */}
       {bottomFill > 0.02 && (
         <g clipPath="url(#hgBotClip)">
           <rect
             x={botSandHL}
-            y={botSandY}
+            y={botSandY + 3}
             width={botSandHR - botSandHL}
-            height={66 - botSandY}
-            fill="url(#hgSand)"
-            opacity="0.8"
+            height={66 - botSandY - 3}
+            fill="url(#hgSandBot)"
+            opacity="0.9"
           />
-          {/* Surface highlight */}
-          <line
-            x1={botSandHL + 2}
-            y1={botSandY + 0.5}
-            x2={botSandHR - 2}
-            y2={botSandY + 0.5}
+          <path
+            d={`M${cx - 8} ${botSandY + 3} Q${cx} ${botSandY - 1} ${cx + 8} ${botSandY + 3}`}
+            fill={accent}
+            opacity="0.85"
+          />
+          <path
+            d={`M${cx - 5} ${botSandY + 2} Q${cx} ${botSandY} ${cx + 5} ${botSandY + 2}`}
             stroke="white"
             strokeWidth="0.6"
-            opacity="0.12"
+            fill="none"
+            opacity="0.2"
           />
         </g>
       )}
 
-      {/* ── Sand stream through waist ── */}
-      <line x1={cx} y1="37" x2={cx} y2="43" stroke={accent} strokeWidth="0.6" opacity="0.5">
-        <animate attributeName="opacity" values="0.3;0.6;0.3" dur="0.8s" repeatCount="indefinite" />
+      {/* ── Sand stream ── */}
+      <line x1={cx} y1="36" x2={cx} y2="46" stroke={accent} strokeWidth="1.2" strokeLinecap="round" opacity="0.7">
+        <animate attributeName="opacity" values="0.5;0.8;0.5" dur="1s" repeatCount="indefinite" />
       </line>
-      {/* Tiny grain at stream tip */}
-      <circle cx={cx} cy="43" r="0.6" fill={accent} opacity="0.6">
-        <animate attributeName="cy" values="43;50" dur="0.7s" repeatCount="indefinite" />
-        <animate attributeName="opacity" values="0.6;0" dur="0.7s" repeatCount="indefinite" />
+      <line x1={cx} y1="37" x2={cx} y2="45" stroke={accent} strokeWidth="3" strokeLinecap="round" opacity="0.08">
+        <animate attributeName="opacity" values="0.05;0.12;0.05" dur="1s" repeatCount="indefinite" />
+      </line>
+      {/* Falling grains */}
+      <circle cx={cx} cy="46" r="1" fill={accent} opacity="0.8">
+        <animate attributeName="cy" values="46;56" dur="0.6s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.8;0" dur="0.6s" repeatCount="indefinite" />
+        <animate attributeName="r" values="1;0.4" dur="0.6s" repeatCount="indefinite" />
+      </circle>
+      <circle cx={cx - 1} cy="44" r="0.7" fill={accent} opacity="0.6">
+        <animate attributeName="cy" values="44;54" dur="0.7s" begin="0.2s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.6;0" dur="0.7s" begin="0.2s" repeatCount="indefinite" />
+      </circle>
+      <circle cx={cx + 1} cy="45" r="0.5" fill={accent} opacity="0.5">
+        <animate attributeName="cy" values="45;52" dur="0.5s" begin="0.4s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.5;0" dur="0.5s" begin="0.4s" repeatCount="indefinite" />
+      </circle>
+      {/* Splash particles */}
+      <circle cx={cx - 3} cy={botSandY + 2} r="0.5" fill={accent} opacity="0.4">
+        <animate attributeName="cx" values={`${cx - 1};${cx - 5}`} dur="0.8s" repeatCount="indefinite" />
+        <animate attributeName="cy" values={`${botSandY + 2};${botSandY}`} dur="0.8s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.5;0" dur="0.8s" repeatCount="indefinite" />
+      </circle>
+      <circle cx={cx + 3} cy={botSandY + 2} r="0.5" fill={accent} opacity="0.4">
+        <animate attributeName="cx" values={`${cx + 1};${cx + 5}`} dur="0.8s" begin="0.3s" repeatCount="indefinite" />
+        <animate
+          attributeName="cy"
+          values={`${botSandY + 2};${botSandY}`}
+          dur="0.8s"
+          begin="0.3s"
+          repeatCount="indefinite"
+        />
+        <animate attributeName="opacity" values="0.5;0" dur="0.8s" begin="0.3s" repeatCount="indefinite" />
       </circle>
     </svg>
   );
@@ -742,7 +809,7 @@ function UrgencyGraphic({ daysElapsed, daysLeft, isDark }: { daysElapsed: number
   return (
     <div
       className="relative flex items-center justify-center"
-      style={{ width: 120, height: 110 }}
+      style={{ width: 130, height: 120 }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -750,9 +817,9 @@ function UrgencyGraphic({ daysElapsed, daysLeft, isDark }: { daysElapsed: number
         className="absolute"
         style={{
           opacity: hovered ? 0 : 1,
-          transform: hovered ? "scale(0.86)" : "scale(1)",
+          transform: hovered ? "scale(0.92) translateY(4px)" : "scale(1) translateY(0)",
           animation: hovered ? "none" : "trialBob 3.2s ease-in-out infinite",
-          transition: "opacity 0.28s cubic-bezier(.4,0,.2,1), transform 0.32s cubic-bezier(.4,0,.2,1)",
+          transition: "opacity 0.4s ease-out, transform 0.45s cubic-bezier(.4,0,.2,1)",
         }}
       >
         <CalendarGraphic daysElapsed={daysElapsed} isDark={isDark} />
@@ -761,10 +828,11 @@ function UrgencyGraphic({ daysElapsed, daysLeft, isDark }: { daysElapsed: number
         className="absolute"
         style={{
           opacity: hovered ? 1 : 0,
-          transform: hovered ? "scale(1)" : "scale(0.88)",
+          transform: hovered ? "scale(1) translateY(0)" : "scale(0.92) translateY(-4px)",
           animation: hovered ? "trialBob 3.2s ease-in-out infinite" : "none",
-          transition:
-            "opacity 0.28s cubic-bezier(.34,1.3,.64,1) 0.06s, transform 0.36s cubic-bezier(.34,1.3,.64,1) 0.06s",
+          transition: hovered
+            ? "opacity 0.4s ease-out 0.1s, transform 0.5s cubic-bezier(.22,1,.36,1) 0.1s"
+            : "opacity 0.3s ease-in, transform 0.35s ease-in",
         }}
       >
         <HourglassGraphic daysLeft={daysLeft} isDark={isDark} />
@@ -1009,9 +1077,9 @@ export function TrialBannerInner({
           }}
         />
 
-        <div className="relative z-10 flex items-center px-5 py-4">
+        <div className="relative z-10 flex items-center px-8 py-4">
           {/* Graphic zone */}
-          <div className="flex w-[120px] shrink-0 items-center justify-center">
+          <div className="flex w-[130px] shrink-0 items-center justify-center">
             <UrgencyGraphic daysElapsed={daysElapsed} daysLeft={daysLeft} isDark={isDark} />
           </div>
 
@@ -1047,6 +1115,7 @@ export function TrialBannerInner({
                 style={{
                   height: 3,
                   width: "100%",
+                  maxWidth: 300,
                   backgroundColor: isDark ? "rgba(254,237,1,0.08)" : "rgba(0,0,0,0.06)",
                 }}
               >
