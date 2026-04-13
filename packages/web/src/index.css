@@ -92,6 +92,99 @@
   animation: search-expand 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
+/* ── Trial banner gift box bob animation ── */
+@keyframes trialBob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+/* ── Trial banner confetti idle drift ── */
+@keyframes trialConfettiDrift {
+  0% {
+    transform: translateY(-20px) rotate(var(--r, 0deg));
+    opacity: 0;
+  }
+  10% {
+    opacity: var(--o, 0.18);
+  }
+  90% {
+    opacity: var(--o, 0.18);
+  }
+  100% {
+    transform: translateY(calc(var(--fall, 120px))) rotate(calc(var(--r, 0deg) + 60deg));
+    opacity: 0;
+  }
+}
+
+/* ── Trial banner confetti pop on hover ── */
+@keyframes trialConfettiPop {
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(0);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+    transform: translate(var(--tx, 0px), var(--ty, -20px)) rotate(var(--r, 45deg)) scale(calc(var(--s, 1) * 1.2));
+  }
+  50% {
+    opacity: 0.9;
+    transform: translate(calc(var(--tx, 0px) * 1.15), calc(var(--ty, -20px) - 8px))
+      rotate(calc(var(--r, 45deg) + 60deg)) scale(var(--s, 1));
+  }
+  100% {
+    transform: translate(calc(var(--tx, 0px) * 1.5), calc(var(--ty, -20px) + 40px))
+      rotate(calc(var(--r, 45deg) + 180deg)) scale(calc(var(--s, 1) * 0.4));
+    opacity: 0;
+  }
+}
+
+/* ── Trial banner ribbon shimmer ── */
+@keyframes trialShimmer {
+  0% {
+    transform: translateX(-100%) skewX(-15deg);
+  }
+  100% {
+    transform: translateX(300%) skewX(-15deg);
+  }
+}
+
+/* ── Trial banner box shine sweep ── */
+@keyframes trialBoxShine {
+  0%,
+  100% {
+    transform: rotate(-20deg) translateX(-30px);
+    opacity: 0;
+  }
+  40% {
+    opacity: 0.12;
+  }
+  50% {
+    transform: rotate(-20deg) translateX(90px);
+    opacity: 0.12;
+  }
+  60% {
+    opacity: 0;
+  }
+}
+
+/* ── Trial banner sparkle twinkle ── */
+@keyframes trialSparkle {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
 /* ── ConnectionsBanner icon parallax transition ── */
 .cb-icon {
   transition: transform 0.8s ease-out;
