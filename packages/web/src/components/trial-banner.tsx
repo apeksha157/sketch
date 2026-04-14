@@ -5,14 +5,20 @@
  *   A (days 1–10): Celebration — gift box with confetti, dismissible per session
  *   B (days 11–15): Urgency — calendar/hourglass, non-dismissible, CTA to /plans
  *
+ * Ticker (compact bar) shows on all dashboard pages except /plans.
+ *
  * Preview (append to any dashboard URL):
- *   ?trialPreview=celebration
- *   ?trialPreview=urgency
+ *   ?trialPreview=celebration        → ticker, celebration state
+ *   ?trialPreview=urgency            → ticker, urgency state
+ *   ?trialPreview=full-celebration   → full banner, celebration state
+ *   ?trialPreview=full-urgency       → full banner, urgency state
+ *
+ * Note: Banner is hidden on /plans since that page has its own pricing context.
  */
 import type { TrialBannerState } from "@/lib/use-trial-banner";
 import { useTrialBanner } from "@/lib/use-trial-banner";
 import { useTheme } from "@sketch/ui/hooks/use-theme";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -1182,24 +1188,186 @@ export function TrialBannerInner({
 }
 
 // ---------------------------------------------------------------------------
+// Ticker banner — compact strip for non-plans pages
+// ---------------------------------------------------------------------------
+
+function TrialTickerBanner({
+  state,
+  daysElapsed,
+  daysLeft,
+  dismissed,
+  onDismiss,
+}: {
+  state: TrialBannerState;
+  daysElapsed: number;
+  daysLeft: number;
+  dismissed: boolean;
+  onDismiss: () => void;
+}) {
+  const { resolvedTheme } = useTheme();
+  const navigate = useNavigate();
+  const isDark = resolvedTheme === "dark";
+
+  if (state === "none") return null;
+  if (state === "celebration" && dismissed) return null;
+
+  const isCelebration = state === "celebration";
+
+  return (
+    <div className="px-6 pt-3">
+      <div
+        className="relative flex items-center gap-4 rounded-lg px-4 py-2.5"
+        style={{
+          background: isDark
+            ? "linear-gradient(90deg, #2A2000 0%, #1F1800 50%, #2A2000 100%)"
+            : "linear-gradient(90deg, #FEED01 0%, #F5E400 50%, #EDD900 100%)",
+          border: `1px solid ${isDark ? "rgba(254,237,1,0.12)" : "rgba(0,0,0,0.08)"}`,
+        }}
+      >
+        {/* Trial status text */}
+        <span
+          style={{
+            fontFamily: "'Gloria Hallelujah', cursive",
+            fontSize: 14,
+            color: isDark ? "#FEED01" : "#292524",
+          }}
+        >
+          {isCelebration ? "Free trial started" : "Trial ending soon"}
+        </span>
+
+        {/* Progress bar */}
+        <div className="flex items-center gap-2">
+          <div
+            className="overflow-hidden rounded-full"
+            style={{
+              height: 3,
+              width: 100,
+              backgroundColor: isDark ? "rgba(254,237,1,0.08)" : "rgba(0,0,0,0.06)",
+            }}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${Math.min((daysElapsed / 15) * 100, 100)}%`,
+                backgroundColor: isDark ? "#FEED01" : "#292524",
+                opacity: 0.6,
+              }}
+            />
+          </div>
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              fontFamily: "'IBM Plex Mono', monospace",
+              color: isDark ? "rgba(254,237,1,0.5)" : "rgba(0,0,0,0.4)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {daysElapsed}/15
+          </span>
+        </div>
+
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Days pill */}
+        <span
+          className="inline-flex items-center rounded-full px-2.5 py-0.5"
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            fontFamily: "'IBM Plex Mono', monospace",
+            letterSpacing: "0.05em",
+            textTransform: "uppercase" as const,
+            backgroundColor: isDark ? "rgba(254,237,1,0.16)" : "rgba(0,0,0,0.08)",
+            color: isDark ? "#FEED01" : "#292524",
+          }}
+        >
+          {isCelebration ? "15-day trial" : `${daysLeft} day${daysLeft !== 1 ? "s" : ""} left`}
+        </span>
+
+        {/* CTA */}
+        <button
+          type="button"
+          onClick={() => navigate({ to: "/plans" })}
+          className="inline-flex items-center gap-1 rounded-md px-3 py-1 font-semibold transition-all hover:shadow-sm active:scale-[0.98]"
+          style={{
+            fontFamily: "var(--font-sans)",
+            fontSize: 11,
+            backgroundColor: isDark ? "#FEED01" : "#1C1917",
+            color: isDark ? "#1C1917" : "#FEF3C7",
+            whiteSpace: "nowrap",
+          }}
+        >
+          View plans <span>&rarr;</span>
+        </button>
+
+        {/* Dismiss (celebration only) */}
+        {isCelebration && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="flex h-5 w-5 items-center justify-center rounded transition-opacity hover:opacity-100"
+            style={{ opacity: 0.5 }}
+            title="Dismiss"
+          >
+            <svg width="8" height="8" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path
+                d="M1 1L9 9M9 1L1 9"
+                stroke={isDark ? "rgba(254,237,1,0.5)" : "#78716C"}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main export — wired to hook, with ?trialPreview= override
 // ---------------------------------------------------------------------------
 
 const PREVIEW_DEFAULTS: Record<string, { daysElapsed: number }> = {
   celebration: { daysElapsed: 1 },
   urgency: { daysElapsed: 12 },
+  "full-celebration": { daysElapsed: 1 },
+  "full-urgency": { daysElapsed: 12 },
 };
 
 export function TrialBanner() {
   const trial = useTrialBanner();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
+  const location = useLocation();
   const preview = typeof search.trialPreview === "string" ? search.trialPreview : null;
 
+  // Hide banner on the plans page — it already has pricing context
+  const isPlansPage = location.pathname === "/plans" || location.pathname.startsWith("/plans/");
+  if (isPlansPage) {
+    return null;
+  }
+
+  // Preview mode — full banner (append ?trialPreview=celebration or ?trialPreview=urgency to any page)
   if (preview && preview in PREVIEW_DEFAULTS) {
     const { daysElapsed } = PREVIEW_DEFAULTS[preview];
     const daysLeft = 15 - daysElapsed;
+    // ?trialPreview=full-celebration or ?trialPreview=full-urgency for full banner
+    if (preview.startsWith("full-")) {
+      const actualState = preview.replace("full-", "") as TrialBannerState;
+      return (
+        <TrialBannerInner
+          state={actualState}
+          daysElapsed={PREVIEW_DEFAULTS[actualState]?.daysElapsed ?? daysElapsed}
+          daysLeft={15 - (PREVIEW_DEFAULTS[actualState]?.daysElapsed ?? daysElapsed)}
+          dismissed={trial.dismissed}
+          onDismiss={trial.dismiss}
+        />
+      );
+    }
     return (
-      <TrialBannerInner
+      <TrialTickerBanner
         state={preview as TrialBannerState}
         daysElapsed={daysElapsed}
         daysLeft={daysLeft}
@@ -1209,8 +1377,9 @@ export function TrialBanner() {
     );
   }
 
+  // Default — ticker on all pages except plans
   return (
-    <TrialBannerInner
+    <TrialTickerBanner
       state={trial.state}
       daysElapsed={trial.daysElapsed}
       daysLeft={trial.daysLeft}
