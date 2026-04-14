@@ -30,7 +30,8 @@ function PreviewShell({
   view,
   lowCredit,
   plan = "startups",
-}: { view: PricingView; lowCredit: boolean; plan?: "startups" | "business" | null }) {
+  promo = false,
+}: { view: PricingView; lowCredit: boolean; plan?: "startups" | "business" | null; promo?: boolean }) {
   return (
     <SidebarProvider>
       {/* biome-ignore lint/a11y/useValidAriaRole: role is a component prop, not an ARIA attribute */}
@@ -38,7 +39,12 @@ function PreviewShell({
       <SidebarInset>
         <SidebarTrigger className="absolute left-3 top-3 z-20" />
         <main className="flex-1 overflow-auto pt-[52px]">
-          <PlansPageContent viewOverride={view} lowCreditOverride={lowCredit} planOverride={plan} />
+          <PlansPageContent
+            viewOverride={view}
+            lowCreditOverride={lowCredit}
+            planOverride={plan}
+            promoOverride={promo}
+          />
         </main>
       </SidebarInset>
     </SidebarProvider>
@@ -94,6 +100,34 @@ export const plansAdminBizLowRoute = createRoute({
   component: () => <PreviewShell view="admin" lowCredit={true} plan="business" />,
 });
 
+// Promo — new user
+export const plansPromoNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/plans/promo-new",
+  component: () => <PreviewShell view="new" lowCredit={false} plan={null} promo />,
+});
+
+// Promo — member startups
+export const plansPromoMemberRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/plans/promo-member",
+  component: () => <PreviewShell view="member" lowCredit={false} plan="startups" promo />,
+});
+
+// Promo — admin startups
+export const plansPromoAdminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/plans/promo-admin",
+  component: () => <PreviewShell view="admin" lowCredit={false} plan="startups" promo />,
+});
+
+// Promo — admin business
+export const plansPromoAdminBizRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/plans/promo-admin-biz",
+  component: () => <PreviewShell view="admin" lowCredit={false} plan="business" promo />,
+});
+
 /* ─── Types & mock data ─── */
 
 type PricingView = "new" | "member" | "admin";
@@ -128,6 +162,42 @@ const MOCK_WORKSPACE_BIZ_LOW = {
 
 const DAYS_ELAPSED = 17;
 const DAYS_UNTIL_RENEWAL = 14;
+
+/* ─── Promo state ─── */
+
+const MOCK_PROMO = {
+  active: true,
+  endDate: "2026-07-14",
+};
+
+const MOCK_PROMO_WORKSPACE = {
+  plan: "startups" as "startups" | "business" | null,
+  credits: { total: 5000, remaining: 3100, used: 1900 },
+  renewalDate: "May 1, 2026",
+  members: 8,
+  tasksRun: 342,
+  activeMemberCount: 6,
+  memberCount: 8,
+};
+
+const MOCK_PROMO_WORKSPACE_BIZ = {
+  plan: "business" as "startups" | "business" | null,
+  credits: { total: 15000, remaining: 9200, used: 5800 },
+  renewalDate: "May 1, 2026",
+  members: 22,
+  tasksRun: 1247,
+  activeMemberCount: 18,
+  memberCount: 22,
+};
+
+function formatPromoDate(isoDate: string) {
+  const d = new Date(isoDate);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function promoDaysRemaining(endDate: string) {
+  return Math.ceil((new Date(endDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+}
 
 interface CreditTier {
   credits: number;
@@ -178,31 +248,44 @@ export function PlansPageContent({
   viewOverride,
   lowCreditOverride,
   planOverride,
+  promoOverride,
 }: {
   userRole?: "admin" | "member";
   viewOverride?: PricingView;
   lowCreditOverride?: boolean;
   planOverride?: "startups" | "business" | null;
+  promoOverride?: boolean;
 }) {
   const topUpRef = useRef<HTMLDivElement>(null);
+
+  const promoActive = promoOverride ?? MOCK_PROMO.active;
+  const promoEndDate = MOCK_PROMO.endDate;
+  const promoExpiring = promoActive && promoDaysRemaining(promoEndDate) <= 10 && userRole === "admin";
 
   const plan = planOverride ?? "startups";
   const useLowCredit = lowCreditOverride ?? false;
   const isBiz = plan === "business";
-  const workspace = isBiz
-    ? useLowCredit
-      ? MOCK_WORKSPACE_BIZ_LOW
-      : MOCK_WORKSPACE_BIZ
-    : useLowCredit
-      ? MOCK_WORKSPACE_LOW
-      : MOCK_WORKSPACE;
+
+  // Use promo workspaces when promo is active
+  const workspace = promoActive
+    ? isBiz
+      ? MOCK_PROMO_WORKSPACE_BIZ
+      : MOCK_PROMO_WORKSPACE
+    : isBiz
+      ? useLowCredit
+        ? MOCK_WORKSPACE_BIZ_LOW
+        : MOCK_WORKSPACE_BIZ
+      : useLowCredit
+        ? MOCK_WORKSPACE_LOW
+        : MOCK_WORKSPACE;
+
   const derivedView: PricingView = !workspace.plan ? "new" : userRole === "admin" ? "admin" : "member";
   const view = viewOverride ?? derivedView;
 
   const dailyBurnRate = Math.round(workspace.credits.used / DAYS_ELAPSED);
   const daysRemaining = dailyBurnRate > 0 ? Math.round(workspace.credits.remaining / dailyBurnRate) : 0;
   const creditPct = workspace.credits.remaining / workspace.credits.total;
-  const isLowCredit = creditPct <= 0.2;
+  const isLowCredit = !promoActive && creditPct <= 0.2;
   const suggestedTopUp = getSuggestedTopUp(dailyBurnRate, workspace.credits.remaining);
 
   return (
@@ -212,15 +295,24 @@ export function PlansPageContent({
       <p className="mt-2 text-sm text-muted-foreground">Manage your workspace plan and credit usage.</p>
 
       {/* 2. Credit overview — member & admin */}
-      {view !== "new" && (
-        <CreditOverview workspace={workspace} daysRemaining={daysRemaining} isLowCredit={isLowCredit} />
-      )}
+      {view !== "new" &&
+        (promoActive ? (
+          <PromoCreditOverview workspace={workspace as typeof MOCK_PROMO_WORKSPACE} promoEndDate={promoEndDate} />
+        ) : (
+          <CreditOverview workspace={workspace} daysRemaining={daysRemaining} isLowCredit={isLowCredit} />
+        ))}
 
       {/* 4. Plan cards */}
-      <PlanCards view={view} currentPlan={workspace.plan} renewalDate={workspace.renewalDate} />
+      <PlanCards
+        view={view}
+        currentPlan={workspace.plan}
+        renewalDate={workspace.renewalDate}
+        promoActive={promoActive}
+        promoEndDate={promoEndDate}
+      />
 
-      {/* 5. Top-up + what uses credits */}
-      {(view === "new" || view === "admin") && (
+      {/* 5. Top-up + what uses credits — hidden during promo */}
+      {!promoActive && (view === "new" || view === "admin") && (
         <div className="mt-8 rounded-xl border border-border bg-card">
           <TopUpInteractive ref={topUpRef} />
           <div className="mx-6 flex items-center gap-2.5 border-t border-border py-3.5">
@@ -301,17 +393,86 @@ function CreditOverview({
   );
 }
 
+/* ─── Promo credit overview (replaces CreditOverview during promo) ─── */
+
+function PromoCreditOverview({
+  workspace,
+  promoEndDate,
+}: {
+  workspace: typeof MOCK_PROMO_WORKSPACE;
+  promoEndDate: string;
+}) {
+  const labelCls = "font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground";
+  const numCls = "mt-1.5 text-3xl font-bold leading-none tracking-[-1px] text-foreground";
+  const subCls = "mt-1 whitespace-nowrap text-[11px] text-muted-foreground";
+  const daysLeft = promoDaysRemaining(promoEndDate);
+
+  return (
+    <div className="mt-6 rounded-xl border border-border bg-card">
+      <div className="grid grid-cols-3 px-1 py-4">
+        {/* Credits */}
+        <div className="flex flex-col px-5">
+          <p className={labelCls}>Credits</p>
+          <p className={numCls}>∞</p>
+          <p className={subCls}>Unlimited during launch</p>
+        </div>
+
+        {/* Tasks run */}
+        <div className="flex flex-col border-l border-border px-5">
+          <p className={labelCls}>Tasks run</p>
+          <p className={numCls}>{workspace.tasksRun.toLocaleString()}</p>
+          <p className={subCls}>since you joined</p>
+        </div>
+
+        {/* Promo ends */}
+        <div className="flex flex-col border-l border-border px-5">
+          <p className={labelCls}>Promo ends</p>
+          <p className={numCls}>{daysLeft} days</p>
+          <p className={subCls}>{formatPromoDate(promoEndDate)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Promo unlimited chip (replaces CreditTierSelect during promo) ─── */
+
+function PromoUnlimitedChip({ promoEndDate }: { promoEndDate: string }) {
+  return (
+    <div className="flex w-full items-center rounded-[14px] border border-border bg-muted px-4 py-[9px]">
+      <span className="text-[13px] font-medium text-foreground">∞ Unlimited credits</span>
+      <span className="ml-auto font-mono text-[11px] text-muted-foreground">
+        Free until {formatPromoDate(promoEndDate)}
+      </span>
+    </div>
+  );
+}
+
 /* ─── Plan cards ─── */
 
 function PlanCards({
   view,
   currentPlan,
   renewalDate,
-}: { view: PricingView; currentPlan: string | null; renewalDate: string }) {
+  promoActive,
+  promoEndDate,
+}: { view: PricingView; currentPlan: string | null; renewalDate: string; promoActive: boolean; promoEndDate: string }) {
   return (
     <div className="mt-8 grid grid-cols-2 gap-4">
-      <StartupsCard view={view} isCurrent={currentPlan === "startups"} renewalDate={renewalDate} />
-      <BusinessCard view={view} isCurrent={currentPlan === "business"} renewalDate={renewalDate} />
+      <StartupsCard
+        view={view}
+        isCurrent={currentPlan === "startups"}
+        renewalDate={renewalDate}
+        promoActive={promoActive}
+        promoEndDate={promoEndDate}
+      />
+      <BusinessCard
+        view={view}
+        isCurrent={currentPlan === "business"}
+        renewalDate={renewalDate}
+        promoActive={promoActive}
+        promoEndDate={promoEndDate}
+      />
     </div>
   );
 }
@@ -330,12 +491,14 @@ function StartupsCard({
   view,
   isCurrent,
   renewalDate,
-}: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
+  promoActive,
+  promoEndDate,
+}: { view: PricingView; isCurrent: boolean; renewalDate: string; promoActive: boolean; promoEndDate: string }) {
   const [selectedTier, setSelectedTier] = useState<number | null>(0);
   const tier = selectedTier != null ? STARTUPS_TIERS[selectedTier] : null;
-  const addOnPrice = tier?.price ?? 0;
+  const addOnPrice = promoActive ? 0 : (tier?.price ?? 0);
   const totalPrice = STARTUPS_BASE_PRICE + addOnPrice;
-  const totalCredits = tier?.credits ?? 0;
+  const totalCredits = promoActive ? 0 : (tier?.credits ?? 0);
   const showBadge = isCurrent && view !== "new";
 
   return (
@@ -363,7 +526,11 @@ function StartupsCard({
         <span className="text-[13px] text-muted-foreground">/month</span>
       </div>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-        {totalCredits > 0 ? `$${(totalPrice / totalCredits).toFixed(3)} per credit` : "Add credits below"}
+        {promoActive
+          ? "Unlimited credits included"
+          : totalCredits > 0
+            ? `$${(totalPrice / totalCredits).toFixed(3)} per credit`
+            : "Add credits below"}
       </p>
 
       {/* Monthly credits label + selector */}
@@ -371,7 +538,11 @@ function StartupsCard({
         <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
           Monthly credits
         </p>
-        <CreditTierSelect tiers={STARTUPS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
+        {promoActive ? (
+          <PromoUnlimitedChip promoEndDate={promoEndDate} />
+        ) : (
+          <CreditTierSelect tiers={STARTUPS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
+        )}
       </div>
 
       {/* CTA or renewal info */}
@@ -419,13 +590,15 @@ function BusinessCard({
   view,
   isCurrent,
   renewalDate,
-}: { view: PricingView; isCurrent: boolean; renewalDate: string }) {
+  promoActive,
+  promoEndDate,
+}: { view: PricingView; isCurrent: boolean; renewalDate: string; promoActive: boolean; promoEndDate: string }) {
   const showCurrentBadge = isCurrent && view !== "new";
   const [selectedTier, setSelectedTier] = useState<number | null>(0);
   const tier = selectedTier != null ? BUSINESS_TIERS[selectedTier] : null;
-  const addOnPrice = tier?.price ?? 0;
+  const addOnPrice = promoActive ? 0 : (tier?.price ?? 0);
   const totalPrice = BUSINESS_BASE_PRICE + addOnPrice;
-  const totalCredits = tier?.credits ?? 0;
+  const totalCredits = promoActive ? 0 : (tier?.credits ?? 0);
 
   return (
     <div
@@ -459,7 +632,11 @@ function BusinessCard({
         <span className="text-[13px] text-muted-foreground">/month</span>
       </div>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-        {totalCredits > 0 ? `$${(totalPrice / totalCredits).toFixed(3)} per credit` : "Add credits below"}
+        {promoActive
+          ? "Unlimited credits included"
+          : totalCredits > 0
+            ? `$${(totalPrice / totalCredits).toFixed(3)} per credit`
+            : "Add credits below"}
       </p>
 
       {/* Monthly credits label + selector */}
@@ -467,7 +644,11 @@ function BusinessCard({
         <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
           Monthly credits
         </p>
-        <CreditTierSelect tiers={BUSINESS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
+        {promoActive ? (
+          <PromoUnlimitedChip promoEndDate={promoEndDate} />
+        ) : (
+          <CreditTierSelect tiers={BUSINESS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
+        )}
       </div>
 
       {/* CTA or renewal info */}

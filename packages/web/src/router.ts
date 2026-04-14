@@ -16,6 +16,10 @@ import {
   plansMemberBizRoute,
   plansMemberStartupsRoute,
   plansNewRoute,
+  plansPromoAdminBizRoute,
+  plansPromoAdminRoute,
+  plansPromoMemberRoute,
+  plansPromoNewRoute,
   plansRoute,
 } from "./routes/plans";
 import { rootRoute } from "./routes/root";
@@ -37,6 +41,10 @@ const routeTree = rootRoute.addChildren([
   plansMemberBizRoute,
   plansAdminBizRoute,
   plansAdminBizLowRoute,
+  plansPromoNewRoute,
+  plansPromoMemberRoute,
+  plansPromoAdminRoute,
+  plansPromoAdminBizRoute,
   indexRoute,
   dashboardRoute.addChildren([
     channelsRoute,
