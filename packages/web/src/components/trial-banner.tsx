@@ -6,19 +6,17 @@
  *   B (days 11–15): Urgency — calendar/hourglass, non-dismissible, CTA to /plans
  *
  * Ticker (compact bar) shows on all dashboard pages except /plans.
+ * Full banner shows on /plans.
  *
- * Preview (append to any dashboard URL):
- *   ?trialPreview=celebration        → ticker, celebration state
- *   ?trialPreview=urgency            → ticker, urgency state
- *   ?trialPreview=full-celebration   → full banner, celebration state
- *   ?trialPreview=full-urgency       → full banner, urgency state
- *
- * Note: Banner is hidden on /plans since that page has its own pricing context.
+ * Preview — append ?trial=<day> to any page:
+ *   ?trial=1   → day 1 (celebration)
+ *   ?trial=12  → day 12 (urgency)
  */
 import type { TrialBannerState } from "@/lib/use-trial-banner";
 import { useTrialBanner } from "@/lib/use-trial-banner";
+import { GiftIcon, HourglassIcon } from "@phosphor-icons/react";
 import { useTheme } from "@sketch/ui/hooks/use-theme";
-import { useLocation, useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -1214,26 +1212,37 @@ function TrialTickerBanner({
   const isCelebration = state === "celebration";
 
   return (
-    <div className="px-6 pt-3">
+    <div className="flex-1 min-w-0">
       <div
-        className="relative flex items-center gap-4 rounded-lg px-4 py-2.5"
+        className="relative flex items-center gap-4 rounded-lg px-4 py-2"
         style={{
-          background: isDark
-            ? "linear-gradient(90deg, #2A2000 0%, #1F1800 50%, #2A2000 100%)"
-            : "linear-gradient(90deg, #FEED01 0%, #F5E400 50%, #EDD900 100%)",
-          border: `1px solid ${isDark ? "rgba(254,237,1,0.12)" : "rgba(0,0,0,0.08)"}`,
+          background: isCelebration
+            ? isDark
+              ? "linear-gradient(90deg, #2A2000 0%, #1F1800 50%, #2A2000 100%)"
+              : "linear-gradient(90deg, #FEED01 0%, #F5E400 50%, #EDD900 100%)"
+            : "linear-gradient(90deg, #1C1917 0%, #292524 50%, #1C1917 100%)",
+          border: `1px solid ${
+            isCelebration ? (isDark ? "rgba(254,237,1,0.12)" : "rgba(0,0,0,0.08)") : isDark ? "#44403C" : "#44403C"
+          }`,
         }}
       >
-        {/* Trial status text */}
-        <span
-          style={{
-            fontFamily: "'Gloria Hallelujah', cursive",
-            fontSize: 14,
-            color: isDark ? "#FEED01" : "#292524",
-          }}
-        >
-          {isCelebration ? "Free trial started" : "Trial ending soon"}
-        </span>
+        {/* Icon + status text */}
+        <div className="flex items-center gap-2">
+          {isCelebration ? (
+            <GiftIcon size={16} weight="fill" color={isDark ? "#FEED01" : "#292524"} />
+          ) : (
+            <HourglassIcon size={16} weight="fill" color="#FEED01" />
+          )}
+          <span
+            style={{
+              fontFamily: "'Gloria Hallelujah', cursive",
+              fontSize: 14,
+              color: isCelebration ? (isDark ? "#FEED01" : "#292524") : "#FEED01",
+            }}
+          >
+            {isCelebration ? "Free trial" : "Trial ending"}
+          </span>
+        </div>
 
         {/* Progress bar */}
         <div className="flex items-center gap-2">
@@ -1242,15 +1251,19 @@ function TrialTickerBanner({
             style={{
               height: 3,
               width: 100,
-              backgroundColor: isDark ? "rgba(254,237,1,0.08)" : "rgba(0,0,0,0.06)",
+              backgroundColor: isCelebration
+                ? isDark
+                  ? "rgba(254,237,1,0.08)"
+                  : "rgba(0,0,0,0.06)"
+                : "rgba(254,237,1,0.15)",
             }}
           >
             <div
               className="h-full rounded-full"
               style={{
                 width: `${Math.min((daysElapsed / 15) * 100, 100)}%`,
-                backgroundColor: isDark ? "#FEED01" : "#292524",
-                opacity: 0.6,
+                backgroundColor: isCelebration ? (isDark ? "#FEED01" : "#292524") : "#FEED01",
+                opacity: isCelebration ? 0.6 : 0.8,
               }}
             />
           </div>
@@ -1259,7 +1272,7 @@ function TrialTickerBanner({
               fontSize: 10,
               fontWeight: 600,
               fontFamily: "'IBM Plex Mono', monospace",
-              color: isDark ? "rgba(254,237,1,0.5)" : "rgba(0,0,0,0.4)",
+              color: isCelebration ? (isDark ? "rgba(254,237,1,0.5)" : "rgba(0,0,0,0.4)") : "rgba(254,237,1,0.5)",
               whiteSpace: "nowrap",
             }}
           >
@@ -1270,36 +1283,20 @@ function TrialTickerBanner({
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Days pill */}
-        <span
-          className="inline-flex items-center rounded-full px-2.5 py-0.5"
-          style={{
-            fontSize: 9,
-            fontWeight: 700,
-            fontFamily: "'IBM Plex Mono', monospace",
-            letterSpacing: "0.05em",
-            textTransform: "uppercase" as const,
-            backgroundColor: isDark ? "rgba(254,237,1,0.16)" : "rgba(0,0,0,0.08)",
-            color: isDark ? "#FEED01" : "#292524",
-          }}
-        >
-          {isCelebration ? "15-day trial" : `${daysLeft} day${daysLeft !== 1 ? "s" : ""} left`}
-        </span>
-
         {/* CTA */}
         <button
           type="button"
           onClick={() => navigate({ to: "/plans" })}
-          className="inline-flex items-center gap-1 rounded-md px-3 py-1 font-semibold transition-all hover:shadow-sm active:scale-[0.98]"
+          className="inline-flex items-center gap-1 rounded-md px-4 py-1.5 font-semibold transition-all hover:shadow-sm active:scale-[0.98]"
           style={{
             fontFamily: "var(--font-sans)",
             fontSize: 11,
-            backgroundColor: isDark ? "#FEED01" : "#1C1917",
-            color: isDark ? "#1C1917" : "#FEF3C7",
+            backgroundColor: isCelebration ? (isDark ? "#FEED01" : "#1C1917") : "#FEED01",
+            color: "#1C1917",
             whiteSpace: "nowrap",
           }}
         >
-          View plans <span>&rarr;</span>
+          {isCelebration ? "Explore plans" : "Upgrade now"} <span>&rarr;</span>
         </button>
 
         {/* Dismiss (celebration only) */}
@@ -1327,62 +1324,59 @@ function TrialTickerBanner({
 }
 
 // ---------------------------------------------------------------------------
-// Main export — wired to hook, with ?trialPreview= override
+// Preview helper
 // ---------------------------------------------------------------------------
 
-const PREVIEW_DEFAULTS: Record<string, { daysElapsed: number }> = {
-  celebration: { daysElapsed: 1 },
-  urgency: { daysElapsed: 12 },
-  "full-celebration": { daysElapsed: 1 },
-  "full-urgency": { daysElapsed: 12 },
-};
+function usePreviewOverride() {
+  const raw = new URLSearchParams(window.location.search).get("trial");
+  if (!raw) return null;
+  const daysElapsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(daysElapsed) || daysElapsed < 0 || daysElapsed > 15) return null;
+  const daysLeft = Math.max(0, 15 - daysElapsed);
+  const state: TrialBannerState = daysElapsed < 11 ? "celebration" : "urgency";
+  return { state, daysElapsed, daysLeft };
+}
+
+// ---------------------------------------------------------------------------
+// TrialTicker — compact strip for the sticky header bar (all pages)
+// ---------------------------------------------------------------------------
+
+export function TrialTicker() {
+  const trial = useTrialBanner();
+  const preview = usePreviewOverride();
+
+  const state = preview?.state ?? trial.state;
+  const daysElapsed = preview?.daysElapsed ?? trial.daysElapsed;
+  const daysLeft = preview?.daysLeft ?? trial.daysLeft;
+
+  return (
+    <TrialTickerBanner
+      state={state}
+      daysElapsed={daysElapsed}
+      daysLeft={daysLeft}
+      dismissed={trial.dismissed}
+      onDismiss={trial.dismiss}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TrialBanner — full banner, intended for /plans page content area
+// ---------------------------------------------------------------------------
 
 export function TrialBanner() {
   const trial = useTrialBanner();
-  const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const location = useLocation();
-  const preview = typeof search.trialPreview === "string" ? search.trialPreview : null;
+  const preview = usePreviewOverride();
 
-  // Hide banner on the plans page — it already has pricing context
-  const isPlansPage = location.pathname === "/plans" || location.pathname.startsWith("/plans/");
-  if (isPlansPage) {
-    return null;
-  }
+  const state = preview?.state ?? trial.state;
+  const daysElapsed = preview?.daysElapsed ?? trial.daysElapsed;
+  const daysLeft = preview?.daysLeft ?? trial.daysLeft;
 
-  // Preview mode — full banner (append ?trialPreview=celebration or ?trialPreview=urgency to any page)
-  if (preview && preview in PREVIEW_DEFAULTS) {
-    const { daysElapsed } = PREVIEW_DEFAULTS[preview];
-    const daysLeft = 15 - daysElapsed;
-    // ?trialPreview=full-celebration or ?trialPreview=full-urgency for full banner
-    if (preview.startsWith("full-")) {
-      const actualState = preview.replace("full-", "") as TrialBannerState;
-      return (
-        <TrialBannerInner
-          state={actualState}
-          daysElapsed={PREVIEW_DEFAULTS[actualState]?.daysElapsed ?? daysElapsed}
-          daysLeft={15 - (PREVIEW_DEFAULTS[actualState]?.daysElapsed ?? daysElapsed)}
-          dismissed={trial.dismissed}
-          onDismiss={trial.dismiss}
-        />
-      );
-    }
-    return (
-      <TrialTickerBanner
-        state={preview as TrialBannerState}
-        daysElapsed={daysElapsed}
-        daysLeft={daysLeft}
-        dismissed={trial.dismissed}
-        onDismiss={trial.dismiss}
-      />
-    );
-  }
-
-  // Default — ticker on all pages except plans
   return (
-    <TrialTickerBanner
-      state={trial.state}
-      daysElapsed={trial.daysElapsed}
-      daysLeft={trial.daysLeft}
+    <TrialBannerInner
+      state={state}
+      daysElapsed={daysElapsed}
+      daysLeft={daysLeft}
       dismissed={trial.dismissed}
       onDismiss={trial.dismiss}
     />
