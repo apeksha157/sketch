@@ -1,8 +1,8 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import { TrialTicker } from "@/components/trial-banner";
+import { TrialBanner, TrialTicker } from "@/components/trial-banner";
 import { api } from "@/lib/api";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
-import { Outlet, createRoute, redirect, useRouteContext } from "@tanstack/react-router";
+import { Outlet, createRoute, redirect, useLocation, useRouteContext } from "@tanstack/react-router";
 import { rootRoute } from "./root";
 
 export interface AuthContext {
@@ -60,16 +60,20 @@ export const dashboardRoute = createRoute({
 
 function DashboardLayout() {
   const auth = useDashboardAuth();
+  const location = useLocation();
+  const isPlansPage = location.pathname === "/plans" || location.pathname.startsWith("/plans/");
+
   return (
     <SidebarProvider>
       <AppSidebar displayName={auth.displayName} displayIdentifier={auth.displayIdentifier} role={auth.role} />
       <SidebarInset>
-        {/* Sticky top bar — sidebar trigger + ticker banner */}
+        {/* Sticky top bar — sidebar trigger + ticker (hidden on plans) */}
         <div className="sticky top-0 z-20 flex items-center gap-3 bg-background px-3 py-2">
           <SidebarTrigger />
-          <TrialTicker />
+          {!isPlansPage && <TrialTicker />}
         </div>
         <main className="flex-1 overflow-auto">
+          {isPlansPage && <TrialBanner />}
           <Outlet />
         </main>
       </SidebarInset>
