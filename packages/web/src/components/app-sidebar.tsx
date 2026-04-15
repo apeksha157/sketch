@@ -10,8 +10,8 @@ import {
   CaretUpDownIcon,
   ChartBarIcon,
   ChatCircleIcon,
+  CreditCardIcon,
   DesktopIcon,
-  FolderIcon,
   FolderSimpleIcon,
   GearIcon,
   LinkSimpleIcon,
@@ -64,7 +64,7 @@ const allPrimaryNav: NavItem[] = [
   { label: "Scheduled Tasks", icon: <CalendarDotsIcon size={18} />, href: "/scheduled-tasks" },
   { label: "Skills", icon: <BrainIcon size={18} />, href: "/skills" },
   { label: "Usage", icon: <ChartBarIcon size={18} />, href: "/usage" },
-  { label: "Pricing", icon: <FolderIcon size={18} />, href: "/plans" },
+  { label: "Pricing", icon: <CreditCardIcon size={18} />, href: "/plans" },
   { label: "Integrations", icon: <LinkSimpleIcon size={18} />, href: "/integrations" },
 ];
 
