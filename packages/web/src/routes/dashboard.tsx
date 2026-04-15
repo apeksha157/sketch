@@ -1,8 +1,8 @@
 import { AppSidebar } from "@/components/app-sidebar";
-import { TrialBanner, TrialTicker } from "@/components/trial-banner";
+import { TrialTicker } from "@/components/trial-banner";
 import { api } from "@/lib/api";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
-import { Outlet, createRoute, redirect, useLocation, useRouteContext } from "@tanstack/react-router";
+import { Outlet, createRoute, redirect, useRouteContext } from "@tanstack/react-router";
 import { rootRoute } from "./root";
 
 export interface AuthContext {
@@ -60,9 +60,6 @@ export const dashboardRoute = createRoute({
 
 function DashboardLayout() {
   const auth = useDashboardAuth();
-  const location = useLocation();
-  const isPlansPage = location.pathname === "/plans" || location.pathname.startsWith("/plans/");
-
   return (
     <SidebarProvider>
       <AppSidebar displayName={auth.displayName} displayIdentifier={auth.displayIdentifier} role={auth.role} />
@@ -73,7 +70,6 @@ function DashboardLayout() {
           <TrialTicker />
         </div>
         <main className="flex-1 overflow-auto">
-          {isPlansPage && <TrialBanner />}
           <Outlet />
         </main>
       </SidebarInset>
