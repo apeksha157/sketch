@@ -72,9 +72,9 @@ export function ChannelsPage() {
   const allDisconnected = data?.channels?.every((ch) => ch.connected !== true);
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
-      <h1 className="text-xl font-bold">Channels</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Manage your messaging platform connections</p>
+    <div className="mx-auto max-w-4xl px-10 py-8">
+      <h1 className="text-xl font-semibold text-foreground">Channels</h1>
+      <p className="mt-2 text-sm text-muted-foreground">Manage your messaging platform connections.</p>
 
       <div className="mt-6 space-y-4">
         {!isLoading && allDisconnected && (

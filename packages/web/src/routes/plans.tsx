@@ -1,4 +1,3 @@
-import { AppSidebar } from "@/components/app-sidebar";
 import { useDashboardAuth } from "@/routes/dashboard";
 import {
   BuildingsIcon,
@@ -11,11 +10,10 @@ import {
   UsersIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
 import { createRoute } from "@tanstack/react-router";
 import { forwardRef, useEffect, useRef, useState } from "react";
 import { dashboardRoute } from "./dashboard";
-import { rootRoute } from "./root";
+import { hideTrialBanner } from "./demo/mock-query-provider";
 
 export const plansRoute = createRoute({
   getParentRoute: () => dashboardRoute,
@@ -26,106 +24,179 @@ export const plansRoute = createRoute({
   },
 });
 
-function PreviewShell({
-  view,
-  lowCredit,
-  plan = "startups",
-  promo = false,
-}: { view: PricingView; lowCredit: boolean; plan?: "startups" | "business" | null; promo?: boolean }) {
-  return (
-    <SidebarProvider>
-      {/* biome-ignore lint/a11y/useValidAriaRole: role is a component prop, not an ARIA attribute */}
-      <AppSidebar displayName="Admin" displayIdentifier="admin@sketch.dev" role="admin" />
-      <SidebarInset>
-        <SidebarTrigger className="absolute left-3 top-3 z-20" />
-        <main className="flex-1 overflow-auto pt-[52px]">
-          <PlansPageContent
-            viewOverride={view}
-            lowCreditOverride={lowCredit}
-            planOverride={plan}
-            promoOverride={promo}
-          />
-        </main>
-      </SidebarInset>
-    </SidebarProvider>
-  );
-}
-
 // New user — no plan
 export const plansNewRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/new",
-  component: () => <PreviewShell view="new" lowCredit={false} plan={null} />,
+  component: () => (
+    <PlansPageContent viewOverride="new" lowCreditOverride={false} planOverride={null} promoOverride={false} />
+  ),
 });
 
 // Startups plan — member
 export const plansMemberStartupsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/member-startups",
-  component: () => <PreviewShell view="member" lowCredit={false} plan="startups" />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="member" lowCreditOverride={false} planOverride="startups" promoOverride={false} />
+  ),
 });
 
 // Startups plan — admin
 export const plansAdminStartupsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/admin-startups",
-  component: () => <PreviewShell view="admin" lowCredit={false} plan="startups" />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={false} planOverride="startups" promoOverride={false} />
+  ),
 });
 
 // Startups plan — admin, low credit
 export const plansAdminStartupsLowRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/admin-startups-low",
-  component: () => <PreviewShell view="admin" lowCredit={true} plan="startups" />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={true} planOverride="startups" promoOverride={false} />
+  ),
 });
 
 // Business plan — member
 export const plansMemberBizRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/member-biz",
-  component: () => <PreviewShell view="member" lowCredit={false} plan="business" />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="member" lowCreditOverride={false} planOverride="business" promoOverride={false} />
+  ),
 });
 
 // Business plan — admin
 export const plansAdminBizRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/admin-biz",
-  component: () => <PreviewShell view="admin" lowCredit={false} plan="business" />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={false} planOverride="business" promoOverride={false} />
+  ),
 });
 
 // Business plan — admin, low credit
 export const plansAdminBizLowRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/admin-biz-low",
-  component: () => <PreviewShell view="admin" lowCredit={true} plan="business" />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={true} planOverride="business" promoOverride={false} />
+  ),
 });
 
 // Promo — new user
 export const plansPromoNewRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/promo-new",
-  component: () => <PreviewShell view="new" lowCredit={false} plan={null} promo />,
+  component: () => <PlansPageContent viewOverride="new" lowCreditOverride={false} planOverride={null} promoOverride />,
 });
 
 // Promo — member startups
 export const plansPromoMemberRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/promo-member",
-  component: () => <PreviewShell view="member" lowCredit={false} plan="startups" promo />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="member" lowCreditOverride={false} planOverride="startups" promoOverride />
+  ),
 });
 
 // Promo — admin startups
 export const plansPromoAdminRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/promo-admin",
-  component: () => <PreviewShell view="admin" lowCredit={false} plan="startups" promo />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={false} planOverride="startups" promoOverride />
+  ),
 });
 
 // Promo — admin business
 export const plansPromoAdminBizRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => dashboardRoute,
   path: "/plans/promo-admin-biz",
-  component: () => <PreviewShell view="admin" lowCredit={false} plan="business" promo />,
+  beforeLoad: hideTrialBanner,
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={false} planOverride="business" promoOverride />
+  ),
+});
+
+// Promo expiring — admin startups (7 days left)
+export const plansPromoExpiringRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/plans/promo-expiring",
+  beforeLoad: hideTrialBanner,
+  component: () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return (
+      <PlansPageContent
+        viewOverride="admin"
+        lowCreditOverride={false}
+        planOverride="startups"
+        promoOverride
+        promoEndDateOverride={d.toISOString().split("T")[0]}
+      />
+    );
+  },
+});
+
+// Promo expiring — admin business (7 days left)
+export const plansPromoExpiringBizRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/plans/promo-expiring-biz",
+  beforeLoad: hideTrialBanner,
+  component: () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return (
+      <PlansPageContent
+        viewOverride="admin"
+        lowCreditOverride={false}
+        planOverride="business"
+        promoOverride
+        promoEndDateOverride={d.toISOString().split("T")[0]}
+      />
+    );
+  },
+});
+
+// Trial banner — celebration state (day 1)
+export const plansTrialCelebrationRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/plans/trial-celebration",
+  beforeLoad: () => {
+    // Inject ?trial=1 so the banner preview hook picks it up
+    if (!new URLSearchParams(window.location.search).has("trial")) {
+      window.history.replaceState(null, "", `${window.location.pathname}?trial=1`);
+    }
+  },
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={false} planOverride="startups" promoOverride={false} />
+  ),
+});
+
+// Trial banner — urgency state (day 12)
+export const plansTrialUrgencyRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/plans/trial-urgency",
+  beforeLoad: () => {
+    if (!new URLSearchParams(window.location.search).has("trial")) {
+      window.history.replaceState(null, "", `${window.location.pathname}?trial=12`);
+    }
+  },
+  component: () => (
+    <PlansPageContent viewOverride="admin" lowCreditOverride={false} planOverride="startups" promoOverride={false} />
+  ),
 });
 
 /* ─── Types & mock data ─── */
@@ -249,17 +320,19 @@ export function PlansPageContent({
   lowCreditOverride,
   planOverride,
   promoOverride,
+  promoEndDateOverride,
 }: {
   userRole?: "admin" | "member";
   viewOverride?: PricingView;
   lowCreditOverride?: boolean;
   planOverride?: "startups" | "business" | null;
   promoOverride?: boolean;
+  promoEndDateOverride?: string;
 }) {
   const topUpRef = useRef<HTMLDivElement>(null);
 
   const promoActive = promoOverride ?? MOCK_PROMO.active;
-  const promoEndDate = MOCK_PROMO.endDate;
+  const promoEndDate = promoEndDateOverride ?? MOCK_PROMO.endDate;
   const promoExpiring = promoActive && promoDaysRemaining(promoEndDate) <= 10 && userRole === "admin";
 
   const plan = planOverride ?? "startups";
@@ -297,18 +370,23 @@ export function PlansPageContent({
       {/* 2. Credit overview — member & admin */}
       {view !== "new" &&
         (promoActive ? (
-          <PromoCreditOverview workspace={workspace as typeof MOCK_PROMO_WORKSPACE} promoEndDate={promoEndDate} />
+          <PromoCreditOverview
+            workspace={workspace as typeof MOCK_PROMO_WORKSPACE}
+            promoEndDate={promoEndDate}
+            expiring={promoExpiring}
+          />
         ) : (
           <CreditOverview workspace={workspace} daysRemaining={daysRemaining} isLowCredit={isLowCredit} />
         ))}
 
-      {/* 4. Plan cards */}
+      {/* 3. Plan cards */}
       <PlanCards
         view={view}
         currentPlan={workspace.plan}
         renewalDate={workspace.renewalDate}
         promoActive={promoActive}
         promoEndDate={promoEndDate}
+        promoExpiring={promoExpiring}
       />
 
       {/* 5. Top-up + what uses credits — hidden during promo */}
@@ -398,9 +476,11 @@ function CreditOverview({
 function PromoCreditOverview({
   workspace,
   promoEndDate,
+  expiring = false,
 }: {
   workspace: typeof MOCK_PROMO_WORKSPACE;
   promoEndDate: string;
+  expiring?: boolean;
 }) {
   const labelCls = "font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground";
   const numCls = "mt-1.5 text-3xl font-bold leading-none tracking-[-1px] text-foreground";
@@ -424,13 +504,37 @@ function PromoCreditOverview({
           <p className={subCls}>since you joined</p>
         </div>
 
-        {/* Promo ends */}
+        {/* Promo ends — warning styling when expiring */}
         <div className="flex flex-col border-l border-border px-5">
-          <p className={labelCls}>Promo ends</p>
-          <p className={numCls}>{daysLeft} days</p>
+          <p
+            className={
+              expiring ? "font-mono text-[10px] font-medium uppercase tracking-[.08em] text-warning/70" : labelCls
+            }
+          >
+            Promo ends
+          </p>
+          <p
+            className={
+              expiring
+                ? "mt-1.5 text-3xl font-bold leading-none tracking-[-1px] text-warning animate-pulse [animation-duration:3s]"
+                : numCls
+            }
+          >
+            {daysLeft} days
+          </p>
           <p className={subCls}>{formatPromoDate(promoEndDate)}</p>
         </div>
       </div>
+
+      {expiring && (
+        <div className="mx-5 flex items-center gap-3 border-t border-border py-3">
+          <WarningIcon size={16} weight="fill" className="shrink-0 text-warning/60" />
+          <p className="text-[13px] text-muted-foreground">
+            <span className="font-semibold text-foreground">Promo ending soon</span> — your unlimited credits expire in{" "}
+            {daysLeft} days. Select a credit tier below to continue uninterrupted.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
@@ -456,7 +560,15 @@ function PlanCards({
   renewalDate,
   promoActive,
   promoEndDate,
-}: { view: PricingView; currentPlan: string | null; renewalDate: string; promoActive: boolean; promoEndDate: string }) {
+  promoExpiring,
+}: {
+  view: PricingView;
+  currentPlan: string | null;
+  renewalDate: string;
+  promoActive: boolean;
+  promoEndDate: string;
+  promoExpiring: boolean;
+}) {
   return (
     <div className="mt-8 grid grid-cols-2 gap-4">
       <StartupsCard
@@ -465,6 +577,7 @@ function PlanCards({
         renewalDate={renewalDate}
         promoActive={promoActive}
         promoEndDate={promoEndDate}
+        promoExpiring={promoExpiring}
       />
       <BusinessCard
         view={view}
@@ -472,6 +585,7 @@ function PlanCards({
         renewalDate={renewalDate}
         promoActive={promoActive}
         promoEndDate={promoEndDate}
+        promoExpiring={promoExpiring}
       />
     </div>
   );
@@ -493,12 +607,20 @@ function StartupsCard({
   renewalDate,
   promoActive,
   promoEndDate,
-}: { view: PricingView; isCurrent: boolean; renewalDate: string; promoActive: boolean; promoEndDate: string }) {
+  promoExpiring,
+}: {
+  view: PricingView;
+  isCurrent: boolean;
+  renewalDate: string;
+  promoActive: boolean;
+  promoEndDate: string;
+  promoExpiring: boolean;
+}) {
   const [selectedTier, setSelectedTier] = useState<number | null>(0);
   const tier = selectedTier != null ? STARTUPS_TIERS[selectedTier] : null;
-  const addOnPrice = promoActive ? 0 : (tier?.price ?? 0);
-  const totalPrice = STARTUPS_BASE_PRICE + addOnPrice;
-  const totalCredits = promoActive ? 0 : (tier?.credits ?? 0);
+  const addOnPrice = promoActive && !promoExpiring ? 0 : (tier?.price ?? 0);
+  const totalPrice = STARTUPS_BASE_PRICE + (promoActive && !promoExpiring ? 0 : addOnPrice);
+  const totalCredits = promoActive && !promoExpiring ? 0 : (tier?.credits ?? 0);
   const showBadge = isCurrent && view !== "new";
 
   return (
@@ -526,11 +648,13 @@ function StartupsCard({
         <span className="text-[13px] text-muted-foreground">/month</span>
       </div>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-        {promoActive
+        {promoActive && !promoExpiring
           ? "Unlimited credits included"
           : totalCredits > 0
             ? `$${(totalPrice / totalCredits).toFixed(3)} per credit`
-            : "Add credits below"}
+            : promoExpiring
+              ? "Select a tier for after promo"
+              : "Add credits below"}
       </p>
 
       {/* Monthly credits label + selector */}
@@ -538,10 +662,15 @@ function StartupsCard({
         <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
           Monthly credits
         </p>
-        {promoActive ? (
+        {promoActive && !promoExpiring ? (
           <PromoUnlimitedChip promoEndDate={promoEndDate} />
         ) : (
-          <CreditTierSelect tiers={STARTUPS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
+          <CreditTierSelect
+            tiers={STARTUPS_TIERS}
+            selectedIndex={selectedTier}
+            onSelect={setSelectedTier}
+            promoDaysLeft={promoExpiring ? promoDaysRemaining(promoEndDate) : undefined}
+          />
         )}
       </div>
 
@@ -592,13 +721,21 @@ function BusinessCard({
   renewalDate,
   promoActive,
   promoEndDate,
-}: { view: PricingView; isCurrent: boolean; renewalDate: string; promoActive: boolean; promoEndDate: string }) {
+  promoExpiring,
+}: {
+  view: PricingView;
+  isCurrent: boolean;
+  renewalDate: string;
+  promoActive: boolean;
+  promoEndDate: string;
+  promoExpiring: boolean;
+}) {
   const showCurrentBadge = isCurrent && view !== "new";
   const [selectedTier, setSelectedTier] = useState<number | null>(0);
   const tier = selectedTier != null ? BUSINESS_TIERS[selectedTier] : null;
-  const addOnPrice = promoActive ? 0 : (tier?.price ?? 0);
-  const totalPrice = BUSINESS_BASE_PRICE + addOnPrice;
-  const totalCredits = promoActive ? 0 : (tier?.credits ?? 0);
+  const addOnPrice = promoActive && !promoExpiring ? 0 : (tier?.price ?? 0);
+  const totalPrice = BUSINESS_BASE_PRICE + (promoActive && !promoExpiring ? 0 : addOnPrice);
+  const totalCredits = promoActive && !promoExpiring ? 0 : (tier?.credits ?? 0);
 
   return (
     <div
@@ -632,11 +769,13 @@ function BusinessCard({
         <span className="text-[13px] text-muted-foreground">/month</span>
       </div>
       <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">
-        {promoActive
+        {promoActive && !promoExpiring
           ? "Unlimited credits included"
           : totalCredits > 0
             ? `$${(totalPrice / totalCredits).toFixed(3)} per credit`
-            : "Add credits below"}
+            : promoExpiring
+              ? "Select a tier for after promo"
+              : "Add credits below"}
       </p>
 
       {/* Monthly credits label + selector */}
@@ -644,10 +783,15 @@ function BusinessCard({
         <p className="mb-2 font-mono text-[10px] font-medium uppercase tracking-[.08em] text-muted-foreground">
           Monthly credits
         </p>
-        {promoActive ? (
+        {promoActive && !promoExpiring ? (
           <PromoUnlimitedChip promoEndDate={promoEndDate} />
         ) : (
-          <CreditTierSelect tiers={BUSINESS_TIERS} selectedIndex={selectedTier} onSelect={setSelectedTier} />
+          <CreditTierSelect
+            tiers={BUSINESS_TIERS}
+            selectedIndex={selectedTier}
+            onSelect={setSelectedTier}
+            promoDaysLeft={promoExpiring ? promoDaysRemaining(promoEndDate) : undefined}
+          />
         )}
       </div>
 
@@ -694,10 +838,12 @@ function CreditTierSelect({
   tiers,
   selectedIndex,
   onSelect,
+  promoDaysLeft,
 }: {
   tiers: CreditTier[];
   selectedIndex: number | null;
   onSelect: (i: number | null) => void;
+  promoDaysLeft?: number;
 }) {
   const [open, setOpen] = useState(false);
   const selected = selectedIndex != null ? tiers[selectedIndex] : null;
@@ -714,26 +860,46 @@ function CreditTierSelect({
 
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className={`group/trigger flex w-full cursor-pointer items-center gap-2 rounded-[14px] border px-4 py-[9px] transition-colors hover:border-[#C8B832] hover:bg-[#C8B832]/10 group-hover/card:border-[#C8B832] group-hover/card:bg-[#C8B832]/10 dark:hover:border-[#FEED01]/30 dark:hover:bg-[#FEED01]/[0.02] dark:group-hover/card:border-[#FEED01]/30 dark:group-hover/card:bg-[#FEED01]/[0.02] ${open ? "border-[#C8B832] bg-[#C8B832]/10 dark:!border-[#FEED01]/30 dark:!bg-[#FEED01]/[0.02]" : "border-border bg-muted"}`}
-      >
-        <span className="shrink-0 text-[13px] font-medium text-foreground">
-          {selected ? `${selected.credits.toLocaleString()} credits` : "No add-on"}
-        </span>
-        {selected && (
-          <span
-            className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}
-          >
-            +${selected.price}
+      {/* Promo expiring: unlimited chip as trigger */}
+      {promoDaysLeft != null && (
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className={`flex w-full cursor-pointer items-center rounded-[14px] border px-4 py-[9px] transition-colors hover:border-[#C8B832] hover:bg-[#C8B832]/10 group-hover/card:border-[#C8B832] group-hover/card:bg-[#C8B832]/10 dark:hover:border-[#FEED01]/30 dark:hover:bg-[#FEED01]/[0.02] dark:group-hover/card:border-[#FEED01]/30 dark:group-hover/card:bg-[#FEED01]/[0.02] ${open ? "border-[#C8B832] bg-[#C8B832]/10 dark:!border-[#FEED01]/30 dark:!bg-[#FEED01]/[0.02]" : "border-border bg-muted"}`}
+        >
+          <span className="text-[13px] font-medium text-foreground">
+            ∞ Unlimited credits for <span className="font-bold text-warning">{promoDaysLeft} days</span>
           </span>
-        )}
-        <CaretDownIcon
-          size={12}
-          className={`ml-auto shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
-        />
-      </button>
+          <CaretDownIcon
+            size={12}
+            className={`ml-2 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      )}
+
+      {/* Normal trigger */}
+      {promoDaysLeft == null && (
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className={`group/trigger flex w-full cursor-pointer items-center gap-2 rounded-[14px] border px-4 py-[9px] transition-colors hover:border-[#C8B832] hover:bg-[#C8B832]/10 group-hover/card:border-[#C8B832] group-hover/card:bg-[#C8B832]/10 dark:hover:border-[#FEED01]/30 dark:hover:bg-[#FEED01]/[0.02] dark:group-hover/card:border-[#FEED01]/30 dark:group-hover/card:bg-[#FEED01]/[0.02] ${open ? "border-[#C8B832] bg-[#C8B832]/10 dark:!border-[#FEED01]/30 dark:!bg-[#FEED01]/[0.02]" : "border-border bg-muted"}`}
+        >
+          <span className="shrink-0 text-[13px] font-medium text-foreground">
+            {selected ? `${selected.credits.toLocaleString()} credits` : "No add-on"}
+          </span>
+          {selected && (
+            <span
+              className={`ml-1 text-[13px] font-medium transition-colors group-hover/trigger:text-[#6b6200] group-hover/card:text-[#6b6200] dark:group-hover/trigger:text-[#E8D44D] dark:group-hover/card:text-[#E8D44D] ${open ? "text-[#6b6200] dark:!text-[#E8D44D]" : "text-muted-foreground/60"}`}
+            >
+              +${selected.price}
+            </span>
+          )}
+          <CaretDownIcon
+            size={12}
+            className={`ml-auto shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+      )}
 
       {open && (
         <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-[14px] border border-border bg-popover shadow-lg">

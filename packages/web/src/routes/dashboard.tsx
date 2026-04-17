@@ -2,7 +2,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { TrialBanner, TrialTicker } from "@/components/trial-banner";
 import { api } from "@/lib/api";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
-import { Outlet, createRoute, redirect, useLocation, useRouteContext } from "@tanstack/react-router";
+import { Outlet, createRoute, useLocation, useRouteContext } from "@tanstack/react-router";
 import { rootRoute } from "./root";
 
 export interface AuthContext {
@@ -14,34 +14,52 @@ export interface AuthContext {
   displayIdentifier: string;
 }
 
+const MOCK_ADMIN: AuthContext = {
+  role: "admin",
+  displayName: "Admin",
+  displayIdentifier: "admin@sketch.dev",
+};
+
+const MOCK_MEMBER: AuthContext = {
+  role: "member",
+  displayName: "Sarah Kim",
+  displayIdentifier: "sarah@acme.com",
+};
+
+/** Returns mock auth context based on ?role= query param (defaults to admin). */
+function getMockAuth(): AuthContext {
+  const role = new URLSearchParams(window.location.search).get("role");
+  return role === "member" ? MOCK_MEMBER : MOCK_ADMIN;
+}
+
 /**
- * Auth guard: checks setup status first, then session.
- * If setup not complete → /onboarding.
- * If not authenticated → /login.
+ * Auth guard: tries real auth, falls back to mock admin context.
+ * Every route works without login — mock context enables design/demo access.
  */
 async function checkAuth(): Promise<{ auth: AuthContext }> {
-  const status = await api.setup.status();
-  if (!status.completed) {
-    throw redirect({ to: "/onboarding" });
+  try {
+    const status = await api.setup.status();
+    if (!status.completed) return { auth: getMockAuth() };
+
+    const session = await api.auth.session();
+    if (!session.authenticated) return { auth: getMockAuth() };
+
+    const role = session.role ?? "admin";
+
+    return {
+      auth: {
+        role,
+        email: session.email,
+        userId: session.userId,
+        name: session.name,
+        displayName: role === "admin" ? "Admin" : (session.name ?? "Member"),
+        displayIdentifier: session.email ?? session.name ?? "User",
+      },
+    };
+  } catch {
+    // API unreachable — fall back to mock context
+    return { auth: getMockAuth() };
   }
-
-  const session = await api.auth.session();
-  if (!session.authenticated) {
-    throw redirect({ to: "/login" });
-  }
-
-  const role = session.role ?? "admin";
-
-  return {
-    auth: {
-      role,
-      email: session.email,
-      userId: session.userId,
-      name: session.name,
-      displayName: role === "admin" ? "Admin" : (session.name ?? "Member"),
-      displayIdentifier: session.email ?? session.name ?? "User",
-    },
-  };
 }
 
 export function useDashboardAuth(): AuthContext {

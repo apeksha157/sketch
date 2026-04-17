@@ -59,7 +59,7 @@ function ConnectionsCallback() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-8">
       <p className="text-sm text-muted-foreground">Connection complete. You can close this window.</p>
     </div>
   );
@@ -161,7 +161,7 @@ function usePreviewMode(): PreviewMode {
 
 type ConnectionsTab = "applications" | "mcps";
 
-function ConnectionsPage() {
+export function ConnectionsPage() {
   const auth = useDashboardAuth();
   const queryClient = useQueryClient();
   const previewMode = usePreviewMode();
@@ -210,7 +210,7 @@ function ConnectionsPage() {
   const isLoading = serversQuery.isLoading;
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-8">
       <div>
         <h1 className="text-xl font-semibold">Integrations</h1>
         <p className="mt-2 text-sm text-muted-foreground">Connect apps and tools to extend your workspace.</p>

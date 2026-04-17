@@ -94,7 +94,7 @@ export const filesRoute = createRoute({
 
 const PAGE_SIZE = 50;
 
-function FilesPage() {
+export function FilesPage() {
   const queryClient = useQueryClient();
 
   const [search, setSearch] = useState("");

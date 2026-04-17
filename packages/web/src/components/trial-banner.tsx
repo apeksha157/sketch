@@ -878,7 +878,7 @@ export function TrialBannerInner({
 
   if (state === "celebration") {
     return (
-      <div className="mx-auto max-w-3xl px-6 pt-4">
+      <div className="mx-auto max-w-4xl px-10 pt-4">
         <div
           className="relative overflow-hidden rounded-xl"
           style={{
@@ -1050,7 +1050,7 @@ export function TrialBannerInner({
 
   // ── State B: Urgency ──
   return (
-    <div className="mx-auto max-w-3xl px-6 pt-4">
+    <div className="mx-auto max-w-4xl px-10 pt-4">
       <div
         className="relative overflow-hidden rounded-xl"
         style={{
@@ -1292,7 +1292,7 @@ function TrialTickerBanner({
             fontFamily: "var(--font-sans)",
             fontSize: 11,
             backgroundColor: isCelebration ? (isDark ? "#FEED01" : "#1C1917") : "#FEED01",
-            color: "#1C1917",
+            color: isCelebration && !isDark ? "#FFFFFF" : "#1C1917",
             whiteSpace: "nowrap",
           }}
         >
@@ -1330,6 +1330,8 @@ function TrialTickerBanner({
 function usePreviewOverride() {
   const raw = new URLSearchParams(window.location.search).get("trial");
   if (!raw) return null;
+  // ?trial=none → force-hide the banner
+  if (raw === "none") return { state: "none" as TrialBannerState, daysElapsed: 15, daysLeft: 0 };
   const daysElapsed = Number.parseInt(raw, 10);
   if (Number.isNaN(daysElapsed) || daysElapsed < 0 || daysElapsed > 15) return null;
   const daysLeft = Math.max(0, 15 - daysElapsed);

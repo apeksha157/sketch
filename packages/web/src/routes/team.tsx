@@ -52,10 +52,13 @@ export function TeamPage() {
   const isMember = auth.role === "member";
 
   return (
-    <div className="px-6 py-8">
-      <div className="mx-auto max-w-3xl">
+    <div className="px-10 py-8">
+      <div className="mx-auto max-w-4xl">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold">Team</h1>
+          <div>
+            <h1 className="text-xl font-semibold text-foreground">Team</h1>
+            <p className="mt-2 text-sm text-muted-foreground">Manage your workspace members and roles.</p>
+          </div>
           {!isMember && (
             <Button size="sm" onClick={() => setShowAddDialog(true)}>
               <PlusIcon size={14} weight="bold" />
@@ -66,14 +69,14 @@ export function TeamPage() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
-        <div className="mx-auto w-full max-w-3xl">
+        <div className="mx-auto w-full max-w-4xl">
           <TabsList>
             <TabsTrigger value="list">List</TabsTrigger>
             <TabsTrigger value="chart">Chart</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent value="list">
-          <div className="mx-auto w-full max-w-3xl">
+          <div className="mx-auto w-full max-w-4xl">
             {isLoading ? (
               <LoadingSkeleton />
             ) : users.length === 0 ? (

@@ -1,8 +1,34 @@
 import { createRouter } from "@tanstack/react-router";
-import { channelsRoute } from "./routes/channels";
-import { connectionsCallbackRoute, connectionsPreviewRoute, connectionsRoute } from "./routes/connections";
+import { connectionsCallbackRoute, connectionsPreviewRoute } from "./routes/connections";
 import { dashboardRoute } from "./routes/dashboard";
-import { filesRoute } from "./routes/files";
+import {
+  channelsEmptyRoute,
+  channelsMemberEmptyRoute,
+  channelsMemberRoute,
+  channelsPreviewRoute,
+} from "./routes/demo/channels-demo";
+import { filesEmptyRoute, filesPreviewRoute } from "./routes/demo/files-demo";
+import {
+  integrationsEmptyRoute,
+  integrationsMemberEmptyRoute,
+  integrationsMemberRoute,
+  integrationsPreviewRoute,
+} from "./routes/demo/integrations-demo";
+import {
+  scheduledTasksEmptyRoute,
+  scheduledTasksMemberEmptyRoute,
+  scheduledTasksMemberRoute,
+  scheduledTasksPreviewRoute,
+} from "./routes/demo/scheduled-tasks-demo";
+import {
+  skillsEmptyRoute,
+  skillsMemberEmptyRoute,
+  skillsMemberRoute,
+  skillsPreviewRoute,
+} from "./routes/demo/skills-demo";
+import { teamEmptyRoute, teamMemberEmptyRoute, teamMemberRoute, teamPreviewRoute } from "./routes/demo/team-demo";
+import { usageEmptyRoute, usageMemberEmptyRoute, usageMemberRoute, usagePreviewRoute } from "./routes/demo/usage-demo";
+import { workspaceEmptyRoute, workspacePreviewRoute } from "./routes/demo/workspace-demo";
 import { indexRoute } from "./routes/index";
 import { loginRoute } from "./routes/login";
 import { loginErrorRoute } from "./routes/login-error";
@@ -18,44 +44,67 @@ import {
   plansNewRoute,
   plansPromoAdminBizRoute,
   plansPromoAdminRoute,
+  plansPromoExpiringBizRoute,
+  plansPromoExpiringRoute,
   plansPromoMemberRoute,
   plansPromoNewRoute,
   plansRoute,
+  plansTrialCelebrationRoute,
+  plansTrialUrgencyRoute,
 } from "./routes/plans";
 import { rootRoute } from "./routes/root";
-import { scheduledTasksRoute } from "./routes/scheduled-tasks";
-import { skillsRoute } from "./routes/skills";
-import { teamRoute } from "./routes/team";
-import { usageRoute } from "./routes/usage";
-import { workspaceRoute } from "./routes/workspace";
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
   loginErrorRoute,
   loginMockRoute,
   onboardingRoute,
-  plansNewRoute,
-  plansMemberStartupsRoute,
-  plansAdminStartupsRoute,
-  plansAdminStartupsLowRoute,
-  plansMemberBizRoute,
-  plansAdminBizRoute,
-  plansAdminBizLowRoute,
-  plansPromoNewRoute,
-  plansPromoMemberRoute,
-  plansPromoAdminRoute,
-  plansPromoAdminBizRoute,
   indexRoute,
   dashboardRoute.addChildren([
-    channelsRoute,
-    teamRoute,
-    scheduledTasksRoute,
-    skillsRoute,
-    usageRoute,
-    filesRoute,
-    workspaceRoute,
+    channelsPreviewRoute,
+    channelsEmptyRoute,
+    channelsMemberRoute,
+    channelsMemberEmptyRoute,
+    teamPreviewRoute,
+    teamEmptyRoute,
+    teamMemberRoute,
+    teamMemberEmptyRoute,
+    scheduledTasksPreviewRoute,
+    scheduledTasksEmptyRoute,
+    scheduledTasksMemberRoute,
+    scheduledTasksMemberEmptyRoute,
+    skillsPreviewRoute,
+    skillsEmptyRoute,
+    skillsMemberRoute,
+    skillsMemberEmptyRoute,
+    usagePreviewRoute,
+    usageEmptyRoute,
+    usageMemberRoute,
+    usageMemberEmptyRoute,
+    filesPreviewRoute,
+    filesEmptyRoute,
+    workspacePreviewRoute,
+    workspaceEmptyRoute,
+    integrationsPreviewRoute.addChildren([connectionsCallbackRoute, connectionsPreviewRoute]),
+    integrationsEmptyRoute,
+    integrationsMemberRoute,
+    integrationsMemberEmptyRoute,
     plansRoute,
-    connectionsRoute.addChildren([connectionsCallbackRoute, connectionsPreviewRoute]),
+    plansNewRoute,
+    plansMemberStartupsRoute,
+    plansAdminStartupsRoute,
+    plansAdminStartupsLowRoute,
+    plansMemberBizRoute,
+    plansAdminBizRoute,
+    plansAdminBizLowRoute,
+    plansPromoNewRoute,
+    plansPromoMemberRoute,
+    plansPromoAdminRoute,
+    plansPromoAdminBizRoute,
+    plansPromoExpiringRoute,
+    plansPromoExpiringBizRoute,
+    plansTrialCelebrationRoute,
+    plansTrialUrgencyRoute,
   ]),
 ]);
 

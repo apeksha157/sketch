@@ -213,17 +213,17 @@ const MOCK_USAGE_CHART_QUARTER = {
 
 // --- Components ---
 
-function UsagePage() {
+export function UsagePage() {
   const auth = useDashboardAuth();
   const isAdmin = auth.role === "admin";
   const [activeTab, setActiveTab] = useState<AdminTab>("team");
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("Week");
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-8">
       <div>
-        <h1 className="text-[22px] font-medium">{isAdmin ? "Usage" : "My usage"}</h1>
-        <p className="mt-1 text-[13px] text-muted-foreground">
+        <h1 className="text-xl font-semibold text-foreground">{isAdmin ? "Usage" : "My usage"}</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
           {isAdmin
             ? "Monitor your workspace activity and team adoption."
             : "Your personal activity with Sketch this week."}
@@ -256,12 +256,12 @@ function TabButton({ label, isActive, onClick }: { label: string; isActive: bool
       type="button"
       onClick={onClick}
       className={cn(
-        "relative pb-3 font-mono text-[11px] uppercase tracking-[0.07em] transition-colors",
+        "relative pb-3 font-mono text-[12px] uppercase tracking-[0.07em] transition-colors",
         isActive ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
       {label}
-      {isActive ? <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-[#FEED01]" /> : null}
+      {isActive ? <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-full bg-[#FEED01]" /> : null}
     </button>
   );
 }

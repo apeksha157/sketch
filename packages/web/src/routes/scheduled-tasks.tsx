@@ -134,10 +134,10 @@ export function ScheduledTasksPage() {
   const isAdmin = auth.role === "admin";
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-8">
       <div>
-        <h1 className="text-xl font-bold">Scheduled Tasks</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{getScheduledTasksSubtitle(auth.role)}</p>
+        <h1 className="text-xl font-semibold text-foreground">Scheduled Tasks</h1>
+        <p className="mt-2 text-sm text-muted-foreground">{getScheduledTasksSubtitle(auth.role)}</p>
       </div>
 
       <div className="mt-6">
