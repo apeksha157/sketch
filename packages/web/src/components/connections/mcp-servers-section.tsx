@@ -50,7 +50,7 @@ export function McpServersSection({
             )}
           </p>
           {isAdmin && (
-            <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
+            <Button variant="ghost" size="sm" className="mt-4 gap-1.5 hover:bg-[#FEED01]/8" onClick={onAdd}>
               <PlusIcon size={14} weight="bold" />
               New server
             </Button>
@@ -63,7 +63,12 @@ export function McpServersSection({
               {isAdmin ? `${servers.length} ${servers.length === 1 ? "server" : "servers"}` : "Available servers"}
             </span>
             {isAdmin && (
-              <Button size="sm" onClick={onAdd} className="h-7 gap-1.5 rounded-md px-2.5 text-xs">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onAdd}
+                className="h-7 gap-1.5 rounded-md px-2.5 text-xs hover:bg-[#FEED01]/8"
+              >
                 <PlusIcon size={12} weight="bold" />
                 New server
               </Button>

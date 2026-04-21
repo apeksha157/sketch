@@ -30,7 +30,7 @@ export function SkillsEmptyState({
             Skills let you define custom behaviors, connect integrations, and automate workflows with Sketch.
           </p>
           {showCreateButton && (
-            <Button onClick={onCreateClick} size="sm" className="mt-4 gap-1.5">
+            <Button variant="ghost" onClick={onCreateClick} size="sm" className="mt-4 gap-1.5 hover:bg-[#FEED01]/8">
               <PlusIcon size={14} weight="bold" />
               Create Your First Skill
             </Button>
@@ -54,7 +54,7 @@ export function SkillsEmptyState({
               </Button>
             )}
             {showCreateButton && (
-              <Button onClick={onCreateClick} size="sm" className="gap-1.5">
+              <Button variant="ghost" onClick={onCreateClick} size="sm" className="gap-1.5 hover:bg-[#FEED01]/8">
                 <PlusIcon size={14} weight="bold" />
                 Create Skill
               </Button>
@@ -75,7 +75,7 @@ export function SkillsEmptyState({
               : "No active skills in this category."}
           </p>
           {showCreateButton && (
-            <Button onClick={onCreateClick} size="sm" className="mt-4 gap-1.5">
+            <Button variant="ghost" onClick={onCreateClick} size="sm" className="mt-4 gap-1.5 hover:bg-[#FEED01]/8">
               <PlusIcon size={14} weight="bold" />
               Create Skill
             </Button>

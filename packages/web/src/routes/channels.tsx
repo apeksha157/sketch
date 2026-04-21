@@ -10,6 +10,9 @@ import {
   DotsThreeIcon,
   EnvelopeIcon,
   EnvelopeSimpleIcon,
+  GearIcon,
+  LinkIcon,
+  PlugIcon,
   SlackLogoIcon,
   SpinnerGapIcon,
   WarningIcon,
@@ -153,7 +156,13 @@ function SlackCard({ channel, readOnly }: { channel: ChannelStatus; readOnly: bo
           {!readOnly && (
             <div className="flex items-center gap-2">
               {!isConfigured && (
-                <Button variant="outline" size="sm" onClick={() => setShowConnectDialog(true)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 hover:bg-[#FEED01]/8"
+                  onClick={() => setShowConnectDialog(true)}
+                >
+                  <PlugIcon size={14} weight="bold" />
                   Connect
                 </Button>
               )}
@@ -256,7 +265,13 @@ function WhatsAppCard({ channel, readOnly }: { channel: ChannelStatus; readOnly:
           {!readOnly && (
             <div className="flex items-center gap-2">
               {!isConnected && (
-                <Button variant="outline" size="sm" onClick={() => setShowPairDialog(true)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 hover:bg-[#FEED01]/8"
+                  onClick={() => setShowPairDialog(true)}
+                >
+                  <LinkIcon size={14} weight="bold" />
                   Pair
                 </Button>
               )}
@@ -391,7 +406,13 @@ function EmailCard({ channel, readOnly }: { channel: ChannelStatus; readOnly: bo
           {!readOnly && (
             <div className="flex items-center gap-2">
               {!isConfigured && (
-                <Button variant="outline" size="sm" onClick={() => setShowConfigDialog(true)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 hover:bg-[#FEED01]/8"
+                  onClick={() => setShowConfigDialog(true)}
+                >
+                  <GearIcon size={14} weight="bold" />
                   Configure
                 </Button>
               )}

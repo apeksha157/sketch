@@ -27,6 +27,17 @@ export const configSchema = z.object({
     .default("false")
     .transform((v) => v === "true" || v === "1"),
 
+  // Developer convenience: auto-login as the admin user when no session cookie
+  // is present. Only honoured when NODE_ENV !== "production". Unblocks fresh
+  // preview browsers (Claude Code's preview tool, incognito windows, etc.)
+  // so they don't hit the /login redirect before any UI verification can run.
+  DEV_AUTO_LOGIN: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
+
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
   // Slack mode
   SLACK_MODE: z.enum(["socket", "http"]).default("socket"),
   SLACK_SIGNING_SECRET: z.string().optional(),

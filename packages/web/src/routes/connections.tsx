@@ -8,7 +8,6 @@
  *
  * Component implementations live in @/components/connections/*.
  */
-import { ConnectionsBanner } from "@/components/connections-banner";
 import { AddIntegrationDialog } from "@/components/connections/add-integration-dialog";
 import { AddMcpDialog } from "@/components/connections/add-mcp-dialog";
 import { AddProviderDialog, ProviderSelectorDialog } from "@/components/connections/add-provider-dialog";
@@ -20,7 +19,7 @@ import { RemoveMcpDialog } from "@/components/connections/remove-mcp-dialog";
 import { LoadingSkeleton } from "@/components/connections/shared";
 import { api } from "@/lib/api";
 import { useDashboardAuth } from "@/routes/dashboard";
-import { PlusIcon } from "@phosphor-icons/react";
+import { PlugIcon, PlusIcon } from "@phosphor-icons/react";
 import type { IntegrationConnection, McpServerRecord } from "@sketch/shared";
 import { cn } from "@sketch/ui";
 import { Badge } from "@sketch/ui/components/badge";
@@ -232,7 +231,26 @@ export function ConnectionsPage() {
           <>
             {!provider ? (
               isAdmin ? (
-                <ConnectionsBanner onConnect={() => setShowProviderSelector(true)} />
+                <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-[#FEED01]/[0.04] px-6 pt-8 pb-10 text-center">
+                  <div className="flex size-12 items-center justify-center rounded-full bg-white border border-[#FEED01]">
+                    <PlugIcon size={24} className="text-[#8B7A00]" />
+                  </div>
+                  <p className="mt-3 text-sm font-medium">No integration provider connected</p>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    Let your team connect their own apps. Each member authorizes
+                    <br />
+                    with their own credentials — no shared access.
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-4 gap-1.5 hover:bg-[#FEED01]/8"
+                    onClick={() => setShowProviderSelector(true)}
+                  >
+                    <PlusIcon size={14} weight="bold" />
+                    Connect provider
+                  </Button>
+                </div>
               ) : null
             ) : (
               <>
@@ -243,9 +261,10 @@ export function ConnectionsPage() {
                       via {provider.type === "canvas" ? "Canvas" : (provider.type ?? "Provider")}
                     </span>
                     <Button
+                      variant="ghost"
                       size="sm"
                       onClick={() => setShowAddIntegrationDialog(true)}
-                      className="h-7 gap-1.5 rounded-md px-2.5 text-xs"
+                      className="h-7 gap-1.5 rounded-md px-2.5 text-xs hover:bg-[#FEED01]/8"
                     >
                       <PlusIcon size={12} weight="bold" />
                       Add app

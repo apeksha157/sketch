@@ -6,6 +6,15 @@
       "runtimeExecutable": "/bin/sh",
       "runtimeArgs": ["-c", "cd packages/web && PATH=/opt/homebrew/bin:$PATH exec node node_modules/vite/bin/vite.js"],
       "port": 5173
+    },
+    {
+      "name": "server",
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/apekshamaithani/Desktop/projects/sketch && PATH=/opt/homebrew/bin:$PATH DOTENV_CONFIG_PATH=/Users/apekshamaithani/Desktop/projects/sketch/.env exec node --import tsx/esm --watch /Users/apekshamaithani/Desktop/projects/sketch/packages/server/src/index.ts"
+      ],
+      "port": 3000
     }
   ],
   "autoVerify": false

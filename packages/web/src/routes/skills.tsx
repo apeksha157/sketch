@@ -434,7 +434,7 @@ export function SkillsPage() {
           <p className="mt-2 text-sm text-muted-foreground">Discover and manage your bot&apos;s capabilities.</p>
         </div>
         {isAdmin && (
-          <Button size="sm" className="gap-1.5" onClick={handleCreateClick}>
+          <Button variant="ghost" size="sm" className="gap-1.5 hover:bg-[#FEED01]/8" onClick={handleCreateClick}>
             <PlusIcon size={14} weight="bold" />
             Create Skill
           </Button>

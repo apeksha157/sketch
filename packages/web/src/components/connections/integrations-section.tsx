@@ -73,7 +73,7 @@ export function IntegrationsSection({
           </div>
           <p className="mt-3 text-sm font-medium">No apps connected yet</p>
           <p className="mt-1.5 text-sm text-muted-foreground">Add an integration to connect your apps.</p>
-          <Button size="sm" className="mt-4 gap-1.5" onClick={onAdd}>
+          <Button variant="ghost" size="sm" className="mt-4 gap-1.5 hover:bg-[#FEED01]/8" onClick={onAdd}>
             <PlusIcon size={14} weight="bold" />
             Add integration
           </Button>

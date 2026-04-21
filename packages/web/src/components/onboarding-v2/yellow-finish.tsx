@@ -21,7 +21,7 @@ export function YellowFinish({
   return (
     <div className="ob-finish ob-animate-finish">
       <div className="ob-finish-heading">
-        <img src="/logos/sketch-icon-light.png" alt="" aria-hidden="true" className="ob-finish-icon" />
+        <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden="true" className="ob-finish-icon" />
         is now ready.
       </div>
       <div className="ob-finish-subtitle">{subtitle}</div>

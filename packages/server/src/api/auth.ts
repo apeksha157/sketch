@@ -87,6 +87,23 @@ export function authRoutes(settings: SettingsRepo, db: Kysely<DB>, deps: { confi
   routes.get("/session", async (c) => {
     const token = getCookie(c, SESSION_COOKIE);
     if (!token) {
+      // Dev-only auto-login: if enabled and an admin account exists, issue
+      // an admin session so fresh preview browsers (Claude Code preview tool,
+      // incognito windows, Playwright) can load the dashboard without a
+      // manual login. Gated on NODE_ENV !== "production" as a belt-and-braces
+      // check in case DEV_AUTO_LOGIN leaks into a real deployment.
+      if (deps.config.DEV_AUTO_LOGIN && deps.config.NODE_ENV !== "production") {
+        const row = await settings.get();
+        if (row?.admin_email && row.jwt_secret && row.onboarding_completed_at) {
+          await createSession(c, row.admin_email, "admin", row.jwt_secret);
+          deps.logger.warn({ email: row.admin_email }, "DEV_AUTO_LOGIN: auto-issued admin session");
+          return c.json({
+            authenticated: true,
+            role: "admin" as const,
+            email: row.admin_email,
+          });
+        }
+      }
       return c.json({ authenticated: false });
     }
 
