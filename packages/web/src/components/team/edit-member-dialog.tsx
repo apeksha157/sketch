@@ -1,6 +1,7 @@
 /**
  * EditMemberDialog — update an existing member's name, role, description,
- * reports-to, and contact details.
+ * reports-to, and contact details. Admins can edit all fields; members can
+ * only edit their own record (and cannot change their own email).
  *
  * Also includes RemoveMemberDialog and LinkProviderDialog as they share
  * the same import surface and are only used together with this dialog.
@@ -9,7 +10,15 @@ import { ConnectorLogo } from "@/components/connector-logos";
 import type { ProviderIdentity, User } from "@/lib/api";
 import { api } from "@/lib/api";
 import { getIntegration } from "@/lib/integrations";
-import { CheckCircleIcon, ClockIcon, RobotIcon, SlackLogoIcon, SpinnerGapIcon, XIcon } from "@phosphor-icons/react";
+import {
+  CheckCircleIcon,
+  ClockIcon,
+  LinkIcon,
+  RobotIcon,
+  SlackLogoIcon,
+  SpinnerGapIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { emailSchema, whatsappNumberSchema } from "@sketch/shared";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
@@ -44,11 +53,13 @@ const editMemberSchema = z.object({
 export function EditMemberDialog({
   user,
   users,
+  isMember,
   onOpenChange,
   onSuccess,
 }: {
   user: User | null;
   users: User[];
+  isMember: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
 }) {
@@ -84,7 +95,7 @@ export function EditMemberDialog({
         ...(isAgent
           ? {}
           : {
-              email: email.trim() || null,
+              ...(isMember ? {} : { email: email.trim() || null }),
               whatsappNumber: phone.trim() || null,
             }),
       }),
@@ -217,8 +228,9 @@ export function EditMemberDialog({
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="name@example.com"
-                  disabled={updateMutation.isPending}
+                  disabled={updateMutation.isPending || isMember}
                 />
+                {isMember && <p className="text-xs text-muted-foreground">Contact your admin to change your email.</p>}
                 {user?.email && email === user.email && (
                   <div className="flex items-center gap-1.5">
                     {user.email_verified_at ? (
@@ -575,7 +587,13 @@ function ProviderLinkRow({
         <p className="text-sm font-medium text-muted-foreground">{displayName}</p>
         <p className="text-xs text-muted-foreground/70">Not linked</p>
       </div>
-      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setIsEditing(true)}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 text-xs hover:bg-[#FEED01]/8"
+        onClick={() => setIsEditing(true)}
+      >
+        <LinkIcon size={12} weight="bold" />
         Link
       </Button>
     </div>

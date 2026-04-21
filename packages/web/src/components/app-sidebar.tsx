@@ -60,7 +60,7 @@ const allPrimaryNav: NavItem[] = [
   { label: "Channels", icon: <ChatCircleIcon size={18} />, href: "/channels" },
   { label: "Files", icon: <FolderSimpleIcon size={18} />, href: "/files" },
   { label: "Team", icon: <UsersThreeIcon size={18} />, href: "/team" },
-  { label: "Automations", icon: <CalendarDotsIcon size={18} />, href: "/scheduled-tasks" },
+  { label: "Scheduled Tasks", icon: <CalendarDotsIcon size={18} />, href: "/scheduled-tasks" },
   { label: "Skills", icon: <BrainIcon size={18} />, href: "/skills" },
   { label: "Workspace", icon: <FolderIcon size={18} />, href: "/workspace" },
   { label: "Integrations", icon: <LinkSimpleIcon size={18} />, href: "/integrations" },
@@ -111,8 +111,8 @@ export function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="pointer-events-none hover:bg-transparent active:bg-transparent">
-              <div className="flex size-8 shrink-0 items-center justify-center">
-                <img src={logoSrc} alt="Sketch" className="size-7" />
+              <div className="flex size-9 shrink-0 items-center justify-center">
+                <img src={logoSrc} alt="Sketch" className="size-9 dark:invert" />
               </div>
               <div className="flex min-w-0 flex-col text-left">
                 <span className="truncate text-base font-semibold tracking-tight">{identity?.botName ?? "Sketch"}</span>
@@ -142,7 +142,7 @@ export function AppSidebar({
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
-              {setupStatus?.managedUrl && role === "admin" ? (
+              {setupStatus?.managedUrl ? (
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild tooltip="Account">
                     <a href={setupStatus.managedUrl} target="_blank" rel="noopener noreferrer">

@@ -14,12 +14,13 @@ import { Download, Star, Store } from "lucide-react";
 
 interface SkillCardProps {
   skill: Skill;
+  isAdmin?: boolean;
   onCardClick: (skillId: string) => void;
   onDuplicate: (skill: Skill) => void;
   onDelete: (skill: Skill) => void;
 }
 
-export function SkillCard({ skill, onCardClick, onDuplicate, onDelete }: SkillCardProps) {
+export function SkillCard({ skill, isAdmin, onCardClick, onDuplicate, onDelete }: SkillCardProps) {
   return (
     // biome-ignore lint/a11y/useSemanticElements: div instead of button to avoid nested button hydration error
     <div
@@ -48,21 +49,23 @@ export function SkillCard({ skill, onCardClick, onDuplicate, onDelete }: SkillCa
           </span>
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={(e) => e.stopPropagation()}>
-              <DotsThreeIcon size={16} className="text-muted-foreground" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
-            <DropdownMenuItem onClick={() => onDuplicate(skill)}>Duplicate</DropdownMenuItem>
-            {/* TODO: Enable/Disable skill will be implemented later. */}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onClick={() => onDelete(skill)}>
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {isAdmin && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={(e) => e.stopPropagation()}>
+                <DotsThreeIcon size={16} className="text-muted-foreground" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+              <DropdownMenuItem onClick={() => onDuplicate(skill)}>Duplicate</DropdownMenuItem>
+              {/* TODO: Enable/Disable skill will be implemented later. */}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" onClick={() => onDelete(skill)}>
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {/* Skill name */}

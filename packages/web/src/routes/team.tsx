@@ -20,9 +20,8 @@ import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
 import { Card, CardContent } from "@sketch/ui/components/card";
 import { Skeleton } from "@sketch/ui/components/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@sketch/ui/components/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@sketch/ui/components/tooltip";
-import { getInitials } from "@sketch/ui/lib/utils";
+import { cn, getInitials } from "@sketch/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createRoute } from "@tanstack/react-router";
 import { useState } from "react";
@@ -46,35 +45,49 @@ export function TeamPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [removingUser, setRemovingUser] = useState<User | null>(null);
   const [linkingUser, setLinkingUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState("list");
+  const [activeTab, setActiveTab] = useState<"list" | "chart">("list");
 
   const users = data?.users ?? [];
+  const isMember = auth.role === "member";
 
   return (
-    <div className="px-6 py-8">
-      <div className="mx-auto max-w-3xl">
+    <div className="px-10 py-8">
+      <div className="mx-auto max-w-4xl">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold">Team</h1>
-          <Button size="sm" onClick={() => setShowAddDialog(true)}>
-            <PlusIcon size={14} weight="bold" />
-            Add member
-          </Button>
+          <div>
+            <h1 className="text-xl font-semibold text-foreground">Team</h1>
+            <p className="mt-2 text-sm text-muted-foreground">Manage your workspace members and roles.</p>
+          </div>
+          {!isMember && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 hover:bg-[#FEED01]/8"
+              onClick={() => setShowAddDialog(true)}
+            >
+              <PlusIcon size={14} weight="bold" />
+              Add member
+            </Button>
+          )}
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-6">
-        <div className="mx-auto w-full max-w-3xl">
-          <TabsList>
-            <TabsTrigger value="list">List</TabsTrigger>
-            <TabsTrigger value="chart">Chart</TabsTrigger>
-          </TabsList>
+      <div className="mx-auto w-full max-w-4xl">
+        <div className="mt-6 flex items-center gap-6 border-b border-border">
+          <TabButton label="List" isActive={activeTab === "list"} onClick={() => setActiveTab("list")} />
+          <TabButton label="Chart" isActive={activeTab === "chart"} onClick={() => setActiveTab("chart")} />
         </div>
-        <TabsContent value="list">
-          <div className="mx-auto w-full max-w-3xl">
-            {isLoading ? (
+
+        <div className="mt-5">
+          {activeTab === "list" ? (
+            isLoading ? (
               <LoadingSkeleton />
             ) : users.length === 0 ? (
-              <EmptyState onAdd={() => setShowAddDialog(true)} />
+              isMember ? (
+                <p className="text-sm text-muted-foreground">No team members yet.</p>
+              ) : (
+                <EmptyState onAdd={() => setShowAddDialog(true)} />
+              )
             ) : (
               <MemberList
                 users={users}
@@ -83,24 +96,30 @@ export function TeamPage() {
                 onRemove={setRemovingUser}
                 onLink={setLinkingUser}
               />
-            )}
-          </div>
-        </TabsContent>
-        <TabsContent value="chart">{isLoading ? <LoadingSkeleton /> : <OrgChart users={users} />}</TabsContent>
-      </Tabs>
+            )
+          ) : isLoading ? (
+            <LoadingSkeleton />
+          ) : (
+            <OrgChart users={users} />
+          )}
+        </div>
+      </div>
 
-      <AddMemberDialog
-        open={showAddDialog}
-        users={users}
-        onOpenChange={setShowAddDialog}
-        onSuccess={() => {
-          queryClient.invalidateQueries({ queryKey: ["users"] });
-        }}
-      />
+      {!isMember && (
+        <AddMemberDialog
+          open={showAddDialog}
+          users={users}
+          onOpenChange={setShowAddDialog}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ["users"] });
+          }}
+        />
+      )}
 
       <EditMemberDialog
         user={editingUser}
         users={users}
+        isMember={isMember}
         onOpenChange={(open) => !open && setEditingUser(null)}
         onSuccess={() => {
           setEditingUser(null);
@@ -108,17 +127,35 @@ export function TeamPage() {
         }}
       />
 
-      <RemoveMemberDialog
-        user={removingUser}
-        onOpenChange={(open) => !open && setRemovingUser(null)}
-        onSuccess={() => {
-          setRemovingUser(null);
-          queryClient.invalidateQueries({ queryKey: ["users"] });
-        }}
-      />
+      {!isMember && (
+        <RemoveMemberDialog
+          user={removingUser}
+          onOpenChange={(open) => !open && setRemovingUser(null)}
+          onSuccess={() => {
+            setRemovingUser(null);
+            queryClient.invalidateQueries({ queryKey: ["users"] });
+          }}
+        />
+      )}
 
       <LinkProviderDialog user={linkingUser} onOpenChange={(open) => !open && setLinkingUser(null)} />
     </div>
+  );
+}
+
+function TabButton({ label, isActive, onClick }: { label: string; isActive: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "relative pb-3 font-mono text-[12px] uppercase tracking-[0.07em] transition-colors",
+        isActive ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {label}
+      {isActive ? <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-full bg-[#FEED01]" /> : null}
+    </button>
   );
 }
 
@@ -260,7 +297,7 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
       </div>
       <p className="mt-4 text-sm font-medium">Your team's empty!</p>
       <p className="mt-1 text-xs text-muted-foreground">Add your first team member to get started.</p>
-      <Button size="sm" onClick={onAdd} className="mt-4">
+      <Button variant="ghost" size="sm" onClick={onAdd} className="mt-4 gap-1.5 hover:bg-[#FEED01]/8">
         <PlusIcon size={14} weight="bold" />
         Add member
       </Button>

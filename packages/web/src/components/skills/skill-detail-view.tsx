@@ -24,6 +24,7 @@ import ReactMarkdown from "react-markdown";
 
 interface SkillDetailViewProps {
   skill: Skill;
+  isAdmin: boolean;
   activeTab: "details" | "permissions";
   onTabChange: (tab: "details" | "permissions") => void;
   onBack: () => void;
@@ -36,6 +37,7 @@ interface SkillDetailViewProps {
 
 export function SkillDetailView({
   skill,
+  isAdmin,
   activeTab,
   onTabChange,
   onBack,
@@ -89,26 +91,28 @@ export function SkillDetailView({
               Add Skill
             </Button>
           ) : (
-            <>
-              <Button variant="ghost" size="icon" className="size-8" onClick={onEdit}>
-                <PencilSimpleIcon size={16} className="text-muted-foreground" />
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="size-7">
-                    <DotsThreeIcon size={16} className="text-muted-foreground" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => onDuplicate(skill)}>Duplicate</DropdownMenuItem>
-                  {/* TODO: Enable/Disable skill will be implemented later. */}
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" onClick={() => onDelete(skill)}>
-                    Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
+            isAdmin && (
+              <>
+                <Button variant="ghost" size="icon" className="size-8" onClick={onEdit}>
+                  <PencilSimpleIcon size={16} className="text-muted-foreground" />
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="size-7">
+                      <DotsThreeIcon size={16} className="text-muted-foreground" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => onDuplicate(skill)}>Duplicate</DropdownMenuItem>
+                    {/* TODO: Enable/Disable skill will be implemented later. */}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem variant="destructive" onClick={() => onDelete(skill)}>
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )
           )}
         </div>
       </div>
@@ -147,12 +151,16 @@ export function SkillDetailView({
 
           {activeTab === "permissions" && (
             <div className="mt-6">
-              <AdminPermissionsView
-                skill={skill}
-                enabled={enabled}
-                activeChannels={activeChannels}
-                activeIndividuals={activeIndividuals}
-              />
+              {isAdmin ? (
+                <AdminPermissionsView
+                  skill={skill}
+                  enabled={enabled}
+                  activeChannels={activeChannels}
+                  activeIndividuals={activeIndividuals}
+                />
+              ) : (
+                <MemberStatusLabel enabled={enabled} />
+              )}
             </div>
           )}
         </div>
@@ -429,5 +437,20 @@ function AdminPermissionsView({
         </div>
       </div>
     </div>
+  );
+}
+
+function MemberStatusLabel({ enabled }: { enabled: boolean }) {
+  if (enabled) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs font-medium text-success">
+        <span className="text-sm">⚡</span> Enabled for you
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+      <span className="text-sm">⏸</span> Not available
+    </span>
   );
 }

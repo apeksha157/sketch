@@ -1,0 +1,1589 @@
+/* Onboarding conversational UI — scoped design tokens and animations */
+
+.onboarding-root {
+  --ob-yellow: #feed01;
+  --ob-yellow-fg: #6b6200; /* dark yellow for text/icons on light backgrounds */
+  --ob-bg: #f7f7f5;
+  --ob-container-bg: #ffffff;
+  --ob-card: linear-gradient(180deg, #ffffff 0%, #f4f4f2 100%);
+  --ob-card-border: #d5d5d3;
+  --ob-text: #040404;
+  --ob-text-dim: #3d3d39;
+  --ob-text-muted: #5f5e5a;
+  --ob-divider: #d5d5d3;
+  --ob-green: #1a7f37;
+  --ob-error: rgba(220, 38, 38, 0.8);
+  --ob-error-border: rgba(220, 38, 38, 0.35);
+  --ob-green-border: rgba(26, 127, 55, 0.35);
+
+  --ob-font-body: "Inter", sans-serif;
+  --ob-font-mono: "IBM Plex Mono", monospace;
+  --ob-font-deco: "Gloria Hallelujah", cursive;
+
+  /* ── Type scale — minimum 10px everywhere ── */
+  --ob-fs-xs: 10px; /* mono labels, badges, avatar letters */
+  --ob-fs-sm: 11px; /* secondary labels, chips, row labels */
+  --ob-fs-base: 12px; /* body small, field labels, status text */
+  --ob-fs-md: 13px; /* body regular, input values */
+  --ob-fs-lg: 14px; /* body large, button text, message text */
+  --ob-fs-xl: 16px; /* card values, primary values */
+  --ob-fs-2xl: 18px; /* header logo */
+  --ob-fs-3xl: 32px; /* finish headline */
+
+  font-family: var(--ob-font-body);
+  background: var(--ob-bg);
+  color: var(--ob-text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* ── Animations ── */
+
+@keyframes ob-fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ob-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ob-rowReveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ob-animate-in {
+  animation: ob-fadeIn 0.4s ease-out both;
+}
+
+.ob-animate-finish {
+  animation: ob-fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.ob-animate-spin {
+  animation: ob-spin 1s linear infinite;
+}
+
+.ob-animate-row {
+  animation: ob-rowReveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ── Container ── */
+
+.ob-container {
+  width: 100%;
+  max-width: 560px;
+  height: min(740px, 90vh);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--ob-container-bg);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+/* ── Header ── */
+
+.ob-header {
+  padding: 20px 28px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+}
+
+.ob-header-left {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ob-header-logo {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-2xl);
+  font-weight: 700;
+  color: var(--ob-text);
+}
+
+.ob-header-setup {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+}
+
+/* ── Step track ── */
+
+.ob-track {
+  padding: 8px 28px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  background: var(--ob-container-bg);
+  position: relative;
+}
+
+.ob-track::after {
+  content: "";
+  position: absolute;
+  bottom: -20px;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(to bottom, var(--ob-container-bg), transparent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.ob-track-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 100px;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  cursor: default;
+  transition: background 0.2s;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ob-track-pill[data-clickable="true"] {
+  cursor: pointer;
+}
+
+.ob-track-pill[data-state="active"] {
+  background: rgba(107, 98, 0, 0.08);
+  color: var(--ob-yellow-fg);
+}
+
+.ob-track-pill[data-state="done"] {
+  background: transparent;
+  color: var(--ob-text-muted);
+}
+
+.ob-track-pill[data-state="inactive"] {
+  color: rgba(4, 4, 4, 0.3);
+}
+
+.ob-track-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.ob-track-dot[data-state="active"] {
+  background: var(--ob-yellow-fg);
+}
+
+.ob-track-dot[data-state="done"] {
+  display: none;
+}
+
+.ob-track-dot[data-state="inactive"] {
+  background: rgba(4, 4, 4, 0.2);
+}
+
+.ob-track-connector {
+  width: 10px;
+  height: 1px;
+  margin: 0 4px;
+  background: var(--ob-divider);
+}
+
+.ob-track-connector[data-done="true"] {
+  background: rgba(107, 98, 0, 0.35);
+}
+
+/* ── Chat area ── */
+
+.ob-chat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 28px 28px;
+  scroll-behavior: smooth;
+}
+
+/* ── Messages ── */
+
+.ob-msg {
+  margin-bottom: 8px;
+}
+
+.ob-msg-label {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ob-msg-label-sketch {
+  color: var(--ob-yellow-fg);
+}
+
+.ob-msg-label-user {
+  color: var(--ob-text-dim);
+  justify-content: flex-end;
+}
+
+.ob-msg-body {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 400;
+  line-height: 1.7;
+  color: var(--ob-text);
+}
+
+.ob-msg-body-sketch {
+  padding-left: 32px;
+}
+
+.ob-msg-body-dim {
+  font-size: 12px;
+  color: var(--ob-text-muted);
+  line-height: 1.5;
+}
+
+/* Continuation message — no label row, align body with the batch above */
+.ob-msg-continued {
+  margin-top: 0;
+}
+
+.ob-msg-continued .ob-msg-body {
+  padding-left: 32px;
+}
+
+.ob-msg-body-user {
+  text-align: right;
+}
+
+/* ── User message pill ── */
+
+.ob-user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #ebebea;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 400;
+  color: var(--ob-text);
+}
+
+/* ── Section divider ── */
+
+.ob-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 0;
+}
+
+.ob-divider-line {
+  flex: 1;
+  height: 1px;
+  background: var(--ob-divider);
+}
+
+.ob-divider-label {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--ob-text-muted);
+  white-space: nowrap;
+}
+
+/* ── Widgets (indented like message body) ── */
+
+.ob-widget {
+  padding-left: 32px;
+  margin-top: 16px;
+  margin-bottom: 0;
+}
+
+/* ── Auth picker ── */
+
+.ob-auth-card {
+  background: var(--ob-card);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+  border: 1px solid var(--ob-card-border);
+  max-width: 340px;
+  text-align: left;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  color: var(--ob-text);
+}
+
+.ob-auth-card:hover {
+  border-color: rgba(4, 4, 4, 0.28);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.ob-auth-icon-container {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ob-auth-title {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 600;
+  color: var(--ob-text);
+}
+
+.ob-auth-subtitle {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  color: var(--ob-text-muted);
+}
+
+/* ── Workspace card ── */
+
+.ob-workspace-card {
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 20px 24px 24px;
+  max-width: 340px;
+}
+
+.ob-workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--ob-divider);
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow-fg);
+}
+
+/* Identity hero — large icon + name + role badge */
+.ob-ws-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.ob-ws-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(107, 98, 0, 0.08);
+  color: var(--ob-yellow-fg);
+  font-family: var(--ob-font-mono);
+  font-size: 20px;
+  font-weight: 700;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.ob-ws-icon.ob-ws-icon-img {
+  background: transparent;
+}
+
+.ob-ws-identity-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ob-ws-identity-name {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xl);
+  font-weight: 700;
+  color: var(--ob-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ob-ws-identity-sub {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  margin-top: 3px;
+  letter-spacing: 0.03em;
+}
+
+/* Stats chips row */
+.ob-ws-stats {
+  display: flex;
+  gap: 8px;
+}
+
+.ob-ws-stat-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
+  background: rgba(4, 4, 4, 0.04);
+  border: 1px solid rgba(4, 4, 4, 0.07);
+  border-radius: 10px;
+  padding: 10px 12px;
+  gap: 8px;
+}
+
+.ob-ws-stat-number {
+  font-family: var(--ob-font-body);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ob-text);
+  line-height: 1;
+}
+
+.ob-ws-stat-label {
+  font-family: var(--ob-font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ob-text-muted);
+  margin-top: 3px;
+}
+
+.ob-ws-stat-avatars {
+  display: flex;
+  align-items: center;
+}
+
+.ob-ws-stat-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.ob-ws-mini-chip {
+  font-family: var(--ob-font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--ob-text-muted);
+  background: rgba(4, 4, 4, 0.06);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+/* Google auth — account email row */
+.ob-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(4, 4, 4, 0.04);
+  border: 1px solid rgba(4, 4, 4, 0.07);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.ob-account-email {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Google auth — user profile avatar (circle) */
+.ob-user-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #4285f4;
+  color: #fff;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Role badge */
+.ob-role-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgba(4, 4, 4, 0.05);
+  color: var(--ob-text-dim);
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+
+.ob-role-badge-admin {
+  background: rgba(107, 98, 0, 0.09);
+  color: var(--ob-yellow-fg);
+}
+
+/* Stacked member avatars (used inside stat chip) */
+.ob-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--ob-container-bg);
+  font-family: var(--ob-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+  margin-left: -5px;
+  flex-shrink: 0;
+}
+
+.ob-ws-stat-avatars .ob-avatar:first-child {
+  margin-left: 0;
+}
+
+/* ── Unified button system ── */
+
+/* Base: shared shape, font, and sizing for all action buttons */
+.ob-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 24px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: opacity 0.15s, border-color 0.15s, background 0.15s, color 0.15s;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ob-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Primary: yellow fill */
+.ob-btn-primary {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+
+.ob-btn-primary:not(:disabled):hover {
+  opacity: 0.92;
+  box-shadow: 0 0 20px rgba(254, 237, 1, 0.35), 0 0 60px rgba(254, 237, 1, 0.1);
+}
+
+/* Ghost: bordered, dim text — for secondary/skip actions */
+.ob-btn-ghost {
+  background: transparent;
+  border-color: rgba(4, 4, 4, 0.14);
+  color: var(--ob-text-dim);
+}
+
+.ob-btn-ghost:not(:disabled):hover {
+  border-color: rgba(4, 4, 4, 0.28);
+  color: var(--ob-text);
+  background: rgba(4, 4, 4, 0.03);
+}
+
+/* Dark-on-yellow: used inside the yellow finish card */
+.ob-btn-dark {
+  background: #0a0a0a;
+  color: var(--ob-yellow);
+}
+
+.ob-btn-dark:not(:disabled):hover {
+  opacity: 0.88;
+}
+
+/* Legacy aliases — keeps old class names working during transition */
+.ob-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 24px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  text-decoration: none;
+}
+.ob-cta-primary {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+.ob-cta-primary:hover {
+  opacity: 0.88;
+}
+.ob-cta-dark-on-yellow {
+  background: #0a0a0a;
+  color: var(--ob-yellow);
+}
+.ob-cta-dark-on-yellow:hover {
+  opacity: 0.88;
+}
+.ob-cta:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── QR card ── */
+
+.ob-qr-card {
+  width: 100%;
+  max-width: 320px;
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.ob-qr-card[data-connected="true"] {
+  border-color: var(--ob-green-border);
+}
+
+.ob-qr-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow-fg);
+  padding-bottom: 14px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--ob-divider);
+}
+
+.ob-qr-header[data-connected="true"] {
+  color: var(--ob-green);
+}
+
+.ob-qr-container {
+  width: 100%;
+  aspect-ratio: 1;
+  background: #fff;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.ob-qr-container canvas,
+.ob-qr-container img {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.ob-qr-container[data-verifying="true"] svg {
+  opacity: 0.15;
+  filter: blur(1px);
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+.ob-qr-verifying-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+}
+
+.ob-qr-wa-logo {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  background: #fff;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ob-qr-text {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-md);
+  font-weight: 500;
+  color: var(--ob-text);
+  text-align: center;
+  margin-top: 16px;
+}
+
+.ob-qr-connected {
+  color: var(--ob-green);
+  font-weight: 400;
+}
+
+.ob-qr-subtext {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  letter-spacing: 0.04em;
+  color: var(--ob-text-muted);
+  text-align: center;
+  margin-top: 6px;
+}
+
+.ob-qr-success-circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--ob-green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── API key input ── */
+
+.ob-api-card {
+  max-width: 400px;
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.ob-api-toggle {
+  display: flex;
+  background: #ebebea;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 10px;
+  padding: 3px;
+  margin-bottom: 20px;
+}
+
+.ob-api-toggle-tab {
+  flex: 1 1 auto;
+  padding: 8px 12px;
+  white-space: nowrap;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.ob-api-toggle-tab[data-active="true"] {
+  background: #ffffff;
+  color: var(--ob-text);
+}
+
+.ob-api-field-label {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+  margin-bottom: 6px;
+}
+
+.ob-api-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-md);
+  color: var(--ob-text);
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 16px;
+}
+
+.ob-api-input::placeholder {
+  color: var(--ob-text-muted);
+}
+
+.ob-api-input:focus {
+  border-color: #3d3d39;
+}
+
+.ob-api-input[data-state="error"] {
+  border-color: var(--ob-error-border);
+}
+
+.ob-api-input[data-state="valid"] {
+  border-color: var(--ob-green-border);
+}
+
+.ob-api-select {
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-md);
+  color: var(--ob-text);
+  outline: none;
+  transition: border-color 0.2s;
+  margin-bottom: 16px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.ob-api-select option {
+  background: #ffffff;
+  color: var(--ob-text);
+}
+
+.ob-api-btn {
+  /* Extends ob-btn visually — full width variant */
+  width: 100%;
+  padding: 13px 24px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.ob-api-btn[data-state="default"] {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+}
+
+.ob-api-btn[data-state="default"]:not(:disabled):hover {
+  opacity: 0.88;
+}
+
+.ob-api-btn[data-state="loading"] {
+  background: var(--ob-yellow);
+  color: #0a0a0a;
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ob-api-btn[data-state="success"] {
+  background: var(--ob-green);
+  color: #fff;
+}
+
+.ob-api-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.ob-api-error {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  color: var(--ob-error);
+  margin-top: 8px;
+}
+
+.ob-api-success {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  color: var(--ob-green);
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.ob-api-help {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+  text-align: center;
+  margin-top: 8px;
+}
+
+.ob-api-help a {
+  color: var(--ob-text-muted);
+  text-decoration: none;
+}
+
+.ob-api-help a:hover {
+  color: var(--ob-text-dim);
+}
+
+.ob-api-max-info {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  color: var(--ob-text-primary);
+  line-height: 1.5;
+  padding: 8px 0;
+}
+
+.ob-api-max-info p {
+  margin: 0 0 6px 0;
+}
+
+.ob-api-max-detail {
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+}
+
+/* ── Provisioning card ── */
+
+/* Outer shell — matches workspace-card / api-card / qr-card exactly */
+.ob-provision-card {
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 400px;
+}
+
+/* ── Interior: headline + copy ── */
+
+.ob-provision-headline {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 700;
+  color: var(--ob-text);
+  margin-bottom: 10px;
+}
+
+.ob-provision-subhead {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  line-height: 1.55;
+  margin: 0 0 10px 0;
+}
+
+.ob-provision-eta {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  letter-spacing: 0.04em;
+  margin: 0 0 20px 0;
+}
+
+/* ── Interior: progress block ── */
+
+.ob-provision-progress {
+  margin-bottom: 20px;
+}
+
+.ob-provision-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.ob-provision-progress-label {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+}
+
+.ob-provision-timer {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  letter-spacing: 0.04em;
+}
+
+.ob-provision-bar-track {
+  height: 8px;
+  background: #ebebea;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ob-provision-bar-fill {
+  height: 100%;
+  background: var(--ob-yellow);
+  border-radius: 4px;
+  transition: width 1s linear;
+}
+
+.ob-provision-bar-fill[data-complete="true"] {
+  background: var(--ob-green);
+}
+
+.ob-provision-status {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  margin-bottom: 8px;
+  animation: ob-fadeIn 0.4s ease;
+}
+
+/* ── Interior: footnote ── */
+
+.ob-provision-footnote {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  line-height: 1.5;
+  margin: 0 0 20px 0;
+}
+
+/* ── Interior: "while you wait" nested card ── */
+
+.ob-provision-wait-card {
+  overflow: hidden;
+  background: #f8f5e6;
+  border: 1px solid #d9d4c7;
+  border-radius: 12px;
+}
+
+.ob-provision-wait-content {
+  padding: 16px 18px;
+  flex: 1;
+  min-width: 0;
+}
+
+.ob-provision-wait-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.ob-provision-wait-label {
+  font-family: var(--ob-font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow-fg);
+  margin-bottom: 2px;
+}
+
+.ob-provision-wait-title {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  font-weight: 700;
+  color: var(--ob-text);
+}
+
+.ob-provision-wait-body {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-dim);
+  line-height: 1.55;
+  margin: 0;
+}
+
+.ob-provision-wait-cta {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ob-text);
+  background: #fdf8d8;
+  border: 1px solid #d9d4c7;
+  border-radius: 10px;
+  padding: 8px 16px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ob-provision-wait-cta:hover {
+  color: #1a1a00;
+  background: var(--ob-yellow);
+  border-color: var(--ob-yellow);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(254, 237, 1, 0.3);
+}
+
+.ob-provision-wait-cta:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* dark overrides */
+.dark .ob-provision-bar-track {
+  background: #2a2a28;
+}
+
+.dark .ob-provision-wait-card {
+  background: linear-gradient(135deg, #1a1c14 0%, #1c1a18 100%);
+  border: 1px solid rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-provision-wait-cta {
+  color: var(--ob-text);
+  background: rgba(254, 237, 1, 0.08);
+  border-color: rgba(254, 237, 1, 0.2);
+}
+.dark .ob-provision-wait-cta:hover {
+  color: #1a1a00;
+  background: var(--ob-yellow);
+  border-color: var(--ob-yellow);
+  box-shadow: 0 2px 12px rgba(254, 237, 1, 0.2);
+}
+
+/* ── Yellow finish card ── */
+
+.ob-finish {
+  background: var(--ob-yellow);
+  border-radius: 20px;
+  padding: 40px 32px;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.ob-finish-heading {
+  font-family: var(--ob-font-deco);
+  font-size: var(--ob-fs-3xl);
+  font-weight: 400;
+  color: #0a0a0a;
+  margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.ob-finish-icon {
+  height: 40px;
+  width: auto;
+}
+
+.ob-finish-subtitle {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  color: rgba(10, 10, 10, 0.6);
+  margin-bottom: 24px;
+}
+
+/* ── Loading spinner ── */
+
+.ob-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.1);
+  border-top-color: var(--ob-text);
+  border-radius: 50%;
+  animation: ob-spin 0.8s linear infinite;
+}
+
+.ob-spinner-dark {
+  border-color: rgba(0, 0, 0, 0.1);
+  border-top-color: #0a0a0a;
+}
+
+/* ── ConnCard (connection status) ── */
+
+.ob-conn-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 32px;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  color: var(--ob-text-dim);
+  line-height: 1.7;
+}
+
+.ob-conn-card-success {
+  color: var(--ob-text);
+}
+
+.ob-conn-green {
+  color: var(--ob-green);
+  font-weight: 400;
+}
+
+/* ── Example prompts ── */
+
+.ob-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 32px;
+}
+
+.ob-prompt-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-md);
+  font-style: italic;
+  color: var(--ob-text-dim);
+  line-height: 1.6;
+}
+
+.ob-prompt-arrow {
+  color: var(--ob-yellow-fg);
+  font-style: normal;
+  flex-shrink: 0;
+}
+
+/* ── Bottom spacer ──
+   Must be tall enough that any step divider can be scrolled to
+   the top of the chat viewport. We use a large min-height so
+   scrollTo always has room; the spacer just adds empty space
+   below the last real content. */
+
+.ob-bottom-spacer {
+  flex-shrink: 0;
+}
+
+/* ── Dark mode ── */
+
+.dark .onboarding-root {
+  --ob-yellow-fg: var(--ob-yellow);
+  --ob-bg: #040404;
+  --ob-container-bg: #111110;
+  --ob-card: linear-gradient(180deg, #1c1c1a 0%, #111110 100%);
+  --ob-card-border: #2c2c2a;
+  --ob-text: #fafaf8;
+  --ob-text-dim: #b0b0aa;
+  --ob-text-muted: #5f5e5a;
+  --ob-divider: #2c2c2a;
+  --ob-green: #30d158;
+  --ob-error: rgba(255, 59, 48, 0.8);
+  --ob-error-border: rgba(255, 59, 48, 0.35);
+  --ob-green-border: rgba(48, 209, 88, 0.35);
+}
+
+.dark .ob-container {
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.dark .ob-track-pill[data-state="active"] {
+  background: rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-track-pill[data-state="inactive"] {
+  color: rgba(245, 245, 240, 0.3);
+}
+
+.dark .ob-track-dot[data-state="inactive"] {
+  background: rgba(245, 245, 240, 0.2);
+}
+
+.dark .ob-track-connector[data-done="true"] {
+  background: rgba(254, 237, 1, 0.25);
+}
+
+.dark .ob-user-pill {
+  background: rgba(245, 245, 240, 0.06);
+}
+
+.dark .ob-auth-card:hover {
+  border-color: rgba(245, 245, 240, 0.28);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.dark .ob-ws-icon {
+  background: rgba(254, 237, 1, 0.08);
+}
+
+.dark .ob-ws-stat-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+.dark .ob-ws-mini-chip {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.dark .ob-account-row {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.dark .ob-role-badge {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-role-badge-admin {
+  background: rgba(254, 237, 1, 0.1);
+}
+
+.dark .ob-avatar {
+  border-color: var(--ob-container-bg);
+}
+
+.dark .ob-btn-ghost {
+  border-color: rgba(245, 245, 240, 0.14);
+}
+
+.dark .ob-btn-ghost:not(:disabled):hover {
+  border-color: rgba(245, 245, 240, 0.28);
+  background: rgba(245, 245, 240, 0.03);
+  color: var(--ob-text);
+}
+
+.dark .ob-api-toggle {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-api-toggle-tab[data-active="true"] {
+  background: rgba(245, 245, 240, 0.1);
+}
+
+.dark .ob-api-input,
+.dark .ob-api-select {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-api-input:focus {
+  border-color: rgba(245, 245, 240, 0.4);
+}
+
+.dark .ob-api-select option {
+  background: #1a1a18;
+}
+
+.dark .ob-spinner {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .ob-spinner-dark {
+  border-color: rgba(255, 255, 255, 0.1);
+  border-top-color: #f5f5f0;
+}
+
+/* ── Theme toggle button ── */
+
+.ob-theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--ob-text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.ob-theme-toggle:hover {
+  background: rgba(4, 4, 4, 0.06);
+  color: var(--ob-yellow-fg);
+}
+
+.dark .ob-theme-toggle:hover {
+  background: rgba(245, 245, 240, 0.08);
+  color: var(--ob-yellow-fg);
+}
+
+/* ── Danger message body ── */
+
+.ob-msg-body-danger {
+  color: var(--ob-error);
+}
+
+/* ── Admin email pill (inline in holding screen) ── */
+
+.ob-admin-email-pill {
+  display: inline;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-lg);
+  font-weight: 400;
+  background: rgba(107, 98, 0, 0.08);
+  color: var(--ob-yellow-fg);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.dark .ob-admin-email-pill {
+  background: rgba(254, 237, 1, 0.1);
+  color: var(--ob-yellow-fg);
+}
+
+/* ── Finish card CTA row ── */
+
+.ob-finish-ctas {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 70%;
+  margin: 0 auto;
+}
+
+.ob-finish-ctas .ob-btn {
+  padding: 12px 16px;
+  font-size: var(--ob-fs-sm);
+}
+
+.ob-finish-ctas-row {
+  display: flex;
+  gap: 4px;
+}
+
+.ob-finish-ctas-row .ob-btn {
+  flex: 1;
+}
+
+/* Ghost button on yellow background needs dark border */
+.ob-btn.ob-btn-ghost-on-yellow {
+  border: 1.5px solid rgba(10, 10, 10, 0.8) !important;
+  color: rgba(10, 10, 10, 0.8);
+  background: transparent;
+}
+
+.ob-btn.ob-btn-ghost-on-yellow:not(:disabled):hover {
+  border-color: rgba(10, 10, 10, 0.8) !important;
+  color: #feed01;
+  background: rgba(10, 10, 10, 0.8);
+}
+
+/* ── Login page ── */
+
+.ob-login-container {
+  height: auto;
+  min-height: 0;
+  max-height: min(740px, 90vh);
+}
+
+.ob-login-container .ob-header {
+  padding: 20px 28px 8px;
+}
+
+.ob-login-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0 28px 28px;
+  gap: 0;
+}
+
+.ob-login-body .ob-widget {
+  margin-top: 8px;
+}
+
+/* Space between auth cards and error message that follows */
+.ob-widget + .ob-msg {
+  margin-top: 16px;
+}
+
+.ob-login-footer {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+  padding-left: 32px;
+  margin-top: 20px;
+  opacity: 0.6;
+}
+
+.ob-login-signup-link {
+  color: var(--ob-text-dim);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.ob-login-signup-link:hover {
+  color: var(--ob-yellow-fg);
+}

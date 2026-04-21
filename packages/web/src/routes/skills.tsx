@@ -14,6 +14,7 @@ import {
   getCategoryLabel,
   isSkillEnabled,
 } from "@/lib/skills-data";
+import { useDashboardAuth } from "@/routes/dashboard";
 import { PlusIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import { Skeleton } from "@sketch/ui/components/skeleton";
@@ -165,6 +166,8 @@ export function SkillsPage() {
   });
 
   // ── Derived data ──────────────────────────────────────────
+  const auth = useDashboardAuth();
+  const isAdmin = auth.role === "admin";
 
   // TODO: Switch the active tab to per-user visibility once viewer identity is available
   // by using `isSkillActiveForUser` and `getSkillSourcesForUser`.
@@ -296,7 +299,7 @@ export function SkillsPage() {
   // ── Loading skeleton ───────────────────────────────────────
   if (skillsQuery.isLoading && skills.length === 0) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-4xl px-10 py-8">
         <div className="flex items-start justify-between">
           <Skeleton className="h-7 w-24" />
           <Skeleton className="h-8 w-32" />
@@ -317,10 +320,10 @@ export function SkillsPage() {
 
   if (skillsQuery.isError && skills.length === 0) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-4xl px-10 py-8">
         <div>
-          <h1 className="text-xl font-bold">Skills</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Discover and manage your bot&apos;s capabilities.</p>
+          <h1 className="text-xl font-semibold text-foreground">Skills</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Discover and manage your bot&apos;s capabilities.</p>
         </div>
         <div className="mt-6 rounded-xl border border-destructive/20 bg-destructive/5 p-6">
           <h2 className="text-sm font-semibold text-destructive">Couldn&apos;t load skills</h2>
@@ -341,9 +344,10 @@ export function SkillsPage() {
   // ── Explore-preview mode ───────────────────────────────────
   if (mode === "explore-preview" && selectedSkill) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-4xl px-10 py-8">
         <SkillDetailView
           skill={selectedSkill}
+          isAdmin={isAdmin}
           activeTab="details"
           onTabChange={() => {}}
           onBack={handleBackToListing}
@@ -366,9 +370,10 @@ export function SkillsPage() {
   // ── View mode ──────────────────────────────────────────────
   if (mode === "view" && selectedSkill) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-4xl px-10 py-8">
         <SkillDetailView
           skill={selectedSkill}
+          isAdmin={isAdmin}
           activeTab={activeTab}
           onTabChange={setActiveTab}
           onBack={handleBackToListing}
@@ -389,7 +394,7 @@ export function SkillsPage() {
   // ── Edit / Create mode ─────────────────────────────────────
   if (mode === "edit" || mode === "create") {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-8">
+      <div className="mx-auto max-w-4xl px-10 py-8">
         <SkillDetailEdit
           skill={mode === "edit" && selectedSkill ? selectedSkill : null}
           activeTab={activeTab}
@@ -421,21 +426,23 @@ export function SkillsPage() {
           : "no-skills";
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold">Skills</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Discover and manage your bot&apos;s capabilities.</p>
+          <h1 className="text-xl font-semibold text-foreground">Skills</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Discover and manage your bot&apos;s capabilities.</p>
         </div>
-        <Button size="sm" className="gap-1.5" onClick={handleCreateClick}>
-          <PlusIcon size={14} weight="bold" />
-          Create Skill
-        </Button>
+        {isAdmin && (
+          <Button variant="ghost" size="sm" className="gap-1.5 hover:bg-[#FEED01]/8" onClick={handleCreateClick}>
+            <PlusIcon size={14} weight="bold" />
+            Create Skill
+          </Button>
+        )}
       </div>
 
       {/* Active / Explore tabs */}
-      <div className="mt-4 flex gap-4 border-b border-border">
+      <div hidden className="mt-6 flex items-center gap-6 border-b border-border">
         {(["active", "explore"] as const).map((tab) => {
           const count = tab === "active" ? totalActiveCount : skills.length;
           return (
@@ -444,28 +451,28 @@ export function SkillsPage() {
               type="button"
               onClick={() => handleListingTabChange(tab)}
               className={cn(
-                "relative py-2 text-sm capitalize transition-colors",
-                listingTab === tab
-                  ? "font-medium text-foreground"
-                  : "font-normal text-muted-foreground/60 hover:text-muted-foreground",
+                "relative pb-3 font-mono text-[12px] uppercase tracking-[0.07em] transition-colors",
+                listingTab === tab ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {tab}
               <span className="ml-1.5 text-xs font-normal text-muted-foreground/60">{count}</span>
-              {listingTab === tab && <span className="absolute inset-x-0 bottom-0 h-0.5 bg-primary" />}
+              {listingTab === tab && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-full bg-[#FEED01]" />}
             </button>
           );
         })}
       </div>
 
       {/* Filter bar */}
-      <SkillsFilterBar
-        activeCategories={activeCategories}
-        onCategoryToggle={handleCategoryToggle}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        searchPlaceholder={listingTab === "active" ? "Search active skills..." : "Search all skills..."}
-      />
+      <div hidden>
+        <SkillsFilterBar
+          activeCategories={activeCategories}
+          onCategoryToggle={handleCategoryToggle}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          searchPlaceholder={listingTab === "active" ? "Search active skills..." : "Search all skills..."}
+        />
+      </div>
 
       {/* Grid or empty state */}
       <div className="mt-6">
@@ -476,6 +483,7 @@ export function SkillsPage() {
             category={activeCategories.length > 0 ? activeCategories.map(getCategoryLabel).join(", ") : undefined}
             onCreateClick={handleCreateClick}
             onClearSearch={searchQuery.trim() ? () => setSearchQuery("") : undefined}
+            showCreateButton={isAdmin}
           />
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -483,6 +491,7 @@ export function SkillsPage() {
               <SkillCard
                 key={skill.id}
                 skill={skill}
+                isAdmin={isAdmin}
                 onCardClick={handleCardClick}
                 onDuplicate={handleDuplicate}
                 onDelete={handleDeleteClick}
