@@ -6,6 +6,8 @@ interface ProvisioningCardProps {
   onComplete: () => void;
   /** Duration in ms before auto-completing (default 15000) */
   duration?: number;
+  /** When true, render in the completed state instantly and skip timers. */
+  frozen?: boolean;
 }
 
 const STATUS_MESSAGES = [
@@ -19,15 +21,22 @@ const STATUS_MESSAGES = [
 const STATUS_INTERVAL = 15_000;
 
 /** Provisioning progress card shown while the private instance is being set up. */
-export function ProvisioningCard({ companyName, email, onComplete, duration = 60_000 }: ProvisioningCardProps) {
-  const [elapsed, setElapsed] = useState(0);
+export function ProvisioningCard({
+  companyName,
+  email,
+  onComplete,
+  duration = 60_000,
+  frozen = false,
+}: ProvisioningCardProps) {
+  const [elapsed, setElapsed] = useState(frozen ? duration : 0);
   const [statusIndex, setStatusIndex] = useState(0);
-  const [complete, setComplete] = useState(false);
+  const [complete, setComplete] = useState(frozen);
   const startRef = useRef(Date.now());
-  const completedRef = useRef(false);
+  const completedRef = useRef(frozen);
 
   // Elapsed timer
   useEffect(() => {
+    if (frozen) return;
     const interval = setInterval(() => {
       const now = Date.now();
       const ms = now - startRef.current;
@@ -41,17 +50,18 @@ export function ProvisioningCard({ companyName, email, onComplete, duration = 60
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [duration, onComplete]);
+  }, [duration, onComplete, frozen]);
 
   // Rotating status message
   useEffect(() => {
+    if (frozen) return;
     const interval = setInterval(() => {
       setStatusIndex((prev) => (prev + 1) % STATUS_MESSAGES.length);
     }, STATUS_INTERVAL);
     return () => clearInterval(interval);
-  }, []);
+  }, [frozen]);
 
-  const progress = Math.min(100, (elapsed / duration) * 100);
+  const progress = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 100;
 
   const minutes = Math.floor(elapsed / 60_000);
   const seconds = Math.floor((elapsed % 60_000) / 1000);
@@ -103,9 +113,7 @@ export function ProvisioningCard({ companyName, email, onComplete, duration = 60
                 Book a call &rarr;
               </a>
             </div>
-            <p className="ob-provision-wait-body">
-              Grab 15 minutes with our founder. Ask anything about Sketch, tell us what you're building, or just say hi.
-            </p>
+            <p className="ob-provision-wait-body">Grab 15 min with our founder — ask anything or say hi.</p>
           </div>
         </div>
       </div>

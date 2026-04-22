@@ -282,6 +282,49 @@
   line-height: 1.5;
 }
 
+.ob-trial-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--ob-font-body);
+  font-size: inherit;
+  font-weight: 500;
+  color: var(--ob-text);
+  background: rgba(254, 237, 1, 0.5);
+  border-radius: 999px;
+  padding: 1px 9px;
+  white-space: nowrap;
+}
+
+.ob-trial-pill::before {
+  content: "✦";
+  font-size: 0.8em;
+  color: #040404;
+  display: inline-block;
+  animation: ob-trial-sparkle 3.6s ease-in-out infinite;
+}
+
+@keyframes ob-trial-sparkle {
+  0%,
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 0.85;
+  }
+  50% {
+    transform: scale(1.15) rotate(15deg);
+    opacity: 1;
+  }
+}
+
+.dark .ob-trial-pill {
+  background: rgba(254, 237, 1, 0.18);
+  color: var(--ob-text);
+}
+
+.dark .ob-trial-pill::before {
+  color: var(--ob-yellow);
+}
+
 /* Continuation message — no label row, align body with the batch above */
 .ob-msg-continued {
   margin-top: 0;
@@ -636,7 +679,6 @@
 
 .ob-btn-primary:not(:disabled):hover {
   opacity: 0.92;
-  box-shadow: 0 0 20px rgba(254, 237, 1, 0.35), 0 0 60px rgba(254, 237, 1, 0.1);
 }
 
 /* Ghost: bordered, dim text — for secondary/skip actions */
@@ -1180,8 +1222,8 @@
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--ob-text);
-  background: #fdf8d8;
-  border: 1px solid #d9d4c7;
+  background: #ffffff;
+  border: 1px solid #c7c2b4;
   border-radius: 10px;
   padding: 8px 16px;
   text-decoration: none;
@@ -1190,11 +1232,11 @@
 }
 
 .ob-provision-wait-cta:hover {
-  color: #1a1a00;
-  background: var(--ob-yellow);
-  border-color: var(--ob-yellow);
+  color: var(--ob-text);
+  background: #ffffff;
+  border-color: #3d3d39;
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(254, 237, 1, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 .ob-provision-wait-cta:active {
@@ -1214,14 +1256,14 @@
 
 .dark .ob-provision-wait-cta {
   color: var(--ob-text);
-  background: rgba(254, 237, 1, 0.08);
-  border-color: rgba(254, 237, 1, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 .dark .ob-provision-wait-cta:hover {
-  color: #1a1a00;
-  background: var(--ob-yellow);
-  border-color: var(--ob-yellow);
-  box-shadow: 0 2px 12px rgba(254, 237, 1, 0.2);
+  color: var(--ob-text);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
 /* ── Yellow finish card ── */
@@ -1250,7 +1292,7 @@
 }
 
 .ob-finish-icon {
-  height: 40px;
+  height: 56px;
   width: auto;
 }
 
@@ -1333,6 +1375,36 @@
 
 .ob-bottom-spacer {
   flex-shrink: 0;
+}
+
+/* ── Inline link (used inside sketch messages) ── */
+
+.ob-link {
+  color: var(--ob-text-muted);
+  text-decoration: underline;
+  text-decoration-color: rgba(95, 94, 90, 0.4);
+  text-underline-offset: 2px;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.ob-link:hover {
+  color: var(--ob-text);
+  text-decoration-color: var(--ob-text);
+}
+
+.ob-link-icon {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-left: 3px;
+  vertical-align: -0.1em;
+  opacity: 0.7;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.ob-link:hover .ob-link-icon {
+  opacity: 1;
+  transform: translate(1px, -1px);
 }
 
 /* ── Dark mode ── */
@@ -1525,6 +1597,28 @@
 
 .ob-finish-ctas-row .ob-btn {
   flex: 1;
+}
+
+.ob-finish-trial {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(10, 10, 10, 0.15);
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: rgba(10, 10, 10, 0.7);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.ob-finish-trial a {
+  color: rgba(10, 10, 10, 0.9);
+  text-decoration: underline;
+  text-decoration-color: rgba(10, 10, 10, 0.3);
+  text-underline-offset: 3px;
+}
+
+.ob-finish-trial a:hover {
+  text-decoration-color: rgba(10, 10, 10, 0.9);
 }
 
 /* Ghost button on yellow background needs dark border */

@@ -10,6 +10,8 @@ interface SketchMessageProps {
   dim?: boolean;
   /** When true, renders in danger/error color. */
   danger?: boolean;
+  /** When true, marks the message with a subtle yellow accent for added emphasis. */
+  highlight?: boolean;
   /** Optional children override — when provided, renders instead of text. */
   children?: ReactNode;
 }
@@ -21,9 +23,15 @@ export function SketchMessage({
   hideLabel = false,
   dim = false,
   danger = false,
+  highlight = false,
   children,
 }: SketchMessageProps) {
-  const bodyClass = ["ob-msg-body ob-msg-body-sketch", dim && "ob-msg-body-dim", danger && "ob-msg-body-danger"]
+  const bodyClass = [
+    "ob-msg-body ob-msg-body-sketch",
+    dim && "ob-msg-body-dim",
+    danger && "ob-msg-body-danger",
+    highlight && "ob-msg-body-highlight",
+  ]
     .filter(Boolean)
     .join(" ");
 

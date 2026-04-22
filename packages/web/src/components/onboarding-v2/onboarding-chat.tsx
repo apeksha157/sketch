@@ -121,18 +121,52 @@ function isSketchOrigin(msg: ChatMessage | undefined): boolean {
   return false;
 }
 
-/** Renders admin email as an inline pill with amber styling. */
-function renderAdminEmailMessage(text: string) {
-  const match = text.match(/^(.*)##(.+?)##(.*)$/);
-  if (!match) return text;
-  const [, before, email, after] = match;
-  return (
-    <>
-      {before}
-      <span className="ob-admin-email-pill">{email}</span>
-      {after}
-    </>
-  );
+/** Renders inline markers: ##email## → admin pill, [[phrase]] → trial pill, {text|url} → link. */
+function renderRichMessage(text: string): ReactNode {
+  const regex = /##(.+?)##|\[\[(.+?)\]\]|\{([^|]+?)\|([^}]+?)\}/g;
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null = regex.exec(text);
+  let key = 0;
+  while (match !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
+    if (match[1] !== undefined) {
+      parts.push(
+        <span key={key++} className="ob-admin-email-pill">
+          {match[1]}
+        </span>,
+      );
+    } else if (match[2] !== undefined) {
+      parts.push(
+        <span key={key++} className="ob-trial-pill">
+          {match[2]}
+        </span>,
+      );
+    } else if (match[3] !== undefined && match[4] !== undefined) {
+      parts.push(
+        <a key={key++} href={match[4]} className="ob-link" target="_blank" rel="noreferrer">
+          {match[3]}
+          <svg
+            className="ob-link-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M7 17L17 7" />
+            <path d="M8 7h9v9" />
+          </svg>
+        </a>,
+      );
+    }
+    lastIndex = regex.lastIndex;
+    match = regex.exec(text);
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return <>{parts}</>;
 }
 
 export function OnboardingChat() {
@@ -159,7 +193,7 @@ export function OnboardingChat() {
     startFlow,
     handleAuthSelect,
     handleConnComplete,
-    handleWorkspaceComplete,
+    handleTrialOptIn,
     handleProvisioningComplete,
     handleWorkspaceContinue,
     handlePlatformsContinue,
@@ -278,17 +312,19 @@ export function OnboardingChat() {
     switch (msg.kind) {
       case "sketch-message": {
         const hideLabel = isSketchOrigin(messages[index - 1]);
-        const hasAdminEmail = msg.text?.includes("##");
+        const hasMarker =
+          !!msg.text && (msg.text.includes("##") || msg.text.includes("[[") || /\{[^|]+\|[^}]+\}/.test(msg.text));
         return (
           <SketchMessage
             key={msg.id}
-            text={hasAdminEmail ? "" : msg.text || ""}
+            text={hasMarker ? "" : msg.text || ""}
             step={msg.step}
             hideLabel={hideLabel}
             dim={msg.dim}
             danger={msg.danger}
+            highlight={msg.highlight}
           >
-            {hasAdminEmail ? renderAdminEmailMessage(msg.text || "") : undefined}
+            {hasMarker ? renderRichMessage(msg.text || "") : undefined}
           </SketchMessage>
         );
       }
@@ -343,7 +379,7 @@ export function OnboardingChat() {
             companyName={props.companyName}
             email={props.email}
             onComplete={() => {}}
-            duration={0}
+            frozen
           />
         );
       }
@@ -362,21 +398,6 @@ export function OnboardingChat() {
         const props = activeWidget.widgetProps as { authMethod: "slack" | "google"; skipSuccess?: boolean };
         return (
           <ConnCard authMethod={props.authMethod} onComplete={handleConnComplete} skipSuccess={props.skipSuccess} />
-        );
-      }
-      case "workspace-card": {
-        const props = activeWidget.widgetProps as {
-          authMethod: "slack" | "google";
-          data: { name: string; members: number; channels: number; email?: string; role?: string };
-          isAdmin: boolean;
-        };
-        return (
-          <WorkspaceCard
-            authMethod={props.authMethod}
-            data={props.data}
-            isAdmin={props.isAdmin}
-            onComplete={handleWorkspaceComplete}
-          />
         );
       }
       case "provisioning-card": {
@@ -407,6 +428,14 @@ export function OnboardingChat() {
           </div>
         );
       }
+      case "trial-opt-in":
+        return (
+          <div className="ob-widget ob-animate-in">
+            <button type="button" className="ob-btn ob-btn-primary" onClick={handleTrialOptIn}>
+              Start trial
+            </button>
+          </div>
+        );
       case "api-key-input":
         return <ApiKeyInput onValidated={handleApiKeyValidated} />;
       case "error-state": {

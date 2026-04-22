@@ -26,6 +26,8 @@ export interface ChatMessage {
   dim?: boolean;
   /** When set, renders in danger color */
   danger?: boolean;
+  /** When true, marks the message with a subtle yellow accent. */
+  highlight?: boolean;
   /** For dividers */
   label?: string;
   /** For widgets rendered inline in the chat history (after user interacts) */
@@ -44,13 +46,14 @@ export type WidgetType =
   | "yellow-finish"
   | "example-prompts"
   | "section-continue"
+  | "trial-opt-in"
   | "error-state"
   | "provisioning-card"
   | "loading";
 
 /** An instruction in the message queue (not yet processed). */
 export type QueueItem =
-  | { type: "sketch-message"; text: string; step: number; dim?: boolean; danger?: boolean }
+  | { type: "sketch-message"; text: string; step: number; dim?: boolean; danger?: boolean; highlight?: boolean }
   | { type: "user-message"; text: string; step: number; icon?: string }
   | { type: "divider"; label: string; step: number }
   | { type: "delay"; ms: number }

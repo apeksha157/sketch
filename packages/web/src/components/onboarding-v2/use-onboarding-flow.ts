@@ -7,6 +7,27 @@ function nextId() {
   return `msg-${++msgId}`;
 }
 
+/** Trial intro block shown after workspace detection — trial context, sublinks, and opt-in button. */
+function buildTrialIntro(): QueueItem[] {
+  return [
+    { type: "delay", ms: 700 },
+    { type: "sketch-message", text: "Quick heads up before I set everything up.", step: 1 },
+    { type: "delay", ms: 500 },
+    { type: "sketch-message", text: "[[30 days free — no card needed.]]", step: 1 },
+    { type: "delay", ms: 500 },
+    {
+      type: "sketch-message",
+      text: "After that, you're on our Basic plan — $99/mo and 10,000 AI credits every month.",
+      step: 1,
+    },
+    { type: "delay", ms: 600 },
+    { type: "sketch-message", text: "{Curious how credits work?|#}", step: 1, dim: true },
+    { type: "sketch-message", text: "{Want to self-host instead? It's free on GitHub|#}", step: 1, dim: true },
+    { type: "delay", ms: 500 },
+    { type: "widget", widgetType: "trial-opt-in", step: 1 },
+  ];
+}
+
 export function useOnboardingFlow() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeWidget, setActiveWidget] = useState<ChatMessage | null>(null);
@@ -50,6 +71,7 @@ export function useOnboardingFlow() {
             text: item.text,
             dim: item.dim,
             danger: item.danger,
+            highlight: item.highlight,
           });
           break;
         case "user-message":
@@ -117,7 +139,7 @@ export function useOnboardingFlow() {
       { type: "sketch-message", text: "Hey! I'm Sketch — your new AI coworker.", step: 0 },
       { type: "delay", ms: 1000 },
       { type: "sketch-message", text: "Let's get you set up. Takes about 2 minutes.", step: 0 },
-      { type: "delay", ms: 1000 },
+      { type: "delay", ms: 800 },
       { type: "sketch-message", text: "How would you like to sign in?", step: 0 },
       { type: "delay", ms: 500 },
       { type: "widget", widgetType: "auth-picker", step: 0 },
@@ -270,13 +292,7 @@ export function useOnboardingFlow() {
             text: `Got it, I can see your whole team at ${workspace.name}. Two more steps and I'll be ready for them.`,
             step: 1,
           },
-          { type: "delay", ms: 400 },
-          {
-            type: "widget",
-            widgetType: "workspace-card",
-            step: 1,
-            props: { authMethod: method, data: workspace, isAdmin: true },
-          },
+          ...buildTrialIntro(),
         ]);
         return;
       }
@@ -301,34 +317,19 @@ export function useOnboardingFlow() {
         text: `Got it, I can see your whole team at ${workspace.name}. Two more steps and I'll be ready for them.`,
         step: 1,
       },
-      { type: "delay", ms: 400 },
-      {
-        type: "widget",
-        widgetType: "workspace-card",
-        step: 1,
-        props: { authMethod: method, data: workspace, isAdmin: true },
-      },
+      ...buildTrialIntro(),
     ]);
   }, [appendMessage, enqueue, state.authMethod]);
 
   // ── Step 1: Workspace discovery complete ──
 
-  const handleWorkspaceComplete = useCallback(() => {
-    const method = state.authMethod;
+  /** Called when the user opts into the trial — kicks off provisioning. */
+  const handleTrialOptIn = useCallback(() => {
     const workspace = state.workspace;
-
-    // Persist the completed workspace card as a frozen inline message
-    appendMessage({
-      id: nextId(),
-      kind: "widget",
-      step: 1,
-      widgetType: "workspace-card",
-      widgetProps: { authMethod: method, data: workspace, isAdmin: true, frozen: true },
-    });
-
     setActiveWidget(null);
     enqueue([
-      { type: "delay", ms: 900 },
+      { type: "user-message", text: "Start trial", step: 1 },
+      { type: "delay", ms: 600 },
       {
         type: "widget",
         widgetType: "provisioning-card",
@@ -339,7 +340,7 @@ export function useOnboardingFlow() {
         },
       },
     ]);
-  }, [appendMessage, enqueue, state.authMethod, state.workspace]);
+  }, [enqueue, state.workspace]);
 
   /** Called when provisioning card completes — continue to platforms. */
   const handleProvisioningComplete = useCallback(() => {
@@ -545,7 +546,7 @@ export function useOnboardingFlow() {
     startFlow,
     handleAuthSelect,
     handleConnComplete,
-    handleWorkspaceComplete,
+    handleTrialOptIn,
     handleProvisioningComplete,
     handleWorkspaceContinue,
     handlePlatformsContinue,
