@@ -405,12 +405,12 @@ function DeleteTaskDialog({
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border py-12 text-center">
-      <div className="flex size-12 items-center justify-center rounded-full bg-muted">
-        <ClockIcon size={24} className="text-muted-foreground" />
+    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-[#FEED01]/[0.04] px-6 pt-8 pb-10 text-center">
+      <div className="flex size-12 items-center justify-center rounded-full border border-[#FEED01] bg-white">
+        <ClockIcon size={24} className="text-[#8B7A00]" />
       </div>
-      <p className="mt-4 text-sm font-medium">No scheduled tasks yet</p>
-      <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+      <p className="mt-3 text-sm font-medium">No scheduled tasks yet</p>
+      <p className="mt-1.5 max-w-xs text-sm text-muted-foreground">
         Create a scheduled task by asking the assistant to remind you or run something on a schedule.
       </p>
     </div>
