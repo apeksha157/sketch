@@ -72,9 +72,9 @@ export function ProvisioningCard({
       <div className="ob-provision-card">
         <div className="ob-provision-headline">Setting up your private instance</div>
         <p className="ob-provision-subhead">
-          We're spinning up a dedicated server just for <strong>{companyName}</strong> — your data stays private, never
-          shared with another org.
+          Spinning up a dedicated server for <strong>{companyName}</strong>.
         </p>
+        <p className="ob-provision-privacy">Your data stays private, never shared.</p>
 
         {/* Progress block */}
         <div className="ob-provision-progress">

@@ -12,6 +12,7 @@ import { SectionDivider } from "./section-divider";
 import { SketchMessage } from "./sketch-message";
 import { SparkAvatar } from "./spark-icon";
 import { StepTrack } from "./step-track";
+import { TrialCard } from "./trial-card";
 import type { ChatMessage } from "./types";
 import { useOnboardingFlow } from "./use-onboarding-flow";
 import { UserMessage } from "./user-message";
@@ -383,6 +384,8 @@ export function OnboardingChat() {
           />
         );
       }
+      case "trial-card":
+        return <TrialCard key={msg.id} onStart={() => {}} frozen />;
       default:
         return null;
     }
@@ -436,6 +439,8 @@ export function OnboardingChat() {
             </button>
           </div>
         );
+      case "trial-card":
+        return <TrialCard onStart={handleTrialOptIn} />;
       case "api-key-input":
         return <ApiKeyInput onValidated={handleApiKeyValidated} />;
       case "error-state": {

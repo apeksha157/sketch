@@ -325,6 +325,186 @@
   color: var(--ob-yellow);
 }
 
+/* ── Trial summary card ── */
+
+.ob-trial-card {
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 20px 22px 22px;
+  max-width: 360px;
+}
+
+.ob-trial-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow-fg);
+  margin-bottom: 12px;
+}
+
+/* Hero: big "30 days free" with soft yellow tint */
+.ob-trial-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(254, 237, 1, 0.14);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+
+.ob-trial-hero-sparkle {
+  font-size: 22px;
+  line-height: 1;
+  color: var(--ob-yellow-fg);
+  animation: ob-trial-sparkle 3.6s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.ob-trial-hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ob-trial-hero-title {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xl);
+  font-weight: 700;
+  color: var(--ob-text);
+  line-height: 1.15;
+}
+
+.ob-trial-hero-sub {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  line-height: 1.4;
+}
+
+/* "After trial" block — receipt-style row */
+.ob-trial-then {
+  padding: 0 2px;
+  margin-bottom: 16px;
+}
+
+.ob-trial-then-label {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+  margin-bottom: 6px;
+}
+
+.ob-trial-then-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.ob-trial-then-plan {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 600;
+  color: var(--ob-text);
+}
+
+.ob-trial-then-price {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-lg);
+  font-weight: 600;
+  color: var(--ob-text);
+}
+
+.ob-trial-then-credits {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-base);
+  color: var(--ob-text-dim);
+  margin-top: 3px;
+}
+
+.ob-trial-card-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(4, 4, 4, 0.06);
+}
+
+.ob-trial-card-link + .ob-trial-card-link::before {
+  content: "•";
+  color: var(--ob-text-dim);
+  font-size: 0.9em;
+  margin-right: 10px;
+  pointer-events: none;
+}
+
+.dark .ob-trial-card-links {
+  border-top-color: rgba(255, 255, 255, 0.05);
+}
+
+.ob-trial-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+
+.ob-trial-card-link:hover {
+  color: var(--ob-text);
+}
+
+.ob-trial-card-link-icon {
+  width: 0.85em;
+  height: 0.85em;
+  opacity: 0.7;
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.ob-trial-card-link:hover .ob-trial-card-link-icon {
+  opacity: 1;
+  transform: translate(1px, -1px);
+}
+
+.ob-trial-card-cta {
+  width: 100%;
+  margin-top: 16px;
+}
+
+.ob-trial-card-started {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ob-green);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.dark .ob-trial-hero {
+  background: rgba(254, 237, 1, 0.08);
+}
+
 /* Continuation message — no label row, align body with the batch above */
 .ob-msg-continued {
   margin-top: 0;
@@ -1076,7 +1256,7 @@
 
 .ob-provision-headline {
   font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-lg);
+  font-size: var(--ob-fs-xl);
   font-weight: 700;
   color: var(--ob-text);
   margin-bottom: 10px;
@@ -1087,7 +1267,15 @@
   font-size: var(--ob-fs-sm);
   color: var(--ob-text-dim);
   line-height: 1.55;
-  margin: 0 0 10px 0;
+  margin: 0 0 2px 0;
+}
+
+.ob-provision-privacy {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xs);
+  color: var(--ob-text-muted);
+  line-height: 1.5;
+  margin: 0 0 16px 0;
 }
 
 .ob-provision-eta {
@@ -1157,7 +1345,7 @@
 
 .ob-provision-footnote {
   font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-xs);
+  font-size: var(--ob-fs-sm);
   color: var(--ob-text-muted);
   line-height: 1.5;
   margin: 0 0 20px 0;
@@ -1167,8 +1355,7 @@
 
 .ob-provision-wait-card {
   overflow: hidden;
-  background: #f8f5e6;
-  border: 1px solid #d9d4c7;
+  background: rgba(254, 237, 1, 0.14);
   border-radius: 12px;
 }
 
@@ -1188,7 +1375,7 @@
 
 .ob-provision-wait-label {
   font-family: var(--ob-font-mono);
-  font-size: 9px;
+  font-size: var(--ob-fs-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.12em;
@@ -1198,14 +1385,14 @@
 
 .ob-provision-wait-title {
   font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-base);
-  font-weight: 700;
+  font-size: var(--ob-fs-sm);
+  font-weight: 600;
   color: var(--ob-text);
 }
 
 .ob-provision-wait-body {
   font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-xs);
+  font-size: var(--ob-fs-sm);
   color: var(--ob-text-dim);
   line-height: 1.55;
   margin: 0;
@@ -1217,7 +1404,7 @@
   flex-shrink: 0;
   white-space: nowrap;
   font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-xs);
+  font-size: var(--ob-fs-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1250,8 +1437,7 @@
 }
 
 .dark .ob-provision-wait-card {
-  background: linear-gradient(135deg, #1a1c14 0%, #1c1a18 100%);
-  border: 1px solid rgba(254, 237, 1, 0.1);
+  background: rgba(254, 237, 1, 0.08);
 }
 
 .dark .ob-provision-wait-cta {

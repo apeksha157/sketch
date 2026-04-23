@@ -47,6 +47,7 @@ export type WidgetType =
   | "example-prompts"
   | "section-continue"
   | "trial-opt-in"
+  | "trial-card"
   | "error-state"
   | "provisioning-card"
   | "loading";

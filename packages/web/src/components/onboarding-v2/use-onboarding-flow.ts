@@ -7,24 +7,11 @@ function nextId() {
   return `msg-${++msgId}`;
 }
 
-/** Trial intro block shown after workspace detection — trial context, sublinks, and opt-in button. */
+/** Trial intro — single summary card replacing the prose block. */
 function buildTrialIntro(): QueueItem[] {
   return [
-    { type: "delay", ms: 700 },
-    { type: "sketch-message", text: "Quick heads up before I set everything up.", step: 1 },
-    { type: "delay", ms: 500 },
-    { type: "sketch-message", text: "[[30 days free — no card needed.]]", step: 1 },
-    { type: "delay", ms: 500 },
-    {
-      type: "sketch-message",
-      text: "After that, you're on our Basic plan — $99/mo and 10,000 AI credits every month.",
-      step: 1,
-    },
     { type: "delay", ms: 600 },
-    { type: "sketch-message", text: "{Curious how credits work?|#}", step: 1, dim: true },
-    { type: "sketch-message", text: "{Want to self-host instead? It's free on GitHub|#}", step: 1, dim: true },
-    { type: "delay", ms: 500 },
-    { type: "widget", widgetType: "trial-opt-in", step: 1 },
+    { type: "widget", widgetType: "trial-card", step: 1 },
   ];
 }
 
@@ -326,6 +313,14 @@ export function useOnboardingFlow() {
   /** Called when the user opts into the trial — kicks off provisioning. */
   const handleTrialOptIn = useCallback(() => {
     const workspace = state.workspace;
+    // Freeze the trial card into message history so it persists after the click
+    appendMessage({
+      id: nextId(),
+      kind: "widget",
+      step: 1,
+      widgetType: "trial-card",
+      widgetProps: { frozen: true },
+    });
     setActiveWidget(null);
     enqueue([
       { type: "user-message", text: "Start trial", step: 1 },
@@ -340,7 +335,7 @@ export function useOnboardingFlow() {
         },
       },
     ]);
-  }, [enqueue, state.workspace]);
+  }, [appendMessage, enqueue, state.workspace]);
 
   /** Called when provisioning card completes — continue to platforms. */
   const handleProvisioningComplete = useCallback(() => {
