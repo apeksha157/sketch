@@ -16,8 +16,8 @@ export interface AuthContext {
 
 const MOCK_ADMIN: AuthContext = {
   role: "admin",
-  displayName: "Admin",
-  displayIdentifier: "admin@sketch.dev",
+  displayName: "Apeksha",
+  displayIdentifier: "ops@canvasx.ai",
 };
 
 const MOCK_MEMBER: AuthContext = {
@@ -52,7 +52,7 @@ async function checkAuth(): Promise<{ auth: AuthContext }> {
         email: session.email,
         userId: session.userId,
         name: session.name,
-        displayName: role === "admin" ? "Admin" : (session.name ?? "Member"),
+        displayName: session.name ?? (role === "admin" ? "Admin" : "Member"),
         displayIdentifier: session.email ?? session.name ?? "User",
       },
     };

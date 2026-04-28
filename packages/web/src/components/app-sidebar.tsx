@@ -1,24 +1,18 @@
 import { api } from "@/lib/api";
+import { type NavItem, getDashboardNav } from "@/lib/dashboard-nav";
 /**
  * App sidebar — navigation, branding, and user actions.
  * Follows the designer's sidebar structure with Phosphor icons.
  */
 import {
   ArrowSquareOutIcon,
-  BrainIcon,
-  CalendarDotsIcon,
   CaretUpDownIcon,
-  ChartBarIcon,
-  ChatCircleIcon,
-  CreditCardIcon,
   DesktopIcon,
-  FolderSimpleIcon,
   GearIcon,
   LinkSimpleIcon,
   MoonIcon,
   SignOutIcon,
   SunIcon,
-  UsersThreeIcon,
 } from "@phosphor-icons/react";
 import {
   DropdownMenu,
@@ -48,25 +42,9 @@ import { getInitials } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
-interface NavItem {
-  label: string;
-  icon: React.ReactNode;
-  href: string;
-  disabled?: boolean;
-}
-
 const experimentalNavLabels = new Set(["Files"]);
 
-const allPrimaryNav: NavItem[] = [
-  { label: "Channels", icon: <ChatCircleIcon size={18} />, href: "/channels" },
-  { label: "Files", icon: <FolderSimpleIcon size={18} />, href: "/files" },
-  { label: "Team", icon: <UsersThreeIcon size={18} />, href: "/team" },
-  { label: "Scheduled Tasks", icon: <CalendarDotsIcon size={18} />, href: "/scheduled-tasks" },
-  { label: "Skills", icon: <BrainIcon size={18} />, href: "/skills" },
-  { label: "Usage", icon: <ChartBarIcon size={18} />, href: "/usage" },
-  { label: "Pricing", icon: <CreditCardIcon size={18} />, href: "/plans" },
-  { label: "Integrations", icon: <LinkSimpleIcon size={18} />, href: "/integrations" },
-];
+const allPrimaryNav: NavItem[] = getDashboardNav(18);
 
 const adminNav: NavItem[] = [
   { label: "Integrations", icon: <LinkSimpleIcon size={18} />, href: "/integrations" },

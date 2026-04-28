@@ -9,6 +9,13 @@ import {
 } from "./routes/demo/channels-demo";
 import { filesEmptyRoute, filesPreviewRoute } from "./routes/demo/files-demo";
 import {
+  homeCompleteRoute,
+  homeEmptyRoute,
+  homeMemberEmptyRoute,
+  homeMemberRoute,
+  homePreviewRoute,
+} from "./routes/demo/home-demo";
+import {
   integrationsEmptyRoute,
   integrationsMemberEmptyRoute,
   integrationsMemberRoute,
@@ -61,6 +68,11 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   indexRoute,
   dashboardRoute.addChildren([
+    homePreviewRoute,
+    homeEmptyRoute,
+    homeMemberRoute,
+    homeMemberEmptyRoute,
+    homeCompleteRoute,
     channelsPreviewRoute,
     channelsEmptyRoute,
     channelsMemberRoute,
