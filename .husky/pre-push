@@ -2,7 +2,10 @@ echo "Running pre-push checks..."
 
 pnpm lint || { echo "Lint failed"; exit 1; }
 pnpm typecheck || { echo "Typecheck failed"; exit 1; }
-pnpm test || { echo "Tests failed"; exit 1; }
+# Run tests one package at a time. Concurrent runs (the default) intermittently
+# flake under load (resource contention between vitest workers across packages),
+# even though every test passes when run alone.
+pnpm -r --workspace-concurrency=1 test || { echo "Tests failed"; exit 1; }
 pnpm build || { echo "Build failed"; exit 1; }
 
 echo "All pre-push checks passed!"
