@@ -205,10 +205,19 @@ const DEFAULT_DISCOVER: DiscoverItem[] = [
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Picks a salutation appropriate to the time of day. Rotates across formal
+ * ("Good morning") and casual ("Hey", "Morning") variants so the page feels
+ * alive on each visit. Each entry must read naturally before ", {name}".
+ */
 function getGreeting(hour: number): string {
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
+  let pool: readonly string[];
+  if (hour < 5) pool = ["Hey", "Hi"];
+  else if (hour < 12) pool = ["Good morning", "Morning", "Hey", "Hi"];
+  else if (hour < 17) pool = ["Good afternoon", "Afternoon", "Hey", "Hi"];
+  else if (hour < 21) pool = ["Good evening", "Evening", "Hey", "Hi"];
+  else pool = ["Hey", "Hi", "Evening"];
+  return pickRandom(pool);
 }
 
 function firstName(displayName: string): string {
@@ -317,18 +326,26 @@ export function HomePage({
 
 // ── Zone 1: Greeting ─────────────────────────────────────────────────────────
 
-function GreetingBar({ firstName, digest }: { firstName: string; digest: HomeDigest }) {
-  const hour = new Date().getHours();
-  const greeting = getGreeting(hour);
+/** Long names paired with a long greeting can run off the line. Fall back to "Hey". */
+function pickGreetingForName(firstName: string, hour: number): string {
+  const FIRST_NAME_LIMIT = 12;
+  if (firstName.length > FIRST_NAME_LIMIT) return "Hey";
+  return getGreeting(hour);
+}
 
-  // Lazy init pins the pick to mount (so it's stable on render). The interval
-  // re-rolls every 30 min for users who leave the page open.
+export function GreetingBar({ firstName, digest }: { firstName: string; digest: HomeDigest }) {
+  // Lazy init pins both the greeting and subtitle picks to mount (stable on render).
+  // The interval re-rolls every 30 min for users who leave the page open.
+  const [greeting, setGreeting] = useState(() => pickGreetingForName(firstName, new Date().getHours()));
   const [subtitle, setSubtitle] = useState(() => pickSubtitle(digest));
 
   useEffect(() => {
-    const id = setInterval(() => setSubtitle(pickSubtitle(digest)), SUBTITLE_ROTATE_MS);
+    const id = setInterval(() => {
+      setGreeting(pickGreetingForName(firstName, new Date().getHours()));
+      setSubtitle(pickSubtitle(digest));
+    }, SUBTITLE_ROTATE_MS);
     return () => clearInterval(id);
-  }, [digest]);
+  }, [digest, firstName]);
 
   return (
     <div className="min-w-0">

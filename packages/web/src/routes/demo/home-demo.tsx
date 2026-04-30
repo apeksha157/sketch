@@ -2,16 +2,16 @@
  * Home page route variants — matches the convention used by every other dashboard
  * page (channels, skills, integrations, etc.):
  *
- *   /home                  — admin, populated
- *   /home/empty            — admin, first-time / nothing done
- *   /home/member           — member, populated
- *   /home/member-empty     — member, first-time
- *   /home/complete         — bonus: setup 100% done (checklist hidden)
- *
- * The `HomePage` component is shared; each variant supplies its own mock content
- * so the design demo can show every state without a real backend.
+ *   /home                       — admin, populated  (legacy HomePage)
+ *   /home/empty                 — admin, first-time (legacy HomePage)
+ *   /home/complete              — admin, setup 100% done (legacy HomePage)
+ *   /home/member                — member, active, no errors (redesign)
+ *   /home/member-empty          — member, new user (redesign)
+ *   /home/member-errors         — member with notifications card (Iteration B)
+ *   /home/member-iteration-a    — member with notifications as banner (Iteration A)
  */
 import { HomePage } from "@/routes/home";
+import { type ActivityFeedItem, type DiscoverNudge, HomeMemberPage, type NotificationItem } from "@/routes/home-member";
 import { CalendarDotsIcon, ChatCircleIcon, MagnifyingGlassIcon, PlugIcon, TargetIcon } from "@phosphor-icons/react";
 import { createRoute } from "@tanstack/react-router";
 import { dashboardRoute } from "../dashboard";
@@ -77,50 +77,158 @@ const ADMIN_DISCOVER = [
   },
 ];
 
-// ── Member mocks (Sarah Kim — different person, different data) ──────────────
+// ── Member mocks (Sarah Kim) — redesigned home shapes ────────────────────────
 
-const MEMBER_ACTIVITY = [
+const MEMBER_ACTIVITY: ActivityFeedItem[] = [
   {
-    kind: "user" as const,
-    initials: "SK",
-    title: "You triggered Lead Qualifier",
-    day: "Today",
-    time: "11:20 AM",
+    id: "u1",
+    type: "upcoming",
+    skillName: "Competitive Intel",
+    time: "2:00 PM",
+    day: "today",
+    meta: "scheduled · #market-research",
   },
   {
-    kind: "sketch" as const,
-    icon: <MagnifyingGlassIcon size={16} />,
-    title: "Account research ran",
-    outcome: "Brief on Acme Corp drafted",
-    day: "Today",
+    id: "r1",
+    type: "running",
+    skillName: "Lead Qualifier",
+    time: "11:24 AM",
+    day: "today",
+    meta: "processing 8 items",
+  },
+  {
+    id: "t1",
+    type: "completed_auto",
+    skillName: "Meeting Summary",
     time: "9:45 AM",
+    day: "today",
+    meta: "12 msgs · #design-standups",
   },
   {
-    kind: "user" as const,
-    initials: "SK",
-    title: "You asked about pipeline coverage",
-    day: "Yesterday",
-    time: "3:10 PM",
+    id: "t2",
+    type: "completed_user",
+    skillName: "Account Research",
+    time: "9:10 AM",
+    day: "today",
+    meta: "1m 24s",
   },
   {
-    kind: "sketch" as const,
-    icon: <CalendarDotsIcon size={16} />,
-    title: "Daily forecast digest ran",
-    outcome: "Posted to your DM",
-    day: "Yesterday",
+    id: "y1",
+    type: "completed_auto",
+    skillName: "Daily forecast digest",
     time: "8:00 AM",
+    day: "yesterday",
+    meta: "Posted to your DM",
+  },
+  {
+    id: "y2",
+    type: "completed_user",
+    skillName: "Lead Qualifier",
+    time: "3:10 PM",
+    day: "yesterday",
+    meta: "32s",
   },
 ];
 
-const MEMBER_DISCOVER = [
+const MEMBER_DISCOVER: DiscoverNudge[] = [
   {
-    kind: "skill" as const,
-    icon: <ChatCircleIcon size={16} />,
-    name: "Meeting Summary",
-    description: "Most-used skill on your team — 14 runs this week",
-    href: "/skills",
+    id: "d1",
+    type: "team_activity",
+    title: "Priya started using Meeting Summary",
+    description: "Running daily on #design-standups.",
+    ctaLabel: "Try it yourself",
+    ctaUrl: "/skills",
+    dismissible: true,
+  },
+  {
+    id: "d2",
+    type: "popular",
+    title: "Competitive Intel",
+    description: "Used by 68% of teams your size.",
+    ctaLabel: "Try this skill",
+    ctaUrl: "/skills",
+    dismissible: true,
+  },
+  {
+    id: "d3",
+    type: "product_update",
+    title: "MCP integrations are here",
+    description: "Connect external tools directly to Sketch.",
+    ctaLabel: "Learn more",
+    ctaUrl: "/integrations",
+    dismissible: true,
   },
 ];
+
+const MEMBER_NOTIFICATIONS: NotificationItem[] = [
+  {
+    id: "n1",
+    type: "integration_disconnected",
+    title: "Slack disconnected 2h ago",
+    actionLabel: "Reconnect",
+    actionUrl: "/integrations",
+    severity: "critical",
+  },
+  {
+    id: "n2",
+    type: "automation_failed",
+    title: "Lead Scoring failed at 6:12 AM",
+    actionLabel: "View",
+    actionUrl: "/scheduled-tasks",
+    severity: "warning",
+  },
+];
+
+const MEMBER_USAGE_ACTIVE = {
+  messages: 27,
+  messagesDelta: 12,
+  skills: 4,
+  skillsDelta: 100,
+  automations: 9,
+  automationsDelta: -4,
+};
+
+const MEMBER_USAGE_EMPTY = {
+  messages: 0,
+  messagesDelta: 0,
+  skills: 0,
+  skillsDelta: 0,
+  automations: 0,
+  automationsDelta: 0,
+};
+
+const MEMBER_SETUP_ACTIVE = {
+  slack: true,
+  firstConversation: true,
+  firstSkill: true,
+  integration: true,
+  scheduledTask: true,
+};
+
+const MEMBER_SETUP_NEW = {
+  slack: true,
+  firstConversation: false,
+  firstSkill: false,
+  integration: false,
+  scheduledTask: false,
+};
+
+const MEMBER_DIGEST_ACTIVE = {
+  daysActive: 24,
+  tasksRanToday: 4,
+  nextScheduledLabel: "2:00 PM",
+  hoursSavedThisWeek: 3,
+  runningNow: 1,
+  scheduledToday: 2,
+};
+
+const MEMBER_DIGEST_NEW = {
+  daysActive: 2,
+  tasksRanToday: 0,
+  hoursSavedThisWeek: 0,
+  runningNow: 0,
+  scheduledToday: 0,
+};
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -171,53 +279,6 @@ export const homeEmptyRoute = createRoute({
   ),
 });
 
-export const homeMemberRoute = createRoute({
-  getParentRoute: () => dashboardRoute,
-  path: "/home/member",
-  beforeLoad: setMemberRole,
-  component: () => (
-    <HomePage
-      setupSteps={{
-        slack: true,
-        firstConversation: true,
-        firstSkill: true,
-        integration: false,
-        scheduledTask: false,
-      }}
-      activity={MEMBER_ACTIVITY}
-      usage={{ messages: 27, messagesDelta: 23, skills: 4, skillsDelta: 100 }}
-      discover={MEMBER_DISCOVER}
-    />
-  ),
-});
-
-export const homeMemberEmptyRoute = createRoute({
-  getParentRoute: () => dashboardRoute,
-  path: "/home/member-empty",
-  beforeLoad: setMemberRole,
-  component: () => (
-    <HomePage
-      setupSteps={{
-        slack: true,
-        firstConversation: false,
-        firstSkill: false,
-        integration: false,
-        scheduledTask: false,
-      }}
-      activity={[]}
-      usage={{ messages: 0, messagesDelta: 0, skills: 0, skillsDelta: 0 }}
-      discover={[]}
-      digest={{
-        daysActive: 2,
-        tasksRanToday: 0,
-        hoursSavedThisWeek: 0,
-        runningNow: 0,
-        scheduledToday: 0,
-      }}
-    />
-  ),
-});
-
 export const homeCompleteRoute = createRoute({
   getParentRoute: () => dashboardRoute,
   path: "/home/complete",
@@ -234,6 +295,74 @@ export const homeCompleteRoute = createRoute({
       activity={ADMIN_ACTIVITY}
       usage={{ messages: 42, messagesDelta: 40, skills: 8, skillsDelta: -27 }}
       discover={ADMIN_DISCOVER}
+    />
+  ),
+});
+
+// ── Member routes (redesigned bento dashboard) ───────────────────────────────
+
+export const homeMemberRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPage
+      setupSteps={MEMBER_SETUP_ACTIVE}
+      digest={MEMBER_DIGEST_ACTIVE}
+      activity={MEMBER_ACTIVITY}
+      usage={MEMBER_USAGE_ACTIVE}
+      discover={MEMBER_DISCOVER}
+      notifications={[]}
+    />
+  ),
+});
+
+export const homeMemberEmptyRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-empty",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPage
+      setupSteps={MEMBER_SETUP_NEW}
+      digest={MEMBER_DIGEST_NEW}
+      activity={[]}
+      usage={MEMBER_USAGE_EMPTY}
+      discover={[]}
+      notifications={[]}
+    />
+  ),
+});
+
+export const homeMemberErrorsRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-errors",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPage
+      setupSteps={MEMBER_SETUP_ACTIVE}
+      digest={MEMBER_DIGEST_ACTIVE}
+      activity={MEMBER_ACTIVITY}
+      usage={MEMBER_USAGE_ACTIVE}
+      discover={MEMBER_DISCOVER}
+      notifications={MEMBER_NOTIFICATIONS}
+      notificationsMode="card"
+    />
+  ),
+});
+
+export const homeMemberIterationARoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-iteration-a",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPage
+      setupSteps={MEMBER_SETUP_ACTIVE}
+      digest={MEMBER_DIGEST_ACTIVE}
+      activity={MEMBER_ACTIVITY}
+      usage={MEMBER_USAGE_ACTIVE}
+      discover={MEMBER_DISCOVER}
+      notifications={MEMBER_NOTIFICATIONS}
+      notificationsMode="banner"
     />
   ),
 });

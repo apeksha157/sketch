@@ -12,6 +12,8 @@ import {
   homeCompleteRoute,
   homeEmptyRoute,
   homeMemberEmptyRoute,
+  homeMemberErrorsRoute,
+  homeMemberIterationARoute,
   homeMemberRoute,
   homePreviewRoute,
 } from "./routes/demo/home-demo";
@@ -72,6 +74,8 @@ const routeTree = rootRoute.addChildren([
     homeEmptyRoute,
     homeMemberRoute,
     homeMemberEmptyRoute,
+    homeMemberErrorsRoute,
+    homeMemberIterationARoute,
     homeCompleteRoute,
     channelsPreviewRoute,
     channelsEmptyRoute,
