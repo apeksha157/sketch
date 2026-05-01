@@ -41,7 +41,9 @@ export type WidgetType =
   | "conn-card"
   | "workspace-card"
   | "whatsapp-picker"
+  | "whatsapp-number-input"
   | "qr-card"
+  | "whatsapp-members"
   | "api-key-input"
   | "yellow-finish"
   | "example-prompts"
@@ -51,6 +53,12 @@ export type WidgetType =
   | "error-state"
   | "provisioning-card"
   | "loading";
+
+/** A teammate captured during the WhatsApp members step. */
+export interface WhatsAppMember {
+  name: string;
+  phone: string;
+}
 
 /** An instruction in the message queue (not yet processed). */
 export type QueueItem =
@@ -86,6 +94,10 @@ export interface OnboardingState {
     role?: string;
     adminName?: string;
   } | null;
+  /** Admin's own WhatsApp number, captured before pairing. Used to warn if pairing tries to use the same number. */
+  adminWhatsappNumber: string | null;
+  /** Teammates added during the WhatsApp members step. */
+  whatsappMembers: WhatsAppMember[];
 }
 
 export const STEP_LABELS = ["Account", "Workspace", "Platforms", "API Key", "Ready"] as const;

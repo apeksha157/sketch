@@ -16,6 +16,8 @@ import { TrialCard } from "./trial-card";
 import type { ChatMessage } from "./types";
 import { useOnboardingFlow } from "./use-onboarding-flow";
 import { UserMessage } from "./user-message";
+import { WhatsAppMembers } from "./whatsapp-members";
+import { WhatsAppNumberInput } from "./whatsapp-number-input";
 import { WhatsAppPicker } from "./whatsapp-picker";
 import { WorkspaceCard } from "./workspace-card";
 import { YellowFinish } from "./yellow-finish";
@@ -199,7 +201,9 @@ export function OnboardingChat() {
     handleWorkspaceContinue,
     handlePlatformsContinue,
     handleWhatsAppConnect,
+    handleAdminNumberSubmit,
     handleWhatsAppConnected,
+    handleMembersSubmit,
     handleWhatsAppSkip,
     handleApiKeyValidated,
     handleFinishCta,
@@ -418,8 +422,14 @@ export function OnboardingChat() {
         const canSkip = (activeWidget.widgetProps?.canSkip as boolean) ?? true;
         return <WhatsAppPicker canSkip={canSkip} onConnect={handleWhatsAppConnect} onSkip={handleWhatsAppSkip} />;
       }
-      case "qr-card":
-        return <QRCard onConnected={(phone) => handleWhatsAppConnected(phone)} demo />;
+      case "whatsapp-number-input":
+        return <WhatsAppNumberInput onSubmit={handleAdminNumberSubmit} />;
+      case "qr-card": {
+        const enteredNumber = activeWidget.widgetProps?.enteredNumber as string | undefined;
+        return <QRCard onConnected={(phone) => handleWhatsAppConnected(phone)} demo enteredNumber={enteredNumber} />;
+      }
+      case "whatsapp-members":
+        return <WhatsAppMembers onSubmit={handleMembersSubmit} />;
       case "section-continue": {
         const label = (activeWidget.widgetProps?.label as string) ?? "Continue";
         const onClick = activeWidget.step === 2 ? handlePlatformsContinue : handleWorkspaceContinue;

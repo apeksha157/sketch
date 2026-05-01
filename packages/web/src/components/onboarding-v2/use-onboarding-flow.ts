@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import type { ApiProvider, AuthMethod, ChatMessage, OnboardingState, QueueItem } from "./types";
+import type { ApiProvider, AuthMethod, ChatMessage, OnboardingState, QueueItem, WhatsAppMember } from "./types";
 import { MOCK_WORKSPACE, getMockDetectionResult } from "./use-mock-detection";
 
 let msgId = 0;
@@ -32,6 +32,8 @@ export function useOnboardingFlow() {
     userName: null,
     adminEmail: null,
     workspace: null,
+    adminWhatsappNumber: null,
+    whatsappMembers: [],
   });
 
   const queueRef = useRef<QueueItem[]>([]);
@@ -397,34 +399,81 @@ export function useOnboardingFlow() {
     enqueue([
       { type: "user-message", text: "Connect WhatsApp", step: 2, icon: "whatsapp" },
       { type: "delay", ms: 400 },
-      { type: "widget", widgetType: "qr-card", step: 2 },
+      {
+        type: "sketch-message",
+        text: "What's your WhatsApp number?",
+        step: 2,
+      },
+      { type: "delay", ms: 300 },
+      { type: "widget", widgetType: "whatsapp-number-input", step: 2 },
     ]);
   }, [enqueue]);
+
+  /** Called after the admin submits their own WhatsApp number — proceeds to QR pairing. */
+  const handleAdminNumberSubmit = useCallback(
+    (fullNumber: string) => {
+      setState((prev) => ({ ...prev, adminWhatsappNumber: fullNumber }));
+      setActiveWidget(null);
+      enqueue([
+        { type: "user-message", text: fullNumber, step: 2 },
+        { type: "delay", ms: 500 },
+        {
+          type: "sketch-message",
+          text: "Pair from another phone — that becomes my WhatsApp, where your team will message me.",
+          step: 2,
+        },
+        { type: "delay", ms: 300 },
+        { type: "widget", widgetType: "qr-card", step: 2, props: { enteredNumber: fullNumber } },
+      ]);
+    },
+    [enqueue],
+  );
 
   const handleWhatsAppConnected = useCallback(
     (phone: string) => {
       setState((prev) => ({ ...prev, whatsappConnected: true }));
-      // Freeze WhatsApp confirmation into message history
+      // User-side acknowledgement: show the spare number that was just paired,
+      // so the chat visibly tracks both numbers (admin's vs Sketch's).
       appendMessage({
         id: nextId(),
-        kind: "widget",
+        kind: "user-message",
         step: 2,
-        widgetType: "conn-card",
-        widgetProps: { authMethod: "whatsapp", phone, frozen: true },
+        text: `Linked ${phone}`,
       });
       setActiveWidget(null);
       enqueue([
         { type: "delay", ms: 600 },
         {
           type: "sketch-message",
-          text: "WhatsApp is all set. Last step — let's get my brain connected.",
+          text: "Great. Now add your team — I'll say hi to them on WhatsApp.",
           step: 2,
         },
-        { type: "delay", ms: 500 },
-        { type: "widget", widgetType: "section-continue", step: 2, props: { label: "Continue to API Key" } },
+        { type: "delay", ms: 400 },
+        { type: "widget", widgetType: "whatsapp-members", step: 2 },
       ]);
     },
     [appendMessage, enqueue],
+  );
+
+  /** Called after the admin submits at least one teammate. Continues to the API-key step. */
+  const handleMembersSubmit = useCallback(
+    (members: WhatsAppMember[]) => {
+      setState((prev) => ({ ...prev, whatsappMembers: members }));
+      setActiveWidget(null);
+      const summary = members.length === 1 ? `Added ${members[0].name}` : `Added ${members.length} teammates`;
+      enqueue([
+        { type: "user-message", text: summary, step: 2 },
+        { type: "delay", ms: 500 },
+        {
+          type: "sketch-message",
+          text: "Perfect. Last step — let's get my brain connected.",
+          step: 2,
+        },
+        { type: "delay", ms: 400 },
+        { type: "widget", widgetType: "section-continue", step: 2, props: { label: "Continue to API Key" } },
+      ]);
+    },
+    [enqueue],
   );
 
   const handlePlatformsContinue = useCallback(() => {
@@ -546,7 +595,9 @@ export function useOnboardingFlow() {
     handleWorkspaceContinue,
     handlePlatformsContinue,
     handleWhatsAppConnect,
+    handleAdminNumberSubmit,
     handleWhatsAppConnected,
+    handleMembersSubmit,
     handleWhatsAppSkip,
     handleApiKeyValidated,
     handleFinishCta,

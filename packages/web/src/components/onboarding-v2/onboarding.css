@@ -929,7 +929,7 @@
   background: var(--ob-card);
   border: 1px solid var(--ob-card-border);
   border-radius: 16px;
-  padding: 24px;
+  padding: 20px 22px 22px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -950,9 +950,7 @@
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--ob-yellow-fg);
-  padding-bottom: 14px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid var(--ob-divider);
+  margin-bottom: 12px;
 }
 
 .ob-qr-header[data-connected="true"] {
@@ -963,6 +961,7 @@
   width: 100%;
   aspect-ratio: 1;
   background: #fff;
+  border: 1px solid var(--ob-card-border);
   border-radius: 10px;
   display: flex;
   align-items: center;
@@ -971,6 +970,22 @@
   position: relative;
   padding: 12px;
   box-sizing: border-box;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  font: inherit;
+  color: inherit;
+}
+
+.ob-qr-container:hover:not(:disabled) {
+  border-color: var(--ob-text-muted);
+}
+
+.ob-qr-container:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ob-qr-container:disabled {
+  cursor: default;
 }
 
 .ob-qr-container canvas,
@@ -1011,7 +1026,7 @@
   font-size: var(--ob-fs-md);
   font-weight: 500;
   color: var(--ob-text);
-  text-align: center;
+  text-align: left;
   margin-top: 16px;
 }
 
@@ -1021,11 +1036,10 @@
 }
 
 .ob-qr-subtext {
-  font-family: var(--ob-font-mono);
-  font-size: var(--ob-fs-xs);
-  letter-spacing: 0.04em;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
   color: var(--ob-text-muted);
-  text-align: center;
+  text-align: left;
   margin-top: 6px;
 }
 
@@ -1866,4 +1880,275 @@
 
 .ob-login-signup-link:hover {
   color: var(--ob-yellow-fg);
+}
+
+/* ── WhatsApp number input (Step 2 sub-step) — trial-card pattern ── */
+
+.ob-wa-numcard {
+  background: var(--ob-card);
+  border: 1px solid var(--ob-card-border);
+  border-radius: 16px;
+  padding: 20px 22px 22px;
+  max-width: 320px;
+}
+
+.ob-wa-numcard-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ob-yellow-fg);
+  margin-bottom: 14px;
+}
+
+.ob-wa-numcard-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ob-wa-numcard-input {
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid var(--ob-card-border);
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-md);
+  color: var(--ob-text);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.ob-wa-numcard-input:focus {
+  border-color: #3d3d39;
+}
+
+.ob-wa-numcard-input::placeholder {
+  color: var(--ob-text-muted);
+  opacity: 0.55;
+}
+
+.ob-wa-numcard-input[data-state="error"] {
+  border-color: var(--ob-error-border);
+}
+
+.ob-wa-numcard-code {
+  flex: 0 0 auto;
+  width: 64px;
+  text-align: center;
+}
+
+.ob-wa-numcard-number {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-left: 22px;
+  padding-right: 22px;
+}
+
+.ob-wa-numcard-help {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+  margin-top: 10px;
+  line-height: 1.4;
+}
+
+.ob-wa-numcard-help-error {
+  color: var(--ob-error);
+}
+
+.ob-wa-numcard-cta {
+  width: 100%;
+  margin-top: 16px;
+}
+
+.dark .ob-wa-numcard-input {
+  background: rgba(245, 245, 240, 0.05);
+}
+
+.dark .ob-wa-numcard-input:focus {
+  border-color: rgba(245, 245, 240, 0.4);
+}
+
+.dark .ob-wa-numcard-input::placeholder {
+  opacity: 0.45;
+}
+
+/* Members card placeholder subtlety preserved separately */
+.ob-wa-member-name::placeholder,
+.ob-wa-member-phone::placeholder {
+  color: var(--ob-text-muted);
+  opacity: 0.55;
+}
+
+.dark .ob-wa-member-name::placeholder,
+.dark .ob-wa-member-phone::placeholder {
+  opacity: 0.45;
+}
+
+/* ── WhatsApp members (Step 2 sub-step) ── */
+
+.ob-wa-members-card {
+  padding: 20px 22px 22px;
+}
+
+/* Match the CTA height to the input fields above it for a tighter rhythm */
+.ob-wa-members-card .ob-api-btn,
+.ob-wa-members-card .ob-wa-member-add {
+  padding-top: 11px;
+  padding-bottom: 11px;
+}
+
+.ob-wa-members-headrow {
+  display: flex;
+  gap: 8px;
+  /* Mirror row layout so labels align with their inputs (account for the trailing remove-button space when present) */
+  margin-bottom: 6px;
+}
+
+.ob-wa-members-collabel {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ob-text-muted);
+}
+
+.ob-wa-members-collabel-name {
+  flex: 1 1 40%;
+}
+
+.ob-wa-members-collabel-phone {
+  flex: 1 1 60%;
+}
+
+.ob-wa-members-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ob-wa-member-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ob-wa-member-name,
+.ob-wa-member-phone {
+  margin-bottom: 0;
+}
+
+.ob-wa-member-name {
+  flex: 1 1 40%;
+}
+
+.ob-wa-member-phone {
+  flex: 1 1 60%;
+}
+
+.ob-wa-member-remove {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--ob-text-muted);
+  cursor: pointer;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ob-wa-member-remove:hover {
+  background: rgba(4, 4, 4, 0.06);
+  color: var(--ob-text);
+}
+
+.dark .ob-wa-member-remove:hover {
+  background: rgba(245, 245, 240, 0.08);
+  color: var(--ob-text);
+}
+
+/* Width + spacing override for the ghost-styled "+ Add another" button */
+.ob-wa-member-add {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+/* ── QR pre-scan note ── */
+
+.ob-qr-prescan-note {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+  text-align: left;
+  margin-bottom: 14px;
+  line-height: 1.45;
+}
+
+.ob-qr-prescan-note strong {
+  color: var(--ob-text);
+  font-weight: 600;
+}
+
+/* ── QR same-number warning state ── */
+
+.ob-qr-card[data-state="warning"] {
+  border-color: var(--ob-card-border);
+}
+
+.ob-qr-header[data-state="warning"] {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 14px;
+}
+
+.ob-qr-warning-inline {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: rgba(254, 237, 1, 0.14);
+  border-radius: 10px;
+}
+
+.ob-qr-warning-icon {
+  color: var(--ob-yellow-fg);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.ob-qr-warning-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ob-qr-warning-title {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  font-weight: 600;
+  color: var(--ob-text);
+  line-height: 1.35;
+}
+
+.ob-qr-warning-body {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  line-height: 1.45;
+  color: var(--ob-text-muted);
 }

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 interface QRCardProps {
   onConnected: (phone: string) => void;
   demo?: boolean;
+  /** Admin's own number (typed earlier). Reserved for future server-side comparison; not used in the demo. */
+  enteredNumber?: string;
 }
 
 /** WhatsApp icon SVG */
@@ -18,8 +20,10 @@ function WhatsAppIcon({ size = 16, color = "#25D366" }: { size?: number; color?:
 /** Self-contained QR code card with WhatsApp branding. Transitions from scanning → verifying → connected in-place. */
 export function QRCard({ onConnected, demo = true }: QRCardProps) {
   const { resolvedTheme } = useTheme();
-  const [status, setStatus] = useState<"scanning" | "verifying" | "connected" | "expired">("scanning");
+  const [status, setStatus] = useState<"scanning" | "verifying" | "connected" | "expired" | "same-number">("scanning");
   const [elapsed, setElapsed] = useState(0);
+  /** Demo: first click triggers the same-number warning, second click succeeds. */
+  const [errorShown, setErrorShown] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   useEffect(() => {
@@ -30,26 +34,30 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
   }, []);
 
   useEffect(() => {
-    if (!demo) return;
-    // Demo: scanning → verifying at 2.5s → connected at 4.5s
-    const t1 = setTimeout(() => setStatus("verifying"), 2500);
-    const t2 = setTimeout(() => {
-      setStatus("connected");
-      onConnected("+1 (555) 234-5678");
-    }, 4500);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [demo, onConnected]);
-
-  useEffect(() => {
     if (demo) return;
     if (elapsed >= 60 && status === "scanning") {
       setStatus("expired");
       clearInterval(timerRef.current);
     }
   }, [elapsed, status, demo]);
+
+  /** Demo only: clicking the QR simulates a scan. First click → same-number error, second → success.
+   * The mock spare-phone number is intentionally different from the admin's typed number so the chat
+   * shows two distinct numbers (admin's vs Sketch's). Production replaces this with the real paired number from the server. */
+  const handleQrClick = useCallback(() => {
+    if (!demo) return;
+    if (status !== "scanning" && status !== "same-number") return;
+    setStatus("verifying");
+    setTimeout(() => {
+      if (!errorShown) {
+        setErrorShown(true);
+        setStatus("same-number");
+        return;
+      }
+      setStatus("connected");
+      onConnected("+1 (555) 234-5678");
+    }, 900);
+  }, [demo, status, errorShown, onConnected]);
 
   const handleRefresh = useCallback(() => {
     setStatus("scanning");
@@ -58,14 +66,15 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
 
   const isConnected = status === "connected";
   const isVerifying = status === "verifying";
+  const isSameNumber = status === "same-number";
 
   return (
     <div className="ob-widget ob-animate-in">
-      <div className="ob-qr-card" data-connected={isConnected}>
+      <div className="ob-qr-card" data-connected={isConnected} data-state={isSameNumber ? "warning" : undefined}>
         {/* Header */}
-        <div className="ob-qr-header" data-connected={isConnected}>
+        <div className="ob-qr-header" data-connected={isConnected} data-state={isSameNumber ? "warning" : undefined}>
           <WhatsAppIcon size={14} color={isConnected ? "#25D366" : resolvedTheme === "dark" ? "#feed01" : "#6b6200"} />
-          {isConnected ? "WHATSAPP CONNECTED" : "CONNECT WHATSAPP"}
+          {isConnected ? "DEVICE LINKED" : isVerifying ? "LINKING DEVICE" : "LINK DEVICE"}
         </div>
 
         {isConnected ? (
@@ -93,7 +102,37 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
           </>
         ) : (
           <>
-            <div className="ob-qr-container" data-verifying={isVerifying}>
+            {isSameNumber && (
+              <div className="ob-qr-warning ob-qr-warning-inline">
+                <div className="ob-qr-warning-icon" aria-hidden="true">
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="12" y1="8" x2="12" y2="12" strokeLinecap="round" />
+                    <line x1="12" y1="16" x2="12.01" y2="16" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <div className="ob-qr-warning-text">
+                  <div className="ob-qr-warning-title">That's your own number.</div>
+                  <div className="ob-qr-warning-body">Pick a number you can dedicate to me.</div>
+                </div>
+              </div>
+            )}
+            <button
+              type="button"
+              className="ob-qr-container"
+              data-verifying={isVerifying}
+              onClick={handleQrClick}
+              disabled={!demo || isVerifying}
+              aria-label="Simulate scan"
+            >
               {/* Placeholder QR — production uses server-generated QR */}
               <svg viewBox="0 0 180 180" width="200" height="200" role="img" aria-label="QR code">
                 <title>QR code</title>
@@ -160,10 +199,9 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
                   <div className="ob-spinner ob-spinner-dark" />
                 </div>
               )}
-            </div>
-            <span className="ob-qr-text">{isVerifying ? "Connecting..." : "Scan this QR code"}</span>
+            </button>
             <span className="ob-qr-subtext">
-              {isVerifying ? "Verifying with WhatsApp..." : "Open WhatsApp → Settings → Linked devices"}
+              {isVerifying ? "Verifying…" : "Open WhatsApp › Settings › Linked devices"}
             </span>
           </>
         )}
