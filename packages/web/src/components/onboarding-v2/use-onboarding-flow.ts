@@ -15,7 +15,15 @@ function buildTrialIntro(): QueueItem[] {
   ];
 }
 
+/**
+ * Locked once at flow init: viewport < 640px → concise WhatsApp copy; otherwise warm hybrid.
+ * Never re-evaluated — resizing mid-flow must not retroactively rewrite already-sent Sketch bubbles.
+ */
+const COMPACT_BREAKPOINT_PX = 640;
+
 export function useOnboardingFlow() {
+  const compactMode = useRef(typeof window !== "undefined" && window.innerWidth < COMPACT_BREAKPOINT_PX).current;
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeWidget, setActiveWidget] = useState<ChatMessage | null>(null);
   const [state, setState] = useState<OnboardingState>({
@@ -140,7 +148,7 @@ export function useOnboardingFlow() {
       setState((prev) => ({ ...prev, authMethod: method }));
       setActiveWidget(null);
 
-      const label = method === "slack" ? "Continue with Slack" : "Sign in with Google";
+      const label = method === "slack" ? "Sign in with Slack" : "Sign in with Google";
 
       // Peek at detection to skip success animation for error flows
       const detection = getMockDetectionResult(method);
@@ -375,58 +383,149 @@ export function useOnboardingFlow() {
   const handleWorkspaceContinue = useCallback(() => {
     const method = state.authMethod;
     setActiveWidget(null);
+
+    // Step 2a — WhatsApp intro. Two bubbles on desktop (warm hybrid), one on mobile (concise).
+    // The second bubble carries the "I get my own dedicated phone number" mental model — front-loaded
+    // here so users aren't surprised when step 2b/2c ask for two distinct numbers.
+    const introMessages: QueueItem[] = compactMode
+      ? method === "slack"
+        ? [
+            {
+              type: "sketch-message",
+              text: "Let's add WhatsApp so your team can message me from their phones.",
+              step: 2,
+            },
+            { type: "delay", ms: 700 },
+            {
+              type: "sketch-message",
+              text: "I'll need a dedicated phone number — separate from yours — to use as my own.",
+              step: 2,
+            },
+          ]
+        : [
+            {
+              type: "sketch-message",
+              text: "Your team will reach me on WhatsApp. Let's set that up.",
+              step: 2,
+            },
+            { type: "delay", ms: 700 },
+            {
+              type: "sketch-message",
+              text: "I need my own phone number for this — a separate, dedicated line.",
+              step: 2,
+            },
+          ]
+      : method === "slack"
+        ? [
+            {
+              type: "sketch-message",
+              text: "Want your team to reach me on WhatsApp too? Let's set that up.",
+              step: 2,
+            },
+            { type: "delay", ms: 800 },
+            {
+              type: "sketch-message",
+              text: "Here's how it works: I get my own phone number — a dedicated line just for me. Your team texts that number, and I answer.",
+              step: 2,
+            },
+          ]
+        : [
+            {
+              type: "sketch-message",
+              text: "Let's get WhatsApp connected — it's how your team will chat with me.",
+              step: 2,
+            },
+            { type: "delay", ms: 800 },
+            {
+              type: "sketch-message",
+              text: "I'll need my own phone number for this. Think of it like giving the new hire a work phone — except the new hire is me.",
+              step: 2,
+            },
+          ];
+
     enqueue([
       { type: "user-message", text: "Go to Platforms", step: 1 },
       { type: "action", action: "set-step", step: 2 },
       { type: "divider", label: "Platforms", step: 2 },
-      {
-        type: "sketch-message",
-        text:
-          method === "slack"
-            ? "One more way to reach me — connect WhatsApp and your team can message me there too."
-            : "This is how your team will reach me — let's get WhatsApp connected.",
-        step: 2,
-      },
+      ...introMessages,
       { type: "delay", ms: 400 },
       { type: "widget", widgetType: "whatsapp-picker", step: 2, props: { canSkip: method === "slack" } },
     ]);
-  }, [enqueue, state.authMethod]);
+  }, [compactMode, enqueue, state.authMethod]);
 
   // ── Step 2: Channel connection ──
 
   const handleWhatsAppConnect = useCallback(() => {
     setActiveWidget(null);
+    // Step 2b — admin's own WhatsApp. Desktop previews the two-number split inline;
+    // mobile keeps the bubble short and lets help text under the input carry the disambiguation.
+    const promptText = compactMode
+      ? "What's your WhatsApp number?"
+      : "What's your WhatsApp number? I need it to recognize you when you message me — separate from the bot number we'll set up next.";
+    const helpText = compactMode
+      ? "So I recognize you. The bot gets a different number next."
+      : "Your personal number. The bot gets a different one in the next step.";
     enqueue([
       { type: "user-message", text: "Connect WhatsApp", step: 2, icon: "whatsapp" },
       { type: "delay", ms: 400 },
       {
         type: "sketch-message",
-        text: "What's your WhatsApp number?",
+        text: promptText,
         step: 2,
       },
       { type: "delay", ms: 300 },
-      { type: "widget", widgetType: "whatsapp-number-input", step: 2 },
+      { type: "widget", widgetType: "whatsapp-number-input", step: 2, props: { helpText } },
     ]);
-  }, [enqueue]);
+  }, [compactMode, enqueue]);
 
   /** Called after the admin submits their own WhatsApp number — proceeds to QR pairing. */
   const handleAdminNumberSubmit = useCallback(
     (fullNumber: string) => {
       setState((prev) => ({ ...prev, adminWhatsappNumber: fullNumber }));
       setActiveWidget(null);
+      // Step 2c — QR pairing of the bot's dedicated number. Desktop spells out the WhatsApp
+      // one-device-per-number rule explicitly; mobile keeps it to the constraint.
+      const qrIntro: QueueItem[] = compactMode
+        ? [
+            {
+              type: "sketch-message",
+              text: "Pair a spare WhatsApp using the code below — it becomes my number.",
+              step: 2,
+            },
+            { type: "delay", ms: 500 },
+            {
+              type: "sketch-message",
+              text: "Must be a different number than yours.",
+              step: 2,
+            },
+          ]
+        : [
+            {
+              type: "sketch-message",
+              text: "Now for my number. You'll need a spare phone with its own WhatsApp — scan the QR below to pair it as my dedicated line.",
+              step: 2,
+            },
+            { type: "delay", ms: 800 },
+            {
+              type: "sketch-message",
+              text: "This must be a different number than the one you just entered. WhatsApp only allows one device per number, so that phone becomes mine full-time.",
+              step: 2,
+            },
+          ];
       enqueue([
         { type: "user-message", text: fullNumber, step: 2 },
         { type: "delay", ms: 500 },
-        {
-          type: "sketch-message",
-          text: "Pair from another phone — that becomes my WhatsApp, where your team will message me.",
-          step: 2,
-        },
+        ...qrIntro,
         { type: "delay", ms: 300 },
-        { type: "widget", widgetType: "qr-card", step: 2, props: { enteredNumber: fullNumber } },
+        {
+          type: "widget",
+          widgetType: "qr-card",
+          step: 2,
+          props: { enteredNumber: fullNumber, initialMode: compactMode ? "code" : "qr" },
+        },
       ]);
     },
-    [enqueue],
+    [compactMode, enqueue],
   );
 
   const handleWhatsAppConnected = useCallback(
@@ -441,18 +540,22 @@ export function useOnboardingFlow() {
         text: `Linked ${phone}`,
       });
       setActiveWidget(null);
+      // Step 2d — add team. Desktop is warmer ("who else should I say hi to?"), mobile is action-only.
+      const membersPrompt = compactMode
+        ? "Add your team — I'll message them to say hi."
+        : "Almost there — who else should I say hi to? Add your team and I'll send them a welcome message on WhatsApp.";
       enqueue([
         { type: "delay", ms: 600 },
         {
           type: "sketch-message",
-          text: "Great. Now add your team — I'll say hi to them on WhatsApp.",
+          text: membersPrompt,
           step: 2,
         },
         { type: "delay", ms: 400 },
         { type: "widget", widgetType: "whatsapp-members", step: 2 },
       ]);
     },
-    [appendMessage, enqueue],
+    [appendMessage, compactMode, enqueue],
   );
 
   /** Called after the admin submits at least one teammate. Continues to the API-key step. */

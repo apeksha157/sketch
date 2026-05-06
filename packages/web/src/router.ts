@@ -12,9 +12,11 @@ import {
   homeCompleteRoute,
   homeEmptyRoute,
   homeMemberEmptyRoute,
+  homeMemberEmptyV2Route,
   homeMemberErrorsRoute,
   homeMemberIterationARoute,
   homeMemberRoute,
+  homeMemberWalkthroughRoute,
   homePreviewRoute,
 } from "./routes/demo/home-demo";
 import {
@@ -43,6 +45,7 @@ import { loginRoute } from "./routes/login";
 import { loginErrorRoute } from "./routes/login-error";
 import { loginMockRoute } from "./routes/login-mock";
 import { onboardingRoute } from "./routes/onboarding";
+import { onboardingMemberRoute } from "./routes/onboarding-member";
 import {
   plansAdminBizLowRoute,
   plansAdminBizRoute,
@@ -68,12 +71,15 @@ const routeTree = rootRoute.addChildren([
   loginErrorRoute,
   loginMockRoute,
   onboardingRoute,
+  onboardingMemberRoute,
   indexRoute,
   dashboardRoute.addChildren([
     homePreviewRoute,
     homeEmptyRoute,
     homeMemberRoute,
     homeMemberEmptyRoute,
+    homeMemberEmptyV2Route,
+    homeMemberWalkthroughRoute,
     homeMemberErrorsRoute,
     homeMemberIterationARoute,
     homeCompleteRoute,

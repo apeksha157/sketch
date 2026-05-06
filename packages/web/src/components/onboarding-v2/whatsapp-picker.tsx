@@ -7,7 +7,7 @@ interface WhatsAppPickerProps {
 /** Pill buttons: Connect WhatsApp / Maybe later. */
 export function WhatsAppPicker({ canSkip, onConnect, onSkip }: WhatsAppPickerProps) {
   return (
-    <div className="ob-widget ob-animate-in" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+    <div className="ob-widget ob-animate-in ob-cta-row">
       <button type="button" className="ob-btn ob-btn-primary" onClick={onConnect}>
         Connect WhatsApp
       </button>

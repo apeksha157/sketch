@@ -3,6 +3,8 @@ import { useState } from "react";
 
 interface WhatsAppNumberInputProps {
   onSubmit: (fullNumber: string) => void;
+  /** Inline helper text shown below the inputs. Defaults to the admin-flow copy. */
+  helpText?: string;
 }
 
 function digitsOnly(s: string): string {
@@ -30,7 +32,10 @@ function WhatsAppIcon({ size = 14, color = "#25D366" }: { size?: number; color?:
 }
 
 /** Step 2 sub-step: capture the admin's own WhatsApp number before pairing the bot host number via QR. */
-export function WhatsAppNumberInput({ onSubmit }: WhatsAppNumberInputProps) {
+export function WhatsAppNumberInput({
+  onSubmit,
+  helpText = "I'll save this as the admin's number.",
+}: WhatsAppNumberInputProps) {
   const { resolvedTheme } = useTheme();
   const [code, setCode] = useState("");
   // Stored as digits only; the displayed value is formatted based on country code.
@@ -106,7 +111,7 @@ export function WhatsAppNumberInput({ onSubmit }: WhatsAppNumberInputProps) {
             That doesn't look like a valid number. Try again?
           </div>
         ) : (
-          <div className="ob-wa-numcard-help">I'll save this as the admin's number.</div>
+          <div className="ob-wa-numcard-help">{helpText}</div>
         )}
 
         <button

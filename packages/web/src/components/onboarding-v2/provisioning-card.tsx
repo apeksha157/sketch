@@ -96,13 +96,14 @@ export function ProvisioningCard({
           Takes 1-10 minutes. We'll email <strong>{email}</strong> when it's live.
         </p>
 
-        {/* While you wait card */}
+        {/* While you wait — compact CTA. Body line removed; the title now carries the
+            "15 min with our founder" detail inline so the whole block stays at 2 rows max. */}
         <div className="ob-provision-wait-card">
           <div className="ob-provision-wait-content">
             <div className="ob-provision-wait-header">
               <div>
                 <div className="ob-provision-wait-label">WHILE YOU WAIT</div>
-                <div className="ob-provision-wait-title">Want to meet the team?</div>
+                <div className="ob-provision-wait-title">Meet the team — 15 min with our founder</div>
               </div>
               <a
                 href="https://calendly.com"
@@ -113,7 +114,6 @@ export function ProvisioningCard({
                 Book a call &rarr;
               </a>
             </div>
-            <p className="ob-provision-wait-body">Grab 15 min with our founder — ask anything or say hi.</p>
           </div>
         </div>
       </div>

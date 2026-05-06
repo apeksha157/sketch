@@ -26,7 +26,7 @@ describe("OnboardingChat", () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText("Continue with Slack")).toBeInTheDocument();
+        expect(screen.getByText("Sign in with Slack")).toBeInTheDocument();
         expect(screen.getByText("Sign in with Google")).toBeInTheDocument();
       },
       { timeout: 5000 },
@@ -39,12 +39,12 @@ describe("OnboardingChat", () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText("Continue with Slack")).toBeInTheDocument();
+        expect(screen.getByText("Sign in with Slack")).toBeInTheDocument();
       },
       { timeout: 5000 },
     );
 
-    await user.click(screen.getByText("Continue with Slack"));
+    await user.click(screen.getByText("Sign in with Slack"));
 
     await waitFor(() => {
       expect(screen.getByText("Connecting to Slack...")).toBeInTheDocument();

@@ -6,10 +6,14 @@
  *   /home/empty                 — admin, first-time (legacy HomePage)
  *   /home/complete              — admin, setup 100% done (legacy HomePage)
  *   /home/member                — member, active, no errors (redesign)
- *   /home/member-empty          — member, new user (redesign)
+ *   /home/member-empty          — member, new user, verbose empties (current)
+ *   /home/member-empty-v2       — member, new user, calm empties (single teacher: Discover/Setup)
+ *   /home/member-walkthrough    — member, new user, with onboarding chatbot widget + coachmark tour
  *   /home/member-errors         — member with notifications card (Iteration B)
  *   /home/member-iteration-a    — member with notifications as banner (Iteration A)
  */
+import { SketchWidget } from "@/components/onboarding-widget";
+import { useDashboardAuth } from "@/routes/dashboard";
 import { HomePage } from "@/routes/home";
 import { type ActivityFeedItem, type DiscoverNudge, HomeMemberPage, type NotificationItem } from "@/routes/home-member";
 import { CalendarDotsIcon, ChatCircleIcon, MagnifyingGlassIcon, PlugIcon, TargetIcon } from "@phosphor-icons/react";
@@ -331,6 +335,48 @@ export const homeMemberEmptyRoute = createRoute({
       notifications={[]}
     />
   ),
+});
+
+export const homeMemberEmptyV2Route = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-empty-v2",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPage
+      setupSteps={MEMBER_SETUP_NEW}
+      digest={MEMBER_DIGEST_NEW}
+      activity={[]}
+      usage={MEMBER_USAGE_EMPTY}
+      discover={[]}
+      notifications={[]}
+      emptyVariant="calm"
+    />
+  ),
+});
+
+function HomeMemberWalkthrough() {
+  const auth = useDashboardAuth();
+  const firstName = auth.displayName.split(" ")[0] ?? auth.displayName;
+  return (
+    <>
+      <HomeMemberPage
+        setupSteps={MEMBER_SETUP_NEW}
+        digest={MEMBER_DIGEST_NEW}
+        activity={[]}
+        usage={MEMBER_USAGE_EMPTY}
+        discover={[]}
+        notifications={[]}
+      />
+      <SketchWidget firstName={firstName} />
+    </>
+  );
+}
+
+export const homeMemberWalkthroughRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-walkthrough",
+  beforeLoad: setMemberRole,
+  component: HomeMemberWalkthrough,
 });
 
 export const homeMemberErrorsRoute = createRoute({

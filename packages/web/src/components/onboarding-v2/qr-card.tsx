@@ -6,7 +6,13 @@ interface QRCardProps {
   demo?: boolean;
   /** Admin's own number (typed earlier). Reserved for future server-side comparison; not used in the demo. */
   enteredNumber?: string;
+  /** "qr" works when the user has a second device. "code" works on the same phone they're onboarding from
+   *  (no camera scan required — they paste the pairing code into WhatsApp's "Link with phone number" flow). */
+  initialMode?: "qr" | "code";
 }
+
+/** Stable demo pairing code in WhatsApp's XXXX-XXXX format. Production replaces with a server-issued code. */
+const DEMO_PAIRING_CODE = "LM3K-9P2R";
 
 /** WhatsApp icon SVG */
 function WhatsAppIcon({ size = 16, color = "#25D366" }: { size?: number; color?: string }) {
@@ -17,11 +23,16 @@ function WhatsAppIcon({ size = 16, color = "#25D366" }: { size?: number; color?:
   );
 }
 
-/** Self-contained QR code card with WhatsApp branding. Transitions from scanning → verifying → connected in-place. */
-export function QRCard({ onConnected, demo = true }: QRCardProps) {
+/** Self-contained WhatsApp linking card. Two modes:
+ *  - QR: shows a scannable code (default on desktop where the admin has a second device).
+ *  - Code: shows an 8-char pairing code (default on mobile where camera-scan-from-same-device is impossible).
+ *  Both modes share the scanning → verifying → connected state machine and the same-number warning. */
+export function QRCard({ onConnected, demo = true, initialMode = "qr" }: QRCardProps) {
   const { resolvedTheme } = useTheme();
+  const [mode, setMode] = useState<"qr" | "code">(initialMode);
   const [status, setStatus] = useState<"scanning" | "verifying" | "connected" | "expired" | "same-number">("scanning");
   const [elapsed, setElapsed] = useState(0);
+  const [copied, setCopied] = useState(false);
   /** Demo: first click triggers the same-number warning, second click succeeds. */
   const [errorShown, setErrorShown] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval>>(undefined);
@@ -64,6 +75,41 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
     setElapsed(0);
   }, []);
 
+  /** In demo mode, copying the code is the trigger that simulates the spare phone completing the link
+   *  (production listens via webhook and advances passively). The lag between "Copied" feedback and the
+   *  status flip mirrors the real round-trip: user copies → switches to WhatsApp → enters code → backend confirms. */
+  const handleCopyCode = useCallback(() => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(DEMO_PAIRING_CODE.replace("-", "")).catch(() => {
+        /* clipboard blocked (insecure context / permissions) — code is still selectable on the card */
+      });
+    }
+    setCopied(true);
+
+    if (!demo) return;
+    if (status !== "scanning" && status !== "same-number") return;
+
+    setTimeout(() => {
+      setStatus("verifying");
+      setTimeout(() => {
+        if (!errorShown) {
+          setErrorShown(true);
+          setStatus("same-number");
+          setCopied(false);
+          return;
+        }
+        setStatus("connected");
+        onConnected("+1 (555) 234-5678");
+      }, 1100);
+    }, 900);
+  }, [demo, status, errorShown, onConnected]);
+
+  const handleSwitchMode = useCallback(() => {
+    setMode((m) => (m === "qr" ? "code" : "qr"));
+    if (status === "verifying") setStatus("scanning");
+    setCopied(false);
+  }, [status]);
+
   const isConnected = status === "connected";
   const isVerifying = status === "verifying";
   const isSameNumber = status === "same-number";
@@ -95,7 +141,7 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
           </>
         ) : status === "expired" ? (
           <>
-            <span className="ob-qr-text">QR code expired.</span>
+            <span className="ob-qr-text">{mode === "qr" ? "QR code expired." : "Pairing code expired."}</span>
             <button type="button" className="ob-btn ob-btn-primary" onClick={handleRefresh}>
               Generate new code
             </button>
@@ -106,8 +152,8 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
               <div className="ob-qr-warning ob-qr-warning-inline">
                 <div className="ob-qr-warning-icon" aria-hidden="true">
                   <svg
-                    width="20"
-                    height="20"
+                    width="16"
+                    height="16"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
@@ -120,89 +166,152 @@ export function QRCard({ onConnected, demo = true }: QRCardProps) {
                   </svg>
                 </div>
                 <div className="ob-qr-warning-text">
-                  <div className="ob-qr-warning-title">That's your own number.</div>
-                  <div className="ob-qr-warning-body">Pick a number you can dedicate to me.</div>
+                  <strong className="ob-qr-warning-title">That's your own number.</strong>{" "}
+                  <span className="ob-qr-warning-body">Pick a different one.</span>
                 </div>
               </div>
             )}
-            <button
-              type="button"
-              className="ob-qr-container"
-              data-verifying={isVerifying}
-              onClick={handleQrClick}
-              disabled={!demo || isVerifying}
-              aria-label="Simulate scan"
-            >
-              {/* Placeholder QR — production uses server-generated QR */}
-              <svg viewBox="0 0 180 180" width="200" height="200" role="img" aria-label="QR code">
-                <title>QR code</title>
-                <rect width="180" height="180" fill="#fff" />
-                <rect x="12" y="12" width="48" height="48" rx="4" fill="#000" />
-                <rect x="18" y="18" width="36" height="36" rx="2" fill="#fff" />
-                <rect x="24" y="24" width="24" height="24" rx="2" fill="#000" />
-                <rect x="120" y="12" width="48" height="48" rx="4" fill="#000" />
-                <rect x="126" y="18" width="36" height="36" rx="2" fill="#fff" />
-                <rect x="132" y="24" width="24" height="24" rx="2" fill="#000" />
-                <rect x="12" y="120" width="48" height="48" rx="4" fill="#000" />
-                <rect x="18" y="126" width="36" height="36" rx="2" fill="#fff" />
-                <rect x="24" y="132" width="24" height="24" rx="2" fill="#000" />
-                {[72, 84, 96, 108].map((x) =>
-                  [72, 84, 96, 108].map((y) => (
-                    <rect
-                      key={`${x}-${y}`}
-                      x={x}
-                      y={y}
-                      width="10"
-                      height="10"
-                      rx="1"
-                      fill="#000"
-                      opacity={(x + y) % 24 === 0 ? 0 : 1}
-                    />
-                  )),
-                )}
-                {[72, 84, 96].map((x) =>
-                  [12, 24, 36, 48].map((y) => (
-                    <rect
-                      key={`m-${x}-${y}`}
-                      x={x}
-                      y={y}
-                      width="10"
-                      height="10"
-                      rx="1"
-                      fill="#000"
-                      opacity={(x * y) % 5 === 0 ? 0 : 1}
-                    />
-                  )),
-                )}
-                {[12, 24, 36, 48].map((x) =>
-                  [72, 84, 96].map((y) => (
-                    <rect
-                      key={`n-${x}-${y}`}
-                      x={x}
-                      y={y}
-                      width="10"
-                      height="10"
-                      rx="1"
-                      fill="#000"
-                      opacity={(x + y) % 7 === 0 ? 0 : 1}
-                    />
-                  )),
-                )}
-              </svg>
-              {!isVerifying && (
-                <div className="ob-qr-wa-logo">
-                  <WhatsAppIcon size={20} />
+            {mode === "qr" ? (
+              <>
+                <button
+                  type="button"
+                  className="ob-qr-container"
+                  data-verifying={isVerifying}
+                  onClick={handleQrClick}
+                  disabled={!demo || isVerifying}
+                  aria-label="Simulate scan"
+                >
+                  {/* Placeholder QR — production uses server-generated QR */}
+                  <svg viewBox="0 0 180 180" width="200" height="200" role="img" aria-label="QR code">
+                    <title>QR code</title>
+                    <rect width="180" height="180" fill="#fff" />
+                    <rect x="12" y="12" width="48" height="48" rx="4" fill="#000" />
+                    <rect x="18" y="18" width="36" height="36" rx="2" fill="#fff" />
+                    <rect x="24" y="24" width="24" height="24" rx="2" fill="#000" />
+                    <rect x="120" y="12" width="48" height="48" rx="4" fill="#000" />
+                    <rect x="126" y="18" width="36" height="36" rx="2" fill="#fff" />
+                    <rect x="132" y="24" width="24" height="24" rx="2" fill="#000" />
+                    <rect x="12" y="120" width="48" height="48" rx="4" fill="#000" />
+                    <rect x="18" y="126" width="36" height="36" rx="2" fill="#fff" />
+                    <rect x="24" y="132" width="24" height="24" rx="2" fill="#000" />
+                    {[72, 84, 96, 108].map((x) =>
+                      [72, 84, 96, 108].map((y) => (
+                        <rect
+                          key={`${x}-${y}`}
+                          x={x}
+                          y={y}
+                          width="10"
+                          height="10"
+                          rx="1"
+                          fill="#000"
+                          opacity={(x + y) % 24 === 0 ? 0 : 1}
+                        />
+                      )),
+                    )}
+                    {[72, 84, 96].map((x) =>
+                      [12, 24, 36, 48].map((y) => (
+                        <rect
+                          key={`m-${x}-${y}`}
+                          x={x}
+                          y={y}
+                          width="10"
+                          height="10"
+                          rx="1"
+                          fill="#000"
+                          opacity={(x * y) % 5 === 0 ? 0 : 1}
+                        />
+                      )),
+                    )}
+                    {[12, 24, 36, 48].map((x) =>
+                      [72, 84, 96].map((y) => (
+                        <rect
+                          key={`n-${x}-${y}`}
+                          x={x}
+                          y={y}
+                          width="10"
+                          height="10"
+                          rx="1"
+                          fill="#000"
+                          opacity={(x + y) % 7 === 0 ? 0 : 1}
+                        />
+                      )),
+                    )}
+                  </svg>
+                  {!isVerifying && (
+                    <div className="ob-qr-wa-logo">
+                      <WhatsAppIcon size={20} />
+                    </div>
+                  )}
+                  {isVerifying && (
+                    <div className="ob-qr-verifying-overlay">
+                      <div className="ob-spinner ob-spinner-dark" />
+                    </div>
+                  )}
+                </button>
+                <span className="ob-qr-subtext">
+                  {isVerifying ? "Verifying…" : "Open WhatsApp › Settings › Linked devices"}
+                </span>
+              </>
+            ) : (
+              <>
+                <div className="ob-code-display">
+                  <span className="ob-code-value">{DEMO_PAIRING_CODE}</span>
+                  <button
+                    type="button"
+                    className="ob-code-copy"
+                    onClick={handleCopyCode}
+                    aria-label={copied ? "Code copied" : "Copy pairing code"}
+                    title={copied ? "Copied" : "Copy code"}
+                    data-copied={copied}
+                  >
+                    {copied ? (
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : (
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                      </svg>
+                    )}
+                  </button>
                 </div>
-              )}
-              {isVerifying && (
-                <div className="ob-qr-verifying-overlay">
-                  <div className="ob-spinner ob-spinner-dark" />
-                </div>
-              )}
+                <ol className="ob-code-steps">
+                  <li>Open WhatsApp on the spare phone</li>
+                  <li>Settings &rsaquo; Linked Devices &rsaquo; Link with phone number</li>
+                  <li>Enter this code</li>
+                </ol>
+                <output className="ob-code-status">
+                  <span className="ob-code-status-dot" data-verifying={isVerifying} aria-hidden="true" />
+                  <span className="ob-code-status-text">
+                    {isVerifying ? "Linking…" : "We'll continue once your spare phone links"}
+                  </span>
+                </output>
+              </>
+            )}
+            <button type="button" className="ob-qr-mode-toggle" onClick={handleSwitchMode}>
+              {mode === "qr" ? "Can't scan? Use a code instead" : "On a second device? Show QR instead"}
             </button>
-            <span className="ob-qr-subtext">
-              {isVerifying ? "Verifying…" : "Open WhatsApp › Settings › Linked devices"}
-            </span>
           </>
         )}
       </div>

@@ -107,6 +107,12 @@ export interface HomeMemberPageProps {
   notifications: NotificationItem[];
   /** "card" = Iteration B (separate notifications card). "banner" = Iteration A (banner inside Activity). */
   notificationsMode?: "card" | "banner";
+  /**
+   * Controls how empty zones teach. "verbose" (default) = each card carries its own
+   * teach-and-CTA copy. "calm" = only the right column (Discover/Setup) teaches; Activity
+   * collapses to a single quiet line and Usage tiles drop their empty copy.
+   */
+  emptyVariant?: "verbose" | "calm";
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -137,6 +143,7 @@ export function HomeMemberPage({
   discover,
   notifications,
   notificationsMode = "card",
+  emptyVariant = "verbose",
 }: HomeMemberPageProps) {
   const auth = useDashboardAuth();
   const stage = deriveStage(digest, setupSteps);
@@ -145,23 +152,36 @@ export function HomeMemberPage({
   const showNotificationsBanner = notificationsMode === "banner" && errorCount > 0;
   const notificationsVisible = showNotificationsCard || showNotificationsBanner;
 
+  // In calm variant, when a new user has nothing in their activity, drop the
+  // Activity card entirely — Discover/Setup owns the teaching job, no need for
+  // an almost-empty card competing for attention.
+  const hideActivityCard = emptyVariant === "calm" && stage === "new_user" && activity.length === 0;
+
   // Grid ratios: new user → Discover dominant. Active → Activity dominant.
-  const topRowCols = stage === "new_user" ? "grid-cols-1 lg:grid-cols-[2fr_3fr]" : "grid-cols-1 lg:grid-cols-[3fr_2fr]";
+  // When activity is hidden, the row becomes a single column so Discover spans full width.
+  const topRowCols = hideActivityCard
+    ? "grid-cols-1"
+    : stage === "new_user"
+      ? "grid-cols-1 lg:grid-cols-[2fr_3fr]"
+      : "grid-cols-1 lg:grid-cols-[3fr_2fr]";
 
   return (
-    <div className="mx-auto flex h-[calc(100dvh-3rem)] w-full max-w-4xl flex-col gap-4 overflow-hidden px-10 pt-8 pb-10">
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-10 pt-8 pb-10 lg:h-[calc(100dvh-3rem)] lg:overflow-hidden">
       <div className="shrink-0">
         <GreetingBar firstName={firstName(auth.displayName)} digest={digest} />
       </div>
 
-      <div className={cn("grid min-h-0 flex-1 gap-5 overflow-hidden", topRowCols)}>
-        <ActivityCard
-          items={activity}
-          digest={digest}
-          isNewUser={stage === "new_user"}
-          banner={showNotificationsBanner ? <NotificationsBanner items={notifications} /> : null}
-          notificationsVisible={notificationsVisible}
-        />
+      <div className={cn("grid gap-5 lg:min-h-0 lg:flex-1 lg:overflow-hidden", topRowCols)}>
+        {!hideActivityCard && (
+          <ActivityCard
+            items={activity}
+            digest={digest}
+            isNewUser={stage === "new_user"}
+            banner={showNotificationsBanner ? <NotificationsBanner items={notifications} /> : null}
+            notificationsVisible={notificationsVisible}
+            emptyVariant={emptyVariant}
+          />
+        )}
 
         <div className="flex flex-col gap-5">
           {showNotificationsCard ? <NotificationsCard items={notifications} /> : null}
@@ -179,6 +199,7 @@ export function HomeMemberPage({
           label="Messages"
           value={usage.messages}
           delta={usage.messagesDelta}
+          emptyVariant={emptyVariant}
           emptyCopy={
             <>
               We haven't talked yet. Every conversation on Slack counts here.{" "}
@@ -192,6 +213,7 @@ export function HomeMemberPage({
           label="Skills used"
           value={usage.skills}
           delta={usage.skillsDelta}
+          emptyVariant={emptyVariant}
           emptyCopy={
             <>
               I can summarize meetings, qualify leads, track competitors — and more.{" "}
@@ -205,6 +227,7 @@ export function HomeMemberPage({
           label="Automations run"
           value={usage.automations}
           delta={usage.automationsDelta}
+          emptyVariant={emptyVariant}
           emptyCopy={
             <>
               Schedule a task — daily, weekly, whatever you need — and I'll handle it from there.{" "}
@@ -227,12 +250,14 @@ function ActivityCard({
   isNewUser,
   banner,
   notificationsVisible,
+  emptyVariant,
 }: {
   items: ActivityFeedItem[];
   digest: HomeDigest;
   isNewUser: boolean;
   banner: React.ReactNode;
   notificationsVisible: boolean;
+  emptyVariant: "verbose" | "calm";
 }) {
   // When notifications are visible, the right column is taller. Trim Activity caps
   // so the row doesn't grow too tall and force page scroll.
@@ -250,21 +275,30 @@ function ActivityCard({
   const isEmpty = items.length === 0;
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
+    <section
+      data-walkthrough-target="activity-card"
+      className="flex flex-col rounded-lg border border-border bg-card lg:min-h-0 lg:flex-1 lg:overflow-hidden"
+    >
       <header className="flex shrink-0 items-center justify-between gap-4 px-5 pt-4">
         <h2 className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">Activity</h2>
-        <Link
-          to="/usage"
-          className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-[#8B7A00] dark:hover:text-[#FEED01]"
-        >
-          View all →
-        </Link>
+        {!isEmpty && (
+          <Link
+            to="/usage"
+            className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-[#8B7A00] dark:hover:text-[#FEED01]"
+          >
+            View all →
+          </Link>
+        )}
       </header>
 
       <div className="flex flex-1 flex-col gap-3 px-5 py-4">
         {banner}
         {isNewUser && isEmpty ? (
-          <ActivityEmptyState />
+          emptyVariant === "calm" ? (
+            <ActivityEmptyStateCalm />
+          ) : (
+            <ActivityEmptyState />
+          )
         ) : (
           <>
             <div className="space-y-2">
@@ -365,21 +399,9 @@ function ActivityEmptyState() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex-1 space-y-5">
-        <GhostSection
-          label="Upcoming"
-          body="Nothing on my schedule yet. When you set one up, your next run shows here."
-          example="Competitive Intel at 2:00 PM"
-        />
-        <GhostSection
-          label="Completed"
-          body="I'll log everything I run — summaries, reports, lead scoring — right in this feed."
-          example="Meeting Summary ran · 8:42 AM"
-        />
-        <GhostSection
-          label="Triggered by you"
-          body="Ask me something on Slack and it shows up here too."
-          example="You triggered Lead Scoring · 11:00 AM"
-        />
+        <GhostSection label="Upcoming" body="Nothing scheduled yet." />
+        <GhostSection label="Completed" body="Tasks I run will show up here." />
+        <GhostSection label="Triggered by you" body="Things you ask me will appear here." />
       </div>
 
       <div className="mt-6 flex items-center gap-3 rounded-md border border-[#8B7A00]/20 bg-[#FEED01]/10 px-3 py-3 dark:border-[#FEED01]/20 dark:bg-[#FEED01]/[0.04]">
@@ -387,9 +409,8 @@ function ActivityEmptyState() {
           <ClockIcon size={16} weight="fill" />
         </div>
         <p className="text-sm">
-          I'm on Slack, ready when you are.{" "}
           <Link to="/channels" className="font-medium text-foreground underline-offset-2 hover:underline">
-            Come say hi →
+            Say hi on Slack →
           </Link>
         </p>
       </div>
@@ -397,14 +418,25 @@ function ActivityEmptyState() {
   );
 }
 
-function GhostSection({ label, body, example }: { label: string; body: string; example: string }) {
+/**
+ * Calm variant — single quiet line. Defers the teaching job to the right column
+ * (Discover/Setup) so the page has one entry point, not many.
+ */
+function ActivityEmptyStateCalm() {
+  return (
+    <div className="flex h-full min-h-0 flex-col items-center justify-center px-6 text-center">
+      <p className="max-w-[28ch] text-sm text-muted-foreground">
+        Your activity will show up here once tasks start running.
+      </p>
+    </div>
+  );
+}
+
+function GhostSection({ label, body }: { label: string; body: string }) {
   return (
     <div>
       <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground/70">{label}</h3>
-      <div className="px-2 py-1">
-        <p className="text-sm text-muted-foreground">{body}</p>
-        <p className="mt-1 text-xs italic text-muted-foreground/60">{example}</p>
-      </div>
+      <p className="px-2 py-1 text-sm text-muted-foreground">{body}</p>
     </div>
   );
 }
@@ -742,7 +774,10 @@ function SetupRow({
   const progressPct = (completedCount / SETUP_STEPS.length) * 100;
 
   return (
-    <div className={cn("flex flex-col gap-3 px-5 py-4", fillCard && "min-h-0 flex-1")}>
+    <div
+      data-walkthrough-target="setup-checklist"
+      className={cn("flex flex-col gap-3 px-5 py-4", fillCard && "min-h-0 flex-1")}
+    >
       <div className="flex items-center justify-between gap-4">
         <p className="text-sm">
           <span className="text-muted-foreground">Setting up Sketch · </span>
@@ -951,11 +986,13 @@ function UsageTile({
   value,
   delta,
   emptyCopy,
+  emptyVariant = "verbose",
 }: {
   label: string;
   value: number;
   delta: number;
   emptyCopy: React.ReactNode;
+  emptyVariant?: "verbose" | "calm";
 }) {
   const isEmpty = value === 0;
   const isNegative = delta < 0;
@@ -982,7 +1019,9 @@ function UsageTile({
         </span>
       ) : null}
       {isEmpty ? (
-        <p className="text-xs leading-snug text-muted-foreground">{emptyCopy}</p>
+        emptyVariant === "calm" ? null : (
+          <p className="text-xs leading-snug text-muted-foreground">{emptyCopy}</p>
+        )
       ) : (
         <div className="h-[3px] w-full overflow-hidden rounded-full bg-muted">
           <div className={cn("h-full rounded-full transition-all", USAGE_TINT.bar)} style={{ width: `${barPct}%` }} />

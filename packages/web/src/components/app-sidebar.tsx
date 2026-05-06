@@ -90,7 +90,7 @@ export function AppSidebar({
   const initials = getInitials(displayIdentifier);
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" data-walkthrough-target="sidebar">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -114,7 +114,10 @@ export function AppSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               {primaryNav.map((item) => (
-                <SidebarMenuItem key={item.href}>
+                <SidebarMenuItem
+                  key={item.href}
+                  data-walkthrough-target={item.href === "/skills" ? "sidebar-skills" : undefined}
+                >
                   <SidebarMenuButton
                     isActive={location.pathname === item.href}
                     onClick={() => !item.disabled && navigate({ to: item.href })}

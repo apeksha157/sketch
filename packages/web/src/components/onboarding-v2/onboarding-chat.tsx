@@ -22,6 +22,9 @@ import { WhatsAppPicker } from "./whatsapp-picker";
 import { WorkspaceCard } from "./workspace-card";
 import { YellowFinish } from "./yellow-finish";
 
+const BOOK_CALL_URL =
+  (import.meta.env.VITE_BOOK_CALL_URL as string | undefined) ?? "https://calendly.com/sketch-team/onboarding-help";
+
 /* ── Brand icons for user message pills ── */
 
 function SlackMiniIcon() {
@@ -345,7 +348,14 @@ export function OnboardingChat() {
         );
       }
       case "divider":
-        return <SectionDivider key={msg.id} label={msg.label || ""} step={msg.step} />;
+        return (
+          <SectionDivider
+            key={msg.id}
+            label={msg.label || ""}
+            step={msg.step}
+            isCurrent={msg.step === state.currentStep}
+          />
+        );
       case "widget":
         return renderInlineWidget(msg, index);
       default:
@@ -426,7 +436,15 @@ export function OnboardingChat() {
         return <WhatsAppNumberInput onSubmit={handleAdminNumberSubmit} />;
       case "qr-card": {
         const enteredNumber = activeWidget.widgetProps?.enteredNumber as string | undefined;
-        return <QRCard onConnected={(phone) => handleWhatsAppConnected(phone)} demo enteredNumber={enteredNumber} />;
+        const initialMode = (activeWidget.widgetProps?.initialMode as "qr" | "code" | undefined) ?? "qr";
+        return (
+          <QRCard
+            onConnected={(phone) => handleWhatsAppConnected(phone)}
+            demo
+            enteredNumber={enteredNumber}
+            initialMode={initialMode}
+          />
+        );
       }
       case "whatsapp-members":
         return <WhatsAppMembers onSubmit={handleMembersSubmit} />;
@@ -495,19 +513,13 @@ export function OnboardingChat() {
       <div className="ob-container">
         {/* Header */}
         <div className="ob-header">
-          <div className="ob-header-left">
-            <img
-              src={resolvedTheme === "dark" ? "/logos/sketch-logo-light.png" : "/logos/sketch-logo-dark.png"}
-              alt="Sketch"
-              style={{ height: 40, width: "auto" }}
-            />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="ob-header-side">
             <button
               type="button"
               className="ob-theme-toggle"
               onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
               aria-label={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             >
               {resolvedTheme === "dark" ? (
                 <svg
@@ -540,6 +552,41 @@ export function OnboardingChat() {
                 </svg>
               )}
             </button>
+          </div>
+          <div className="ob-header-left">
+            <img
+              src={resolvedTheme === "dark" ? "/logos/sketch-logo-light.png" : "/logos/sketch-logo-dark.png"}
+              alt="Sketch"
+              style={{ height: 40, width: "auto" }}
+            />
+          </div>
+          <div className="ob-header-side ob-header-side-right">
+            <a
+              href={BOOK_CALL_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ob-book-call"
+              title="Book a call"
+              aria-label="Book a call"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 11h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H3v-7Z" />
+                <path d="M21 11h-3a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h3v-7Z" />
+                <path d="M3 11v-1a9 9 0 0 1 18 0v1" />
+                <path d="M21 16v2a4 4 0 0 1-4 4h-5" />
+              </svg>
+              <span className="ob-visually-hidden">Book a call</span>
+            </a>
           </div>
         </div>
 

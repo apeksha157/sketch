@@ -1,5 +1,17 @@
 /* Onboarding conversational UI — scoped design tokens and animations */
 
+.ob-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .onboarding-root {
   --ob-yellow: #feed01;
   --ob-yellow-fg: #6b6200; /* dark yellow for text/icons on light backgrounds */
@@ -109,8 +121,18 @@
   padding: 20px 28px 8px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   position: relative;
+}
+
+.ob-header-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ob-header-side-right {
+  justify-content: flex-end;
 }
 
 .ob-header-left {
@@ -142,12 +164,61 @@
 
 .ob-track {
   padding: 8px 28px 4px;
+  background: var(--ob-container-bg);
+  position: relative;
+}
+
+/* Wide: pills visible, bar hidden. Narrow flips this in the media query below. */
+.ob-track-pills {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0;
-  background: var(--ob-container-bg);
-  position: relative;
+}
+
+.ob-track-bar {
+  display: none;
+  align-items: center;
+  gap: 12px;
+}
+
+.ob-track-bar-rail {
+  flex: 1 1 auto;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(4, 4, 4, 0.08);
+  overflow: hidden;
+}
+
+.dark .ob-track-bar-rail {
+  background: rgba(245, 245, 240, 0.08);
+}
+
+.ob-track-bar-fill {
+  height: 100%;
+  background: var(--ob-yellow-fg);
+  border-radius: inherit;
+  transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.dark .ob-track-bar-fill {
+  background: var(--ob-yellow);
+}
+
+.ob-track-bar-counter {
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ob-text-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ob-track-bar-counter-of {
+  opacity: 0.5;
+  margin: 0 1px;
 }
 
 .ob-track::after {
@@ -225,6 +296,44 @@
 
 .ob-track-connector[data-done="true"] {
   background: rgba(107, 98, 0, 0.35);
+}
+
+/* Below 720px: hide the top progress row entirely. The section divider takes over progress
+   duty — left line filled yellow (steps reached), right line dim (steps remaining), with
+   "Up next: X" hint inline. One row does the work of three. */
+@media (max-width: 720px) {
+  .ob-track {
+    padding: 0;
+  }
+
+  .ob-track-pills,
+  .ob-track-bar {
+    display: none;
+  }
+
+  /* Tighten horizontal padding on small screens — desktop uses 28px gutters which eat
+     ~6% of screen width on a 375px phone. 16px feels right at mobile sizes. */
+  .ob-header {
+    padding: 20px 16px 8px;
+  }
+
+  .ob-chat {
+    padding: 0 16px 16px;
+  }
+
+  /* Pull message bodies closer to the avatar — desktop offsets by 32px which is too much
+     when the container itself is narrower. */
+  .ob-msg-body-sketch,
+  .ob-msg-continued .ob-msg-body,
+  .ob-widget {
+    padding-left: 24px;
+  }
+
+  /* Divider gets more vertical breathing room on mobile — the 2-row block is heavier than
+     the desktop horizontal-rule and was getting squeezed by adjacent chat content. */
+  .ob-divider {
+    padding: 24px 0;
+  }
 }
 
 /* ── Chat area ── */
@@ -482,6 +591,30 @@
   transform: translate(1px, -1px);
 }
 
+/* Mobile: pack the trial-card links onto one row by shrinking font, gaps, bullet, and icon. */
+@media (max-width: 720px) {
+  .ob-trial-card-links {
+    flex-wrap: nowrap;
+    gap: 6px 8px;
+    padding-top: 12px;
+  }
+
+  .ob-trial-card-link {
+    font-size: var(--ob-fs-xs);
+    gap: 3px;
+  }
+
+  .ob-trial-card-link + .ob-trial-card-link::before {
+    margin-right: 6px;
+    font-size: 0.85em;
+  }
+
+  .ob-trial-card-link-icon {
+    width: 0.8em;
+    height: 0.8em;
+  }
+}
+
 .ob-trial-card-cta {
   width: 100%;
   margin-top: 16px;
@@ -537,10 +670,14 @@
 /* ── Section divider ── */
 
 .ob-divider {
+  padding: 14px 0;
+}
+
+/* Desktop variant: classic horizontal rule with label centered. */
+.ob-divider-classic {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 14px 0;
 }
 
 .ob-divider-line {
@@ -559,12 +696,113 @@
   white-space: nowrap;
 }
 
+/* Mobile-only progress variant — hidden by default. */
+.ob-divider-progress {
+  display: none;
+}
+
+/* Mobile: every divider uses the 2-row progress layout for visual consistency. The "Up next"
+   hint is rendered only on the current divider (handled in the React component); the progress
+   bar on past dividers shows the journey state at that moment — a footprint pattern.
+   Dividers are also sticky on mobile so the section name + progress stay visible while
+   scrolling within a section — once you scroll into the next section, that divider takes over
+   (CSS sticky stacking, same pattern as iOS Messages section headers). */
+@media (max-width: 720px) {
+  .ob-divider {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--ob-container-bg);
+  }
+
+  .ob-divider-classic {
+    display: none;
+  }
+
+  .ob-divider-progress {
+    display: block;
+  }
+
+  .ob-divider-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  .ob-divider-progress-label {
+    font-family: var(--ob-font-mono);
+    font-size: var(--ob-fs-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ob-text-muted);
+    white-space: nowrap;
+  }
+
+  .ob-divider-progress-next {
+    font-family: var(--ob-font-mono);
+    font-size: var(--ob-fs-xs);
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ob-text-dim);
+    white-space: nowrap;
+  }
+
+  .ob-divider-progress-next-strong {
+    color: var(--ob-text-muted);
+    font-weight: 600;
+    margin-left: 4px;
+  }
+
+  .ob-divider-progress-bar {
+    height: 2px;
+    border-radius: 2px;
+    background: rgba(4, 4, 4, 0.08);
+    overflow: hidden;
+  }
+
+  .dark .ob-divider-progress-bar {
+    background: rgba(245, 245, 240, 0.08);
+  }
+
+  .ob-divider-progress-fill {
+    height: 100%;
+    background: var(--ob-yellow-fg);
+    border-radius: inherit;
+    transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .dark .ob-divider-progress-fill {
+    background: var(--ob-yellow);
+  }
+}
+
 /* ── Widgets (indented like message body) ── */
 
 .ob-widget {
   padding-left: 32px;
+  padding-right: 16px;
   margin-top: 16px;
   margin-bottom: 0;
+}
+
+/* Side-by-side CTAs (e.g., "Connect WhatsApp" / "Maybe later"). On wide viewports they sit
+   in a row; on narrow viewports they stack so neither overflows the chat container. */
+.ob-cta-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .ob-cta-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
 }
 
 /* ── Auth picker ── */
@@ -1053,6 +1291,169 @@
   justify-content: center;
 }
 
+/* ── Code-pairing variant (mobile-default; works on the same device the admin onboards from) ── */
+
+/* Code is the visual hero — flat presentation on the card surface, no second border. */
+.ob-code-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 2px 14px;
+  border-bottom: 1px solid var(--ob-divider);
+  margin-bottom: 14px;
+}
+
+.ob-code-value {
+  font-family: var(--ob-font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--ob-text);
+  user-select: all;
+}
+
+.ob-code-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--ob-text-dim);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.ob-code-copy:hover {
+  color: var(--ob-text);
+  background: rgba(127, 127, 127, 0.08);
+}
+
+.ob-code-copy[data-copied="true"] {
+  color: var(--ob-green);
+  background: rgba(48, 209, 88, 0.1);
+  animation: ob-copy-pop 0.32s ease-out;
+}
+
+@keyframes ob-copy-pop {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Numbered steps — counter inline with text, low-key styling so the code remains the hero. */
+.ob-code-steps {
+  list-style: none;
+  counter-reset: ob-code-step;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ob-code-steps li {
+  counter-increment: ob-code-step;
+  position: relative;
+  padding-left: 26px;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  line-height: 1.5;
+  color: var(--ob-text-dim);
+}
+
+.ob-code-steps li::before {
+  content: counter(ob-code-step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--ob-font-mono);
+  font-size: var(--ob-fs-xs);
+  font-weight: 600;
+  color: var(--ob-text-muted);
+  background: rgba(127, 127, 127, 0.08);
+  border-radius: 50%;
+  line-height: 1;
+}
+
+/* Listening / status indicator — passive: backend webhook drives the transition. */
+.ob-code-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 8px 0;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+}
+
+.ob-code-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ob-yellow-fg);
+  box-shadow: 0 0 0 0 rgba(254, 237, 1, 0.4);
+  animation: ob-pulse-dot 1.6s ease-out infinite;
+}
+
+.ob-code-status-dot[data-verifying="true"] {
+  background: var(--ob-green);
+  box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.4);
+}
+
+@keyframes ob-pulse-dot {
+  0% {
+    box-shadow: 0 0 0 0 rgba(254, 237, 1, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(254, 237, 1, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(254, 237, 1, 0);
+  }
+}
+
+.ob-code-status-text {
+  letter-spacing: 0.01em;
+}
+
+.ob-qr-mode-toggle {
+  align-self: flex-start;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  background: transparent;
+  border: none;
+  padding: 10px 0 0;
+  margin: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--ob-divider);
+  text-underline-offset: 3px;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.ob-qr-mode-toggle:hover {
+  color: var(--ob-text);
+  text-decoration-color: var(--ob-text-muted);
+}
+
 /* ── API key input ── */
 
 .ob-api-card {
@@ -1384,7 +1785,6 @@
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  margin-bottom: 6px;
 }
 
 .ob-provision-wait-label {
@@ -1446,6 +1846,56 @@
 }
 
 /* dark overrides */
+/* Mobile: tighten the provisioning card so the inner content has room to breathe.
+   Outer padding 24 → 16 (frees ~16px of content width); the progress header and the
+   "While you wait" header both stack instead of fighting on a narrow row. */
+@media (max-width: 720px) {
+  .ob-provision-card {
+    padding: 16px;
+  }
+
+  .ob-provision-headline {
+    margin-bottom: 6px;
+  }
+
+  .ob-provision-privacy {
+    margin-bottom: 14px;
+  }
+
+  .ob-provision-progress {
+    margin-bottom: 16px;
+  }
+
+  .ob-provision-progress-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .ob-provision-progress-label {
+    letter-spacing: 0.08em;
+  }
+
+  .ob-provision-footnote {
+    margin-bottom: 16px;
+  }
+
+  .ob-provision-wait-content {
+    padding: 12px 14px;
+  }
+
+  .ob-provision-wait-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+
+  .ob-provision-wait-cta {
+    align-self: flex-start;
+  }
+}
+
 .dark .ob-provision-bar-track {
   background: #2a2a28;
 }
@@ -1747,6 +2197,39 @@
 }
 
 .dark .ob-theme-toggle:hover {
+  background: rgba(245, 245, 240, 0.08);
+  color: var(--ob-yellow-fg);
+}
+
+/* ── Book-a-call utility icon in the onboarding header ── */
+/* Icon-only (headset). Native title attribute supplies the "Book a call" tooltip. */
+
+.ob-book-call {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--ob-text-dim);
+  text-decoration: none;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+/* The Lucide headset path has a slightly taller bounding box than the sun/moon, so it
+   renders visually ~1px taller in the same 16×16 box. A 0.95 scale normalizes the
+   effective height so the headset, sun, and moon all read at the same visual size. */
+.ob-book-call svg {
+  transform: scale(0.95);
+}
+
+.ob-book-call:hover {
+  background: rgba(4, 4, 4, 0.06);
+  color: var(--ob-yellow-fg);
+}
+
+.dark .ob-book-call:hover {
   background: rgba(245, 245, 240, 0.08);
   color: var(--ob-yellow-fg);
 }
@@ -2114,9 +2597,9 @@
 
 .ob-qr-warning-inline {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
   margin-bottom: 12px;
   background: rgba(254, 237, 1, 0.14);
   border-radius: 10px;
@@ -2128,27 +2611,21 @@
   align-items: center;
   justify-content: flex-start;
   flex-shrink: 0;
-  margin-top: 1px;
 }
 
 .ob-qr-warning-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  line-height: 1.4;
+  color: var(--ob-text-dim);
   min-width: 0;
 }
 
 .ob-qr-warning-title {
-  font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-sm);
   font-weight: 600;
   color: var(--ob-text);
-  line-height: 1.35;
 }
 
 .ob-qr-warning-body {
-  font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-sm);
-  line-height: 1.45;
-  color: var(--ob-text-muted);
+  color: var(--ob-text-dim);
 }

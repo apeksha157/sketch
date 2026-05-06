@@ -20,7 +20,7 @@ function UsagePage() {
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("Month");
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-8">
       <div>
         <h1 className="text-[22px] font-medium">{isAdmin ? "Usage" : "My usage"}</h1>
         <p className="mt-1 text-[13px] text-muted-foreground">
