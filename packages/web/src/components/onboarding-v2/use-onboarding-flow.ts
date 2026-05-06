@@ -465,6 +465,11 @@ export function useOnboardingFlow() {
     const helpText = compactMode
       ? "So I recognize you. The bot gets a different number next."
       : "Your personal number. The bot gets a different one in the next step.";
+    // Once committed to "Connect WhatsApp", the user can still bail out per-step if they realize
+    // they don't have a spare phone handy. The escape hatch is only offered when the picker would
+    // have allowed skip too (auth method = slack), to preserve the "WhatsApp required" rule for
+    // non-Slack auth.
+    const canSkip = state.authMethod === "slack";
     enqueue([
       { type: "user-message", text: "Connect WhatsApp", step: 2, icon: "whatsapp" },
       { type: "delay", ms: 400 },
@@ -474,9 +479,9 @@ export function useOnboardingFlow() {
         step: 2,
       },
       { type: "delay", ms: 300 },
-      { type: "widget", widgetType: "whatsapp-number-input", step: 2, props: { helpText } },
+      { type: "widget", widgetType: "whatsapp-number-input", step: 2, props: { helpText, canSkip } },
     ]);
-  }, [compactMode, enqueue]);
+  }, [compactMode, enqueue, state.authMethod]);
 
   /** Called after the admin submits their own WhatsApp number — proceeds to QR pairing. */
   const handleAdminNumberSubmit = useCallback(
@@ -512,6 +517,7 @@ export function useOnboardingFlow() {
               step: 2,
             },
           ];
+      const canSkip = state.authMethod === "slack";
       enqueue([
         { type: "user-message", text: fullNumber, step: 2 },
         { type: "delay", ms: 500 },
@@ -521,11 +527,11 @@ export function useOnboardingFlow() {
           type: "widget",
           widgetType: "qr-card",
           step: 2,
-          props: { enteredNumber: fullNumber, initialMode: compactMode ? "code" : "qr" },
+          props: { enteredNumber: fullNumber, initialMode: compactMode ? "code" : "qr", canSkip },
         },
       ]);
     },
-    [compactMode, enqueue],
+    [compactMode, enqueue, state.authMethod],
   );
 
   const handleWhatsAppConnected = useCallback(
@@ -602,30 +608,33 @@ export function useOnboardingFlow() {
     ]);
   }, [enqueue]);
 
-  const handleWhatsAppSkip = useCallback(() => {
-    setActiveWidget(null);
-    enqueue([
-      { type: "user-message", text: "Maybe later", step: 2 },
-      { type: "delay", ms: 400 },
-      { type: "sketch-message", text: "No worries. You can connect anytime from settings.", step: 2 },
-      { type: "delay", ms: 1000 },
-      { type: "action", action: "set-step", step: 3 },
-      { type: "divider", label: "API Key", step: 3 },
-      {
-        type: "sketch-message",
-        text: "Almost done — I just need to know which AI provider to run on.",
-        step: 3,
-      },
-      {
-        type: "sketch-message",
-        text: "I run on Claude under the hood — it's why I'm good at reading between the lines.",
-        step: 3,
-        dim: true,
-      },
-      { type: "delay", ms: 350 },
-      { type: "widget", widgetType: "api-key-input", step: 3 },
-    ]);
-  }, [enqueue]);
+  const handleWhatsAppSkip = useCallback(
+    (userMessage = "Maybe later") => {
+      setActiveWidget(null);
+      enqueue([
+        { type: "user-message", text: userMessage, step: 2 },
+        { type: "delay", ms: 400 },
+        { type: "sketch-message", text: "No worries. You can connect anytime from settings.", step: 2 },
+        { type: "delay", ms: 1000 },
+        { type: "action", action: "set-step", step: 3 },
+        { type: "divider", label: "API Key", step: 3 },
+        {
+          type: "sketch-message",
+          text: "Almost done — I just need to know which AI provider to run on.",
+          step: 3,
+        },
+        {
+          type: "sketch-message",
+          text: "I run on Claude under the hood — it's why I'm good at reading between the lines.",
+          step: 3,
+          dim: true,
+        },
+        { type: "delay", ms: 350 },
+        { type: "widget", widgetType: "api-key-input", step: 3 },
+      ]);
+    },
+    [enqueue],
+  );
 
   // ── Step 3: API key ──
 

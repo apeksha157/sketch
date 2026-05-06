@@ -9,6 +9,9 @@ interface QRCardProps {
   /** "qr" works when the user has a second device. "code" works on the same phone they're onboarding from
    *  (no camera scan required — they paste the pairing code into WhatsApp's "Link with phone number" flow). */
   initialMode?: "qr" | "code";
+  /** Escape hatch for users who realize at the pairing step that they don't have a spare phone available.
+   *  Rendered next to the mode toggle when provided; omitted (= no skip) when WhatsApp is mandatory. */
+  onSkip?: () => void;
 }
 
 /** Stable demo pairing code in WhatsApp's XXXX-XXXX format. Production replaces with a server-issued code. */
@@ -27,7 +30,7 @@ function WhatsAppIcon({ size = 16, color = "#25D366" }: { size?: number; color?:
  *  - QR: shows a scannable code (default on desktop where the admin has a second device).
  *  - Code: shows an 8-char pairing code (default on mobile where camera-scan-from-same-device is impossible).
  *  Both modes share the scanning → verifying → connected state machine and the same-number warning. */
-export function QRCard({ onConnected, demo = true, initialMode = "qr" }: QRCardProps) {
+export function QRCard({ onConnected, demo = true, initialMode = "qr", onSkip }: QRCardProps) {
   const { resolvedTheme } = useTheme();
   const [mode, setMode] = useState<"qr" | "code">(initialMode);
   const [status, setStatus] = useState<"scanning" | "verifying" | "connected" | "expired" | "same-number">("scanning");
@@ -309,9 +312,16 @@ export function QRCard({ onConnected, demo = true, initialMode = "qr" }: QRCardP
                 </output>
               </>
             )}
-            <button type="button" className="ob-qr-mode-toggle" onClick={handleSwitchMode}>
-              {mode === "qr" ? "Can't scan? Use a code instead" : "On a second device? Show QR instead"}
-            </button>
+            <div className="ob-qr-meta-row">
+              <button type="button" className="ob-qr-mode-toggle" onClick={handleSwitchMode}>
+                {mode === "qr" ? "Can't scan? Use a code instead" : "On a second device? Show QR instead"}
+              </button>
+              {onSkip && (
+                <button type="button" className="ob-qr-skip" onClick={onSkip}>
+                  Set this up later
+                </button>
+              )}
+            </div>
           </>
         )}
       </div>

@@ -432,17 +432,28 @@ export function OnboardingChat() {
         const canSkip = (activeWidget.widgetProps?.canSkip as boolean) ?? true;
         return <WhatsAppPicker canSkip={canSkip} onConnect={handleWhatsAppConnect} onSkip={handleWhatsAppSkip} />;
       }
-      case "whatsapp-number-input":
-        return <WhatsAppNumberInput onSubmit={handleAdminNumberSubmit} />;
+      case "whatsapp-number-input": {
+        const helpText = activeWidget.widgetProps?.helpText as string | undefined;
+        const canSkip = (activeWidget.widgetProps?.canSkip as boolean | undefined) ?? false;
+        return (
+          <WhatsAppNumberInput
+            onSubmit={handleAdminNumberSubmit}
+            helpText={helpText}
+            onSkip={canSkip ? () => handleWhatsAppSkip("I'll set this up later") : undefined}
+          />
+        );
+      }
       case "qr-card": {
         const enteredNumber = activeWidget.widgetProps?.enteredNumber as string | undefined;
         const initialMode = (activeWidget.widgetProps?.initialMode as "qr" | "code" | undefined) ?? "qr";
+        const canSkip = (activeWidget.widgetProps?.canSkip as boolean | undefined) ?? false;
         return (
           <QRCard
             onConnected={(phone) => handleWhatsAppConnected(phone)}
             demo
             enteredNumber={enteredNumber}
             initialMode={initialMode}
+            onSkip={canSkip ? () => handleWhatsAppSkip("I'll set this up later") : undefined}
           />
         );
       }

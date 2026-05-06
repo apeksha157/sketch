@@ -5,6 +5,9 @@ interface WhatsAppNumberInputProps {
   onSubmit: (fullNumber: string) => void;
   /** Inline helper text shown below the inputs. Defaults to the admin-flow copy. */
   helpText?: string;
+  /** Called when the user opts to defer WhatsApp setup. Renders a small ghost link below the CTA;
+   *  when undefined, no escape hatch is shown (e.g. WhatsApp is mandatory for the chosen auth method). */
+  onSkip?: () => void;
 }
 
 function digitsOnly(s: string): string {
@@ -35,6 +38,7 @@ function WhatsAppIcon({ size = 14, color = "#25D366" }: { size?: number; color?:
 export function WhatsAppNumberInput({
   onSubmit,
   helpText = "I'll save this as the admin's number.",
+  onSkip,
 }: WhatsAppNumberInputProps) {
   const { resolvedTheme } = useTheme();
   const [code, setCode] = useState("");
@@ -122,6 +126,12 @@ export function WhatsAppNumberInput({
         >
           Continue
         </button>
+
+        {onSkip && (
+          <button type="button" className="ob-wa-numcard-skip" onClick={onSkip}>
+            Set this up later
+          </button>
+        )}
       </div>
     </div>
   );

@@ -1433,14 +1433,23 @@
   letter-spacing: 0.01em;
 }
 
-.ob-qr-mode-toggle {
-  align-self: flex-start;
+.ob-qr-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding-top: 10px;
+}
+
+.ob-qr-mode-toggle,
+.ob-qr-skip {
   font-family: var(--ob-font-body);
   font-size: var(--ob-fs-sm);
   color: var(--ob-text-dim);
   background: transparent;
   border: none;
-  padding: 10px 0 0;
+  padding: 0;
   margin: 0;
   cursor: pointer;
   text-decoration: underline;
@@ -1449,7 +1458,8 @@
   transition: color 0.15s, text-decoration-color 0.15s;
 }
 
-.ob-qr-mode-toggle:hover {
+.ob-qr-mode-toggle:hover,
+.ob-qr-skip:hover {
   color: var(--ob-text);
   text-decoration-color: var(--ob-text-muted);
 }
@@ -2447,6 +2457,27 @@
 .ob-wa-numcard-cta {
   width: 100%;
   margin-top: 16px;
+}
+
+.ob-wa-numcard-skip {
+  align-self: center;
+  margin-top: 10px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-dim);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--ob-divider);
+  text-underline-offset: 3px;
+  transition: color 0.15s, text-decoration-color 0.15s;
+}
+
+.ob-wa-numcard-skip:hover {
+  color: var(--ob-text);
+  text-decoration-color: var(--ob-text-muted);
 }
 
 .dark .ob-wa-numcard-input {
