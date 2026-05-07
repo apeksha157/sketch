@@ -18,8 +18,6 @@ const STATUS_MESSAGES = [
   "Almost there",
 ];
 
-const STATUS_INTERVAL = 15_000;
-
 /** Provisioning progress card shown while the private instance is being set up. */
 export function ProvisioningCard({
   companyName,
@@ -29,7 +27,6 @@ export function ProvisioningCard({
   frozen = false,
 }: ProvisioningCardProps) {
   const [elapsed, setElapsed] = useState(frozen ? duration : 0);
-  const [statusIndex, setStatusIndex] = useState(0);
   const [complete, setComplete] = useState(frozen);
   const startRef = useRef(Date.now());
   const completedRef = useRef(frozen);
@@ -52,20 +49,19 @@ export function ProvisioningCard({
     return () => clearInterval(interval);
   }, [duration, onComplete, frozen]);
 
-  // Rotating status message
-  useEffect(() => {
-    if (frozen) return;
-    const interval = setInterval(() => {
-      setStatusIndex((prev) => (prev + 1) % STATUS_MESSAGES.length);
-    }, STATUS_INTERVAL);
-    return () => clearInterval(interval);
-  }, [frozen]);
-
+  const totalSteps = STATUS_MESSAGES.length;
   const progress = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 100;
 
-  const minutes = Math.floor(elapsed / 60_000);
-  const seconds = Math.floor((elapsed % 60_000) / 1000);
-  const timer = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  // Bind step index to elapsed/duration so steps advance evenly across the actual duration —
+  // previously the rotation was a fixed 15s interval, which decoupled it from total time
+  // and made the demo (15s total) only ever show the first message.
+  const stepIndex = duration > 0 ? Math.min(totalSteps - 1, Math.floor((elapsed / duration) * totalSteps)) : 0;
+
+  // Remaining countdown (replaces elapsed). Floored to seconds; pad to MM:SS.
+  const remainingMs = Math.max(0, duration - elapsed);
+  const remainingMinutes = Math.floor(remainingMs / 60_000);
+  const remainingSeconds = Math.floor((remainingMs % 60_000) / 1000);
+  const remaining = `${String(remainingMinutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
 
   return (
     <div className="ob-widget ob-animate-in">
@@ -79,12 +75,14 @@ export function ProvisioningCard({
         {/* Progress block */}
         <div className="ob-provision-progress">
           <div className="ob-provision-progress-header">
-            <span className="ob-provision-progress-label">Provisioning your instance</span>
-            <span className="ob-provision-timer">{timer} elapsed</span>
+            <span className="ob-provision-progress-label">
+              Step {Math.min(stepIndex + 1, totalSteps)} of {totalSteps}
+            </span>
+            <span className="ob-provision-timer">{remaining} remaining</span>
           </div>
           {!complete && (
-            <div className="ob-provision-status" key={statusIndex}>
-              {STATUS_MESSAGES[statusIndex]}
+            <div className="ob-provision-status" key={stepIndex}>
+              {STATUS_MESSAGES[stepIndex]}
             </div>
           )}
           <div className="ob-provision-bar-track">
