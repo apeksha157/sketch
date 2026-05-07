@@ -113,9 +113,7 @@ export function useMemberFlow() {
     msgId = 0;
     enqueue([
       { type: "sketch-message", text: "Hey! Your team's already on me — let's get you in.", step: 0 },
-      { type: "delay", ms: 800 },
-      { type: "sketch-message", text: "How would you like to sign in?", step: 0 },
-      { type: "delay", ms: 500 },
+      { type: "delay", ms: 1000 },
       { type: "widget", widgetType: "auth-picker", step: 0 },
     ]);
   }, [enqueue]);

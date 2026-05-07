@@ -136,9 +136,7 @@ export function useOnboardingFlow() {
       { type: "sketch-message", text: "Hey! I'm Sketch — your new AI coworker.", step: 0 },
       { type: "delay", ms: 1000 },
       { type: "sketch-message", text: "Let's get you set up. Takes about 2 minutes.", step: 0 },
-      { type: "delay", ms: 800 },
-      { type: "sketch-message", text: "How would you like to sign in?", step: 0 },
-      { type: "delay", ms: 500 },
+      { type: "delay", ms: 1000 },
       { type: "widget", widgetType: "auth-picker", step: 0 },
     ]);
   }, [enqueue]);
