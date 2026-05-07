@@ -71,7 +71,7 @@ export function AuthPicker({ onSelect }: AuthPickerProps) {
         </div>
         <div>
           <div className="ob-auth-title">Sign in with Google</div>
-          <div className="ob-auth-subtitle">Use your work email — we'll set up your workspace</div>
+          <div className="ob-auth-subtitle">Use your work email</div>
         </div>
       </button>
       <p className="ob-auth-trial-note">Try free for 30 days. No card needed.</p>
