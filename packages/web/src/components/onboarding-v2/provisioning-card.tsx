@@ -67,9 +67,9 @@ export function ProvisioningCard({
     <div className="ob-widget ob-animate-in">
       <div className="ob-provision-card">
         <div className="ob-provision-headline">
-          Setting up your private instance for <strong>{companyName}</strong>
+          Setting up Sketch for <strong>{companyName}</strong>
         </div>
-        <p className="ob-provision-privacy">Your data stays private, never shared.</p>
+        <p className="ob-provision-privacy">Private instance · Your data stays yours.</p>
 
         {/* Progress block — single header row carries the rotating step name + countdown,
             removing a redundant status line. The progress bar already shows pacing visually. */}
