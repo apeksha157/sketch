@@ -329,6 +329,13 @@
     padding-left: 24px;
   }
 
+  /* Match the right indent for sketch bodies on mobile (desktop is 32px). Widgets keep their
+     own desktop right padding (16px) — no override here. */
+  .ob-msg-body-sketch,
+  .ob-msg-continued .ob-msg-body {
+    padding-right: 24px;
+  }
+
   /* Divider gets more vertical breathing room on mobile — the 2-row block is heavier than
      the desktop horizontal-rule and was getting squeezed by adjacent chat content. */
   .ob-divider {
@@ -383,6 +390,9 @@
 
 .ob-msg-body-sketch {
   padding-left: 32px;
+  /* Mirror the icon-aligned left indent on the right so long messages have breathing room
+     and don't run flush to the chat container edge. */
+  padding-right: 32px;
 }
 
 .ob-msg-body-dim {
@@ -645,6 +655,7 @@
 
 .ob-msg-continued .ob-msg-body {
   padding-left: 32px;
+  padding-right: 32px;
 }
 
 .ob-msg-body-user {
