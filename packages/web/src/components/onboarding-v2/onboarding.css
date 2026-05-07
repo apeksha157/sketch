@@ -1768,12 +1768,14 @@
   background: var(--ob-green);
 }
 
-.ob-provision-status {
+/* The rotating step name now sits in the progress header (left of the countdown), replacing
+   the previous "STEP X OF 5" mono label — fewer rows, same scope info via the label change. */
+.ob-provision-progress-step {
   font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-xs);
-  color: var(--ob-text-muted);
-  margin-bottom: 8px;
-  animation: ob-fadeIn 0.4s ease;
+  font-size: var(--ob-fs-md);
+  font-weight: 500;
+  color: var(--ob-text);
+  animation: ob-fadeIn 0.3s ease;
 }
 
 /* ── Interior: footnote ── */

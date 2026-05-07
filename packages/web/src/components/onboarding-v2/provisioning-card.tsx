@@ -66,32 +66,27 @@ export function ProvisioningCard({
   return (
     <div className="ob-widget ob-animate-in">
       <div className="ob-provision-card">
-        <div className="ob-provision-headline">Setting up your private instance</div>
-        <p className="ob-provision-subhead">
-          Spinning up a dedicated server for <strong>{companyName}</strong>.
-        </p>
+        <div className="ob-provision-headline">
+          Setting up your private instance for <strong>{companyName}</strong>
+        </div>
         <p className="ob-provision-privacy">Your data stays private, never shared.</p>
 
-        {/* Progress block */}
+        {/* Progress block — single header row carries the rotating step name + countdown,
+            removing a redundant status line. The progress bar already shows pacing visually. */}
         <div className="ob-provision-progress">
           <div className="ob-provision-progress-header">
-            <span className="ob-provision-progress-label">
-              Step {Math.min(stepIndex + 1, totalSteps)} of {totalSteps}
+            <span className="ob-provision-progress-step" key={stepIndex}>
+              {complete ? "Done" : STATUS_MESSAGES[stepIndex]}
             </span>
             <span className="ob-provision-timer">{remaining} remaining</span>
           </div>
-          {!complete && (
-            <div className="ob-provision-status" key={stepIndex}>
-              {STATUS_MESSAGES[stepIndex]}
-            </div>
-          )}
           <div className="ob-provision-bar-track">
             <div className="ob-provision-bar-fill" data-complete={complete} style={{ width: `${progress}%` }} />
           </div>
         </div>
 
         <p className="ob-provision-footnote">
-          Takes 1-10 minutes. We'll email <strong>{email}</strong> when it's live.
+          We'll email <strong>{email}</strong> when it's ready.
         </p>
 
         {/* While you wait — compact CTA. Body line removed; the title now carries the
