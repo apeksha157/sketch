@@ -1685,6 +1685,77 @@
   border-radius: 16px;
   padding: 24px;
   max-width: 400px;
+  transition: border-color 0.4s ease;
+}
+
+.ob-provision-card[data-complete="true"] {
+  border-color: var(--ob-green-border);
+}
+
+/* ── Success / celebration state — visible only when complete ── */
+
+.ob-provision-success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 8px 4px;
+  animation: ob-celebrate 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.ob-provision-success-circle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--ob-green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.25);
+  animation: ob-celebrate-pulse 1.4s ease-out 0.2s both;
+}
+
+.ob-provision-success-headline {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-xl);
+  font-weight: 600;
+  color: var(--ob-text);
+  margin-bottom: 6px;
+}
+
+.ob-provision-success-sub {
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-md);
+  line-height: 1.5;
+  color: var(--ob-text-dim);
+  margin: 0;
+}
+
+@keyframes ob-celebrate {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  60% {
+    transform: scale(1.03);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ob-celebrate-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(48, 209, 88, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0);
+  }
 }
 
 /* ── Interior: headline + copy ── */

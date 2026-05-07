@@ -43,7 +43,10 @@ export function ProvisioningCard({
         completedRef.current = true;
         setComplete(true);
         clearInterval(interval);
-        setTimeout(onComplete, 800);
+        // Hold the celebration visible long enough for the user to register the success beat
+        // before the next section pulls in. The card freezes into history at this point,
+        // and the chat continues automatically (no transitional CTA).
+        setTimeout(onComplete, 1500);
       }
     }, 1000);
     return () => clearInterval(interval);
@@ -65,50 +68,68 @@ export function ProvisioningCard({
 
   return (
     <div className="ob-widget ob-animate-in">
-      <div className="ob-provision-card">
-        <div className="ob-provision-headline">
-          Setting up Sketch for <strong>{companyName}</strong>
-        </div>
-        <p className="ob-provision-privacy">Private instance · Data stays yours.</p>
-
-        {/* Progress block — single header row carries the rotating step name + countdown,
-            removing a redundant status line. The progress bar already shows pacing visually. */}
-        <div className="ob-provision-progress">
-          <div className="ob-provision-progress-header">
-            <span className="ob-provision-progress-step" key={stepIndex}>
-              {complete ? "Done" : STATUS_MESSAGES[stepIndex]}
-            </span>
-            <span className="ob-provision-timer">{remaining} remaining</span>
-          </div>
-          <div className="ob-provision-bar-track">
-            <div className="ob-provision-bar-fill" data-complete={complete} style={{ width: `${progress}%` }} />
-          </div>
-        </div>
-
-        <p className="ob-provision-footnote">
-          We'll email <strong>{email}</strong> when it's ready.
-        </p>
-
-        {/* While you wait — compact CTA. Body line removed; the title now carries the
-            "15 min with our founder" detail inline so the whole block stays at 2 rows max. */}
-        <div className="ob-provision-wait-card">
-          <div className="ob-provision-wait-content">
-            <div className="ob-provision-wait-header">
-              <div>
-                <div className="ob-provision-wait-label">WHILE YOU WAIT</div>
-                <div className="ob-provision-wait-title">Meet the team — 15 min with our founder</div>
-              </div>
-              <a
-                href="https://calendly.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ob-provision-wait-cta"
-              >
-                Book a call &rarr;
-              </a>
+      <div className="ob-provision-card" data-complete={complete}>
+        {complete ? (
+          // Celebration state — replaces working interior to mark a clean section finish.
+          // No transitional CTA follows in the Google flow, so this beat carries the "moving forward" cue.
+          <div className="ob-provision-success">
+            <div className="ob-provision-success-circle">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M5 12l5 5 9-11" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </div>
+            <div className="ob-provision-success-headline">Your private instance is live</div>
+            <p className="ob-provision-success-sub">
+              Sketch is ready for <strong>{companyName}</strong>.
+            </p>
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="ob-provision-headline">
+              Setting up Sketch for <strong>{companyName}</strong>
+            </div>
+            <p className="ob-provision-privacy">Your own dedicated server — encrypted, isolated, never shared.</p>
+
+            {/* Progress block — single header row carries the rotating step name + countdown,
+                removing a redundant status line. The progress bar already shows pacing visually. */}
+            <div className="ob-provision-progress">
+              <div className="ob-provision-progress-header">
+                <span className="ob-provision-progress-step" key={stepIndex}>
+                  {STATUS_MESSAGES[stepIndex]}
+                </span>
+                <span className="ob-provision-timer">{remaining} remaining</span>
+              </div>
+              <div className="ob-provision-bar-track">
+                <div className="ob-provision-bar-fill" style={{ width: `${progress}%` }} />
+              </div>
+            </div>
+
+            <p className="ob-provision-footnote">
+              We'll email <strong>{email}</strong> when it's ready.
+            </p>
+
+            {/* While you wait — compact CTA. Body line removed; the title now carries the
+                "15 min with our founder" detail inline so the whole block stays at 2 rows max. */}
+            <div className="ob-provision-wait-card">
+              <div className="ob-provision-wait-content">
+                <div className="ob-provision-wait-header">
+                  <div>
+                    <div className="ob-provision-wait-label">WHILE YOU WAIT</div>
+                    <div className="ob-provision-wait-title">Meet the team — 15 min with our founder</div>
+                  </div>
+                  <a
+                    href="https://calendly.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ob-provision-wait-cta"
+                  >
+                    Book a call &rarr;
+                  </a>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

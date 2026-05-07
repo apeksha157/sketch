@@ -345,10 +345,16 @@ export function useOnboardingFlow() {
     ]);
   }, [appendMessage, enqueue, state.workspace]);
 
-  /** Called when provisioning card completes — continue to platforms. */
+  /** Called when provisioning card completes — continue to platforms.
+   *  Slack path keeps the explicit "Go to Platforms" CTA + WhatsApp picker (since Slack itself
+   *  is a working channel and WhatsApp is genuinely optional).
+   *  Google path auto-advances straight through into the WhatsApp number-input — the picker and
+   *  section-continue CTA are redundant here because WhatsApp is the user's only channel option,
+   *  and the celebration on the provisioning card carries the section-end beat. */
   const handleProvisioningComplete = useCallback(() => {
     // Freeze the provisioning card into message history
     const workspace = state.workspace;
+    const method = state.authMethod;
     appendMessage({
       id: nextId(),
       kind: "widget",
@@ -361,20 +367,72 @@ export function useOnboardingFlow() {
       },
     });
     setActiveWidget(null);
+
+    if (method === "slack") {
+      enqueue([
+        { type: "delay", ms: 600 },
+        {
+          type: "sketch-message",
+          text: "One more way to reach me — connect WhatsApp and your team can message me there too.",
+          step: 1,
+        },
+        { type: "delay", ms: 700 },
+        { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Platforms" } },
+      ]);
+      return;
+    }
+
+    // Google path — auto-advance into the Platforms section and straight to admin-number input.
+    // Inlines the intro + prompt that handleWorkspaceContinue/handleWhatsAppConnect produce for
+    // the non-slack branch, minus the synthetic "Go to Platforms" / "Connect WhatsApp" user
+    // messages that were just markers for transitional CTAs.
+    const introMessages: QueueItem[] = compactMode
+      ? [
+          {
+            type: "sketch-message",
+            text: "Your team will reach me on WhatsApp. Let's set that up.",
+            step: 2,
+          },
+          { type: "delay", ms: 700 },
+          {
+            type: "sketch-message",
+            text: "I need my own phone number for this — a separate, dedicated line.",
+            step: 2,
+          },
+        ]
+      : [
+          {
+            type: "sketch-message",
+            text: "Let's get WhatsApp connected — it's how your team will chat with me.",
+            step: 2,
+          },
+          { type: "delay", ms: 800 },
+          {
+            type: "sketch-message",
+            text: "I'll need my own phone number for this. Think of it like giving the new hire a work phone — except the new hire is me.",
+            step: 2,
+          },
+        ];
+
+    const promptText = compactMode
+      ? "What's your WhatsApp number?"
+      : "What's your WhatsApp number? I need it to recognize you when you message me — separate from the bot number we'll set up next.";
+    const helpText = compactMode
+      ? "So I recognize you. The bot gets a different number next."
+      : "Your personal number. The bot gets a different one in the next step.";
+
     enqueue([
-      { type: "delay", ms: 600 },
-      {
-        type: "sketch-message",
-        text:
-          state.authMethod === "slack"
-            ? "One more way to reach me — connect WhatsApp and your team can message me there too."
-            : "This is how your team will reach me — let's get WhatsApp connected.",
-        step: 1,
-      },
-      { type: "delay", ms: 700 },
-      { type: "widget", widgetType: "section-continue", step: 1, props: { label: "Go to Platforms" } },
+      { type: "delay", ms: 800 },
+      { type: "action", action: "set-step", step: 2 },
+      { type: "divider", label: "Platforms", step: 2 },
+      ...introMessages,
+      { type: "delay", ms: 400 },
+      { type: "sketch-message", text: promptText, step: 2 },
+      { type: "delay", ms: 300 },
+      // canSkip stays false for Google — WhatsApp is mandatory there because there's no Slack fallback.
+      { type: "widget", widgetType: "whatsapp-number-input", step: 2, props: { helpText, canSkip: false } },
     ]);
-  }, [appendMessage, enqueue, state.authMethod, state.workspace]);
+  }, [appendMessage, compactMode, enqueue, state.authMethod, state.workspace]);
 
   // ── Step 1 → 2: User clicks "Go to Platforms" ──
 
