@@ -849,6 +849,16 @@
   color: var(--ob-text-muted);
 }
 
+/* Subtle reassurance below the auth picker — sits where the eye lands after scanning the two cards. */
+.ob-auth-trial-note {
+  margin: 6px 0 0;
+  text-align: center;
+  font-family: var(--ob-font-body);
+  font-size: var(--ob-fs-sm);
+  color: var(--ob-text-muted);
+  letter-spacing: 0.01em;
+}
+
 /* ── Workspace card ── */
 
 .ob-workspace-card {

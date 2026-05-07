@@ -74,6 +74,7 @@ export function AuthPicker({ onSelect }: AuthPickerProps) {
           <div className="ob-auth-subtitle">No Slack? Start here</div>
         </div>
       </button>
+      <p className="ob-auth-trial-note">Free for 30 days · No credit card</p>
     </div>
   );
 }
