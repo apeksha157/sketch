@@ -72,7 +72,7 @@ export function WhatsAppNumberInput({
       <div className="ob-wa-numcard">
         <div className="ob-wa-numcard-header">
           <WhatsAppIcon size={14} color={resolvedTheme === "dark" ? "#feed01" : "#6b6200"} />
-          WHATSAPP
+          YOUR WHATSAPP NUMBER
         </div>
 
         <div className="ob-wa-numcard-row">
