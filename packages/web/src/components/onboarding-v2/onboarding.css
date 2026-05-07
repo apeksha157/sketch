@@ -1710,29 +1710,60 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  padding: 8px 4px;
+  padding: 20px 4px 12px;
   animation: ob-celebrate 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 .ob-provision-success-circle {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  background: var(--ob-green);
+  /* Diagonal gradient gives the circle depth — top-left highlight, bottom-right shadow. */
+  background: linear-gradient(135deg, #34c759 0%, #1a7f37 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 16px;
-  box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.25);
-  animation: ob-celebrate-pulse 1.4s ease-out 0.2s both;
+  margin-bottom: 24px;
+  position: relative;
+  /* Layered halo: two soft green rings + a drop shadow for elevation. */
+  box-shadow: 0 0 0 8px rgba(48, 209, 88, 0.1), 0 0 0 16px rgba(48, 209, 88, 0.05), 0 12px 28px rgba(48, 209, 88, 0.22);
+}
+
+/* A separate ripple expands outward on entry — pseudo-element so it doesn't clobber the
+   static box-shadow halo above. Fires once via animation-fill-mode: forwards. */
+.ob-provision-success-circle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(48, 209, 88, 0.4);
+  animation: ob-celebrate-ripple 1.4s ease-out 0.15s forwards;
+}
+
+@keyframes ob-celebrate-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.ob-provision-success-circle svg {
+  width: 32px;
+  height: 32px;
 }
 
 .ob-provision-success-headline {
   font-family: var(--ob-font-body);
-  font-size: var(--ob-fs-xl);
+  font-size: var(--ob-fs-2xl);
   font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
   color: var(--ob-text);
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .ob-provision-success-sub {
@@ -1754,18 +1785,6 @@
   to {
     opacity: 1;
     transform: scale(1);
-  }
-}
-
-@keyframes ob-celebrate-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0.4);
-  }
-  70% {
-    box-shadow: 0 0 0 14px rgba(48, 209, 88, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(48, 209, 88, 0);
   }
 }
 
