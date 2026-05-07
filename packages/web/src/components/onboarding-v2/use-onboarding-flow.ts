@@ -386,6 +386,11 @@ export function useOnboardingFlow() {
     // Inlines the intro + prompt that handleWorkspaceContinue/handleWhatsAppConnect produce for
     // the non-slack branch, minus the synthetic "Go to Platforms" / "Connect WhatsApp" user
     // messages that were just markers for transitional CTAs.
+    //
+    // Desktop intro is a single bubble — the "new hire work phone" metaphor was character flavor
+    // that overlapped with the prompt bubble's own "I'll get my own dedicated number next" framing.
+    // Mobile keeps both bubbles since the compact prompt is too short to carry the two-numbers
+    // mental model on its own.
     const introMessages: QueueItem[] = compactMode
       ? [
           {
@@ -406,20 +411,14 @@ export function useOnboardingFlow() {
             text: "Let's get WhatsApp connected — it's how your team will chat with me.",
             step: 2,
           },
-          { type: "delay", ms: 800 },
-          {
-            type: "sketch-message",
-            text: "I'll need my own phone number for this. Think of it like giving the new hire a work phone — except the new hire is me.",
-            step: 2,
-          },
         ];
 
     const promptText = compactMode
       ? "What's your WhatsApp number?"
-      : "What's your WhatsApp number? I need it to recognize you when you message me — separate from the bot number we'll set up next.";
+      : "What's your WhatsApp number? I need it to recognize you — I'll get my own dedicated number next.";
     const helpText = compactMode
       ? "So I recognize you. The bot gets a different number next."
-      : "Your personal number. The bot gets a different one in the next step.";
+      : "Your personal number.";
 
     enqueue([
       { type: "delay", ms: 800 },
