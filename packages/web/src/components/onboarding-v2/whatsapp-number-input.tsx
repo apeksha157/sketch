@@ -114,9 +114,9 @@ export function WhatsAppNumberInput({
           <div className="ob-wa-numcard-help ob-wa-numcard-help-error">
             That doesn't look like a valid number. Try again?
           </div>
-        ) : (
+        ) : helpText ? (
           <div className="ob-wa-numcard-help">{helpText}</div>
-        )}
+        ) : null}
 
         <button
           type="button"

@@ -416,9 +416,10 @@ export function useOnboardingFlow() {
     const promptText = compactMode
       ? "What's your WhatsApp number?"
       : "What's your WhatsApp number? I need it to recognize you — I'll get my own dedicated number next.";
-    const helpText = compactMode
-      ? "So I recognize you. The bot gets a different number next."
-      : "Your personal number.";
+    // Mobile: short prompt above + substantive help text inside the card carries the two-numbers context.
+    // Desktop: the prompt above is rich enough; the input card stands alone with no help row, which avoids
+    // the "Your personal number." fragment looking lonely beneath the inputs.
+    const helpText = compactMode ? "So I recognize you. The bot gets a different number next." : "";
 
     enqueue([
       { type: "delay", ms: 800 },
