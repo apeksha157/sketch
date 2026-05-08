@@ -268,7 +268,7 @@ function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: R
   return (
     <Card>
       <SectionHeader
-        label="Upcoming"
+        label="Up next"
         action={
           upcomingEmpty
             ? { kind: "link", icon: <PlusIcon size={12} />, label: "Schedule a task", href: "/scheduled-tasks" }
@@ -286,7 +286,7 @@ function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: R
       )}
 
       <div className="mt-4 flex items-center justify-between">
-        <p className={SECTION_LABEL}>Recent</p>
+        <p className={SECTION_LABEL}>Recent activity</p>
         {recentEmpty ? null : (
           <Link to="/usage" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
             View all →
@@ -362,7 +362,7 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
 
   return (
     <Card>
-      <SectionHeader label="Active" action={{ kind: "link", label: "View all →", href: "/skills" }} />
+      <SectionHeader label="Active skills" action={{ kind: "link", label: "View all →", href: "/skills" }} />
 
       {empty ? (
         <div className="mt-3 space-y-3">
@@ -383,7 +383,7 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
         </ul>
       )}
 
-      <p className={cn(SECTION_LABEL, "mt-4")}>Explore</p>
+      <p className={cn(SECTION_LABEL, "mt-4")}>Explore skills</p>
       <Link
         to={suggestion.href}
         className="group mt-2 flex items-center gap-3 rounded-md transition-colors hover:bg-muted/40"
@@ -668,7 +668,7 @@ function FilesCard({ files }: { files: FilesSummary }) {
 
       <div className="mt-4">
         <div className="flex items-center justify-between">
-          <p className={SECTION_LABEL}>Sources</p>
+          <p className={SECTION_LABEL}>Connected sources</p>
           {isEmpty ? (
             <Link
               to="/integrations"
