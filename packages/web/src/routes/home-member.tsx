@@ -28,7 +28,6 @@ import {
   ChartBarIcon,
   ChatCircleIcon,
   ClockIcon,
-  FileTextIcon,
   MagnifyingGlassIcon,
   NewspaperIcon,
   type Icon as PhosphorIcon,
@@ -214,11 +213,11 @@ export function HomeMemberPage(props: HomeMemberPageProps) {
   const auth = useDashboardAuth();
 
   return (
-    <div className="mx-auto max-w-4xl px-10 py-8">
+    <div className="mx-auto max-w-4xl px-10 py-6">
       <GreetingBar firstName={firstName(auth.displayName)} digest={props.digest} />
 
       <div
-        className="mt-6 grid gap-3"
+        className="mt-5 grid gap-3"
         style={{
           gridTemplateColumns: "1.2fr 0.78fr 1.05fr",
           gridTemplateAreas: `
@@ -262,68 +261,61 @@ export function HomeMemberPage(props: HomeMemberPageProps) {
 function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: RecentEvent[] }) {
   const upcomingEmpty = upcoming.length === 0;
   const recentEmpty = recent.length === 0;
-  const dayGroups = groupRecentByDay(recent);
+  // Top 3 recent events overall — single flat list, no day grouping. Time column
+  // carries enough context. Anything older lives behind "View all →".
+  const recentEvents = recent.slice(0, 3);
 
   return (
     <Card>
-      <h2 className={cn(SECTION_LABEL, "mb-3")}>Activity</h2>
+      <SectionHeader
+        label="Upcoming"
+        action={
+          upcomingEmpty
+            ? { kind: "link", icon: <PlusIcon size={12} />, label: "Schedule a task", href: "/scheduled-tasks" }
+            : { kind: "link", label: "View all →", href: "/scheduled-tasks" }
+        }
+      />
+      {upcomingEmpty ? (
+        <VoiceLine className="mt-2">I'm built for routines. Tell me when, and I'll run on time.</VoiceLine>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {upcoming.slice(0, 1).map((run) => (
+            <UpcomingRow key={run.id} run={run} />
+          ))}
+        </ul>
+      )}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <SectionHeader
-          label="Upcoming"
-          action={
-            upcomingEmpty
-              ? { kind: "link", icon: <PlusIcon size={11} />, label: "Schedule a task", href: "/scheduled-tasks" }
-              : { kind: "link", label: "View all →", href: "/scheduled-tasks" }
-          }
-        />
-        {upcomingEmpty ? (
-          <VoiceLine>I'm built for routines. Tell me when, and I'll run on time.</VoiceLine>
-        ) : (
-          <ul className="space-y-2">
-            {upcoming.slice(0, 2).map((run) => (
-              <UpcomingRow key={run.id} run={run} />
-            ))}
-          </ul>
-        )}
-
-        <Divider />
-
-        <SectionHeader
-          label="Recent"
-          action={recentEmpty ? null : { kind: "link", label: "View all →", href: "/usage" }}
-        />
-        {recentEmpty ? (
-          <>
-            <VoiceLine>My logbook — every task I run, every question you ask, lands here.</VoiceLine>
-            <ul className="space-y-2 opacity-40">
-              <RecentRow
-                event={{
-                  kind: "sketch",
-                  id: "ghost",
-                  title: "Standup digest sent",
-                  category: "comms",
-                  day: "Today",
-                  time: "9:02 AM",
-                }}
-              />
-            </ul>
-          </>
-        ) : (
-          <div className="space-y-3">
-            {dayGroups.map((group) => (
-              <div key={group.day}>
-                <p className="mb-1 text-xs font-medium text-muted-foreground">{group.day}</p>
-                <ul className="space-y-2">
-                  {group.events.map((event) => (
-                    <RecentRow key={event.id} event={event} />
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
+      <div className="mt-4 flex items-center justify-between">
+        <p className={SECTION_LABEL}>Recent</p>
+        {recentEmpty ? null : (
+          <Link to="/usage" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
+            View all →
+          </Link>
         )}
       </div>
+      {recentEmpty ? (
+        <>
+          <VoiceLine className="mt-2">My logbook — every task I run, every question you ask, lands here.</VoiceLine>
+          <ul className="mt-2 space-y-2 opacity-40">
+            <RecentRow
+              event={{
+                kind: "sketch",
+                id: "ghost",
+                title: "Standup digest sent",
+                category: "comms",
+                day: "Today",
+                time: "9:02 AM",
+              }}
+            />
+          </ul>
+        </>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {recentEvents.map((event) => (
+            <RecentRow key={event.id} event={event} />
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }
@@ -363,20 +355,6 @@ function RecentRow({ event }: { event: RecentEvent }) {
   );
 }
 
-function groupRecentByDay(events: RecentEvent[]): { day: string; events: RecentEvent[] }[] {
-  const groups: { day: string; events: RecentEvent[] }[] = [];
-  for (const event of events) {
-    const last = groups[groups.length - 1];
-    if (last && last.day === event.day) {
-      last.events.push(event);
-    } else {
-      groups.push({ day: event.day, events: [event] });
-    }
-  }
-  // Cap to 2-3 day windows max per spec; keep all events within those days.
-  return groups.slice(0, 3);
-}
-
 // ── Skills card ──────────────────────────────────────────────────────────────
 
 function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion: ExploreSuggestion }) {
@@ -384,52 +362,47 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
 
   return (
     <Card>
-      <SectionHeader label="Skills" action={{ kind: "link", label: "View all →", href: "/skills" }} />
+      <SectionHeader label="Active" action={{ kind: "link", label: "View all →", href: "/skills" }} />
 
-      <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3">
-        <p className={SECTION_LABEL}>Active</p>
-        {empty ? (
-          <div className="space-y-3">
-            <VoiceLine>I work on what you set me up to do.</VoiceLine>
-            <Link
-              to="/skills"
-              className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
-            >
-              <PlusIcon size={11} />
-              Activate a skill
-            </Link>
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {active.slice(0, 3).map((skill) => (
-              <ActiveSkillRow key={skill.id} skill={skill} />
-            ))}
-          </ul>
-        )}
+      {empty ? (
+        <div className="mt-3 space-y-3">
+          <VoiceLine>I work on what you set me up to do.</VoiceLine>
+          <Link
+            to="/skills"
+            className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
+          >
+            <PlusIcon size={12} />
+            Activate a skill
+          </Link>
+        </div>
+      ) : (
+        <ul className="mt-3 space-y-2">
+          {active.slice(0, 3).map((skill) => (
+            <ActiveSkillRow key={skill.id} skill={skill} />
+          ))}
+        </ul>
+      )}
 
-        <Divider />
-
-        <p className={SECTION_LABEL}>Explore</p>
-        <Link
-          to={suggestion.href}
-          className="group flex items-center gap-3 rounded-md transition-colors hover:bg-muted/40"
-        >
-          <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted/60 text-muted-foreground">
-            <NewspaperIcon size={12} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm">
-              <span className="text-muted-foreground">Try: </span>
-              <span className="font-medium">{suggestion.name}</span>
-            </p>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{suggestion.description}</p>
-          </div>
-          <ArrowRightIcon
-            size={14}
-            className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
-          />
-        </Link>
-      </div>
+      <p className={cn(SECTION_LABEL, "mt-4")}>Explore</p>
+      <Link
+        to={suggestion.href}
+        className="group mt-2 flex items-center gap-3 rounded-md transition-colors hover:bg-muted/40"
+      >
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted/60 text-muted-foreground">
+          <NewspaperIcon size={12} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm">
+            <span className="text-muted-foreground">Try: </span>
+            <span className="font-medium">{suggestion.name}</span>
+          </p>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{suggestion.description}</p>
+        </div>
+        <ArrowRightIcon
+          size={14}
+          className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+        />
+      </Link>
     </Card>
   );
 }
@@ -682,9 +655,9 @@ function FilesCard({ files }: { files: FilesSummary }) {
         </div>
       ) : null}
 
-      <div className="mt-5">
+      <div className="mt-4">
         <p className={SECTION_LABEL}>{isEmpty ? "What I'll know" : "What I know"}</p>
-        <ul className="mt-3 space-y-2">
+        <ul className="mt-2 space-y-2">
           <FilesEntityRow label="People" count={files.entityCounts.people} empty={isEmpty} />
           <FilesEntityRow label="Companies" count={files.entityCounts.companies} empty={isEmpty} />
           <FilesEntityRow label="Projects" count={files.entityCounts.projects} empty={isEmpty} />
@@ -693,26 +666,7 @@ function FilesCard({ files }: { files: FilesSummary }) {
         </ul>
       </div>
 
-      {!isEmpty && files.recentlyIndexed.length > 0 ? (
-        <div className="mt-5">
-          <p className={SECTION_LABEL}>Recently indexed</p>
-          <ul className="mt-3 space-y-2.5">
-            {files.recentlyIndexed.slice(0, 3).map((file) => (
-              <li key={file.id} className="flex items-center gap-2.5">
-                <FileTextIcon size={14} className="shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm">{file.fileName}</p>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {file.source} · {file.syncedLabel}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      <div className="mt-5">
+      <div className="mt-4">
         <div className="flex items-center justify-between">
           <p className={SECTION_LABEL}>Sources</p>
           {isEmpty ? (
@@ -790,10 +744,6 @@ function SectionHeader({ label, action }: { label: string; action: SectionAction
   );
 }
 
-function VoiceLine({ children }: { children: React.ReactNode }) {
-  return <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>;
-}
-
-function Divider() {
-  return <div className="my-1 h-px w-full bg-border/60" />;
+function VoiceLine({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <p className={cn("text-sm leading-relaxed text-muted-foreground", className)}>{children}</p>;
 }
