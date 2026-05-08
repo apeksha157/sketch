@@ -2,20 +2,39 @@
  * Home page route variants — matches the convention used by every other dashboard
  * page (channels, skills, integrations, etc.):
  *
- *   /home                       — admin, populated  (legacy HomePage)
- *   /home/empty                 — admin, first-time (legacy HomePage)
- *   /home/complete              — admin, setup 100% done (legacy HomePage)
- *   /home/member                — member, active, no errors (redesign)
- *   /home/member-empty          — member, new user, verbose empties (current)
- *   /home/member-empty-v2       — member, new user, calm empties (single teacher: Discover/Setup)
- *   /home/member-walkthrough    — member, new user, with onboarding chatbot widget + coachmark tour
- *   /home/member-errors         — member with notifications card (Iteration B)
- *   /home/member-iteration-a    — member with notifications as banner (Iteration A)
+ *   /home                          — admin, populated  (legacy HomePage)
+ *   /home/empty                    — admin, first-time (legacy HomePage)
+ *   /home/complete                 — admin, setup 100% done (legacy HomePage)
+ *   /home/member                   — member, active (current canonical member design)
+ *   /home/member-empty             — member, new user (current canonical member design)
+ *   /home/member-old               — previous member design, active
+ *   /home/member-old-empty         — previous member design, new user, verbose empties
+ *   /home/member-old-empty-v2      — previous member design, new user, calm empties
+ *   /home/member-old-walkthrough   — previous member design, with onboarding chatbot + coachmark tour
+ *   /home/member-old-errors        — previous member design, notifications card (Iteration B)
+ *   /home/member-old-iteration-a   — previous member design, notifications banner (Iteration A)
  */
 import { SketchWidget } from "@/components/onboarding-widget";
 import { useDashboardAuth } from "@/routes/dashboard";
 import { HomePage } from "@/routes/home";
-import { type ActivityFeedItem, type DiscoverNudge, HomeMemberPage, type NotificationItem } from "@/routes/home-member";
+import {
+  type ActiveSkill,
+  type ExploreSuggestion,
+  type FilesSummary,
+  HomeMemberPage as HomeMemberPageNew,
+  type HomeMemberPageProps,
+  type IntegrationSummary,
+  type RecentEvent,
+  type TeamSummary,
+  type UpcomingRun,
+  type UsageSummary,
+} from "@/routes/home-member";
+import {
+  type ActivityFeedItem,
+  type DiscoverNudge,
+  HomeMemberPage as HomeMemberPageOld,
+  type NotificationItem,
+} from "@/routes/home-member-old";
 import { CalendarDotsIcon, ChatCircleIcon, MagnifyingGlassIcon, PlugIcon, TargetIcon } from "@phosphor-icons/react";
 import { createRoute } from "@tanstack/react-router";
 import { dashboardRoute } from "../dashboard";
@@ -240,6 +259,13 @@ export const homePreviewRoute = createRoute({
   getParentRoute: () => dashboardRoute,
   path: "/home",
   beforeLoad: hideTrialBanner,
+  component: () => <HomeMemberPageNew {...MEMBER_HOME_ACTIVE_PROPS} />,
+});
+
+export const homeAdminLegacyRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/admin-legacy",
+  beforeLoad: hideTrialBanner,
   component: () => (
     <HomePage
       setupSteps={{
@@ -260,27 +286,7 @@ export const homeEmptyRoute = createRoute({
   getParentRoute: () => dashboardRoute,
   path: "/home/empty",
   beforeLoad: hideTrialBanner,
-  component: () => (
-    <HomePage
-      setupSteps={{
-        slack: true,
-        firstConversation: false,
-        firstSkill: false,
-        integration: false,
-        scheduledTask: false,
-      }}
-      activity={[]}
-      usage={{ messages: 0, messagesDelta: 0, skills: 0, skillsDelta: 0 }}
-      discover={[]}
-      digest={{
-        daysActive: 2,
-        tasksRanToday: 0,
-        hoursSavedThisWeek: 0,
-        runningNow: 0,
-        scheduledToday: 0,
-      }}
-    />
-  ),
+  component: () => <HomeMemberPageNew {...MEMBER_HOME_EMPTY_PROPS} />,
 });
 
 export const homeCompleteRoute = createRoute({
@@ -305,12 +311,12 @@ export const homeCompleteRoute = createRoute({
 
 // ── Member routes (redesigned bento dashboard) ───────────────────────────────
 
-export const homeMemberRoute = createRoute({
+export const homeMemberOldRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member",
+  path: "/home/member-old",
   beforeLoad: setMemberRole,
   component: () => (
-    <HomeMemberPage
+    <HomeMemberPageOld
       setupSteps={MEMBER_SETUP_ACTIVE}
       digest={MEMBER_DIGEST_ACTIVE}
       activity={MEMBER_ACTIVITY}
@@ -321,12 +327,12 @@ export const homeMemberRoute = createRoute({
   ),
 });
 
-export const homeMemberEmptyRoute = createRoute({
+export const homeMemberOldEmptyRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-empty",
+  path: "/home/member-old-empty",
   beforeLoad: setMemberRole,
   component: () => (
-    <HomeMemberPage
+    <HomeMemberPageOld
       setupSteps={MEMBER_SETUP_NEW}
       digest={MEMBER_DIGEST_NEW}
       activity={[]}
@@ -337,12 +343,12 @@ export const homeMemberEmptyRoute = createRoute({
   ),
 });
 
-export const homeMemberEmptyV2Route = createRoute({
+export const homeMemberOldEmptyV2Route = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-empty-v2",
+  path: "/home/member-old-empty-v2",
   beforeLoad: setMemberRole,
   component: () => (
-    <HomeMemberPage
+    <HomeMemberPageOld
       setupSteps={MEMBER_SETUP_NEW}
       digest={MEMBER_DIGEST_NEW}
       activity={[]}
@@ -354,12 +360,12 @@ export const homeMemberEmptyV2Route = createRoute({
   ),
 });
 
-function HomeMemberWalkthrough() {
+function HomeMemberOldWalkthrough() {
   const auth = useDashboardAuth();
   const firstName = auth.displayName.split(" ")[0] ?? auth.displayName;
   return (
     <>
-      <HomeMemberPage
+      <HomeMemberPageOld
         setupSteps={MEMBER_SETUP_NEW}
         digest={MEMBER_DIGEST_NEW}
         activity={[]}
@@ -372,19 +378,19 @@ function HomeMemberWalkthrough() {
   );
 }
 
-export const homeMemberWalkthroughRoute = createRoute({
+export const homeMemberOldWalkthroughRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-walkthrough",
+  path: "/home/member-old-walkthrough",
   beforeLoad: setMemberRole,
-  component: HomeMemberWalkthrough,
+  component: HomeMemberOldWalkthrough,
 });
 
-export const homeMemberErrorsRoute = createRoute({
+export const homeMemberOldErrorsRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-errors",
+  path: "/home/member-old-errors",
   beforeLoad: setMemberRole,
   component: () => (
-    <HomeMemberPage
+    <HomeMemberPageOld
       setupSteps={MEMBER_SETUP_ACTIVE}
       digest={MEMBER_DIGEST_ACTIVE}
       activity={MEMBER_ACTIVITY}
@@ -396,12 +402,12 @@ export const homeMemberErrorsRoute = createRoute({
   ),
 });
 
-export const homeMemberIterationARoute = createRoute({
+export const homeMemberOldIterationARoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-iteration-a",
+  path: "/home/member-old-iteration-a",
   beforeLoad: setMemberRole,
   component: () => (
-    <HomeMemberPage
+    <HomeMemberPageOld
       setupSteps={MEMBER_SETUP_ACTIVE}
       digest={MEMBER_DIGEST_ACTIVE}
       activity={MEMBER_ACTIVITY}
@@ -411,4 +417,162 @@ export const homeMemberIterationARoute = createRoute({
       notificationsMode="banner"
     />
   ),
+});
+
+// ── New canonical member home (bento grid) ──────────────────────────────────
+
+const MEMBER_HOME_ACTIVE_UPCOMING: UpcomingRun[] = [
+  {
+    id: "u1",
+    title: "Daily standup digest",
+    target: "#standup",
+    time: "9:00 AM",
+    relativeTime: "tomorrow",
+  },
+  {
+    id: "u2",
+    title: "Competitive intel sweep",
+    target: "#market-research",
+    time: "2:00 PM",
+    relativeTime: "in 2h",
+  },
+];
+
+const MEMBER_HOME_ACTIVE_RECENT: RecentEvent[] = [
+  { kind: "sketch", id: "r1", title: "Standup digest sent", category: "comms", day: "Today", time: "9:02 AM" },
+  { kind: "sketch", id: "r2", title: "Q2 pipeline summary", category: "reporting", day: "Today", time: "9:15 AM" },
+  { kind: "user", id: "r3", title: "Sarah asked about launch", initials: "SK", day: "Today", time: "8:51 AM" },
+  {
+    kind: "scheduled",
+    id: "r4",
+    title: "Daily forecast digest",
+    category: "reporting",
+    day: "Yesterday",
+    time: "8:00 AM",
+  },
+];
+
+const MEMBER_HOME_ACTIVE_SKILLS: ActiveSkill[] = [
+  { id: "s1", name: "Standup digest", category: "comms", lastUsedAt: null, lastUsedLabel: "ran 2h ago" },
+  { id: "s2", name: "Lead qualifier", category: "crm", lastUsedAt: null, lastUsedLabel: "ran today" },
+  { id: "s3", name: "Competitive intel", category: "research", lastUsedAt: null, lastUsedLabel: "ran 2d ago" },
+];
+
+const MEMBER_HOME_EXPLORE: ExploreSuggestion = {
+  id: "e1",
+  name: "Weekly roundup",
+  description: "Digest every Monday morning",
+  href: "/skills",
+};
+
+const MEMBER_HOME_TEAM_ACTIVE: TeamSummary = {
+  totalCount: 8,
+  humanCount: 6,
+  agentCount: 2,
+  pendingInvites: 0,
+  members: [
+    { id: "m1", initials: "SK", tint: "bg-blue-500/30 text-blue-700 dark:text-blue-200" },
+    { id: "m2", initials: "MJ", tint: "bg-emerald-500/30 text-emerald-700 dark:text-emerald-200" },
+    { id: "m3", initials: "JR", tint: "bg-violet-500/30 text-violet-700 dark:text-violet-200" },
+  ],
+};
+
+const MEMBER_HOME_TEAM_EMPTY: TeamSummary = {
+  totalCount: 1,
+  humanCount: 1,
+  agentCount: 0,
+  pendingInvites: 0,
+  members: [{ id: "self", initials: "SK", tint: "bg-blue-500/30 text-blue-700 dark:text-blue-200" }],
+};
+
+const MEMBER_HOME_INTEGRATIONS_ACTIVE: IntegrationSummary = {
+  totalCount: 5,
+  needsReconnectCount: 1,
+  providers: [
+    { id: "drive", tint: "bg-blue-500", status: "ok" },
+    { id: "notion", tint: "bg-violet-500", status: "ok" },
+    { id: "slack", tint: "bg-pink-500", status: "ok" },
+    { id: "linear", tint: "bg-indigo-500", status: "ok" },
+    { id: "fireflies", tint: "bg-orange-500", status: "error" },
+  ],
+};
+
+const MEMBER_HOME_INTEGRATIONS_EMPTY: IntegrationSummary = {
+  totalCount: 0,
+  needsReconnectCount: 0,
+  providers: [],
+};
+
+const MEMBER_HOME_USAGE_ACTIVE: UsageSummary = {
+  messages: 247,
+  messagesDelta: 12,
+  automations: 32,
+  automationsDelta: 4,
+};
+
+const MEMBER_HOME_USAGE_EMPTY: UsageSummary = {
+  messages: 0,
+  messagesDelta: 0,
+  automations: 0,
+  automationsDelta: 0,
+};
+
+const MEMBER_HOME_FILES_ACTIVE: FilesSummary = {
+  entityCounts: { people: 24, companies: 8, projects: 12, databases: 4, documents: 168 },
+  recentlyIndexed: [
+    { id: "f1", fileName: "Q4 launch plan", source: "Drive", syncedLabel: "2h ago" },
+    { id: "f2", fileName: "Customer interview notes", source: "Notion", syncedLabel: "today" },
+    { id: "f3", fileName: "Pricing model v3", source: "Drive", syncedLabel: "today" },
+  ],
+  sources: [
+    { id: "drive", name: "Drive", status: "ok" },
+    { id: "notion", name: "Notion", status: "ok" },
+    { id: "slack", name: "Slack", status: "ok" },
+    { id: "linear", name: "Linear", status: "syncing" },
+    { id: "fireflies", name: "Fireflies", status: "error" },
+  ],
+};
+
+const MEMBER_HOME_FILES_EMPTY: FilesSummary = {
+  entityCounts: { people: 0, companies: 0, projects: 0, databases: 0, documents: 0 },
+  recentlyIndexed: [],
+  sources: [],
+};
+
+const MEMBER_HOME_ACTIVE_PROPS: HomeMemberPageProps = {
+  digest: MEMBER_DIGEST_ACTIVE,
+  upcoming: MEMBER_HOME_ACTIVE_UPCOMING,
+  recent: MEMBER_HOME_ACTIVE_RECENT,
+  activeSkills: MEMBER_HOME_ACTIVE_SKILLS,
+  exploreSuggestion: MEMBER_HOME_EXPLORE,
+  team: MEMBER_HOME_TEAM_ACTIVE,
+  integrations: MEMBER_HOME_INTEGRATIONS_ACTIVE,
+  usage: MEMBER_HOME_USAGE_ACTIVE,
+  files: MEMBER_HOME_FILES_ACTIVE,
+};
+
+const MEMBER_HOME_EMPTY_PROPS: HomeMemberPageProps = {
+  digest: MEMBER_DIGEST_NEW,
+  upcoming: [],
+  recent: [],
+  activeSkills: [],
+  exploreSuggestion: MEMBER_HOME_EXPLORE,
+  team: MEMBER_HOME_TEAM_EMPTY,
+  integrations: MEMBER_HOME_INTEGRATIONS_EMPTY,
+  usage: MEMBER_HOME_USAGE_EMPTY,
+  files: MEMBER_HOME_FILES_EMPTY,
+};
+
+export const homeMemberRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member",
+  beforeLoad: setMemberRole,
+  component: () => <HomeMemberPageNew {...MEMBER_HOME_ACTIVE_PROPS} />,
+});
+
+export const homeMemberEmptyRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-empty",
+  beforeLoad: setMemberRole,
+  component: () => <HomeMemberPageNew {...MEMBER_HOME_EMPTY_PROPS} />,
 });

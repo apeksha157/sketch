@@ -1,118 +1,173 @@
+import type { SkillCategory } from "@/lib/skills-data";
+import { useDashboardAuth } from "@/routes/dashboard";
 /**
  * Member home — bento-grid dashboard. Single viewport, no scroll on standard heights.
  *
- * Layout (top to bottom):
- *   1. Greeting (shrink-0, ~60px)
- *   2. Top row: Activity + right column (shrink-0, sized to natural content; cards stretch via grid)
- *   3. Bottom row: 3 Usage tiles (shrink-0, natural-content height)
+ * The same layout serves both empty (new member) and mature (active member) states.
+ * Cards keep the same dimensions across states; only their content changes. This is
+ * intentional — a layout that reshuffles as setup progresses feels disorienting.
  *
- * Empty space at the bottom of the page is intentional — content is naturally sized
- * rather than artificially distributed.
+ * Discovery / "what can Sketch do?" lives in the chatbot widget (rendered separately,
+ * shared across pages). Setup guidance lives in the AppSidebar's stepper. Neither is
+ * the home page's job.
  *
- * Top-row right column composition:
- *   • new user (incomplete setup): Discover dominates (40/60 with Activity), Get Started UI inside
- *   • active no errors: Activity + Discover, both stretch to grid alignment
- *   • active with errors (Iteration B — default): NotificationsCard on top of Discover (Discover always renders)
- *   • active with errors (Iteration A): banner inside Activity card; right column is just Discover
+ * Bento grid (5 rows × 3 cols):
  *
- * When notifications are visible, Activity caps trim to keep the row from growing too tall,
- * and Discover row count drops from 4 to 2 to balance.
+ *   greet    greet         greet
+ *   activity activity      files
+ *   skills   team          files
+ *   skills   integrations  files
+ *   usage    usage         files
  */
-import { useDashboardAuth } from "@/routes/dashboard";
 import { GreetingBar, type HomeDigest } from "@/routes/home";
 import {
   ArrowDownIcon,
   ArrowRightIcon,
   ArrowUpIcon,
-  CalendarDotsIcon,
-  CaretDownIcon,
-  CaretUpIcon,
-  CheckCircleIcon,
-  CheckIcon,
+  ChartBarIcon,
+  ChatCircleIcon,
   ClockIcon,
+  FileTextIcon,
   MagnifyingGlassIcon,
+  NewspaperIcon,
+  type Icon as PhosphorIcon,
   PlugIcon,
-  SparkleIcon,
+  PlusIcon,
+  StackIcon,
   TargetIcon,
   UsersThreeIcon,
-  WarningCircleIcon,
-  XCircleIcon,
+  WarningIcon,
+  WrenchIcon,
 } from "@phosphor-icons/react";
-import { Input } from "@sketch/ui/components/input";
 import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 import type React from "react";
-import { useEffect, useRef, useState } from "react";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export interface SetupSteps {
-  slack: boolean;
-  firstConversation: boolean;
-  firstSkill: boolean;
-  integration: boolean;
-  scheduledTask: boolean;
+export interface UpcomingRun {
+  id: string;
+  title: string;
+  /** Where this runs — e.g. "#standup", "Daily DM". */
+  target: string;
+  /** Clock time, e.g. "9:00 AM". */
+  time: string;
+  /** Time-until-next-run, e.g. "in 2h", "Mon", "tomorrow". */
+  relativeTime: string;
 }
 
-export type { HomeDigest };
+export type RecentEvent =
+  | {
+      kind: "sketch" | "scheduled";
+      id: string;
+      title: string;
+      category: SkillCategory;
+      day: string;
+      time: string;
+    }
+  | {
+      kind: "user";
+      id: string;
+      title: string;
+      initials: string;
+      day: string;
+      time: string;
+    };
 
-export interface UsageStats {
+export interface ActiveSkill {
+  id: string;
+  name: string;
+  category: SkillCategory;
+  /** ISO string or null for "never run". Display formatting is up to the renderer. */
+  lastUsedAt: string | null;
+  /** Pre-formatted relative time, e.g. "ran 2h ago". Empty string for never-run. */
+  lastUsedLabel: string;
+}
+
+export interface ExploreSuggestion {
+  id: string;
+  name: string;
+  description: string;
+  href: string;
+}
+
+export interface TeamMember {
+  id: string;
+  initials: string;
+  /** Tailwind background class for the avatar tint, e.g. "bg-blue-500/20". */
+  tint: string;
+}
+
+export interface TeamSummary {
+  totalCount: number;
+  humanCount: number;
+  agentCount: number;
+  pendingInvites: number;
+  /** First few members shown in the avatar row. */
+  members: TeamMember[];
+}
+
+export interface IntegrationProvider {
+  id: string;
+  /** Tailwind background class for the connector swatch, e.g. "bg-orange-500". */
+  tint: string;
+  status: "ok" | "error";
+}
+
+export interface IntegrationSummary {
+  totalCount: number;
+  needsReconnectCount: number;
+  providers: IntegrationProvider[];
+}
+
+export interface UsageSummary {
   messages: number;
+  /** Percent change vs last week (0 = no change / unavailable). */
   messagesDelta: number;
-  skills: number;
-  skillsDelta: number;
   automations: number;
+  /** Raw count change vs last week (0 = no change / unavailable). */
   automationsDelta: number;
 }
 
-export type ActivityFeedItem = {
-  id: string;
-  type: "upcoming" | "running" | "completed_auto" | "completed_user";
-  skillName: string;
-  time: string;
-  /** "today" | "yesterday" | "Mon" | etc. */
-  day: string;
-  meta: string;
-  channel?: string;
-  duration?: string;
-};
+export interface FilesEntityCounts {
+  people: number;
+  companies: number;
+  projects: number;
+  databases: number;
+  documents: number;
+}
 
-export type NotificationItem = {
+export interface RecentlyIndexedFile {
   id: string;
-  type: "integration_disconnected" | "automation_failed" | "file_error";
-  title: string;
-  actionLabel: string;
-  actionUrl: string;
-  severity: "critical" | "warning";
-};
+  fileName: string;
+  /** Display label for the source, e.g. "Drive", "Notion". */
+  source: string;
+  /** Pre-formatted relative time, e.g. "2h ago", "today". */
+  syncedLabel: string;
+}
 
-export type DiscoverNudge = {
+export interface FilesSourceStatus {
   id: string;
-  type: "product_update" | "team_activity" | "popular" | "new_member" | "suggested";
-  title: string;
-  description?: string;
-  ctaLabel: string;
-  ctaUrl: string;
-  dismissible: boolean;
-};
+  name: string;
+  status: "ok" | "syncing" | "error";
+}
 
-export type LifecycleStage = "new_user" | "active_user" | "power_user";
+export interface FilesSummary {
+  entityCounts: FilesEntityCounts;
+  recentlyIndexed: RecentlyIndexedFile[];
+  sources: FilesSourceStatus[];
+}
 
 export interface HomeMemberPageProps {
-  setupSteps: SetupSteps;
   digest: HomeDigest;
-  activity: ActivityFeedItem[];
-  usage: UsageStats;
-  discover: DiscoverNudge[];
-  notifications: NotificationItem[];
-  /** "card" = Iteration B (separate notifications card). "banner" = Iteration A (banner inside Activity). */
-  notificationsMode?: "card" | "banner";
-  /**
-   * Controls how empty zones teach. "verbose" (default) = each card carries its own
-   * teach-and-CTA copy. "calm" = only the right column (Discover/Setup) teaches; Activity
-   * collapses to a single quiet line and Usage tiles drop their empty copy.
-   */
-  emptyVariant?: "verbose" | "calm";
+  upcoming: UpcomingRun[];
+  recent: RecentEvent[];
+  activeSkills: ActiveSkill[];
+  exploreSuggestion: ExploreSuggestion;
+  team: TeamSummary;
+  integrations: IntegrationSummary;
+  usage: UsageSummary;
+  files: FilesSummary;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -121,122 +176,80 @@ function firstName(displayName: string): string {
   return displayName.split(" ")[0] ?? displayName;
 }
 
-function countCompleted(steps: SetupSteps): number {
-  return Object.values(steps).filter(Boolean).length;
+/**
+ * Phosphor icon per skill category. Picked once and stable so Activity and Active
+ * skill rows feel cohesive (a "research" run looks like a "research" skill).
+ * Only the categories that show up frequently get a dedicated icon; everything
+ * else falls back to a generic spark.
+ */
+const CATEGORY_ICON: Partial<Record<SkillCategory, PhosphorIcon>> = {
+  crm: TargetIcon,
+  comms: ChatCircleIcon,
+  research: MagnifyingGlassIcon,
+  ops: WrenchIcon,
+  reporting: ChartBarIcon,
+  sales: TargetIcon,
+  analytics: ChartBarIcon,
+  marketing: NewspaperIcon,
+};
+
+function CategoryIcon({ category, size = 11 }: { category: SkillCategory; size?: number }) {
+  const Icon = CATEGORY_ICON[category] ?? StackIcon;
+  return <Icon size={size} />;
 }
 
-/** Lifecycle derivation per spec — drives flex ratios and discover density. */
-function deriveStage(digest: HomeDigest, steps: SetupSteps): LifecycleStage {
-  const setupComplete = countCompleted(steps) === 5;
-  if (digest.daysActive <= 7 && !setupComplete) return "new_user";
-  if (digest.daysActive > 60) return "power_user";
-  return "active_user";
-}
+/** Yellow-wash tile used for sketch-action and active-skill rows. */
+const SKETCH_TILE = "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06] text-[#8B7A00] dark:text-[#FEED01]";
+
+/** Standard section label style — uppercase, monospaced, tight tracking. */
+const SECTION_LABEL = "font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground";
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-export function HomeMemberPage({
-  setupSteps,
-  digest,
-  activity,
-  usage,
-  discover,
-  notifications,
-  notificationsMode = "card",
-  emptyVariant = "verbose",
-}: HomeMemberPageProps) {
+export function HomeMemberPage(props: HomeMemberPageProps) {
   const auth = useDashboardAuth();
-  const stage = deriveStage(digest, setupSteps);
-  const errorCount = notifications.length;
-  const showNotificationsCard = notificationsMode === "card" && errorCount > 0;
-  const showNotificationsBanner = notificationsMode === "banner" && errorCount > 0;
-  const notificationsVisible = showNotificationsCard || showNotificationsBanner;
-
-  // In calm variant, when a new user has nothing in their activity, drop the
-  // Activity card entirely — Discover/Setup owns the teaching job, no need for
-  // an almost-empty card competing for attention.
-  const hideActivityCard = emptyVariant === "calm" && stage === "new_user" && activity.length === 0;
-
-  // Grid ratios: new user → Discover dominant. Active → Activity dominant.
-  // When activity is hidden, the row becomes a single column so Discover spans full width.
-  const topRowCols = hideActivityCard
-    ? "grid-cols-1"
-    : stage === "new_user"
-      ? "grid-cols-1 lg:grid-cols-[2fr_3fr]"
-      : "grid-cols-1 lg:grid-cols-[3fr_2fr]";
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-10 pt-8 pb-10 lg:h-[calc(100dvh-3rem)] lg:overflow-hidden">
-      <div className="shrink-0">
-        <GreetingBar firstName={firstName(auth.displayName)} digest={digest} />
+    <div
+      className="grid gap-3 overflow-hidden px-5 py-4 lg:h-[calc(100dvh-3rem)]"
+      style={{
+        gridTemplateColumns: "1.2fr 0.78fr 1.05fr",
+        gridTemplateRows: "auto 1.95fr 1fr 1fr 0.4fr",
+        gridTemplateAreas: `
+          "greet greet greet"
+          "activity activity files"
+          "skills team files"
+          "skills integrations files"
+          "usage usage files"
+        `,
+      }}
+    >
+      <div style={{ gridArea: "greet" }} className="min-w-0">
+        <GreetingBar firstName={firstName(auth.displayName)} digest={props.digest} />
       </div>
 
-      <div className={cn("grid gap-5 lg:min-h-0 lg:flex-1 lg:overflow-hidden", topRowCols)}>
-        {!hideActivityCard && (
-          <ActivityCard
-            items={activity}
-            digest={digest}
-            isNewUser={stage === "new_user"}
-            banner={showNotificationsBanner ? <NotificationsBanner items={notifications} /> : null}
-            notificationsVisible={notificationsVisible}
-            emptyVariant={emptyVariant}
-          />
-        )}
-
-        <div className="flex flex-col gap-5">
-          {showNotificationsCard ? <NotificationsCard items={notifications} /> : null}
-          <DiscoverCard
-            setupSteps={setupSteps}
-            isNewUser={stage === "new_user"}
-            nudges={discover}
-            showNotificationsCard={showNotificationsCard}
-          />
-        </div>
+      <div style={{ gridArea: "activity" }} className="min-h-0">
+        <ActivityCard upcoming={props.upcoming} recent={props.recent} />
       </div>
 
-      <div className="grid shrink-0 grid-cols-1 gap-4 sm:grid-cols-3">
-        <UsageTile
-          label="Messages"
-          value={usage.messages}
-          delta={usage.messagesDelta}
-          emptyVariant={emptyVariant}
-          emptyCopy={
-            <>
-              We haven't talked yet. Every conversation on Slack counts here.{" "}
-              <Link to="/channels" className="font-medium text-foreground underline-offset-2 hover:underline">
-                Send your first message →
-              </Link>
-            </>
-          }
-        />
-        <UsageTile
-          label="Skills used"
-          value={usage.skills}
-          delta={usage.skillsDelta}
-          emptyVariant={emptyVariant}
-          emptyCopy={
-            <>
-              I can summarize meetings, qualify leads, track competitors — and more.{" "}
-              <Link to="/skills" className="font-medium text-foreground underline-offset-2 hover:underline">
-                Try your first skill →
-              </Link>
-            </>
-          }
-        />
-        <UsageTile
-          label="Automations run"
-          value={usage.automations}
-          delta={usage.automationsDelta}
-          emptyVariant={emptyVariant}
-          emptyCopy={
-            <>
-              Schedule a task — daily, weekly, whatever you need — and I'll handle it from there.{" "}
-              <Link to="/scheduled-tasks" className="font-medium text-foreground underline-offset-2 hover:underline">
-                Set one up →
-              </Link>
-            </>
-          }
-        />
+      <div style={{ gridArea: "skills" }} className="min-h-0">
+        <SkillsCard active={props.activeSkills} suggestion={props.exploreSuggestion} />
+      </div>
+
+      <div style={{ gridArea: "team" }} className="min-h-0">
+        <TeamCard team={props.team} />
+      </div>
+
+      <div style={{ gridArea: "integrations" }} className="min-h-0">
+        <IntegrationsCard summary={props.integrations} />
+      </div>
+
+      <div style={{ gridArea: "usage" }} className="min-h-0">
+        <UsageStrip usage={props.usage} />
+      </div>
+
+      <div style={{ gridArea: "files" }} className="min-h-0">
+        <FilesCard files={props.files} />
       </div>
     </div>
   );
@@ -244,789 +257,541 @@ export function HomeMemberPage({
 
 // ── Activity card ────────────────────────────────────────────────────────────
 
-function ActivityCard({
-  items,
-  digest,
-  isNewUser,
-  banner,
-  notificationsVisible,
-  emptyVariant,
-}: {
-  items: ActivityFeedItem[];
-  digest: HomeDigest;
-  isNewUser: boolean;
-  banner: React.ReactNode;
-  notificationsVisible: boolean;
-  emptyVariant: "verbose" | "calm";
-}) {
-  // When notifications are visible, the right column is taller. Trim Activity caps
-  // so the row doesn't grow too tall and force page scroll.
-  const caps = notificationsVisible
-    ? { upcoming: 1, running: 1, today: 1, yesterday: 1 }
-    : { upcoming: 3, running: 3, today: 2, yesterday: 2 };
-
-  const upcoming = items.filter((i) => i.type === "upcoming").slice(0, caps.upcoming);
-  const running = items.filter((i) => i.type === "running").slice(0, caps.running);
-  const todayCompleted = items
-    .filter((i) => i.day === "today" && i.type !== "upcoming" && i.type !== "running")
-    .slice(0, caps.today);
-  const yesterdayCompleted = items.filter((i) => i.day === "yesterday").slice(0, caps.yesterday);
-
-  const isEmpty = items.length === 0;
+function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: RecentEvent[] }) {
+  const upcomingEmpty = upcoming.length === 0;
+  const recentEmpty = recent.length === 0;
+  const dayGroups = groupRecentByDay(recent);
 
   return (
-    <section
-      data-walkthrough-target="activity-card"
-      className="flex flex-col rounded-lg border border-border bg-card lg:min-h-0 lg:flex-1 lg:overflow-hidden"
-    >
-      <header className="flex shrink-0 items-center justify-between gap-4 px-5 pt-4">
-        <h2 className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">Activity</h2>
-        {!isEmpty && (
-          <Link
-            to="/usage"
-            className="shrink-0 text-xs font-medium text-muted-foreground transition-colors hover:text-[#8B7A00] dark:hover:text-[#FEED01]"
-          >
-            View all →
-          </Link>
-        )}
-      </header>
+    <Card>
+      <h2 className={cn(SECTION_LABEL, "mb-3")}>Activity</h2>
 
-      <div className="flex flex-1 flex-col gap-3 px-5 py-4">
-        {banner}
-        {isNewUser && isEmpty ? (
-          emptyVariant === "calm" ? (
-            <ActivityEmptyStateCalm />
-          ) : (
-            <ActivityEmptyState />
-          )
+      <div className="flex min-h-0 flex-1 flex-col gap-3">
+        <SectionHeader
+          label="Upcoming"
+          action={
+            upcomingEmpty
+              ? { kind: "link", icon: <PlusIcon size={11} />, label: "Schedule a task", href: "/scheduled-tasks" }
+              : { kind: "link", label: "View all →", href: "/scheduled-tasks" }
+          }
+        />
+        {upcomingEmpty ? (
+          <VoiceLine>I'm built for routines. Tell me when, and I'll run on time.</VoiceLine>
+        ) : (
+          <ul className="space-y-2">
+            {upcoming.slice(0, 2).map((run) => (
+              <UpcomingRow key={run.id} run={run} />
+            ))}
+          </ul>
+        )}
+
+        <Divider />
+
+        <SectionHeader
+          label="Recent"
+          action={recentEmpty ? null : { kind: "link", label: "View all →", href: "/usage" }}
+        />
+        {recentEmpty ? (
+          <>
+            <VoiceLine>My logbook — every task I run, every question you ask, lands here.</VoiceLine>
+            <ul className="space-y-2 opacity-40">
+              <RecentRow
+                event={{
+                  kind: "sketch",
+                  id: "ghost",
+                  title: "Standup digest sent",
+                  category: "comms",
+                  day: "Today",
+                  time: "9:02 AM",
+                }}
+              />
+            </ul>
+          </>
+        ) : (
+          <div className="space-y-3">
+            {dayGroups.map((group) => (
+              <div key={group.day}>
+                <p className="mb-1 text-[10.5px] font-medium text-muted-foreground">{group.day}</p>
+                <ul className="space-y-2">
+                  {group.events.map((event) => (
+                    <RecentRow key={event.id} event={event} />
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function UpcomingRow({ run }: { run: UpcomingRun }) {
+  return (
+    <li className="flex items-center gap-3">
+      <div className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+        <ClockIcon size={13} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs">{run.title}</p>
+        <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
+          {run.target} · {run.time}
+        </p>
+      </div>
+      <p className="shrink-0 text-[10.5px] text-muted-foreground">{run.relativeTime}</p>
+    </li>
+  );
+}
+
+function RecentRow({ event }: { event: RecentEvent }) {
+  return (
+    <li className="flex items-center gap-3">
+      {event.kind === "user" ? (
+        <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-[9.5px] font-medium text-blue-700 dark:bg-blue-500/[0.12] dark:text-blue-300">
+          {event.initials}
+        </div>
+      ) : (
+        <div className={cn("flex size-5 shrink-0 items-center justify-center rounded-[5px]", SKETCH_TILE)}>
+          <CategoryIcon category={event.category} size={11} />
+        </div>
+      )}
+      <p className="min-w-0 flex-1 truncate text-xs">{event.title}</p>
+      <p className="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{event.time}</p>
+    </li>
+  );
+}
+
+function groupRecentByDay(events: RecentEvent[]): { day: string; events: RecentEvent[] }[] {
+  const groups: { day: string; events: RecentEvent[] }[] = [];
+  for (const event of events) {
+    const last = groups[groups.length - 1];
+    if (last && last.day === event.day) {
+      last.events.push(event);
+    } else {
+      groups.push({ day: event.day, events: [event] });
+    }
+  }
+  // Cap to 2-3 day windows max per spec; keep all events within those days.
+  return groups.slice(0, 3);
+}
+
+// ── Skills card ──────────────────────────────────────────────────────────────
+
+function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion: ExploreSuggestion }) {
+  const empty = active.length === 0;
+
+  return (
+    <Card>
+      <SectionHeader label="Skills" action={{ kind: "link", label: "View all →", href: "/skills" }} />
+
+      <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3">
+        <p className={SECTION_LABEL}>Active</p>
+        {empty ? (
+          <div className="space-y-3">
+            <VoiceLine>I work on what you set me up to do.</VoiceLine>
+            <Link
+              to="/skills"
+              className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-muted/50"
+            >
+              <PlusIcon size={11} />
+              Activate a skill
+            </Link>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {active.slice(0, 3).map((skill) => (
+              <ActiveSkillRow key={skill.id} skill={skill} />
+            ))}
+          </ul>
+        )}
+
+        <Divider />
+
+        <p className={SECTION_LABEL}>Explore</p>
+        <Link
+          to={suggestion.href}
+          className="group flex items-center gap-3 rounded-md transition-colors hover:bg-muted/40"
+        >
+          <div className="flex size-5 shrink-0 items-center justify-center rounded-[5px] border border-border bg-muted/60 text-muted-foreground">
+            <NewspaperIcon size={11} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs">
+              <span className="text-muted-foreground">Try: </span>
+              <span className="font-medium">{suggestion.name}</span>
+            </p>
+            <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground">{suggestion.description}</p>
+          </div>
+          <ArrowRightIcon
+            size={12}
+            className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+          />
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+function ActiveSkillRow({ skill }: { skill: ActiveSkill }) {
+  return (
+    <li className="flex items-center gap-3">
+      <div className={cn("flex size-5 shrink-0 items-center justify-center rounded-[5px]", SKETCH_TILE)}>
+        <CategoryIcon category={skill.category} size={11} />
+      </div>
+      <p className="min-w-0 flex-1 truncate text-xs">{skill.name}</p>
+      <p className="shrink-0 text-[10.5px] text-muted-foreground">{skill.lastUsedLabel}</p>
+    </li>
+  );
+}
+
+// ── Team card ────────────────────────────────────────────────────────────────
+
+function TeamCard({ team }: { team: TeamSummary }) {
+  const empty = team.totalCount <= 1;
+  const visible = team.members.slice(0, 3);
+  const overflow = team.totalCount - visible.length;
+
+  return (
+    <Card padding="sm">
+      <div className="flex items-center justify-between">
+        <h2 className={SECTION_LABEL}>Team</h2>
+        <UsersThreeIcon size={12} className="text-muted-foreground" />
+      </div>
+
+      <div className="mt-2 flex items-baseline gap-1.5">
+        <p className="text-[18px] font-medium leading-none tracking-tight tabular-nums">{team.totalCount}</p>
+        <p className="text-[11px] text-muted-foreground">{team.totalCount === 1 ? "member" : "members"}</p>
+      </div>
+
+      {empty ? (
+        team.pendingInvites > 0 ? (
+          <p className="mt-1 text-[10.5px] text-muted-foreground">
+            {team.pendingInvites} {team.pendingInvites === 1 ? "invite" : "invites"} pending
+          </p>
+        ) : null
+      ) : (
+        <p className="mt-1 text-[10.5px] text-muted-foreground">
+          {team.humanCount} humans
+          {team.agentCount > 0 ? ` · ${team.agentCount} agents` : ""}
+          {team.pendingInvites > 0 ? ` · ${team.pendingInvites} pending` : ""}
+        </p>
+      )}
+
+      <div className="mt-auto flex items-center pt-2">
+        {visible.map((member, idx) => (
+          <div
+            key={member.id}
+            className={cn(
+              "flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-card text-[8px] font-medium",
+              member.tint,
+            )}
+            style={{ marginLeft: idx === 0 ? 0 : -5 }}
+          >
+            {member.initials}
+          </div>
+        ))}
+        {overflow > 0 && !empty ? (
+          <div
+            className="flex size-[18px] items-center justify-center rounded-full border-[1.5px] border-card bg-muted text-[8px] font-medium text-muted-foreground"
+            style={{ marginLeft: -5 }}
+          >
+            +{overflow}
+          </div>
+        ) : null}
+        {empty ? (
+          <Link
+            to="/team"
+            aria-label="Invite teammate"
+            className="flex size-[18px] items-center justify-center rounded-full border border-dashed border-border/80 text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+            style={{ marginLeft: visible.length > 0 ? -5 : 0 }}
+          >
+            <PlusIcon size={10} />
+          </Link>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+// ── Integrations card ────────────────────────────────────────────────────────
+
+function IntegrationsCard({ summary }: { summary: IntegrationSummary }) {
+  const empty = summary.totalCount === 0;
+  const visible = summary.providers.slice(0, 5);
+  const overflow = summary.totalCount - visible.length;
+
+  // Empty-state structure preserves slot count so the row's visual rhythm matches mature.
+  const emptyPlaceholderKeys = ["a", "b", "c", "d"];
+
+  return (
+    <Card padding="sm">
+      <div className="flex items-center justify-between">
+        <h2 className={SECTION_LABEL}>Integrations</h2>
+        <PlugIcon size={12} className="text-muted-foreground" />
+      </div>
+
+      <div className="mt-2 flex items-baseline gap-1.5">
+        <p
+          className={cn(
+            "text-[18px] font-medium leading-none tracking-tight tabular-nums",
+            empty && "text-muted-foreground",
+          )}
+        >
+          {summary.totalCount}
+        </p>
+        <p className="text-[11px] text-muted-foreground">connected</p>
+      </div>
+
+      {summary.needsReconnectCount > 0 ? (
+        <p className="mt-1 text-[10.5px] text-amber-600 dark:text-amber-400">
+          {summary.needsReconnectCount} {summary.needsReconnectCount === 1 ? "needs" : "need"} reconnect
+        </p>
+      ) : null}
+
+      <div className="mt-auto flex items-center gap-1.5 pt-2">
+        {empty ? (
+          <>
+            <Link
+              to="/integrations"
+              aria-label="Connect a tool"
+              className="flex size-4 items-center justify-center rounded-[4px] border border-dashed border-border/80 text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
+            >
+              <PlusIcon size={10} />
+            </Link>
+            {emptyPlaceholderKeys.map((key) => (
+              <div key={key} className="size-4 rounded-[4px] bg-muted/50 opacity-40" />
+            ))}
+          </>
         ) : (
           <>
-            <div className="space-y-2">
-              {upcoming.length > 0 && <ActivitySection label="Upcoming" items={upcoming} />}
-              {running.length > 0 && <ActivitySection label="Running now" items={running} />}
-              {todayCompleted.length > 0 && <ActivitySection label="Today" items={todayCompleted} />}
-              {yesterdayCompleted.length > 0 && <ActivitySection label="Yesterday" items={yesterdayCompleted} />}
-            </div>
-            <ActivityStatsStrip digest={digest} items={items} />
+            {visible.map((provider) =>
+              provider.status === "error" ? (
+                <div
+                  key={provider.id}
+                  className="flex size-4 items-center justify-center rounded-[4px] bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                  aria-label="Needs reconnect"
+                >
+                  <WarningIcon size={9} weight="fill" />
+                </div>
+              ) : (
+                <div key={provider.id} className={cn("size-4 rounded-[4px]", provider.tint)} />
+              ),
+            )}
+            {overflow > 0 ? (
+              <div className="flex size-4 items-center justify-center rounded-[4px] bg-muted text-[8px] font-medium text-muted-foreground">
+                +{overflow}
+              </div>
+            ) : null}
           </>
         )}
       </div>
-    </section>
+    </Card>
   );
 }
 
-function ActivityStatsStrip({ digest, items }: { digest: HomeDigest; items: ActivityFeedItem[] }) {
-  const parts: { value: string; label: string }[] = [];
+// ── Usage strip ──────────────────────────────────────────────────────────────
 
-  // Tasks: prefer today, fall back to yesterday if today is empty.
-  if (digest.tasksRanToday > 0) {
-    parts.push({
-      value: String(digest.tasksRanToday),
-      label: digest.tasksRanToday === 1 ? "task today" : "tasks today",
-    });
-  } else {
-    const yesterdayCount = items.filter((i) => i.day === "yesterday").length;
-    if (yesterdayCount > 0) {
-      parts.push({
-        value: String(yesterdayCount),
-        label: yesterdayCount === 1 ? "task yesterday" : "tasks yesterday",
-      });
-    }
-  }
-
-  if (digest.runningNow > 0) {
-    parts.push({ value: String(digest.runningNow), label: "in progress" });
-  }
-  if (digest.hoursSavedThisWeek > 0) {
-    parts.push({ value: `${digest.hoursSavedThisWeek}h`, label: "saved this week" });
-  }
-  if (parts.length === 0) return null;
-
+function UsageStrip({ usage }: { usage: UsageSummary }) {
   return (
-    <div className="mt-auto border-t border-border/60 pt-3">
-      <p className="text-[11px] text-muted-foreground tabular-nums">
-        {parts.map((part, i) => (
-          <span key={part.label}>
-            {i > 0 && <span className="mx-2 text-muted-foreground/50">·</span>}
-            <span className="font-medium text-foreground">{part.value}</span> {part.label}
-          </span>
-        ))}
-      </p>
+    <div className="flex h-full overflow-hidden rounded-lg border border-border bg-card">
+      <UsageHalf label="Messages" value={usage.messages} delta={usage.messagesDelta} deltaUnit="%" />
+      <div className="w-px bg-border" />
+      <UsageHalf label="Automations" value={usage.automations} delta={usage.automationsDelta} deltaUnit="" />
     </div>
   );
 }
 
-function ActivitySection({ label, items }: { label: string; items: ActivityFeedItem[] }) {
-  return (
-    <div>
-      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">{label}</h3>
-      <ul className="space-y-1">
-        {items.map((item) => (
-          <ActivityRow key={item.id} item={item} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function ActivityRow({ item }: { item: ActivityFeedItem }) {
-  const isUpcoming = item.type === "upcoming";
-  const isRunning = item.type === "running";
-
-  return (
-    <li
-      className={cn(
-        "group flex items-center gap-4 rounded-md px-2 py-2 text-sm transition-colors",
-        isUpcoming && "bg-muted/40",
-        isRunning && "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06]",
-        !isUpcoming && !isRunning && "hover:bg-muted/50",
-      )}
-    >
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm leading-tight">
-          <span className={cn("font-medium", isRunning && "text-[#8B7A00] dark:text-[#FEED01]")}>
-            {item.type === "completed_user" ? `You triggered ${item.skillName}` : item.skillName}
-          </span>
-          {item.meta ? <span className="text-muted-foreground"> · {item.meta}</span> : null}
-        </p>
-      </div>
-      <p className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{item.time}</p>
-    </li>
-  );
-}
-
-function ActivityEmptyState() {
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex-1 space-y-5">
-        <GhostSection label="Upcoming" body="Nothing scheduled yet." />
-        <GhostSection label="Completed" body="Tasks I run will show up here." />
-        <GhostSection label="Triggered by you" body="Things you ask me will appear here." />
-      </div>
-
-      <div className="mt-6 flex items-center gap-3 rounded-md border border-[#8B7A00]/20 bg-[#FEED01]/10 px-3 py-3 dark:border-[#FEED01]/20 dark:bg-[#FEED01]/[0.04]">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#FEED01]/20 text-[#8B7A00] dark:bg-[#FEED01]/[0.08] dark:text-[#FEED01]">
-          <ClockIcon size={16} weight="fill" />
-        </div>
-        <p className="text-sm">
-          <Link to="/channels" className="font-medium text-foreground underline-offset-2 hover:underline">
-            Say hi on Slack →
-          </Link>
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Calm variant — single quiet line. Defers the teaching job to the right column
- * (Discover/Setup) so the page has one entry point, not many.
- */
-function ActivityEmptyStateCalm() {
-  return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center px-6 text-center">
-      <p className="max-w-[28ch] text-sm text-muted-foreground">
-        Your activity will show up here once tasks start running.
-      </p>
-    </div>
-  );
-}
-
-function GhostSection({ label, body }: { label: string; body: string }) {
-  return (
-    <div>
-      <h3 className="mb-2 font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground/70">{label}</h3>
-      <p className="px-2 py-1 text-sm text-muted-foreground">{body}</p>
-    </div>
-  );
-}
-
-// ── Notifications ────────────────────────────────────────────────────────────
-
-function NotificationsCard({ items }: { items: NotificationItem[] }) {
-  const heading = items.length === 1 ? "1 issue" : `${items.length} issues`;
-  return (
-    <section className="flex max-h-full shrink-0 flex-col overflow-hidden rounded-lg border border-destructive/25 bg-destructive/[0.04] px-5 py-4">
-      <header className="mb-3 flex items-center gap-2">
-        <WarningCircleIcon size={14} weight="fill" className="text-destructive" />
-        <h2 className="text-sm font-medium text-destructive">{heading}</h2>
-      </header>
-      <ul className="space-y-2 overflow-y-auto">
-        {items.map((item) => (
-          <NotificationRow key={item.id} item={item} />
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function NotificationRow({ item }: { item: NotificationItem }) {
-  const Icon = item.type === "integration_disconnected" ? PlugIcon : XCircleIcon;
-  return (
-    <li className="flex items-center gap-3 text-sm">
-      <Icon size={14} className="shrink-0 text-destructive/80" />
-      <p className="min-w-0 flex-1 truncate text-foreground">{item.title}</p>
-      <Link to={item.actionUrl} className="shrink-0 text-xs font-medium text-destructive hover:underline">
-        {item.actionLabel} →
-      </Link>
-    </li>
-  );
-}
-
-function NotificationsBanner({ items }: { items: NotificationItem[] }) {
-  const heading = items.length === 1 ? "1 issue" : `${items.length} issues`;
-  const visible = items.slice(0, 3);
-  return (
-    <div className="mb-4 rounded-md border border-destructive/25 bg-destructive/[0.05] px-3 py-2.5">
-      <header className="mb-2 flex items-center gap-2">
-        <WarningCircleIcon size={14} weight="fill" className="shrink-0 text-destructive" />
-        <h3 className="text-sm font-medium text-destructive">{heading}</h3>
-      </header>
-      <ul className="space-y-1">
-        {visible.map((item) => (
-          <li key={item.id} className="flex items-center gap-2 text-xs">
-            <p className="min-w-0 flex-1 truncate text-muted-foreground">{item.title}</p>
-            <Link to={item.actionUrl} className="shrink-0 text-[11px] font-medium text-destructive hover:underline">
-              {item.actionLabel} →
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// ── Discover / Get Started ───────────────────────────────────────────────────
-
-interface ScenarioDef {
-  id: string;
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  href: string;
-}
-
-const SCENARIOS: ScenarioDef[] = [
-  {
-    id: "standup",
-    icon: <CalendarDotsIcon size={16} />,
-    title: "Summarize standups every morning",
-    description: "I'll read your channel and send a summary at 9 AM.",
-    href: "/skills",
-  },
-  {
-    id: "leads",
-    icon: <TargetIcon size={16} />,
-    title: "Qualify inbound leads automatically",
-    description: "I'll score new leads and flag the hot ones.",
-    href: "/skills",
-  },
-  {
-    id: "intel",
-    icon: <MagnifyingGlassIcon size={16} />,
-    title: "Run competitive intel weekly",
-    description: "I'll drop a report every Monday.",
-    href: "/skills",
-  },
-];
-
-/**
- * Discover-tone fallbacks for active users when real nudges are insufficient.
- * Phrased as skill suggestions, not setup steps — different voice from SCENARIOS.
- */
-const DISCOVER_FALLBACKS: { id: string; title: string; description: string; href: string }[] = [
-  {
-    id: "meeting-summary",
-    title: "Meeting Summary",
-    description: "Most teams use this for design standups",
-    href: "/skills",
-  },
-  {
-    id: "lead-qualifier",
-    title: "Lead Qualifier",
-    description: "Score and triage incoming leads",
-    href: "/skills",
-  },
-  {
-    id: "competitive-intel",
-    title: "Competitive Intel",
-    description: "Track competitor moves, weekly",
-    href: "/skills",
-  },
-  {
-    id: "weekly-roundup",
-    title: "Weekly Roundup",
-    description: "A digest of what your team shipped this week",
-    href: "/skills",
-  },
-  {
-    id: "ask-anything",
-    title: "Ask me anything",
-    description: "On Slack, in a DM — I'll answer or take action",
-    href: "/channels",
-  },
-];
-
-interface SetupStepDef {
-  key: keyof SetupSteps;
-  label: string;
-  hint: string;
-  cta: { href: string };
-}
-
-const SETUP_STEPS: SetupStepDef[] = [
-  { key: "slack", label: "Connect Slack", hint: "So I can talk to your team.", cta: { href: "/integrations" } },
-  {
-    key: "firstConversation",
-    label: "Have your first conversation",
-    hint: "Say hi to me on Slack — ask me anything.",
-    cta: { href: "/channels" },
-  },
-  {
-    key: "firstSkill",
-    label: "Try your first skill",
-    hint: "Pick a scenario above, or browse all skills.",
-    cta: { href: "/skills" },
-  },
-  {
-    key: "integration",
-    label: "Connect an integration",
-    hint: "Google Drive, Notion, HubSpot — whatever your team uses.",
-    cta: { href: "/integrations" },
-  },
-  {
-    key: "scheduledTask",
-    label: "Schedule your first task",
-    hint: "Set it to run daily or weekly and I'll take it from there.",
-    cta: { href: "/scheduled-tasks" },
-  },
-];
-
-/** Conservative height estimate per NudgeRow — slightly over actual to avoid clipping. */
-const NUDGE_ROW_PX = 110;
-/** Gap between nudge rows in vertical layout (gap-2). */
-const NUDGE_ROW_GAP_PX = 8;
-
-/**
- * Measure a container's inner content area and compute how many fixed-height rows fit.
- * Subtracts the container's vertical padding from clientHeight so we measure the
- * actual area available for rows, not the padded box. Uses both `ResizeObserver` and
- * a `requestAnimationFrame` backup since the observer's first fire can race the flex
- * layout cascade. Hard rule: NO PAGE SCROLL — the count must under-estimate to
- * guarantee no clipping.
- */
-function useRowFitCount(rowPx: number, gapPx: number, fallback: number) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [count, setCount] = useState(fallback);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-
-    const measure = () => {
-      const styles = window.getComputedStyle(el);
-      const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
-      const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
-      const inner = el.clientHeight - paddingTop - paddingBottom;
-      if (inner <= 0) {
-        setCount((prev) => (prev === 0 ? prev : 0));
-        return;
-      }
-      // Allow 0 — caller decides whether to render the card at all.
-      const fits = Math.max(0, Math.floor((inner + gapPx) / (rowPx + gapPx)));
-      setCount((prev) => (prev === fits ? prev : fits));
-    };
-
-    // Backup: measure on next paint in case the observer's first callback races layout.
-    const rafId = requestAnimationFrame(() => requestAnimationFrame(measure));
-
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      observer.disconnect();
-    };
-  }, [rowPx, gapPx]);
-
-  return [ref, count] as const;
-}
-
-function DiscoverCard({
-  setupSteps,
-  isNewUser,
-  nudges,
-  showNotificationsCard,
-}: {
-  setupSteps: SetupSteps;
-  isNewUser: boolean;
-  nudges: DiscoverNudge[];
-  showNotificationsCard: boolean;
-}) {
-  const completedCount = countCompleted(setupSteps);
-  const setupComplete = completedCount === 5;
-  const [stepsExpanded, setStepsExpanded] = useState(false);
-  const [completionDismissed, setCompletionDismissed] = useState(false);
-  // Fallback of 4 keeps the card looking full if measurement is delayed; the observer
-  // will narrow down to the actual fit on the next paint.
-  const [bodyRef, fitCount] = useRowFitCount(NUDGE_ROW_PX, NUDGE_ROW_GAP_PX, 4);
-
-  // Setup just completed — show celebration banner; user can dismiss to drop into discover
-  if (isNewUser && setupComplete && !completionDismissed) {
-    return (
-      <section className="flex min-h-0 flex-1 flex-col rounded-lg border border-[#8B7A00]/40 bg-card p-5 dark:border-[#FEED01]/40">
-        <CompletionBanner onDismiss={() => setCompletionDismissed(true)} />
-      </section>
-    );
-  }
-
-  // New user with incomplete setup → show Get Started
-  if (isNewUser && !setupComplete) {
-    return (
-      <section className="flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-card">
-        <SetupRow
-          completedCount={completedCount}
-          expanded={stepsExpanded}
-          onToggle={() => setStepsExpanded((v) => !v)}
-          steps={setupSteps}
-          fillCard={stepsExpanded}
-        />
-        {!stepsExpanded && (
-          <div className="flex min-h-0 flex-1 flex-col gap-2 border-t border-border/60 p-4">
-            <h3 className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">Try a scenario</h3>
-            <ul className="flex min-h-0 flex-1 flex-col gap-2">
-              {SCENARIOS.map((s) => (
-                <ScenarioRow key={s.id} scenario={s} />
-              ))}
-            </ul>
-          </div>
-        )}
-      </section>
-    );
-  }
-
-  // Active user — Discover row count is driven by `fitCount` (measured via ResizeObserver
-  // on the body container). This keeps the page no-scroll regardless of viewport size,
-  // banner presence, or notifications card height. Hard rule: NO PAGE SCROLL.
-  // When fitCount = 0 (no room — typically happens in iter B with many notifications),
-  // the entire Discover card gets dropped so the right column belongs to NotificationsCard.
-  const targetRowCount = fitCount;
-  if (fitCount === 0) return null;
-  const visibleNudges = nudges.slice(0, targetRowCount);
-  const slotsLeft = targetRowCount - visibleNudges.length;
-  const fallback: DiscoverNudge[] = DISCOVER_FALLBACKS.slice(0, slotsLeft).map((s) => ({
-    id: `fallback-${s.id}`,
-    type: "suggested",
-    title: s.title,
-    description: s.description,
-    ctaLabel: "Try this",
-    ctaUrl: s.href,
-    dismissible: false,
-  }));
-  const rows = [...visibleNudges, ...fallback];
-
-  return (
-    <section className="flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-card">
-      <header className="flex shrink-0 items-center justify-between gap-4 px-5 pt-4">
-        <h2 className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">Discover</h2>
-      </header>
-      <div className="px-5 pt-3">
-        <DiscoverSearch />
-      </div>
-      <div
-        ref={bodyRef}
-        className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden px-3 py-3 md:flex-row md:items-stretch md:gap-4 md:px-5 md:py-4 lg:flex-col lg:gap-2 lg:px-3 lg:py-3"
-      >
-        {rows.map((nudge) => (
-          <NudgeRow key={nudge.id} nudge={nudge} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function DiscoverSearch() {
-  return (
-    <div className="relative">
-      <MagnifyingGlassIcon
-        size={14}
-        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-      />
-      <Input type="search" placeholder="Search skills, integrations, teammates..." className="h-9 pl-8 text-sm" />
-    </div>
-  );
-}
-
-function SetupRow({
-  completedCount,
-  expanded,
-  onToggle,
-  steps,
-  fillCard,
-}: {
-  completedCount: number;
-  expanded: boolean;
-  onToggle: () => void;
-  steps: SetupSteps;
-  fillCard: boolean;
-}) {
-  const next = SETUP_STEPS.find((s) => !steps[s.key]);
-  const progressPct = (completedCount / SETUP_STEPS.length) * 100;
-
-  return (
-    <div
-      data-walkthrough-target="setup-checklist"
-      className={cn("flex flex-col gap-3 px-5 py-4", fillCard && "min-h-0 flex-1")}
-    >
-      <div className="flex items-center justify-between gap-4">
-        <p className="text-sm">
-          <span className="text-muted-foreground">Setting up Sketch · </span>
-          <span className="font-medium text-foreground">
-            {completedCount} of {SETUP_STEPS.length}
-          </span>
-        </p>
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-[#8B7A00] dark:hover:text-[#FEED01]"
-        >
-          {expanded ? "Close" : "View steps"}
-          {expanded ? <CaretUpIcon size={10} /> : <CaretDownIcon size={10} />}
-        </button>
-      </div>
-
-      <div className="h-[3px] w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-[#8B7A00] transition-all dark:bg-[#FEED01]"
-          style={{ width: `${progressPct}%` }}
-        />
-      </div>
-
-      {expanded ? (
-        <ol className="flex min-h-0 flex-1 flex-col justify-around py-2">
-          {SETUP_STEPS.map((step, idx) => {
-            const done = steps[step.key];
-            const isNext = !done && next?.key === step.key;
-            return (
-              <li key={step.key} className="flex items-start gap-3">
-                <ChecklistDot done={done} isNext={isNext} index={idx} />
-                <div className="min-w-0 flex-1">
-                  <p
-                    className={cn(
-                      "text-sm transition-colors",
-                      done && "text-muted-foreground line-through",
-                      isNext && "font-medium text-foreground",
-                      !done && !isNext && "text-foreground",
-                    )}
-                  >
-                    {step.label}
-                  </p>
-                  {!done && <p className="mt-0.5 text-xs text-muted-foreground">{step.hint}</p>}
-                </div>
-                {!done && isNext && (
-                  <Link
-                    to={step.cta.href}
-                    className="shrink-0 text-xs font-medium text-[#8B7A00] transition-colors hover:underline dark:text-[#FEED01]"
-                  >
-                    Start →
-                  </Link>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      ) : next ? (
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-foreground">{next.label}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{next.hint}</p>
-          </div>
-          <Link
-            to={next.cta.href}
-            className="shrink-0 text-xs font-medium text-[#8B7A00] transition-colors hover:underline dark:text-[#FEED01]"
-          >
-            Start →
-          </Link>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ChecklistDot({ done, isNext, index }: { done: boolean; isNext: boolean; index: number }) {
-  if (done) {
-    return (
-      <div className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-[#FEED01] ring-1 ring-[#C8B832]/40 dark:ring-0">
-        <CheckIcon size={10} weight="bold" className="text-[#040404]" />
-      </div>
-    );
-  }
-  if (isNext) {
-    return (
-      <div
-        className="mt-0.5 size-4 shrink-0 rounded-full border-2 border-foreground"
-        aria-label={`Step ${index + 1}`}
-      />
-    );
-  }
-  return (
-    <div className="mt-0.5 size-4 shrink-0 rounded-full border-2 border-border" aria-label={`Step ${index + 1}`} />
-  );
-}
-
-function ScenarioRow({ scenario }: { scenario: ScenarioDef }) {
-  return (
-    <li>
-      <Link
-        to={scenario.href}
-        className="group flex items-start gap-3 rounded-md border border-border/60 bg-background p-3 transition-all duration-150 hover:-translate-y-px hover:border-[#8B7A00]/40 hover:shadow-sm dark:hover:border-[#FEED01]/40"
-      >
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#FEED01]/15 text-[#8B7A00] transition-colors group-hover:bg-[#FEED01]/25 dark:bg-[#FEED01]/[0.06] dark:text-[#FEED01] dark:group-hover:bg-[#FEED01]/10">
-          {scenario.icon}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium leading-tight transition-colors group-hover:text-[#8B7A00] dark:group-hover:text-[#FEED01]">
-            {scenario.title}
-          </p>
-          <p className="mt-1 text-xs text-muted-foreground">{scenario.description}</p>
-        </div>
-        <ArrowRightIcon
-          size={12}
-          className="mt-1.5 shrink-0 -translate-x-1 text-[#8B7A00]/0 transition-all duration-150 group-hover:translate-x-0 group-hover:text-[#8B7A00] dark:group-hover:text-[#FEED01]"
-        />
-      </Link>
-    </li>
-  );
-}
-
-function CompletionBanner({ onDismiss }: { onDismiss: () => void }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-      <div className="flex size-12 items-center justify-center rounded-full bg-[#FEED01]/20 text-[#8B7A00] dark:bg-[#FEED01]/[0.08] dark:text-[#FEED01]">
-        <CheckCircleIcon size={26} weight="fill" />
-      </div>
-      <div>
-        <p className="text-base font-semibold text-foreground">You're all set up</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          I'm connected, configured, and running. Here's what else I can do.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="text-xs font-medium text-muted-foreground hover:text-foreground"
-      >
-        Dismiss →
-      </button>
-    </div>
-  );
-}
-
-interface NudgeStyle {
-  tagLabel: string;
-  icon: React.ReactNode;
-}
-
-const NUDGE_STYLES: Record<DiscoverNudge["type"], NudgeStyle> = {
-  product_update: { tagLabel: "Product update", icon: <SparkleIcon size={12} weight="fill" /> },
-  team_activity: { tagLabel: "Your team", icon: <UsersThreeIcon size={12} weight="fill" /> },
-  popular: { tagLabel: "Popular", icon: <TargetIcon size={12} weight="fill" /> },
-  new_member: { tagLabel: "New member", icon: <UsersThreeIcon size={12} weight="fill" /> },
-  suggested: { tagLabel: "Try this", icon: <SparkleIcon size={12} weight="fill" /> },
-};
-
-function NudgeRow({ nudge }: { nudge: DiscoverNudge }) {
-  const style = NUDGE_STYLES[nudge.type];
-  return (
-    <Link
-      to={nudge.ctaUrl}
-      className="group flex items-start gap-3 rounded-md p-3 transition-colors hover:bg-muted/40 md:flex-1 lg:flex-none"
-    >
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#FEED01]/15 text-[#8B7A00] dark:bg-[#FEED01]/[0.06] dark:text-[#FEED01]">
-        {style.icon}
-      </div>
-      {/* Inner wrapper changes direction by breakpoint:
-          • sm/default: column → CTA stacked below content
-          • md (cards stretched wide): row → CTA on right
-          • lg+ (bento, narrow): column → CTA stacked below content again */}
-      <div className="flex min-w-0 flex-1 flex-col gap-1 md:flex-row md:items-center md:gap-3 lg:flex-col lg:items-start lg:gap-1">
-        <div className="min-w-0 flex-1">
-          <span className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">
-            {style.tagLabel}
-          </span>
-          <p className="mt-0.5 truncate text-sm font-medium leading-snug transition-colors group-hover:text-[#8B7A00] dark:group-hover:text-[#FEED01]">
-            {nudge.title}
-          </p>
-          {nudge.description && (
-            <p className="mt-0.5 truncate text-xs leading-snug text-muted-foreground">{nudge.description}</p>
-          )}
-        </div>
-        <p className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-foreground/70 transition-colors group-hover:text-[#8B7A00] dark:group-hover:text-[#FEED01]">
-          {nudge.ctaLabel}
-          <ArrowRightIcon
-            size={11}
-            className="-translate-x-0.5 transition-transform duration-150 group-hover:translate-x-0"
-          />
-        </p>
-      </div>
-    </Link>
-  );
-}
-
-// ── Usage tiles ──────────────────────────────────────────────────────────────
-
-const USAGE_TINT = {
-  bg: "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06]",
-  text: "text-[#8B7A00] dark:text-[#FEED01]",
-  bar: "bg-[#8B7A00] dark:bg-[#FEED01]",
-} as const;
-
-function UsageTile({
+function UsageHalf({
   label,
   value,
   delta,
-  emptyCopy,
-  emptyVariant = "verbose",
+  deltaUnit,
 }: {
   label: string;
   value: number;
   delta: number;
-  emptyCopy: React.ReactNode;
-  emptyVariant?: "verbose" | "calm";
+  deltaUnit: string;
 }) {
-  const isEmpty = value === 0;
+  const empty = value === 0;
   const isNegative = delta < 0;
   const isPositive = delta > 0;
 
-  // Decorative bar — shows ~20% by default for non-zero, fills more as value grows (capped)
-  const barPct = isEmpty ? 0 : Math.min(20 + value * 1.5, 100);
-
   return (
-    <div className="group flex flex-col gap-2 rounded-lg border border-border bg-card p-4 transition-colors hover:border-foreground/15">
-      <h3 className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">{label}</h3>
-      <p className="text-3xl font-medium leading-none tabular-nums">{value}</p>
-      {isEmpty ? (
-        <span className="text-xs text-muted-foreground">—</span>
-      ) : delta !== 0 ? (
-        <span
+    <div className="flex flex-1 items-center justify-between px-4 py-2.5">
+      <p className={SECTION_LABEL}>{label}</p>
+      <div className="flex items-baseline gap-2">
+        <p
           className={cn(
-            "flex items-center gap-1 text-xs tabular-nums",
-            isNegative ? "text-destructive" : "text-success",
+            "text-base font-medium leading-none tracking-tight tabular-nums",
+            empty && "text-muted-foreground",
           )}
         >
-          {isPositive ? <ArrowUpIcon size={10} /> : <ArrowDownIcon size={10} />}
-          {Math.abs(delta)}% from last week
-        </span>
-      ) : null}
-      {isEmpty ? (
-        emptyVariant === "calm" ? null : (
-          <p className="text-xs leading-snug text-muted-foreground">{emptyCopy}</p>
-        )
-      ) : (
-        <div className="h-[3px] w-full overflow-hidden rounded-full bg-muted">
-          <div className={cn("h-full rounded-full transition-all", USAGE_TINT.bar)} style={{ width: `${barPct}%` }} />
-        </div>
-      )}
+          {value}
+        </p>
+        {empty ? (
+          <span className="text-[10px] text-muted-foreground">—</span>
+        ) : delta !== 0 ? (
+          <span
+            className={cn(
+              "flex items-center gap-0.5 text-[10px] tabular-nums",
+              isNegative ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400",
+            )}
+          >
+            {isPositive ? <ArrowUpIcon size={9} /> : <ArrowDownIcon size={9} />}
+            {Math.abs(delta)}
+            {deltaUnit}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
+}
+
+// ── Files card ───────────────────────────────────────────────────────────────
+
+function FilesCard({ files }: { files: FilesSummary }) {
+  const isEmpty = files.recentlyIndexed.length === 0 && files.sources.length === 0;
+
+  return (
+    <Card padding="lg">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <StackIcon size={13} className="text-muted-foreground" />
+          <h2 className={SECTION_LABEL}>Files</h2>
+        </div>
+        {isEmpty ? null : (
+          <Link to="/files" className="text-[10.5px] text-muted-foreground transition-colors hover:text-foreground">
+            View all →
+          </Link>
+        )}
+      </div>
+
+      <Link
+        to="/files"
+        className="mt-3 flex items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-muted"
+      >
+        <MagnifyingGlassIcon size={11} />
+        <span className="text-xs">Search memory</span>
+      </Link>
+
+      {isEmpty ? (
+        <div className="mt-3">
+          <VoiceLine>I'll start building this as you connect tools and we talk.</VoiceLine>
+        </div>
+      ) : null}
+
+      <div className="mt-4">
+        <p className={SECTION_LABEL}>{isEmpty ? "What I'll know" : "What I know"}</p>
+        <ul className="mt-2 space-y-1.5">
+          <FilesEntityRow label="People" count={files.entityCounts.people} empty={isEmpty} />
+          <FilesEntityRow label="Companies" count={files.entityCounts.companies} empty={isEmpty} />
+          <FilesEntityRow label="Projects" count={files.entityCounts.projects} empty={isEmpty} />
+          <FilesEntityRow label="Databases" count={files.entityCounts.databases} empty={isEmpty} />
+          <FilesEntityRow label="Documents" count={files.entityCounts.documents} empty={isEmpty} />
+        </ul>
+      </div>
+
+      {!isEmpty && files.recentlyIndexed.length > 0 ? (
+        <div className="mt-4">
+          <p className={SECTION_LABEL}>Recently indexed</p>
+          <ul className="mt-2 space-y-2">
+            {files.recentlyIndexed.slice(0, 3).map((file) => (
+              <li key={file.id} className="flex items-center gap-2">
+                <FileTextIcon size={12} className="shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[11.5px]">{file.fileName}</p>
+                  <p className="mt-0.5 truncate text-[9.5px] text-muted-foreground">
+                    {file.source} · {file.syncedLabel}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      <div className="mt-4">
+        <div className="flex items-center justify-between">
+          <p className={SECTION_LABEL}>Sources</p>
+          {isEmpty ? (
+            <Link
+              to="/integrations"
+              className="inline-flex items-center gap-0.5 text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <PlusIcon size={11} />
+              Connect
+            </Link>
+          ) : null}
+        </div>
+        {!isEmpty && files.sources.length > 0 ? (
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {files.sources.map((source) => (
+              <span key={source.id} className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground">
+                <span
+                  className={cn(
+                    "size-[5px] rounded-full",
+                    source.status === "ok" && "bg-emerald-500",
+                    source.status === "syncing" && "bg-amber-500",
+                    source.status === "error" && "bg-red-500",
+                  )}
+                />
+                {source.name}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+function FilesEntityRow({ label, count, empty }: { label: string; count: number; empty: boolean }) {
+  return (
+    <li className="flex items-center justify-between text-[11.5px]">
+      <span className="text-foreground">{label}</span>
+      <span className={cn("font-medium tabular-nums", empty && "text-muted-foreground/70")}>{empty ? "—" : count}</span>
+    </li>
+  );
+}
+
+// ── Shared building blocks ───────────────────────────────────────────────────
+
+function Card({ children, padding = "lg" }: { children: React.ReactNode; padding?: "lg" | "sm" }) {
+  return (
+    <section
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card",
+        padding === "lg" ? "px-4 py-3.5" : "px-3.5 py-3",
+      )}
+    >
+      {children}
+    </section>
+  );
+}
+
+type SectionAction = { kind: "link"; label: string; href: string; icon?: React.ReactNode } | null;
+
+function SectionHeader({ label, action }: { label: string; action: SectionAction }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <p className={SECTION_LABEL}>{label}</p>
+      {action ? (
+        <Link
+          to={action.href}
+          className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {action.icon}
+          {action.label}
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
+function VoiceLine({ children }: { children: React.ReactNode }) {
+  return <p className="text-xs leading-relaxed text-muted-foreground">{children}</p>;
+}
+
+function Divider() {
+  return <div className="my-1 h-px w-full bg-border/60" />;
 }
