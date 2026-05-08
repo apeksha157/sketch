@@ -202,8 +202,14 @@ function CategoryIcon({ category, size = 11 }: { category: SkillCategory; size?:
 const SKETCH_TILE = "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06] text-[#8B7A00] dark:text-[#FEED01]";
 
 /**
- * Standard section label — same uppercase mono treatment used across the dashboard
- * (channels, scheduled-tasks, usage). Keeps home visually native to other pages.
+ * Card title — sentence case, primary text. Sits above sub-section labels and
+ * gives each card a clear identity.
+ */
+const CARD_TITLE = "text-sm font-medium text-foreground";
+
+/**
+ * Sub-section label — uppercase mono used across the dashboard for secondary
+ * groupings inside cards.
  */
 const SECTION_LABEL = "font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground";
 
@@ -223,8 +229,7 @@ export function HomeMemberPage(props: HomeMemberPageProps) {
           gridTemplateAreas: `
             "activity activity files"
             "skills team files"
-            "skills integrations files"
-            "usage usage files"
+            "skills integrations usage"
           `,
         }}
       >
@@ -244,12 +249,12 @@ export function HomeMemberPage(props: HomeMemberPageProps) {
           <IntegrationsCard summary={props.integrations} />
         </div>
 
-        <div style={{ gridArea: "usage" }} className="min-w-0">
-          <UsageStrip usage={props.usage} />
-        </div>
-
         <div style={{ gridArea: "files" }} className="min-w-0">
           <FilesCard files={props.files} />
+        </div>
+
+        <div style={{ gridArea: "usage" }} className="min-w-0">
+          <UsageStrip usage={props.usage} />
         </div>
       </div>
     </div>
@@ -267,14 +272,27 @@ function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: R
 
   return (
     <Card>
-      <SectionHeader
-        label="Up next"
-        action={
-          upcomingEmpty
-            ? { kind: "link", icon: <PlusIcon size={12} />, label: "Schedule a task", href: "/scheduled-tasks" }
-            : { kind: "link", label: "View all →", href: "/scheduled-tasks" }
-        }
-      />
+      <h2 className={CARD_TITLE}>Activity</h2>
+
+      <div className="mt-3 flex items-center justify-between">
+        <p className={SECTION_LABEL}>Up next</p>
+        {upcomingEmpty ? (
+          <Link
+            to="/scheduled-tasks"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <PlusIcon size={12} />
+            Schedule a task
+          </Link>
+        ) : (
+          <Link
+            to="/scheduled-tasks"
+            className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            View all →
+          </Link>
+        )}
+      </div>
       {upcomingEmpty ? (
         <VoiceLine className="mt-2">I'm built for routines. Tell me when, and I'll run on time.</VoiceLine>
       ) : (
@@ -362,10 +380,17 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
 
   return (
     <Card>
-      <SectionHeader label="Active skills" action={{ kind: "link", label: "View all →", href: "/skills" }} />
+      <div className="flex items-center justify-between">
+        <h2 className={CARD_TITLE}>Skills</h2>
+        <Link to="/skills" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
+          View all →
+        </Link>
+      </div>
+
+      <p className={cn(SECTION_LABEL, "mt-3")}>Active</p>
 
       {empty ? (
-        <div className="mt-3 space-y-3">
+        <div className="mt-2 space-y-3">
           <VoiceLine>I work on what you set me up to do.</VoiceLine>
           <Link
             to="/skills"
@@ -376,14 +401,14 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
           </Link>
         </div>
       ) : (
-        <ul className="mt-3 space-y-2">
+        <ul className="mt-2 space-y-2">
           {active.slice(0, 3).map((skill) => (
             <ActiveSkillRow key={skill.id} skill={skill} />
           ))}
         </ul>
       )}
 
-      <p className={cn(SECTION_LABEL, "mt-4")}>Explore skills</p>
+      <p className={cn(SECTION_LABEL, "mt-4")}>Explore</p>
       <Link
         to={suggestion.href}
         className="group mt-2 flex items-center gap-3 rounded-md transition-colors hover:bg-muted/40"
@@ -429,7 +454,7 @@ function TeamCard({ team }: { team: TeamSummary }) {
   return (
     <Card padding="sm">
       <div className="flex items-center justify-between">
-        <h2 className={SECTION_LABEL}>Team</h2>
+        <h2 className={CARD_TITLE}>Team</h2>
         <UsersThreeIcon size={14} className="text-muted-foreground" />
       </div>
 
@@ -501,7 +526,7 @@ function IntegrationsCard({ summary }: { summary: IntegrationSummary }) {
   return (
     <Card padding="sm">
       <div className="flex items-center justify-between">
-        <h2 className={SECTION_LABEL}>Integrations</h2>
+        <h2 className={CARD_TITLE}>Integrations</h2>
         <PlugIcon size={14} className="text-muted-foreground" />
       </div>
 
@@ -632,7 +657,7 @@ function FilesCard({ files }: { files: FilesSummary }) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <StackIcon size={14} className="text-muted-foreground" />
-          <h2 className={SECTION_LABEL}>Files</h2>
+          <h2 className={CARD_TITLE}>Files</h2>
         </div>
         {isEmpty ? null : (
           <Link to="/files" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
@@ -668,7 +693,7 @@ function FilesCard({ files }: { files: FilesSummary }) {
 
       <div className="mt-4">
         <div className="flex items-center justify-between">
-          <p className={SECTION_LABEL}>Connected sources</p>
+          <p className={SECTION_LABEL}>Connected</p>
           {isEmpty ? (
             <Link
               to="/integrations"
@@ -722,25 +747,6 @@ function Card({ children, padding = "lg" }: { children: React.ReactNode; padding
     >
       {children}
     </section>
-  );
-}
-
-type SectionAction = { kind: "link"; label: string; href: string; icon?: React.ReactNode } | null;
-
-function SectionHeader({ label, action }: { label: string; action: SectionAction }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <p className={SECTION_LABEL}>{label}</p>
-      {action ? (
-        <Link
-          to={action.href}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {action.icon}
-          {action.label}
-        </Link>
-      ) : null}
-    </div>
   );
 }
 

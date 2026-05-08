@@ -294,23 +294,23 @@ function SetupStepper() {
   const progressPct = (completedCount / total) * 100;
 
   return (
-    <Link
-      to={next.href}
-      className="block rounded-md border border-border bg-card px-2.5 py-2 text-left transition-colors hover:bg-muted/50"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[10.5px] font-medium text-foreground">Setting up Sketch</span>
+    <div className="px-2 py-2">
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">Setup</span>
         <span className="text-[10px] text-muted-foreground tabular-nums">
           {completedCount}/{total}
         </span>
       </div>
-      <div className="mt-1.5 h-[3px] w-full overflow-hidden rounded-full bg-muted">
+      <div className="mt-1.5 h-[3px] w-full overflow-hidden rounded-full bg-muted/70">
         <div className="h-full rounded-full bg-[#FEED01] transition-all" style={{ width: `${progressPct}%` }} />
       </div>
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <span className="truncate text-[10.5px] text-muted-foreground">{next.label}</span>
-        <ArrowRightIcon size={11} className="shrink-0 text-muted-foreground" />
-      </div>
-    </Link>
+      <Link
+        to={next.href}
+        className="mt-2 flex items-center justify-between gap-2 rounded-md px-1 py-1 text-left transition-colors hover:text-foreground"
+      >
+        <span className="truncate text-xs text-muted-foreground">{next.label}</span>
+        <ArrowRightIcon size={12} className="shrink-0 text-muted-foreground" />
+      </Link>
+    </div>
   );
 }
