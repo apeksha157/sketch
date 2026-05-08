@@ -1,11 +1,13 @@
 import type { SkillCategory } from "@/lib/skills-data";
 import { useDashboardAuth } from "@/routes/dashboard";
 /**
- * Member home — bento-grid dashboard. Single viewport, no scroll on standard heights.
+ * Member home — bento-grid dashboard. Uses the same page shell as every other
+ * dashboard page (mx-auto max-w-4xl, px-10 py-8) so typography, spacing, and
+ * card surfaces stay consistent. Page scrolls naturally if content overflows.
  *
  * The same layout serves both empty (new member) and mature (active member) states.
- * Cards keep the same dimensions across states; only their content changes. This is
- * intentional — a layout that reshuffles as setup progresses feels disorienting.
+ * Cards keep the same dimensions across states; only their content changes — a
+ * layout that reshuffles as setup progresses feels disorienting.
  *
  * Discovery / "what can Sketch do?" lives in the chatbot widget (rendered separately,
  * shared across pages). Setup guidance lives in the AppSidebar's stepper. Neither is
@@ -13,7 +15,6 @@ import { useDashboardAuth } from "@/routes/dashboard";
  *
  * Bento grid (5 rows × 3 cols):
  *
- *   greet    greet         greet
  *   activity activity      files
  *   skills   team          files
  *   skills   integrations  files
@@ -201,7 +202,10 @@ function CategoryIcon({ category, size = 11 }: { category: SkillCategory; size?:
 /** Yellow-wash tile used for sketch-action and active-skill rows. */
 const SKETCH_TILE = "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06] text-[#8B7A00] dark:text-[#FEED01]";
 
-/** Standard section label style — uppercase, monospaced, tight tracking. */
+/**
+ * Standard section label — same uppercase mono treatment used across the dashboard
+ * (channels, scheduled-tasks, usage). Keeps home visually native to other pages.
+ */
 const SECTION_LABEL = "font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground";
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -210,46 +214,44 @@ export function HomeMemberPage(props: HomeMemberPageProps) {
   const auth = useDashboardAuth();
 
   return (
-    <div
-      className="grid gap-3 overflow-hidden px-5 py-4 lg:h-[calc(100dvh-3rem)]"
-      style={{
-        gridTemplateColumns: "1.2fr 0.78fr 1.05fr",
-        gridTemplateRows: "auto 1.95fr 1fr 1fr 0.4fr",
-        gridTemplateAreas: `
-          "greet greet greet"
-          "activity activity files"
-          "skills team files"
-          "skills integrations files"
-          "usage usage files"
-        `,
-      }}
-    >
-      <div style={{ gridArea: "greet" }} className="min-w-0">
-        <GreetingBar firstName={firstName(auth.displayName)} digest={props.digest} />
-      </div>
+    <div className="mx-auto max-w-4xl px-10 py-8">
+      <GreetingBar firstName={firstName(auth.displayName)} digest={props.digest} />
 
-      <div style={{ gridArea: "activity" }} className="min-h-0">
-        <ActivityCard upcoming={props.upcoming} recent={props.recent} />
-      </div>
+      <div
+        className="mt-6 grid gap-3"
+        style={{
+          gridTemplateColumns: "1.2fr 0.78fr 1.05fr",
+          gridTemplateAreas: `
+            "activity activity files"
+            "skills team files"
+            "skills integrations files"
+            "usage usage files"
+          `,
+        }}
+      >
+        <div style={{ gridArea: "activity" }} className="min-w-0">
+          <ActivityCard upcoming={props.upcoming} recent={props.recent} />
+        </div>
 
-      <div style={{ gridArea: "skills" }} className="min-h-0">
-        <SkillsCard active={props.activeSkills} suggestion={props.exploreSuggestion} />
-      </div>
+        <div style={{ gridArea: "skills" }} className="min-w-0">
+          <SkillsCard active={props.activeSkills} suggestion={props.exploreSuggestion} />
+        </div>
 
-      <div style={{ gridArea: "team" }} className="min-h-0">
-        <TeamCard team={props.team} />
-      </div>
+        <div style={{ gridArea: "team" }} className="min-w-0">
+          <TeamCard team={props.team} />
+        </div>
 
-      <div style={{ gridArea: "integrations" }} className="min-h-0">
-        <IntegrationsCard summary={props.integrations} />
-      </div>
+        <div style={{ gridArea: "integrations" }} className="min-w-0">
+          <IntegrationsCard summary={props.integrations} />
+        </div>
 
-      <div style={{ gridArea: "usage" }} className="min-h-0">
-        <UsageStrip usage={props.usage} />
-      </div>
+        <div style={{ gridArea: "usage" }} className="min-w-0">
+          <UsageStrip usage={props.usage} />
+        </div>
 
-      <div style={{ gridArea: "files" }} className="min-h-0">
-        <FilesCard files={props.files} />
+        <div style={{ gridArea: "files" }} className="min-w-0">
+          <FilesCard files={props.files} />
+        </div>
       </div>
     </div>
   );
@@ -311,7 +313,7 @@ function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: R
           <div className="space-y-3">
             {dayGroups.map((group) => (
               <div key={group.day}>
-                <p className="mb-1 text-[10.5px] font-medium text-muted-foreground">{group.day}</p>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">{group.day}</p>
                 <ul className="space-y-2">
                   {group.events.map((event) => (
                     <RecentRow key={event.id} event={event} />
@@ -329,16 +331,16 @@ function ActivityCard({ upcoming, recent }: { upcoming: UpcomingRun[]; recent: R
 function UpcomingRow({ run }: { run: UpcomingRun }) {
   return (
     <li className="flex items-center gap-3">
-      <div className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
-        <ClockIcon size={13} />
+      <div className="flex size-6 shrink-0 items-center justify-center text-muted-foreground">
+        <ClockIcon size={14} />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-xs">{run.title}</p>
-        <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground">
+        <p className="truncate text-sm">{run.title}</p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
           {run.target} · {run.time}
         </p>
       </div>
-      <p className="shrink-0 text-[10.5px] text-muted-foreground">{run.relativeTime}</p>
+      <p className="shrink-0 text-xs text-muted-foreground">{run.relativeTime}</p>
     </li>
   );
 }
@@ -347,16 +349,16 @@ function RecentRow({ event }: { event: RecentEvent }) {
   return (
     <li className="flex items-center gap-3">
       {event.kind === "user" ? (
-        <div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-[9.5px] font-medium text-blue-700 dark:bg-blue-500/[0.12] dark:text-blue-300">
+        <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-blue-500/15 text-[10px] font-medium text-blue-700 dark:bg-blue-500/[0.12] dark:text-blue-300">
           {event.initials}
         </div>
       ) : (
-        <div className={cn("flex size-5 shrink-0 items-center justify-center rounded-[5px]", SKETCH_TILE)}>
-          <CategoryIcon category={event.category} size={11} />
+        <div className={cn("flex size-6 shrink-0 items-center justify-center rounded-md", SKETCH_TILE)}>
+          <CategoryIcon category={event.category} size={12} />
         </div>
       )}
-      <p className="min-w-0 flex-1 truncate text-xs">{event.title}</p>
-      <p className="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{event.time}</p>
+      <p className="min-w-0 flex-1 truncate text-sm">{event.title}</p>
+      <p className="shrink-0 text-xs text-muted-foreground tabular-nums">{event.time}</p>
     </li>
   );
 }
@@ -391,7 +393,7 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
             <VoiceLine>I work on what you set me up to do.</VoiceLine>
             <Link
               to="/skills"
-              className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-[11.5px] font-medium text-foreground transition-colors hover:bg-muted/50"
+              className="inline-flex items-center gap-1.5 self-start rounded-md border border-border px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/50"
             >
               <PlusIcon size={11} />
               Activate a skill
@@ -412,18 +414,18 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
           to={suggestion.href}
           className="group flex items-center gap-3 rounded-md transition-colors hover:bg-muted/40"
         >
-          <div className="flex size-5 shrink-0 items-center justify-center rounded-[5px] border border-border bg-muted/60 text-muted-foreground">
-            <NewspaperIcon size={11} />
+          <div className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border bg-muted/60 text-muted-foreground">
+            <NewspaperIcon size={12} />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs">
+            <p className="truncate text-sm">
               <span className="text-muted-foreground">Try: </span>
               <span className="font-medium">{suggestion.name}</span>
             </p>
-            <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground">{suggestion.description}</p>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{suggestion.description}</p>
           </div>
           <ArrowRightIcon
-            size={12}
+            size={14}
             className="shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5"
           />
         </Link>
@@ -435,11 +437,11 @@ function SkillsCard({ active, suggestion }: { active: ActiveSkill[]; suggestion:
 function ActiveSkillRow({ skill }: { skill: ActiveSkill }) {
   return (
     <li className="flex items-center gap-3">
-      <div className={cn("flex size-5 shrink-0 items-center justify-center rounded-[5px]", SKETCH_TILE)}>
-        <CategoryIcon category={skill.category} size={11} />
+      <div className={cn("flex size-6 shrink-0 items-center justify-center rounded-md", SKETCH_TILE)}>
+        <CategoryIcon category={skill.category} size={12} />
       </div>
-      <p className="min-w-0 flex-1 truncate text-xs">{skill.name}</p>
-      <p className="shrink-0 text-[10.5px] text-muted-foreground">{skill.lastUsedLabel}</p>
+      <p className="min-w-0 flex-1 truncate text-sm">{skill.name}</p>
+      <p className="shrink-0 text-xs text-muted-foreground">{skill.lastUsedLabel}</p>
     </li>
   );
 }
@@ -455,22 +457,22 @@ function TeamCard({ team }: { team: TeamSummary }) {
     <Card padding="sm">
       <div className="flex items-center justify-between">
         <h2 className={SECTION_LABEL}>Team</h2>
-        <UsersThreeIcon size={12} className="text-muted-foreground" />
+        <UsersThreeIcon size={14} className="text-muted-foreground" />
       </div>
 
       <div className="mt-2 flex items-baseline gap-1.5">
-        <p className="text-[18px] font-medium leading-none tracking-tight tabular-nums">{team.totalCount}</p>
-        <p className="text-[11px] text-muted-foreground">{team.totalCount === 1 ? "member" : "members"}</p>
+        <p className="text-xl font-semibold leading-none tracking-tight tabular-nums">{team.totalCount}</p>
+        <p className="text-xs text-muted-foreground">{team.totalCount === 1 ? "member" : "members"}</p>
       </div>
 
       {empty ? (
         team.pendingInvites > 0 ? (
-          <p className="mt-1 text-[10.5px] text-muted-foreground">
+          <p className="mt-1 text-xs text-muted-foreground">
             {team.pendingInvites} {team.pendingInvites === 1 ? "invite" : "invites"} pending
           </p>
         ) : null
       ) : (
-        <p className="mt-1 text-[10.5px] text-muted-foreground">
+        <p className="mt-1 text-xs text-muted-foreground">
           {team.humanCount} humans
           {team.agentCount > 0 ? ` · ${team.agentCount} agents` : ""}
           {team.pendingInvites > 0 ? ` · ${team.pendingInvites} pending` : ""}
@@ -527,23 +529,23 @@ function IntegrationsCard({ summary }: { summary: IntegrationSummary }) {
     <Card padding="sm">
       <div className="flex items-center justify-between">
         <h2 className={SECTION_LABEL}>Integrations</h2>
-        <PlugIcon size={12} className="text-muted-foreground" />
+        <PlugIcon size={14} className="text-muted-foreground" />
       </div>
 
       <div className="mt-2 flex items-baseline gap-1.5">
         <p
           className={cn(
-            "text-[18px] font-medium leading-none tracking-tight tabular-nums",
+            "text-xl font-semibold leading-none tracking-tight tabular-nums",
             empty && "text-muted-foreground",
           )}
         >
           {summary.totalCount}
         </p>
-        <p className="text-[11px] text-muted-foreground">connected</p>
+        <p className="text-xs text-muted-foreground">connected</p>
       </div>
 
       {summary.needsReconnectCount > 0 ? (
-        <p className="mt-1 text-[10.5px] text-amber-600 dark:text-amber-400">
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
           {summary.needsReconnectCount} {summary.needsReconnectCount === 1 ? "needs" : "need"} reconnect
         </p>
       ) : null}
@@ -593,7 +595,7 @@ function IntegrationsCard({ summary }: { summary: IntegrationSummary }) {
 
 function UsageStrip({ usage }: { usage: UsageSummary }) {
   return (
-    <div className="flex h-full overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex h-full rounded-lg border border-border bg-card">
       <UsageHalf label="Messages" value={usage.messages} delta={usage.messagesDelta} deltaUnit="%" />
       <div className="w-px bg-border" />
       <UsageHalf label="Automations" value={usage.automations} delta={usage.automationsDelta} deltaUnit="" />
@@ -617,27 +619,27 @@ function UsageHalf({
   const isPositive = delta > 0;
 
   return (
-    <div className="flex flex-1 items-center justify-between px-4 py-2.5">
+    <div className="flex flex-1 items-center justify-between px-5 py-4">
       <p className={SECTION_LABEL}>{label}</p>
       <div className="flex items-baseline gap-2">
         <p
           className={cn(
-            "text-base font-medium leading-none tracking-tight tabular-nums",
+            "text-xl font-semibold leading-none tracking-tight tabular-nums",
             empty && "text-muted-foreground",
           )}
         >
           {value}
         </p>
         {empty ? (
-          <span className="text-[10px] text-muted-foreground">—</span>
+          <span className="text-xs text-muted-foreground">—</span>
         ) : delta !== 0 ? (
           <span
             className={cn(
-              "flex items-center gap-0.5 text-[10px] tabular-nums",
+              "flex items-center gap-0.5 text-xs tabular-nums",
               isNegative ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400",
             )}
           >
-            {isPositive ? <ArrowUpIcon size={9} /> : <ArrowDownIcon size={9} />}
+            {isPositive ? <ArrowUpIcon size={10} /> : <ArrowDownIcon size={10} />}
             {Math.abs(delta)}
             {deltaUnit}
           </span>
@@ -656,11 +658,11 @@ function FilesCard({ files }: { files: FilesSummary }) {
     <Card padding="lg">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <StackIcon size={13} className="text-muted-foreground" />
+          <StackIcon size={14} className="text-muted-foreground" />
           <h2 className={SECTION_LABEL}>Files</h2>
         </div>
         {isEmpty ? null : (
-          <Link to="/files" className="text-[10.5px] text-muted-foreground transition-colors hover:text-foreground">
+          <Link to="/files" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
             View all →
           </Link>
         )}
@@ -668,10 +670,10 @@ function FilesCard({ files }: { files: FilesSummary }) {
 
       <Link
         to="/files"
-        className="mt-3 flex items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-muted"
+        className="mt-3 flex items-center gap-2 rounded-md bg-muted/60 px-3 py-2 text-muted-foreground transition-colors hover:bg-muted"
       >
-        <MagnifyingGlassIcon size={11} />
-        <span className="text-xs">Search memory</span>
+        <MagnifyingGlassIcon size={14} />
+        <span className="text-sm">Search memory</span>
       </Link>
 
       {isEmpty ? (
@@ -680,9 +682,9 @@ function FilesCard({ files }: { files: FilesSummary }) {
         </div>
       ) : null}
 
-      <div className="mt-4">
+      <div className="mt-5">
         <p className={SECTION_LABEL}>{isEmpty ? "What I'll know" : "What I know"}</p>
-        <ul className="mt-2 space-y-1.5">
+        <ul className="mt-3 space-y-2">
           <FilesEntityRow label="People" count={files.entityCounts.people} empty={isEmpty} />
           <FilesEntityRow label="Companies" count={files.entityCounts.companies} empty={isEmpty} />
           <FilesEntityRow label="Projects" count={files.entityCounts.projects} empty={isEmpty} />
@@ -692,15 +694,15 @@ function FilesCard({ files }: { files: FilesSummary }) {
       </div>
 
       {!isEmpty && files.recentlyIndexed.length > 0 ? (
-        <div className="mt-4">
+        <div className="mt-5">
           <p className={SECTION_LABEL}>Recently indexed</p>
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-3 space-y-2.5">
             {files.recentlyIndexed.slice(0, 3).map((file) => (
-              <li key={file.id} className="flex items-center gap-2">
-                <FileTextIcon size={12} className="shrink-0 text-muted-foreground" />
+              <li key={file.id} className="flex items-center gap-2.5">
+                <FileTextIcon size={14} className="shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[11.5px]">{file.fileName}</p>
-                  <p className="mt-0.5 truncate text-[9.5px] text-muted-foreground">
+                  <p className="truncate text-sm">{file.fileName}</p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     {file.source} · {file.syncedLabel}
                   </p>
                 </div>
@@ -710,26 +712,26 @@ function FilesCard({ files }: { files: FilesSummary }) {
         </div>
       ) : null}
 
-      <div className="mt-4">
+      <div className="mt-5">
         <div className="flex items-center justify-between">
           <p className={SECTION_LABEL}>Sources</p>
           {isEmpty ? (
             <Link
               to="/integrations"
-              className="inline-flex items-center gap-0.5 text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
+              className="inline-flex items-center gap-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
-              <PlusIcon size={11} />
+              <PlusIcon size={12} />
               Connect
             </Link>
           ) : null}
         </div>
         {!isEmpty && files.sources.length > 0 ? (
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
             {files.sources.map((source) => (
-              <span key={source.id} className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground">
+              <span key={source.id} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span
                   className={cn(
-                    "size-[5px] rounded-full",
+                    "size-1.5 rounded-full",
                     source.status === "ok" && "bg-emerald-500",
                     source.status === "syncing" && "bg-amber-500",
                     source.status === "error" && "bg-red-500",
@@ -747,7 +749,7 @@ function FilesCard({ files }: { files: FilesSummary }) {
 
 function FilesEntityRow({ label, count, empty }: { label: string; count: number; empty: boolean }) {
   return (
-    <li className="flex items-center justify-between text-[11.5px]">
+    <li className="flex items-center justify-between text-sm">
       <span className="text-foreground">{label}</span>
       <span className={cn("font-medium tabular-nums", empty && "text-muted-foreground/70")}>{empty ? "—" : count}</span>
     </li>
@@ -760,8 +762,8 @@ function Card({ children, padding = "lg" }: { children: React.ReactNode; padding
   return (
     <section
       className={cn(
-        "flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card",
-        padding === "lg" ? "px-4 py-3.5" : "px-3.5 py-3",
+        "flex h-full min-h-0 flex-col rounded-lg border border-border bg-card",
+        padding === "lg" ? "p-5" : "p-4",
       )}
     >
       {children}
@@ -778,7 +780,7 @@ function SectionHeader({ label, action }: { label: string; action: SectionAction
       {action ? (
         <Link
           to={action.href}
-          className="inline-flex items-center gap-1 text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
         >
           {action.icon}
           {action.label}
