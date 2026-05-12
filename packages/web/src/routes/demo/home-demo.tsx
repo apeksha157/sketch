@@ -425,45 +425,115 @@ const MEMBER_HOME_ACTIVE_UPCOMING: UpcomingRun[] = [
   {
     id: "u1",
     title: "Daily standup digest",
-    target: "#standup",
+    target: "Standup",
     time: "9:00 AM",
-    relativeTime: "tomorrow",
+    relativeTime: "Tomorrow",
+    channel: "slack",
+    href: "/scheduled-tasks",
   },
   {
     id: "u2",
-    title: "Competitive intel sweep",
-    target: "#market-research",
-    time: "2:00 PM",
-    relativeTime: "in 2h",
+    title: "Sales sync recap",
+    target: "Sales team",
+    time: "10:00 AM",
+    relativeTime: "Mon",
+    channel: "whatsapp",
+    href: "/scheduled-tasks",
   },
 ];
 
 const MEMBER_HOME_ACTIVE_RECENT: RecentEvent[] = [
-  { kind: "sketch", id: "r1", title: "Standup digest sent", category: "comms", day: "Today", time: "9:02 AM" },
-  { kind: "sketch", id: "r2", title: "Q2 pipeline summary", category: "reporting", day: "Today", time: "9:15 AM" },
-  { kind: "user", id: "r3", title: "Sarah asked about launch", initials: "SK", day: "Today", time: "8:51 AM" },
   {
-    kind: "scheduled",
+    id: "r1",
+    title: "Standup digest sent",
+    category: "comms",
+    relativeTime: "2h ago",
+    href: "/usage",
+  },
+  {
+    id: "r2",
+    title: "Q2 pipeline summary",
+    category: "reporting",
+    relativeTime: "2h ago",
+    href: "/usage",
+  },
+  {
+    id: "r3",
+    title: "New leads qualified",
+    category: "crm",
+    relativeTime: "3h ago",
+    href: "/usage",
+  },
+  {
     id: "r4",
     title: "Daily forecast digest",
     category: "reporting",
-    day: "Yesterday",
-    time: "8:00 AM",
+    relativeTime: "Yesterday",
+    href: "/usage",
   },
 ];
 
 const MEMBER_HOME_ACTIVE_SKILLS: ActiveSkill[] = [
-  { id: "s1", name: "Standup digest", category: "comms", lastUsedAt: null, lastUsedLabel: "ran 2h ago" },
-  { id: "s2", name: "Lead qualifier", category: "crm", lastUsedAt: null, lastUsedLabel: "ran today" },
-  { id: "s3", name: "Competitive intel", category: "research", lastUsedAt: null, lastUsedLabel: "ran 2d ago" },
+  { id: "s1", name: "Standup digest", category: "comms", lastUsedAt: null, lastUsedLabel: "2h ago", href: "/skills" },
+  { id: "s2", name: "Lead qualifier", category: "crm", lastUsedAt: null, lastUsedLabel: "Today", href: "/skills" },
+  {
+    id: "s3",
+    name: "Competitive intel",
+    category: "research",
+    lastUsedAt: null,
+    lastUsedLabel: "2d ago",
+    href: "/skills",
+  },
 ];
 
-const MEMBER_HOME_EXPLORE: ExploreSuggestion = {
-  id: "e1",
-  name: "Weekly roundup",
-  description: "Digest every Monday morning",
-  href: "/skills",
-};
+/**
+ * Explore mock ordered so the first three slots demonstrate the edge cases:
+ * e1 = typical (2 integrations), e2 = zero integrations (right column collapses,
+ * text takes full row width), e3 = many integrations (+N overflow chip kicks in).
+ * The Empty state shows the top 3 and exercises all three cases at once.
+ */
+const MEMBER_HOME_EXPLORE: ExploreSuggestion[] = [
+  {
+    id: "e1",
+    name: "Weekly roundup",
+    category: "reporting",
+    description: "Catch up on the team's week in one digest",
+    integrations: ["slack", "notion"],
+    href: "/skills",
+  },
+  {
+    id: "e2",
+    name: "Daily focus prompt",
+    category: "ops",
+    description: "A short check-in to start your day with intent",
+    integrations: [],
+    href: "/skills",
+  },
+  {
+    id: "e3",
+    name: "Meeting recap",
+    category: "comms",
+    description: "Auto-summarize calls into team notes",
+    integrations: ["slack", "fireflies", "google_drive", "notion", "linear"],
+    href: "/skills",
+  },
+  {
+    id: "e4",
+    name: "Deal alerts",
+    category: "crm",
+    description: "Get pinged when deals change stage",
+    integrations: ["slack", "linear"],
+    href: "/skills",
+  },
+  {
+    id: "e5",
+    name: "Inbox digest",
+    category: "comms",
+    description: "Surface threads you missed",
+    integrations: ["slack"],
+    href: "/skills",
+  },
+];
 
 const MEMBER_HOME_TEAM_ACTIVE: TeamSummary = {
   totalCount: 8,
@@ -471,9 +541,26 @@ const MEMBER_HOME_TEAM_ACTIVE: TeamSummary = {
   agentCount: 2,
   pendingInvites: 0,
   members: [
-    { id: "m1", initials: "SK", tint: "bg-blue-500/30 text-blue-700 dark:text-blue-200" },
-    { id: "m2", initials: "MJ", tint: "bg-emerald-500/30 text-emerald-700 dark:text-emerald-200" },
-    { id: "m3", initials: "JR", tint: "bg-violet-500/30 text-violet-700 dark:text-violet-200" },
+    {
+      id: "m1",
+      initials: "SK",
+      tint: "bg-blue-500 text-white",
+      imageUrl: "https://i.pravatar.cc/100?img=47",
+    },
+    {
+      id: "m2",
+      initials: "MJ",
+      tint: "bg-emerald-500 text-white",
+      imageUrl: "https://i.pravatar.cc/100?img=12",
+    },
+    { id: "m3", initials: "JR", tint: "bg-violet-500 text-white" },
+    {
+      id: "m4",
+      initials: "AL",
+      tint: "bg-amber-500 text-white",
+      imageUrl: "https://i.pravatar.cc/100?img=32",
+    },
+    { id: "m5", initials: "DN", tint: "bg-rose-500 text-white" },
   ],
 };
 
@@ -482,19 +569,42 @@ const MEMBER_HOME_TEAM_EMPTY: TeamSummary = {
   humanCount: 1,
   agentCount: 0,
   pendingInvites: 0,
-  members: [{ id: "self", initials: "SK", tint: "bg-blue-500/30 text-blue-700 dark:text-blue-200" }],
+  members: [{ id: "self", initials: "SK", tint: "bg-blue-500 text-white" }],
 };
 
 const MEMBER_HOME_INTEGRATIONS_ACTIVE: IntegrationSummary = {
-  totalCount: 5,
-  needsReconnectCount: 1,
+  // High-count Full state — pivots into stat-card layout (drifting glyph bg
+  // + count + status). Providers list expanded with abstract "shape" entries
+  // so the bg has 15 distinct icons to draw from without ever repeating in view.
+  totalCount: 15,
+  needsReconnectCount: 0,
+  skillsPowered: 8,
   providers: [
-    { id: "drive", tint: "bg-blue-500", status: "ok" },
-    { id: "notion", tint: "bg-violet-500", status: "ok" },
-    { id: "slack", tint: "bg-pink-500", status: "ok" },
-    { id: "linear", tint: "bg-indigo-500", status: "ok" },
-    { id: "fireflies", tint: "bg-orange-500", status: "error" },
+    { id: "drive", tint: "bg-[#1a73e8]", status: "ok" },
+    { id: "notion", tint: "bg-[#191919]", status: "ok" },
+    { id: "slack", tint: "bg-[#611f69]", status: "ok" },
+    { id: "linear", tint: "bg-[#5e6ad2]", status: "ok" },
+    { id: "fireflies", tint: "bg-[#ff9500]", status: "ok" },
+    { id: "clickup", tint: "bg-[#7b68ee]", status: "ok" },
+    { id: "whatsapp", tint: "bg-[#25d366]", status: "ok" },
+    { id: "shape-hexagon", tint: "bg-[#e91e63]", status: "ok" },
+    { id: "shape-diamond", tint: "bg-[#9c27b0]", status: "ok" },
+    { id: "shape-triangle", tint: "bg-[#3f51b5]", status: "ok" },
+    { id: "shape-square", tint: "bg-[#00bcd4]", status: "ok" },
+    { id: "shape-plus", tint: "bg-[#009688]", status: "ok" },
+    { id: "shape-star", tint: "bg-[#d97706]", status: "ok" },
+    { id: "shape-pill", tint: "bg-[#795548]", status: "ok" },
+    { id: "shape-ring", tint: "bg-[#0ea5e9]", status: "ok" },
   ],
+};
+
+/** Integrations error variant — one provider needs reconnect. Used on the error route only; Full state never shows error. */
+const MEMBER_HOME_INTEGRATIONS_WITH_ERROR: IntegrationSummary = {
+  ...MEMBER_HOME_INTEGRATIONS_ACTIVE,
+  needsReconnectCount: 1,
+  providers: MEMBER_HOME_INTEGRATIONS_ACTIVE.providers.map((p) =>
+    p.id === "fireflies" ? { ...p, status: "error" } : p,
+  ),
 };
 
 const MEMBER_HOME_INTEGRATIONS_EMPTY: IntegrationSummary = {
@@ -504,17 +614,17 @@ const MEMBER_HOME_INTEGRATIONS_EMPTY: IntegrationSummary = {
 };
 
 const MEMBER_HOME_USAGE_ACTIVE: UsageSummary = {
-  messages: 247,
-  messagesDelta: 12,
-  automations: 32,
-  automationsDelta: 4,
+  creditsTotal: 2500,
+  creditsRemaining: 1253,
+  resetsInDays: 12,
+  breakdown: { messages: 847, automations: 280, toolCalls: 120 },
 };
 
 const MEMBER_HOME_USAGE_EMPTY: UsageSummary = {
-  messages: 0,
-  messagesDelta: 0,
-  automations: 0,
-  automationsDelta: 0,
+  creditsTotal: 2500,
+  creditsRemaining: 2500,
+  resetsInDays: 30,
+  breakdown: { messages: 0, automations: 0, toolCalls: 0 },
 };
 
 const MEMBER_HOME_FILES_ACTIVE: FilesSummary = {
@@ -524,27 +634,20 @@ const MEMBER_HOME_FILES_ACTIVE: FilesSummary = {
     { id: "f2", fileName: "Customer interview notes", source: "Notion", syncedLabel: "today" },
     { id: "f3", fileName: "Pricing model v3", source: "Drive", syncedLabel: "today" },
   ],
-  sources: [
-    { id: "drive", name: "Drive", status: "ok" },
-    { id: "notion", name: "Notion", status: "ok" },
-    { id: "slack", name: "Slack", status: "ok" },
-    { id: "linear", name: "Linear", status: "syncing" },
-    { id: "fireflies", name: "Fireflies", status: "error" },
-  ],
 };
 
 const MEMBER_HOME_FILES_EMPTY: FilesSummary = {
   entityCounts: { people: 0, companies: 0, projects: 0, databases: 0, documents: 0 },
   recentlyIndexed: [],
-  sources: [],
 };
 
 const MEMBER_HOME_ACTIVE_PROPS: HomeMemberPageProps = {
   digest: MEMBER_DIGEST_ACTIVE,
   upcoming: MEMBER_HOME_ACTIVE_UPCOMING,
   recent: MEMBER_HOME_ACTIVE_RECENT,
+  failedRunsCount: 0,
   activeSkills: MEMBER_HOME_ACTIVE_SKILLS,
-  exploreSuggestion: MEMBER_HOME_EXPLORE,
+  exploreSuggestions: MEMBER_HOME_EXPLORE,
   team: MEMBER_HOME_TEAM_ACTIVE,
   integrations: MEMBER_HOME_INTEGRATIONS_ACTIVE,
   usage: MEMBER_HOME_USAGE_ACTIVE,
@@ -555,8 +658,9 @@ const MEMBER_HOME_EMPTY_PROPS: HomeMemberPageProps = {
   digest: MEMBER_DIGEST_NEW,
   upcoming: [],
   recent: [],
+  failedRunsCount: 0,
   activeSkills: [],
-  exploreSuggestion: MEMBER_HOME_EXPLORE,
+  exploreSuggestions: MEMBER_HOME_EXPLORE,
   team: MEMBER_HOME_TEAM_EMPTY,
   integrations: MEMBER_HOME_INTEGRATIONS_EMPTY,
   usage: MEMBER_HOME_USAGE_EMPTY,
@@ -575,4 +679,66 @@ export const homeMemberEmptyRoute = createRoute({
   path: "/home/member-empty",
   beforeLoad: setMemberRole,
   component: () => <HomeMemberPageNew {...MEMBER_HOME_EMPTY_PROPS} />,
+});
+
+/**
+ * Combined error state mock — one Activity run failed and one Skill is broken
+ * because its integration disconnected. Same route (/home/member-error) shows
+ * both card-level error treatments at once so the dashboard's error language
+ * stays consistent across cards.
+ */
+const MEMBER_HOME_ERROR_RECENT: RecentEvent[] = [
+  {
+    id: "r-err",
+    title: "Lead enrichment failed",
+    category: "crm",
+    relativeTime: "1h ago",
+    href: "/usage",
+    error: true,
+  },
+  MEMBER_HOME_ACTIVE_RECENT[0],
+];
+
+const MEMBER_HOME_ACTIVE_SKILLS_WITH_ERROR: ActiveSkill[] = [
+  { ...MEMBER_HOME_ACTIVE_SKILLS[0], error: true, errorIntegration: "slack" },
+  MEMBER_HOME_ACTIVE_SKILLS[1],
+];
+
+export const homeMemberErrorRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-error",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPageNew
+      {...MEMBER_HOME_ACTIVE_PROPS}
+      failedRunsCount={1}
+      recent={MEMBER_HOME_ERROR_RECENT}
+      activeSkills={MEMBER_HOME_ACTIVE_SKILLS_WITH_ERROR}
+      integrations={MEMBER_HOME_INTEGRATIONS_WITH_ERROR}
+    />
+  ),
+});
+
+/**
+ * Sparse state — every card surfaces a reduced count, demonstrating how the
+ * dashboard's row budgets rebalance when content is below default caps.
+ *  - Activity: 1 upcoming + 2 recent
+ *  - Skills: 1 active (renderer expands Explore to 2 to fill the saved space)
+ */
+const MEMBER_HOME_SPARSE_UPCOMING: UpcomingRun[] = MEMBER_HOME_ACTIVE_UPCOMING.slice(0, 1);
+const MEMBER_HOME_SPARSE_RECENT: RecentEvent[] = MEMBER_HOME_ACTIVE_RECENT.slice(0, 2);
+const MEMBER_HOME_SPARSE_SKILLS: ActiveSkill[] = MEMBER_HOME_ACTIVE_SKILLS.slice(0, 1);
+
+export const homeMemberSparseRoute = createRoute({
+  getParentRoute: () => dashboardRoute,
+  path: "/home/member-sparse",
+  beforeLoad: setMemberRole,
+  component: () => (
+    <HomeMemberPageNew
+      {...MEMBER_HOME_ACTIVE_PROPS}
+      upcoming={MEMBER_HOME_SPARSE_UPCOMING}
+      recent={MEMBER_HOME_SPARSE_RECENT}
+      activeSkills={MEMBER_HOME_SPARSE_SKILLS}
+    />
+  ),
 });

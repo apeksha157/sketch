@@ -13,6 +13,7 @@ import {
   homeCompleteRoute,
   homeEmptyRoute,
   homeMemberEmptyRoute,
+  homeMemberErrorRoute,
   homeMemberOldEmptyRoute,
   homeMemberOldEmptyV2Route,
   homeMemberOldErrorsRoute,
@@ -20,6 +21,7 @@ import {
   homeMemberOldRoute,
   homeMemberOldWalkthroughRoute,
   homeMemberRoute,
+  homeMemberSparseRoute,
   homePreviewRoute,
 } from "./routes/demo/home-demo";
 import {
@@ -81,6 +83,8 @@ const routeTree = rootRoute.addChildren([
     homeEmptyRoute,
     homeMemberRoute,
     homeMemberEmptyRoute,
+    homeMemberErrorRoute,
+    homeMemberSparseRoute,
     homeMemberOldRoute,
     homeMemberOldEmptyRoute,
     homeMemberOldEmptyV2Route,

@@ -198,3 +198,16 @@
 .scrollbar-none::-webkit-scrollbar {
   display: none !important;
 }
+
+/* ── Integrations card: slow horizontal drift for floating brand-glyph
+   background. Container is 200% card width with a duplicated set of glyphs;
+   translating -50% lands at the duplicate's start, giving a seamless loop.
+   Linear easing keeps the motion calm and constant. */
+@keyframes driftHorizontal {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
