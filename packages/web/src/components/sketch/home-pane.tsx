@@ -68,15 +68,34 @@ export function HomePane({ firstName, role, teamSize, recents, disabled, celebra
         </div>
       </section>
 
-      {/* Below-the-fold rail — quick-action tiles + recents. Sits 32px under
-       * the chip row so the eye can pick it up without scrolling, even on
-       * laptop viewports. */}
-      <section className="mt-8 flex flex-col gap-7">
+      {/* Below-the-fold rail — labeled sections under the hero. Sits 48px below
+       * the chip row so the section headings get a clear runway and the page
+       * resolves into hero → Quick actions → Recents instead of pill-soup. */}
+      <div className="mt-12 flex flex-col gap-7">
         {celebration && <CelebrationCard onDismiss={celebration.onDismiss} />}
-        <TileGrid tiles={tiles} disabled={disabled} />
+        <QuickActions tiles={tiles} disabled={disabled} />
         <Recents conversations={recents} />
-      </section>
+      </div>
     </div>
+  );
+}
+
+interface QuickActionsProps {
+  tiles: ReturnType<typeof getDefaultTiles>;
+  disabled?: boolean;
+  className?: string;
+}
+
+function QuickActions({ tiles, disabled, className }: QuickActionsProps) {
+  return (
+    <section className={cn("flex flex-col", className)}>
+      <div className="mb-[10px] flex items-baseline justify-between px-[6px]">
+        <h2 className="font-mono text-xs uppercase text-foreground" style={{ letterSpacing: "0.08em" }}>
+          Quick actions
+        </h2>
+      </div>
+      <TileGrid tiles={tiles} disabled={disabled} />
+    </section>
   );
 }
 
