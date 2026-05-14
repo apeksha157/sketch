@@ -113,11 +113,9 @@ function ConversationsPage() {
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
     >
-      <div className="mx-auto w-full max-w-[640px] px-[20px] py-[32px]">
+      <div className="mx-auto w-full max-w-4xl px-10 py-8">
         <div className="mb-[18px] flex items-baseline gap-[10px]">
-          <h1 className="text-[18px] font-medium text-foreground" style={{ letterSpacing: "-0.01em" }}>
-            Conversations
-          </h1>
+          <h1 className="text-xl font-semibold text-foreground">Conversations</h1>
           <span className="text-[12px] text-muted-foreground/65 tabular-nums">{counts.all}</span>
         </div>
 
@@ -170,12 +168,10 @@ function SearchTrigger() {
         /* opens the global ⌘K palette — separate work item */
       }}
       className={cn(
-        "flex w-full items-center gap-[8px] rounded-[10px] border bg-card",
-        "px-[12px] py-[9px] text-left text-[13px] text-muted-foreground/65",
-        "transition-colors duration-100 ease-out cursor-pointer",
-        "border-border hover:bg-accent",
+        "flex w-full items-center gap-[10px] rounded-[6px] bg-muted/40",
+        "px-[12px] py-[9px] text-left text-[13px] text-muted-foreground/75",
+        "transition-colors duration-100 ease-out cursor-pointer hover:bg-muted/70 hover:text-foreground",
       )}
-      style={{ borderWidth: "0.5px" }}
     >
       <SearchIcon size={13} aria-hidden />
       <span className="flex-1">Search conversations…</span>
