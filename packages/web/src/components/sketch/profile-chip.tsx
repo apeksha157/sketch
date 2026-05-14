@@ -86,7 +86,7 @@ export function ProfileChip({
             type="button"
             className={cn(
               "flex w-full items-center rounded-[8px] transition-colors duration-100 ease-out cursor-pointer outline-none",
-              collapsed ? "p-0 justify-center hover:opacity-90" : "px-[6px] py-[6px] gap-[10px] hover:bg-accent",
+              collapsed ? "p-0 justify-center hover:opacity-90" : "px-[8px] py-[8px] gap-[10px] hover:bg-accent",
             )}
             aria-label={`Account menu, signed in as ${name}`}
           >

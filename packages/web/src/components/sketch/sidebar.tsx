@@ -114,25 +114,24 @@ export function SketchSidebar({
         "shrink-0 select-none",
       )}
     >
-      {/* Brand row — Sketch logo + product/org stack + collapse toggle */}
+      {/* Brand row — Sketch logo + org name + collapse toggle */}
       <BrandRow collapsed={collapsed} onToggle={toggle} orgName={orgName} />
 
       {/* Search trigger */}
       <SearchTrigger collapsed={collapsed} onClick={onOpenSearchPalette} onKeyDown={handleSearchKey} />
 
-      {/* Primary nav — Home + middle group rendered as one cohesive list. The
-       * spec separated Home from the others; the existing dashboard reads
-       * better as a single nav, so we tighten the gap to match. */}
-      <div className="flex flex-col gap-px">
+      {/* Primary nav — Home + middle group rendered as one cohesive list. */}
+      <div className="flex flex-col gap-[2px]">
         <NavItem item={{ label: "Home", icon: HomeIcon, href: "/home/default" }} isActive={homeActive} />
         {middleNav.map((item) => (
           <NavItem key={item.href} item={item} isActive={pathname.startsWith(item.href)} />
         ))}
       </div>
 
-      {/* Bottom block — §4.1 step 5 */}
-      <div className="mt-auto flex flex-col">
-        <div className="flex flex-col gap-px">
+      {/* Bottom block — Team + Files separated from the primary nav by a thin
+       * divider so the workspace vs. account groups read as distinct families. */}
+      <div className={cn("mt-auto flex flex-col", collapsed ? "" : "border-t border-border pt-[10px]")}>
+        <div className="flex flex-col gap-[2px]">
           {bottomNav.map((item) => (
             <NavItem key={item.href} item={item} isActive={pathname.startsWith(item.href)} />
           ))}
@@ -162,9 +161,8 @@ export function SketchSidebar({
 }
 
 /**
- * Brand row — real Sketch logo, two-line product/org stack, collapse toggle.
- * The logo image switches between light and dark variants based on the resolved
- * theme so the mark always has the right contrast against the sidebar surface.
+ * Brand row — logo carries the brand; the wordmark gets dropped so the org
+ * name can read at proper presence beside the icon instead of as a footnote.
  */
 function BrandRow({
   collapsed,
@@ -179,13 +177,12 @@ function BrandRow({
   const logoSrc = resolvedTheme === "dark" ? "/logos/sketch-icon-darkmode.png" : "/logos/sketch-icon-lightmode.png";
 
   return (
-    <div className={cn("mb-3 flex items-center", collapsed ? "flex-col gap-3 px-0" : "gap-[10px] px-[6px] py-[4px]")}>
+    <div className={cn("mb-3 flex items-center", collapsed ? "flex-col gap-3 px-0" : "gap-[10px] px-[8px] py-[4px]")}>
       <img src={logoSrc} alt="Sketch" className="h-[28px] w-[28px] shrink-0 select-none" draggable={false} />
       {!collapsed && (
-        <div className="flex min-w-0 flex-1 flex-col leading-none">
-          <span className="text-[13px] font-semibold text-foreground tracking-tight">Sketch</span>
-          <span className="mt-[3px] truncate text-[11px] text-muted-foreground">{orgName}</span>
-        </div>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground tracking-tight">
+          {orgName}
+        </span>
       )}
       <button
         type="button"
@@ -219,9 +216,9 @@ function SearchTrigger({
         onKeyDown={onKeyDown}
         aria-label="Open search palette"
         className={cn(
-          "mb-[18px] flex items-center rounded-[6px] bg-card border border-border text-muted-foreground/65",
-          "transition-colors duration-100 ease-out cursor-pointer",
-          collapsed ? "h-[30px] w-[30px] mx-auto justify-center" : "px-[10px] py-[7px] gap-[8px]",
+          "mb-[10px] flex items-center rounded-[6px] bg-muted/40 text-muted-foreground/75",
+          "transition-colors duration-100 ease-out cursor-pointer hover:bg-muted/70 hover:text-foreground",
+          collapsed ? "h-[30px] w-[30px] mx-auto justify-center" : "px-[8px] py-[7px] gap-[10px]",
         )}
       >
         <SearchIcon size={13} aria-hidden />
@@ -248,12 +245,21 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
         to={item.href}
         className={cn(
           "group relative flex items-center rounded-[6px] transition-colors duration-100 ease-out cursor-pointer",
-          isActive ? "text-foreground font-medium" : "text-muted-foreground font-normal",
-          isActive ? "bg-sidebar-accent" : "hover:bg-accent hover:text-foreground",
+          isActive
+            ? "text-foreground font-medium bg-muted"
+            : "text-muted-foreground font-normal hover:bg-accent hover:text-foreground",
           collapsed ? "h-[30px] w-[30px] mx-auto justify-center" : "px-[8px] py-[7px] gap-[10px] text-[13px]",
         )}
         aria-current={isActive ? "page" : undefined}
       >
+        {/* Brand-yellow left-edge marker for the active page (expanded only —
+         * in collapsed mode the bg fill carries the signal alone). */}
+        {isActive && !collapsed && (
+          <span
+            aria-hidden
+            className="absolute left-[-2px] top-1/2 h-[16px] w-[2px] -translate-y-1/2 rounded-full bg-brand-yellow"
+          />
+        )}
         <span className="relative inline-flex items-center justify-center">
           <Icon size={16} aria-hidden />
           {pulse && collapsed && <RunningPulse className="absolute -top-1 -right-1" />}

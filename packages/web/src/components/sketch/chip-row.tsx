@@ -107,11 +107,12 @@ export function ChipRow({ chips = DEFAULT_CHIPS, onPick, disabled, className }: 
                   "group/chip inline-flex shrink-0 items-center gap-[7px] rounded-full px-[14px] py-[8px]",
                   "bg-card border border-border text-[13px] text-muted-foreground",
                   "transition-colors duration-150 ease-out cursor-pointer",
-                  // Hover: light yellow wash. Same intensity ramp as SKETCH_TILE
-                  // (15% in light, 8% in dark). Border picks up a soft yellow
-                  // edge so the chip reads warm, not just darker.
-                  "hover:bg-[#FEED01]/15 dark:hover:bg-[#FEED01]/[0.08]",
-                  "hover:border-[#FEED01]/40 dark:hover:border-[#FEED01]/25",
+                  // Hover: very light yellow wash — half the intensity of
+                  // SKETCH_TILE so the warmth is a hint, not a flag. The same
+                  // ramp lands on TileGrid items so the page reads as one
+                  // visual family on hover.
+                  "hover:bg-[#FEED01]/[0.08] dark:hover:bg-[#FEED01]/[0.05]",
+                  "hover:border-[#FEED01]/25 dark:hover:border-[#FEED01]/15",
                   "hover:text-foreground",
                   "active:scale-[0.97]",
                 )}
