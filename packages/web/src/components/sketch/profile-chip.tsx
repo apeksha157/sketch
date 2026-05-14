@@ -62,7 +62,7 @@ export function ProfileChip({
   const Avatar = (
     <span
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-full bg-brand-brown text-brand-yellow",
+        "flex shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary",
         collapsed ? "h-[28px] w-[28px]" : "h-[32px] w-[32px]",
       )}
       style={{ fontSize: collapsed ? 11 : 12, fontWeight: 600, lineHeight: 1 }}
@@ -98,7 +98,7 @@ export function ProfileChip({
                     <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
                     {isAdmin && (
                       <span
-                        className="inline-flex shrink-0 items-center rounded-[3px] bg-brand-brown px-[5px] py-[1px] text-[10px] font-semibold text-brand-yellow"
+                        className="inline-flex shrink-0 items-center rounded-[3px] bg-muted px-[5px] py-[1px] text-[10px] font-semibold text-muted-foreground"
                         style={{ letterSpacing: 0 }}
                       >
                         ADMIN
@@ -124,7 +124,7 @@ export function ProfileChip({
               <div className="flex items-center gap-[6px]">
                 <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
                 {isAdmin && (
-                  <span className="inline-flex shrink-0 items-center rounded-[3px] bg-brand-brown px-[5px] py-[1px] text-[10px] font-semibold text-brand-yellow">
+                  <span className="inline-flex shrink-0 items-center rounded-[3px] bg-muted px-[5px] py-[1px] text-[10px] font-semibold text-muted-foreground">
                     ADMIN
                   </span>
                 )}

@@ -106,13 +106,11 @@ export function ChipRow({ chips = DEFAULT_CHIPS, onPick, disabled, className }: 
                 className={cn(
                   "group/chip inline-flex shrink-0 items-center gap-[7px] rounded-full px-[14px] py-[8px]",
                   "bg-card border border-border text-[13px] text-muted-foreground",
-                  "transition-all duration-150 ease-out cursor-pointer",
-                  // Hover gives the chip a soft warm wash — a hint of brand, not
-                  // a saturated pill. Border warms toward yellow, background
-                  // gets a faint cream, text reads foreground.
-                  "hover:text-foreground",
-                  "hover:bg-[color-mix(in_oklch,#FEED01_10%,var(--card))]",
-                  "hover:border-[color-mix(in_oklch,#FEED01_45%,var(--border))]",
+                  "transition-colors duration-150 ease-out cursor-pointer",
+                  // Hover: neutral muted warming — the chip darkens slightly and
+                  // text lifts to foreground. No brand yellow tint; the brand
+                  // identity lives in the surrounding tile icons, not here.
+                  "hover:bg-muted/60 hover:text-foreground hover:border-border",
                   "active:scale-[0.97]",
                 )}
               >

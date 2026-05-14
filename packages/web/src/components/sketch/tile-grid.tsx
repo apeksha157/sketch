@@ -95,18 +95,15 @@ function TileItem({ tile }: { tile: TileDef }) {
   const Inner = (
     <>
       {/*
-       * Icon slot — soft warm wash on hover (not a saturated yellow square).
-       * The dark-icon-on-brand-yellow combo read tacky; this version keeps
-       * the icon the same neutral color and only warms its container with a
-       * faint cream tint so the brand peeks through without shouting.
+       * Icon slot — static SKETCH_TILE treatment carried over from the prior
+       * member home: low-opacity brand-yellow wash with a muted-gold glyph in
+       * light mode (full-yellow glyph in dark). Brand stays present at rest;
+       * hover is neutral on the row, not on the icon.
        */}
       <span
         className={cn(
           "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[8px]",
-          "bg-muted text-muted-foreground",
-          "transition-all duration-200 ease-out",
-          "group-hover:bg-[color-mix(in_oklch,#FEED01_28%,var(--muted))]",
-          "group-hover:text-foreground",
+          "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06] text-[#8B7A00] dark:text-[#FEED01]",
         )}
         aria-hidden
       >
@@ -120,22 +117,15 @@ function TileItem({ tile }: { tile: TileDef }) {
   );
 
   /**
-   * Bento card — horizontal layout (icon left, text right) so each tile reads
-   * as a compact action row instead of a sparse 112px block.
-   *
-   * Hover warms the whole card: a faint cream wash on the background, a
-   * border that shifts toward yellow, and the icon container picks up the
-   * same warmth. That puts brand color across the surface — card + border +
-   * icon — instead of cramming all the yellow into one shouty icon square.
+   * Bento card — horizontal layout (icon left, text right). Hover is a neutral
+   * muted wash on the row (matches /old/home/member's row-hover convention),
+   * not a branded yellow takeover. Brand colour stays anchored in the icon
+   * tile so it reads as part of the resting state, never the alarm.
    */
   const baseClass = cn(
     "group flex items-center gap-[12px] rounded-[10px] bg-card border border-border",
-    "transition-all duration-200 ease-out cursor-pointer text-left",
-    "hover:-translate-y-[1px]",
-    "hover:bg-[color-mix(in_oklch,#FEED01_4%,var(--card))]",
-    "hover:border-[color-mix(in_oklch,#FEED01_50%,var(--border))]",
-    "hover:shadow-[0_4px_14px_-6px_color-mix(in_oklch,#FEED01_35%,transparent)]",
-    "active:translate-y-0 active:shadow-none",
+    "transition-colors duration-150 ease-out cursor-pointer text-left",
+    "hover:bg-muted/40 hover:border-border",
     "px-[14px] py-[12px]",
   );
 

@@ -102,10 +102,9 @@ export const ChatInput = forwardRef<HTMLInputElement, ChatInputProps>(function C
         "transition-all duration-150 ease-out",
         disabled
           ? "border-border opacity-90"
-          : // Focus = clean neutral border + a soft warm drop-shadow that lifts
-            // the surface. No yellow ring fighting a half-tinted border (the
-            // previous combo banded ugly). The warmth sits *under* the card.
-            "border-border hover:border-foreground/25 focus-within:border-foreground/30 focus-within:shadow-[0_6px_24px_-10px_color-mix(in_oklch,#FEED01_55%,transparent)]",
+          : // Focus = neutral border emphasis + a soft neutral drop-shadow. The
+            // brand colour stays on the submit pip, not on the field chrome.
+            "border-border hover:border-foreground/25 focus-within:border-foreground/30 focus-within:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.08)]",
       )}
     >
       <textarea
@@ -184,7 +183,7 @@ function SubmitButton({ disabled, empty, onClick }: { disabled: boolean; empty: 
         // affordance: it tells the user the form is "ready" the moment they
         // type anything.
         ready
-          ? "bg-brand-yellow text-brand-brown shadow-[0_4px_14px_-2px_color-mix(in_oklch,#FEED01_55%,transparent)] hover:scale-[1.04] active:scale-[0.97]"
+          ? "bg-brand-yellow text-brand-brown shadow-[0_4px_14px_-2px_rgba(254,237,1,0.45)] hover:scale-[1.04] active:scale-[0.97]"
           : "bg-muted text-muted-foreground/70 cursor-not-allowed",
       )}
     >
