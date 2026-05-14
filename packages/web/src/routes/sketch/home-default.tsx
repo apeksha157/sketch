@@ -26,7 +26,7 @@ function HomeDefaultPage() {
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
     >
-      <HomePane firstName={firstNameOf(auth)} role={auth.role} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
+      <HomePane firstName={firstNameOf(auth)} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
     </SketchShell>
   );
 }

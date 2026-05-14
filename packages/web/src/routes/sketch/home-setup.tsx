@@ -44,7 +44,6 @@ function HomeSetupPage() {
           "no conversations yet" empty state on step 1. */}
       <HomePane
         firstName={firstNameOf(auth)}
-        role={auth.role}
         recents={step >= 3 ? MOCK_RECENTS.slice(0, 2) : []}
         onSubmit={handleSubmit}
       />

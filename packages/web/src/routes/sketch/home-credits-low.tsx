@@ -38,7 +38,7 @@ function HomeCreditsLowPage() {
         />
       }
     >
-      <HomePane firstName={firstNameOf(auth)} role={auth.role} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
+      <HomePane firstName={firstNameOf(auth)} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
     </SketchShell>
   );
 }

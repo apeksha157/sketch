@@ -29,7 +29,7 @@ function HomePaymentLapsedPage() {
         />
       }
     >
-      <HomePane firstName={firstNameOf(auth)} role={auth.role} recents={MOCK_RECENTS} disabled />
+      <HomePane firstName={firstNameOf(auth)} recents={MOCK_RECENTS} disabled />
     </SketchShell>
   );
 }

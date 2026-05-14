@@ -34,7 +34,6 @@ function HomeCelebrationPage() {
     >
       <HomePane
         firstName={firstNameOf(auth)}
-        role={auth.role}
         recents={MOCK_RECENTS}
         onSubmit={handleSubmit}
         celebration={dismissed ? undefined : { onDismiss: () => setDismissed(true) }}

@@ -107,10 +107,12 @@ export function ChipRow({ chips = DEFAULT_CHIPS, onPick, disabled, className }: 
                   "group/chip inline-flex shrink-0 items-center gap-[7px] rounded-full px-[14px] py-[8px]",
                   "bg-card border border-border text-[13px] text-muted-foreground",
                   "transition-colors duration-150 ease-out cursor-pointer",
-                  // Hover: neutral muted warming — the chip darkens slightly and
-                  // text lifts to foreground. No brand yellow tint; the brand
-                  // identity lives in the surrounding tile icons, not here.
-                  "hover:bg-muted/60 hover:text-foreground hover:border-border",
+                  // Hover: light yellow wash. Same intensity ramp as SKETCH_TILE
+                  // (15% in light, 8% in dark). Border picks up a soft yellow
+                  // edge so the chip reads warm, not just darker.
+                  "hover:bg-[#FEED01]/15 dark:hover:bg-[#FEED01]/[0.08]",
+                  "hover:border-[#FEED01]/40 dark:hover:border-[#FEED01]/25",
+                  "hover:text-foreground",
                   "active:scale-[0.97]",
                 )}
               >

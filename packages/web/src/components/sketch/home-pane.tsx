@@ -10,21 +10,22 @@ import { CelebrationCard } from "@/components/sketch/celebration-card";
 import { ChatInput, type ChatInputProps } from "@/components/sketch/chat-input";
 import { ChipRow, type ChipSuggestion } from "@/components/sketch/chip-row";
 import { ConversationRow, type ConversationRowProps } from "@/components/sketch/conversation-row";
-import { Greeting } from "@/components/sketch/greeting";
 import { TileGrid, getDefaultTiles } from "@/components/sketch/tile-grid";
+import { GreetingBar, type HomeDigest } from "@/routes/home";
+import { MOCK_DIGEST } from "@/routes/sketch/mock-data";
 import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
 export interface HomePaneProps {
   firstName: string;
-  /** User role — feeds the Greeting variety pool (admin/member designations). */
-  role?: "admin" | "member";
   /** Total people on the workspace. <=1 means solo — surfaces "Invite a
    * teammate" in the tile grid; >=2 swaps that slot for an integration prompt. */
   teamSize?: number;
   /** Recent conversations, capped to 5 in the recents section (§5.2). */
   recents: ConversationRowProps[];
+  /** Drives the rotating digest-aware subtitle under the greeting. */
+  digest?: HomeDigest;
   /** Disables input + chips + tiles for paused states (§5.7). */
   disabled?: boolean;
   /** Renders the celebration card between chip row and tile grid (§5.10). */
@@ -36,16 +37,16 @@ export interface HomePaneProps {
 }
 
 /**
- * Wrapper sizing copied verbatim from /old/home/member's container so the new
- * and old surfaces share the same content rhythm:
- *   mx-auto max-w-4xl px-10 py-5  ── 896px max, 40px gutters, 20px top/bottom.
+ * Wrapper sizing matches the other dashboard pages exactly (skills, plans,
+ * etc.): mx-auto max-w-4xl px-10 py-8 — so the greeting sits at the same
+ * vertical position as every other page's header.
  *
- * Vertical rhythm: hero (greeting + input + chips) flows naturally from the top
- * with a `pt-14` runway, then a single `mt-8` step into the below-fold rail.
- * No `min-h-[Nvh]` + `justify-center` — that pattern leaves the chat input
- * floating in dead space on tall viewports.
+ * Vertical rhythm: hero (greeting + input + chips) → consistent 28px gap into
+ * each labelled section. Quick actions and Recents share the same gap above
+ * them so the page reads as two parallel sections, not a hero with a special
+ * Quick actions break.
  */
-export function HomePane({ firstName, role, teamSize, recents, disabled, celebration, onSubmit }: HomePaneProps) {
+export function HomePane({ firstName, teamSize, recents, digest, disabled, celebration, onSubmit }: HomePaneProps) {
   const tiles = getDefaultTiles(teamSize);
   const inputRef = useRef<HTMLInputElement>(null);
   const [prefill, setPrefill] = useState<string>("");
@@ -56,22 +57,20 @@ export function HomePane({ firstName, role, teamSize, recents, disabled, celebra
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-10 pt-14 pb-10">
-      {/* Hero — greeting + chat input + chip row. Flows from the top of the
-       * content column; the pt-14 above gives it a comfortable runway without
-       * pushing tiles below the fold. */}
+    <div className="mx-auto w-full max-w-4xl px-10 py-8">
+      {/* Hero — greeting + chat input + chip row. */}
       <section className="flex flex-col">
-        <Greeting firstName={firstName} role={role} />
+        <GreetingBar firstName={firstName} digest={digest ?? MOCK_DIGEST} />
         <div className="mt-7 flex flex-col gap-3">
           <ChatInput ref={inputRef} key={prefill} initialValue={prefill} disabled={disabled} onSubmit={onSubmit} />
           <ChipRow onPick={handleChip} disabled={disabled} />
         </div>
       </section>
 
-      {/* Below-the-fold rail — labeled sections under the hero. Sits 48px below
-       * the chip row so the section headings get a clear runway and the page
-       * resolves into hero → Quick actions → Recents instead of pill-soup. */}
-      <div className="mt-12 flex flex-col gap-7">
+      {/* Below-the-fold rail — labelled sections under the hero. Same 28px gap
+       * above each section (Quick actions and Recents) so the rhythm is
+       * uniform; the section headings themselves carry the separation. */}
+      <div className="mt-7 flex flex-col gap-7">
         {celebration && <CelebrationCard onDismiss={celebration.onDismiss} />}
         <QuickActions tiles={tiles} disabled={disabled} />
         <Recents conversations={recents} />

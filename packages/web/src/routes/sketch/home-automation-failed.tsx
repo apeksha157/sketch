@@ -35,7 +35,7 @@ function HomeAutomationFailedPage() {
       credits={MOCK_CREDITS}
       navState={{ "/scheduled-tasks": { badgeCount: 2 } }}
     >
-      <HomePane firstName={firstNameOf(auth)} role={auth.role} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
+      <HomePane firstName={firstNameOf(auth)} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
       {toastOpen && (
         <ToastStack>
           <Toast

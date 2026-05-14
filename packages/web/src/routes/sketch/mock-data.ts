@@ -6,6 +6,7 @@
  * (§4.7) produces realistic output regardless of when the demo is opened.
  */
 import type { ConversationRowProps } from "@/components/sketch/conversation-row";
+import type { HomeDigest } from "@/routes/home";
 
 function isoMinutesAgo(min: number): string {
   return new Date(Date.now() - min * 60_000).toISOString();
@@ -114,6 +115,16 @@ export const MOCK_ALL_CONVERSATIONS: ConversationRowProps[] = [
     occurredAt: isoDaysAgo(30),
   },
 ];
+
+/** Drives the digest-aware subtitle under the greeting (mirrors /home). */
+export const MOCK_DIGEST: HomeDigest = {
+  daysActive: 30,
+  tasksRanToday: 3,
+  nextScheduledLabel: "5:00 PM",
+  hoursSavedThisWeek: 2,
+  runningNow: 1,
+  scheduledToday: 2,
+};
 
 export const MOCK_CREDITS = {
   count: 1240,
