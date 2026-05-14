@@ -10,6 +10,6 @@ export const indexRoute = createRoute({
     if (!status.completed) {
       throw redirect({ to: "/onboarding" });
     }
-    throw redirect({ to: "/home" });
+    throw redirect({ to: "/home/default" });
   },
 });

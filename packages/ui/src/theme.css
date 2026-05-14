@@ -43,6 +43,13 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Sketch brand pair (absolute — does not vary by mode) + success dot. All
+   * other surface/text/border colors come from the shadcn tokens above so the
+   * new pages share the same palette as /old/home/member. */
+  --color-brand-yellow: var(--brand-yellow);
+  --color-brand-brown: var(--brand-brown);
+  --color-success-dot: var(--success-dot);
 }
 
 :root {
@@ -82,6 +89,11 @@
   --sidebar-accent-foreground: oklch(0.489 0.103 103.3);
   --sidebar-border: oklch(0.918 0.003 107.1);
   --sidebar-ring: oklch(0.489 0.103 103.3);
+
+  /* Sketch brand pair (absolute) + success-dot color used by §4.13 indicators. */
+  --brand-yellow: #feed01;
+  --brand-brown: #412402;
+  --success-dot: #97c459;
 }
 
 .dark {
@@ -120,4 +132,76 @@
   --sidebar-accent-foreground: oklch(0.93 0.196 104.3);
   --sidebar-border: oklch(0.209 0 0);
   --sidebar-ring: oklch(0.93 0.196 104.3);
+
+  /* Sketch v1 tokens inherit from the shadcn vars defined above — no overrides
+   * needed here because the aliases in :root will resolve through these dark
+   * values automatically. */
+}
+
+/* Sketch v1 motion (§3.6).
+ * - sketch-pulse: 1.4s loop on the Scheduled tasks running indicator.
+ * - sketch-banner-in / sketch-celebration-in: enter animations for banners
+ *   and the celebration card.
+ * All collapse to no-op when the user prefers reduced motion.
+ */
+@keyframes sketch-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.78);
+  }
+}
+@keyframes sketch-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sketch-celebration-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes sketch-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Scroll containers that should hide their scrollbar (§4.5 chip row). */
+.sketch-scrollbar-hide {
+  scrollbar-width: none;
+}
+.sketch-scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Pulse becomes a static yellow dot; banner/toast simply fade in place. */
+  .sketch-pulse {
+    animation: none !important;
+  }
+  .sketch-banner-in,
+  .sketch-celebration-in,
+  .sketch-toast-in {
+    animation: none !important;
+  }
 }

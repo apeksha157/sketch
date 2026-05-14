@@ -70,6 +70,19 @@ import {
   plansTrialUrgencyRoute,
 } from "./routes/plans";
 import { rootRoute } from "./routes/root";
+import { chatRoute } from "./routes/sketch/chat";
+import { conversationsRoute } from "./routes/sketch/conversations";
+import { homeAutomationFailedRoute } from "./routes/sketch/home-automation-failed";
+import { homeCelebrationRoute } from "./routes/sketch/home-celebration";
+import { homeChannelDisconnectedRoute } from "./routes/sketch/home-channel-disconnected";
+import { homeCreditsLowRoute } from "./routes/sketch/home-credits-low";
+import { homeDefaultRoute } from "./routes/sketch/home-default";
+import { homeDefaultCollapsedRoute } from "./routes/sketch/home-default-collapsed";
+import { homePaymentLapsedRoute } from "./routes/sketch/home-payment-lapsed";
+import { homeSetupRoute } from "./routes/sketch/home-setup";
+import { homeTrialExpiredRoute } from "./routes/sketch/home-trial-expired";
+import { homeWorkspacePausedRoute } from "./routes/sketch/home-workspace-paused";
+import { sketchRoute } from "./routes/sketch/route";
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
@@ -137,6 +150,21 @@ const routeTree = rootRoute.addChildren([
     plansPromoExpiringBizRoute,
     plansTrialCelebrationRoute,
     plansTrialUrgencyRoute,
+  ]),
+  // ── Sketch v1 spec routes (the new primary surface) ────────────────────────
+  sketchRoute.addChildren([
+    homeSetupRoute,
+    homeDefaultRoute,
+    homeChannelDisconnectedRoute,
+    homeAutomationFailedRoute,
+    homeCreditsLowRoute,
+    homeTrialExpiredRoute,
+    homePaymentLapsedRoute,
+    homeWorkspacePausedRoute,
+    homeCelebrationRoute,
+    homeDefaultCollapsedRoute,
+    chatRoute,
+    conversationsRoute,
   ]),
 ]);
 

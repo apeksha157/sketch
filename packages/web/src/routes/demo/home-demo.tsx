@@ -257,14 +257,14 @@ const MEMBER_DIGEST_NEW = {
 
 export const homePreviewRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home",
+  path: "/old/home",
   beforeLoad: hideTrialBanner,
   component: () => <HomeMemberPageNew {...MEMBER_HOME_ACTIVE_PROPS} />,
 });
 
 export const homeAdminLegacyRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/admin-legacy",
+  path: "/old/home/admin-legacy",
   beforeLoad: hideTrialBanner,
   component: () => (
     <HomePage
@@ -284,14 +284,14 @@ export const homeAdminLegacyRoute = createRoute({
 
 export const homeEmptyRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/empty",
+  path: "/old/home/empty",
   beforeLoad: hideTrialBanner,
   component: () => <HomeMemberPageNew {...MEMBER_HOME_EMPTY_PROPS} />,
 });
 
 export const homeCompleteRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/complete",
+  path: "/old/home/complete",
   beforeLoad: hideTrialBanner,
   component: () => (
     <HomePage
@@ -313,7 +313,7 @@ export const homeCompleteRoute = createRoute({
 
 export const homeMemberOldRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-old",
+  path: "/old/home/member-old",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageOld
@@ -329,7 +329,7 @@ export const homeMemberOldRoute = createRoute({
 
 export const homeMemberOldEmptyRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-old-empty",
+  path: "/old/home/member-old-empty",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageOld
@@ -345,7 +345,7 @@ export const homeMemberOldEmptyRoute = createRoute({
 
 export const homeMemberOldEmptyV2Route = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-old-empty-v2",
+  path: "/old/home/member-old-empty-v2",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageOld
@@ -380,14 +380,14 @@ function HomeMemberOldWalkthrough() {
 
 export const homeMemberOldWalkthroughRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-old-walkthrough",
+  path: "/old/home/member-old-walkthrough",
   beforeLoad: setMemberRole,
   component: HomeMemberOldWalkthrough,
 });
 
 export const homeMemberOldErrorsRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-old-errors",
+  path: "/old/home/member-old-errors",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageOld
@@ -404,7 +404,7 @@ export const homeMemberOldErrorsRoute = createRoute({
 
 export const homeMemberOldIterationARoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-old-iteration-a",
+  path: "/old/home/member-old-iteration-a",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageOld
@@ -669,14 +669,14 @@ const MEMBER_HOME_EMPTY_PROPS: HomeMemberPageProps = {
 
 export const homeMemberRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member",
+  path: "/old/home/member",
   beforeLoad: setMemberRole,
   component: () => <HomeMemberPageNew {...MEMBER_HOME_ACTIVE_PROPS} />,
 });
 
 export const homeMemberEmptyRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-empty",
+  path: "/old/home/member-empty",
   beforeLoad: setMemberRole,
   component: () => <HomeMemberPageNew {...MEMBER_HOME_EMPTY_PROPS} />,
 });
@@ -706,7 +706,7 @@ const MEMBER_HOME_ACTIVE_SKILLS_WITH_ERROR: ActiveSkill[] = [
 
 export const homeMemberErrorRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-error",
+  path: "/old/home/member-error",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageNew
@@ -731,7 +731,7 @@ const MEMBER_HOME_SPARSE_SKILLS: ActiveSkill[] = MEMBER_HOME_ACTIVE_SKILLS.slice
 
 export const homeMemberSparseRoute = createRoute({
   getParentRoute: () => dashboardRoute,
-  path: "/home/member-sparse",
+  path: "/old/home/member-sparse",
   beforeLoad: setMemberRole,
   component: () => (
     <HomeMemberPageNew

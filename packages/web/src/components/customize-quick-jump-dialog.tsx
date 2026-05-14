@@ -20,7 +20,7 @@ import { useEffect, useState } from "react";
 
 const MAX_SHORTCUTS = 4;
 /** Routes excluded from the picker — you can't shortcut to a page you're already on. */
-const HIDDEN_HREFS = new Set(["/home"]);
+const HIDDEN_HREFS = new Set(["/old/home"]);
 
 export function CustomizeQuickJumpDialog({
   open,

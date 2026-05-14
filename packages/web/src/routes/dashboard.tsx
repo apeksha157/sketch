@@ -1,66 +1,12 @@
-import { AppSidebar } from "@/components/app-sidebar";
+import { SketchSidebar } from "@/components/sketch/sidebar";
+import { SidebarStateProvider } from "@/components/sketch/sidebar-context";
 import { TrialBanner, TrialTicker } from "@/components/trial-banner";
-import { api } from "@/lib/api";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "@sketch/ui/components/sidebar";
+import { type AuthContext, checkAuth } from "@/lib/auth";
+import { MOCK_CREDITS } from "@/routes/sketch/mock-data";
 import { Outlet, createRoute, useLocation, useRouteContext } from "@tanstack/react-router";
 import { rootRoute } from "./root";
 
-export interface AuthContext {
-  role: "admin" | "member";
-  email?: string;
-  userId?: string;
-  name?: string;
-  displayName: string;
-  displayIdentifier: string;
-}
-
-const MOCK_ADMIN: AuthContext = {
-  role: "admin",
-  displayName: "Apeksha",
-  displayIdentifier: "ops@canvasx.ai",
-};
-
-const MOCK_MEMBER: AuthContext = {
-  role: "member",
-  displayName: "Sarah Kim",
-  displayIdentifier: "sarah@acme.com",
-};
-
-/** Returns mock auth context based on ?role= query param (defaults to admin). */
-function getMockAuth(): AuthContext {
-  const role = new URLSearchParams(window.location.search).get("role");
-  return role === "member" ? MOCK_MEMBER : MOCK_ADMIN;
-}
-
-/**
- * Auth guard: tries real auth, falls back to mock admin context.
- * Every route works without login — mock context enables design/demo access.
- */
-async function checkAuth(): Promise<{ auth: AuthContext }> {
-  try {
-    const status = await api.setup.status();
-    if (!status.completed) return { auth: getMockAuth() };
-
-    const session = await api.auth.session();
-    if (!session.authenticated) return { auth: getMockAuth() };
-
-    const role = session.role ?? "admin";
-
-    return {
-      auth: {
-        role,
-        email: session.email,
-        userId: session.userId,
-        name: session.name,
-        displayName: session.name ?? (role === "admin" ? "Admin" : "Member"),
-        displayIdentifier: session.email ?? session.name ?? "User",
-      },
-    };
-  } catch {
-    // API unreachable — fall back to mock context
-    return { auth: getMockAuth() };
-  }
-}
+export type { AuthContext };
 
 export function useDashboardAuth(): AuthContext {
   const { auth } = useRouteContext({ from: dashboardRoute.id }) as { auth: AuthContext };
@@ -76,25 +22,47 @@ export const dashboardRoute = createRoute({
   component: DashboardLayout,
 });
 
+/**
+ * Dashboard layout — wraps every legacy route (/old/* and the surviving non-spec
+ * routes like /channels, /skills, /team) in the same SketchSidebar that the new
+ * spec routes use. Single sidebar across the whole product.
+ *
+ * The plans page keeps its trial banner; everything else just gets the ticker
+ * inline at the top of the main pane.
+ */
 function DashboardLayout() {
   const auth = useDashboardAuth();
   const location = useLocation();
   const isPlansPage = location.pathname === "/plans" || location.pathname.startsWith("/plans/");
 
   return (
-    <SidebarProvider>
-      <AppSidebar displayName={auth.displayName} displayIdentifier={auth.displayIdentifier} role={auth.role} />
-      <SidebarInset>
-        {/* Sticky top bar — sidebar trigger + ticker (hidden on plans) */}
-        <div className="sticky top-0 z-20 flex items-center gap-3 bg-background px-3 py-2">
-          <SidebarTrigger />
-          {!isPlansPage && <TrialTicker />}
-        </div>
-        <main className="flex-1 overflow-auto">
-          {isPlansPage && <TrialBanner />}
-          <Outlet />
+    <SidebarStateProvider>
+      <div className="flex h-screen w-full bg-background text-foreground">
+        <SketchSidebar
+          profile={{
+            name: auth.displayName,
+            isAdmin: auth.role === "admin",
+            identifier: auth.displayIdentifier,
+          }}
+          orgName={auth.orgName}
+          credits={MOCK_CREDITS}
+        />
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          {!isPlansPage && (
+            <div className="sticky top-0 z-20 bg-background px-3 py-2">
+              <TrialTicker />
+            </div>
+          )}
+          {/* Block-mode scroll container — using `flex flex-col` here makes
+           * children with `mx-auto` shrink to content width. Routing back to a
+           * normal block lets the existing page wrappers (max-w-4xl mx-auto)
+           * fill the available column. */}
+          <div className="relative min-h-0 flex-1 overflow-y-auto">
+            {isPlansPage && <TrialBanner />}
+            <Outlet />
+          </div>
         </main>
-      </SidebarInset>
-    </SidebarProvider>
+      </div>
+    </SidebarStateProvider>
   );
 }

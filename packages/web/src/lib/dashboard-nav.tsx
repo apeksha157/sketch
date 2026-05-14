@@ -28,7 +28,7 @@ export interface NavItem {
  */
 export function getDashboardNav(iconSize = 18): NavItem[] {
   return [
-    { label: "Home", icon: <HouseIcon size={iconSize} />, href: "/home" },
+    { label: "Home", icon: <HouseIcon size={iconSize} />, href: "/old/home" },
     { label: "Channels", icon: <ChatCircleIcon size={iconSize} />, href: "/channels" },
     { label: "Files", icon: <FolderSimpleIcon size={iconSize} />, href: "/files" },
     { label: "Team", icon: <UsersThreeIcon size={iconSize} />, href: "/team" },

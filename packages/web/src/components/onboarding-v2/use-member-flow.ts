@@ -16,7 +16,7 @@ interface MemberState {
   adminEmail: string | null;
 }
 
-const REDIRECT_TARGET = "/home";
+const REDIRECT_TARGET = "/home/default";
 
 /** Member onboarding flow: auth → detection → (Slack: redirect) | (Google: ask WhatsApp → redirect). */
 export function useMemberFlow() {
