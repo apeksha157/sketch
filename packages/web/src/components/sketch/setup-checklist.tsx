@@ -112,33 +112,33 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
        * do next" without taking vertical space. */}
       <div className="mt-[22px] border-t border-border" />
 
-      {/* Active-step block — form-footer pattern.
-       *
-       * Description sits on its own row, full width, proper line length.
-       * CTA button sits on its own row below, right-aligned. No competing
-       * h3 heading — the stepper above already communicates which step
-       * is current, so a separate title would be redundant noise.
-       */}
-      <div className="mt-[18px]">
-        <p className="text-[14px] text-foreground leading-[1.55]">{currentDef.description}</p>
-        <div className="mt-[14px] flex justify-end">
-          <button
-            type="button"
-            onClick={onAdvance}
-            className={cn(
-              "inline-flex items-center gap-[6px] rounded-[6px]",
-              "bg-foreground text-background px-[14px] py-[8px] text-[13px] font-medium",
-              "transition-all duration-100 ease-out cursor-pointer",
-              "hover:bg-foreground/90 active:scale-[0.98]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-            )}
-            aria-label={`${currentDef.cta}: ${currentDef.label}`}
-          >
-            <span>{currentDef.cta}</span>
-            <ArrowRightIcon size={13} aria-hidden className="text-brand-yellow" />
-          </button>
-        </div>
-      </div>
+      {/* Active-step row — Stripe / Linear pattern: the whole bottom row is
+       * the interactive element, not a card-with-a-button-inside. Eliminates
+       * the wasted middle space that happens when a short description sits
+       * on the left and a small button sits on the right with a void
+       * between them. Description fills the row; the action label + arrow
+       * sit inline-link style at the end. Hover lights the whole row. */}
+      <button
+        type="button"
+        onClick={onAdvance}
+        className={cn(
+          "group/cta mt-[14px] flex w-full items-center justify-between gap-[20px] rounded-[8px]",
+          "-mx-[8px] px-[10px] py-[10px] text-left",
+          "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/[0.04]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/25",
+        )}
+        aria-label={`${currentDef.cta}: ${currentDef.label}`}
+      >
+        <p className="min-w-0 flex-1 text-[14px] text-foreground leading-[1.5]">{currentDef.description}</p>
+        <span className="shrink-0 inline-flex items-center gap-[6px] text-[13px] font-medium text-foreground">
+          <span>{currentDef.cta}</span>
+          <ArrowRightIcon
+            size={14}
+            aria-hidden
+            className="text-brand-yellow transition-transform duration-150 ease-out group-hover/cta:translate-x-[2px]"
+          />
+        </span>
+      </button>
     </section>
   );
 }
