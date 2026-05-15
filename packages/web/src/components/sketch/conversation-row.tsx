@@ -19,7 +19,6 @@
  * One scale, monotonic, no special-cased yesterday-with-time.
  */
 import { BrowserIcon, SlackBrandIcon, WhatsappBrandIcon } from "@/components/sketch/icons";
-import { SuccessDot } from "@/components/sketch/status-indicators";
 import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 
@@ -31,8 +30,6 @@ export interface ConversationRowProps {
   channel: ConversationChannel;
   /** ISO timestamp of the latest activity. */
   occurredAt: string;
-  /** Optional success indicator — a green dot before the timestamp. */
-  ranSuccessfully?: boolean;
   /** Override for testing the relative time output. */
   now?: Date;
 }
@@ -69,7 +66,7 @@ export function formatRelative(occurredAt: string, now: Date = new Date()): stri
     : `${MONTH_NAMES[then.getMonth()]} ${then.getFullYear()}`;
 }
 
-export function ConversationRow({ id, title, channel, occurredAt, ranSuccessfully, now }: ConversationRowProps) {
+export function ConversationRow({ id, title, channel, occurredAt, now }: ConversationRowProps) {
   const ChannelIcon = CHANNEL_ICON[channel];
   return (
     <Link
@@ -85,7 +82,6 @@ export function ConversationRow({ id, title, channel, occurredAt, ranSuccessfull
         <ChannelIcon size={16} weight="regular" aria-label={CHANNEL_LABEL[channel]} />
       </span>
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{title}</span>
-      {ranSuccessfully && <SuccessDot />}
       <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatRelative(occurredAt, now)}</span>
     </Link>
   );

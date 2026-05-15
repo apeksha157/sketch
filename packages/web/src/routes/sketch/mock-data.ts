@@ -45,7 +45,6 @@ export const MOCK_RECENTS: ConversationRowProps[] = [
     title: "Weekly standup digest",
     channel: "slack",
     occurredAt: isoHoursAgo(20),
-    ranSuccessfully: true,
   },
   {
     id: "c-004",
@@ -81,7 +80,6 @@ export const MOCK_ALL_CONVERSATIONS: ConversationRowProps[] = [
     title: "Slack digest posted",
     channel: "slack",
     occurredAt: isoDaysAgo(4),
-    ranSuccessfully: true,
   },
   {
     id: "c-009",
@@ -100,7 +98,6 @@ export const MOCK_ALL_CONVERSATIONS: ConversationRowProps[] = [
     title: "Competitive intel: 3 competitors",
     channel: "web",
     occurredAt: isoDaysAgo(14),
-    ranSuccessfully: true,
   },
   {
     id: "c-012",

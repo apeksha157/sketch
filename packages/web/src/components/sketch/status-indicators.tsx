@@ -3,8 +3,6 @@
  *
  * - NavBadge: red count chip used inside sidebar nav items when a section needs
  *   attention (disconnected channels, failed automations, etc.).
- * - SuccessDot: green dot used inline on a conversation row when an automation
- *   run succeeded. The only place green appears in the system.
  * - RunningPulse: yellow pulsing dot with halo, used on the Scheduled tasks
  *   icon when a run is currently executing. Animation is the 1.4s loop spec'd
  *   in §3.6 and collapses to a static dot under prefers-reduced-motion.
@@ -23,16 +21,6 @@ export function NavBadge({ count, className }: { count: number; className?: stri
     >
       {count}
     </span>
-  );
-}
-
-export function SuccessDot({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn("inline-block h-[5px] w-[5px] shrink-0 rounded-full bg-success-dot", className)}
-      role="img"
-      aria-label="Ran successfully"
-    />
   );
 }
 
