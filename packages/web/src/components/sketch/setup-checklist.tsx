@@ -133,14 +133,13 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
             onClick={onAdvance}
             className={cn(
               "shrink-0 inline-flex items-center gap-[6px] rounded-[6px]",
-              // Brand-brown bg with near-white text + a brand-yellow arrow
-              // accent. Keeps the button on-brand (the brown is unmistakably
-              // Sketch) while reading as a clean modern primary action —
-              // not the saturated brown-on-yellow combo that read kitsch.
-              "bg-brand-brown text-background px-[14px] py-[8px] text-[13px] font-medium",
+              // Neutral dark primary with a brand-yellow arrow accent — the
+              // arrow is the brand wink, the button itself stays clean and
+              // legible.
+              "bg-foreground text-background px-[14px] py-[8px] text-[13px] font-medium",
               "transition-all duration-100 ease-out cursor-pointer",
-              "hover:bg-brand-brown/90 active:scale-[0.98]",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+              "hover:bg-foreground/90 active:scale-[0.98]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
             )}
             aria-label={`${currentDef.cta}: ${currentDef.label}`}
           >
@@ -207,9 +206,9 @@ function ConnectorSegment({ visible, filled }: { visible: boolean; filled: boole
       className={cn(
         "h-[2px] flex-1 rounded-full",
         !visible && "bg-transparent",
-        // Completed segments use brand-brown — visible against the white card
-        // and gives the page a clear branded progression trail.
-        visible && filled && "bg-brand-brown",
+        // Neutral dark for the completed trail — the brand identity in the
+        // stepper lives on the circles (yellow current + yellow checks).
+        visible && filled && "bg-foreground/40",
         visible && !filled && "bg-foreground/12",
       )}
     />
@@ -226,14 +225,13 @@ function StatusCircle({
       className={cn(
         "flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        // Completed: brand pair in normal orientation. Brown bg with yellow
-        // check reads as "Sketch did this," and matches the brown connector
-        // trail behind it.
-        completed && "bg-brand-brown text-brand-yellow",
-        // Current: inverted brand pair so the active step pops against the
-        // white card. The brown ring gives the yellow circle an outline so
-        // it doesn't dissolve into the page background.
-        current && "bg-brand-yellow text-brand-brown ring-2 ring-brand-brown ring-offset-2 ring-offset-card",
+        // Completed: neutral dark fill with a brand-yellow check — the
+        // check is the only brand accent on each completed step.
+        completed && "bg-foreground/70 text-brand-yellow",
+        // Current: brand-yellow fill with dark text + a neutral foreground
+        // ring so the yellow circle doesn't dissolve into the white card.
+        // This is the page's brightest brand spot — the "you are here."
+        current && "bg-brand-yellow text-foreground ring-2 ring-foreground/30 ring-offset-2 ring-offset-card",
         !completed && !current && "border-[1.5px] border-foreground/20 bg-card text-foreground/35",
       )}
       aria-hidden
