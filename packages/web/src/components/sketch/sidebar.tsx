@@ -22,6 +22,7 @@ import {
 } from "@/components/sketch/icons";
 import { ProfileChip, type ProfileChipProps } from "@/components/sketch/profile-chip";
 import { useSidebarState } from "@/components/sketch/sidebar-context";
+import { SidebarSetupNudge, type SidebarSetupNudgeProps } from "@/components/sketch/sidebar-setup-nudge";
 import { NavBadge, RunningPulse } from "@/components/sketch/status-indicators";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import { useTheme } from "@sketch/ui/hooks/use-theme";
@@ -66,6 +67,13 @@ export interface SketchSidebarProps {
   credits?: CreditsCardProps;
   /** When true, the credits card slot is replaced with a "Account paused" line (§5.7). */
   paused?: boolean;
+  /**
+   * Optional setup-progress nudge. Shown above the credits/profile area while
+   * setup is in progress so the affordance persists across every route — even
+   * after the user dismisses the top banner / inline home card. Mutually
+   * exclusive with `credits`: setup completion is what makes credits visible.
+   */
+  setupNudge?: SidebarSetupNudgeProps;
   /** Triggered when the user clicks the search affordance or presses ⌘K. */
   onOpenSearchPalette?: () => void;
 }
@@ -76,6 +84,7 @@ export function SketchSidebar({
   navState,
   credits,
   paused,
+  setupNudge,
   onOpenSearchPalette,
 }: SketchSidebarProps) {
   const { collapsed, toggle } = useSidebarState();
@@ -137,23 +146,31 @@ export function SketchSidebar({
           ))}
         </div>
 
-        {/* Account zone — credits + profile chip grouped via spacing, with
-         * extra breathing room above to separate from the workspace nav. */}
-        {!paused && credits && !collapsed && (
+        {/* Account zone — setup-nudge / credits / paused-line + profile chip
+         * share the same vertical slot. Precedence: setupNudge wins while
+         * setup is in progress (the affordance only disappears when setup
+         * completes), then credits, then paused. */}
+        {setupNudge && (
+          <div className={collapsed ? "mt-[14px] flex justify-center" : "mt-[18px]"}>
+            <SidebarSetupNudge {...setupNudge} />
+          </div>
+        )}
+
+        {!setupNudge && !paused && credits && !collapsed && (
           <div className="mt-[18px]">
             <CreditsCard {...credits} />
           </div>
         )}
 
         {/* Paused-state replacement for the credits card (§5.7) */}
-        {paused && !collapsed && (
+        {!setupNudge && paused && !collapsed && (
           <div className="mt-[18px] px-[12px] text-[11px] font-medium text-destructive">Account paused</div>
         )}
 
         <ProfileChip
           {...profile}
           collapsed={collapsed}
-          className={!collapsed && (credits || paused) ? "mt-[6px]" : "mt-[18px]"}
+          className={!collapsed && (setupNudge || credits || paused) ? "mt-[6px]" : "mt-[18px]"}
         />
       </div>
     </aside>

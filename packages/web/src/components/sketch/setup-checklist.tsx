@@ -1,207 +1,283 @@
+import { CheckIcon, ClockIcon, XIcon } from "@phosphor-icons/react";
 /**
- * Setup checklist card — proposed primary affordance for /home/setup.
+ * Setup checklist card — the "Get started" affordance for /home/setup-v2.
  *
- * Horizontal stepper layout — the pattern Stripe / Notion / Linear / Asana
- * use when 5-ish onboarding steps need to fit in a wide-but-short card on
- * a home surface. The card fills the available width and stays short
- * vertically; all 5 step states are visible simultaneously instead of
- * scrolling.
+ * Built to the locked design spec (Get Started Card — Design Spec). Three
+ * horizontal bands:
  *
- * Structure:
- *   [GET STARTED                                              N of 5]
- *   ✓ ── ✓ ── ● ── ○ ── ○      ← circles + connectors + labels
- *   Channel  Team  Integ.  Skill  Task
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │  Get started                                          ×  │   Header
+ *   │   ✓ ─── 2 ─── 3 ─── 4 ─── 5                              │   Stepper
+ *   │  Channel  Teammate  Integration  Skill  Schedule         │
+ *   │  ─────────────────────────────────────────────────────   │   Hairline
+ *   │  Invite a teammate  [~1 MIN]               Step 2 of 5   │
+ *   │  Bring someone else into the workspace —                 │   Action
+ *   │  Sketch gets sharper with more context.    [Add member]  │
+ *   └──────────────────────────────────────────────────────────┘
  *
- *   {one-sentence description of the current step}    [ CTA → ]
- *
- * Color discipline: only the CTA button uses the brown/yellow brand pair.
- * Status circles + connectors are neutral grays; the current step is
- * distinguished by a darker fill rather than a colored accent.
+ * Locked decisions (do not re-litigate without re-reading the spec):
+ *   - Brand yellow appears in exactly one place: the active step indicator.
+ *     The check inside completed circles is white, not yellow. The CTA arrow
+ *     is gone (it was decoration on a high-contrast filled button).
+ *   - Action area is a 2-col CSS grid with align-items: end so the CTA's
+ *     bottom edge tracks the description's bottom edge regardless of
+ *     description length. No floating button vs. empty column.
+ *   - Sentence-case mono for the card label and step counter, not
+ *     ALL-CAPS — calmer, more current than a decade-old SaaS pattern.
+ *   - Dismiss button is absolutely positioned in the top-right and isolated
+ *     from any other header metadata: it's destructive and shouldn't share
+ *     visual weight with anything.
+ *   - Time pill ("~1 MIN") only appears when the step has a duration; the
+ *     pill earns its place because step 4 reads ~3 min — variance is what
+ *     makes metadata informative.
  */
-import { ArrowRightIcon, CheckIcon } from "@/components/sketch/icons";
 import { cn } from "@sketch/ui/lib/utils";
 
 export type SetupStepKey = "channel" | "teammate" | "integration" | "skill" | "schedule";
 
 interface StepDef {
   key: SetupStepKey;
-  /** Short label that renders under the circle in the stepper. */
+  /** Single-noun label rendered under the circle in the stepper. Never a verb. */
   shortLabel: string;
-  /** Long label used in the active-step row below the stepper. */
-  label: string;
-  /** One-sentence description shown when this step is current. */
+  /** Verb-first title shown in the action area when this step is current. */
+  title: string;
+  /** One sentence, two clauses joined by an em dash — action then why. */
   description: string;
-  /** CTA button label when this step is current. */
+  /** Duration estimate ("~1 MIN"). Only steps with a meaningful estimate carry one. */
+  time?: string;
+  /** Primary CTA label. Must not repeat any verb from the step title. */
   cta: string;
 }
 
-// CTA strings are verb-only on purpose — the title already says the noun,
-// so the button just confirms the intent. Avoids "Schedule a task: Schedule
-// a task" duplication.
 const STEPS: StepDef[] = [
   {
     key: "channel",
     shortLabel: "Channel",
-    label: "Connect a channel",
-    description: "Hook up Slack or WhatsApp so Sketch can live where your team already talks.",
-    cta: "Connect",
+    title: "Set up your channel",
+    description: "Hook up Slack or WhatsApp — Sketch can live where your team already talks.",
+    time: "~30 sec",
+    cta: "Create",
   },
   {
     key: "teammate",
     shortLabel: "Teammate",
-    label: "Invite a teammate",
+    title: "Invite a teammate",
     description: "Bring someone else into the workspace — Sketch gets sharper with more context.",
-    cta: "Invite",
+    time: "~1 min",
+    cta: "Add member",
   },
   {
     key: "integration",
     shortLabel: "Integration",
-    label: "Connect an integration",
-    description: "Hook up Gmail, Notion, Drive, Linear, or any of 300+ others so Sketch has context.",
+    title: "Connect an integration",
+    description: "Hook up Gmail, Notion, Drive, Linear, or any of 300+ others — Sketch gets the context it needs.",
+    time: "~2 min",
     cta: "Connect",
   },
   {
     key: "skill",
     shortLabel: "Skill",
-    label: "Create your first skill",
-    description: "Teach Sketch a workflow your team uses so it can run on a schedule or on demand.",
-    cta: "Create",
+    title: "Create a skill",
+    description: "Teach Sketch a workflow your team uses — it can then run on a schedule or on demand.",
+    time: "~3 min",
+    cta: "Build",
   },
   {
     key: "schedule",
     shortLabel: "Schedule",
-    label: "Schedule a task",
-    description: "Automate something you do every week — Sketch will run it without you asking.",
-    cta: "Schedule",
+    title: "Choose a schedule",
+    description: "Pick when Sketch runs your skill — daily, weekly, or on a custom cadence.",
+    time: "~1 min",
+    cta: "Set up",
   },
 ];
 
 export interface SetupChecklistProps {
-  /** Index of the current step (1-based, 1–5). Earlier indices render completed. */
+  /** 1-based index of the current step (1–5). Earlier indices render as done. */
   currentStep: number;
   onAdvance?: () => void;
+  /**
+   * When provided, renders the dismiss × in the top-right. Dismissal collapses
+   * the card down to the sidebar nudge — it does not abandon setup.
+   */
+  onDismiss?: () => void;
   className?: string;
 }
 
-export function SetupChecklist({ currentStep, onAdvance, className }: SetupChecklistProps) {
-  const currentDef = STEPS[currentStep - 1] ?? STEPS[0];
-  const completedCount = Math.max(0, Math.min(STEPS.length, currentStep - 1));
+export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }: SetupChecklistProps) {
+  const safeStep = Math.max(1, Math.min(STEPS.length, currentStep));
+  const currentDef = STEPS[safeStep - 1];
 
   return (
     <section
-      className={cn("flex flex-col rounded-[12px] border border-border bg-card", "px-[24px] py-[20px]", className)}
+      className={cn(
+        "relative flex flex-col rounded-[12px] border border-[color:rgba(0,0,0,0.08)]",
+        // Card surface per spec — slightly warmer than the page background,
+        // sits visually inside the page without competing with it.
+        "bg-[#F8F6F0]",
+        "pt-[22px] pb-[26px] px-[32px]",
+        className,
+      )}
     >
-      {/* Header — label + progress count */}
-      <div className="mb-[18px] flex items-baseline justify-between">
-        <h2 className="font-mono text-xs uppercase text-foreground" style={{ letterSpacing: "0.08em" }}>
-          Get started
-        </h2>
-        <span
-          className="font-mono text-[10px] uppercase text-muted-foreground tabular-nums"
-          style={{ letterSpacing: "0.07em" }}
+      {/* Header — card label on the left, dismiss × absolutely positioned
+       * top-right so it stands isolated from any metadata. */}
+      <h2 className="font-mono text-[11px] text-[color:#1A1A1A]" style={{ letterSpacing: "0.14em" }}>
+        Get started
+      </h2>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss setup card (continue from sidebar)"
+          className={cn(
+            "absolute top-[16px] right-[16px] inline-flex h-[32px] w-[32px] items-center justify-center rounded-[8px]",
+            "text-[color:#888] hover:bg-[rgba(0,0,0,0.06)] transition-colors duration-100 ease-out cursor-pointer",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(0,0,0,0.18)]",
+          )}
         >
-          {completedCount} of {STEPS.length}
-        </span>
+          <XIcon size={18} aria-hidden />
+        </button>
+      )}
+
+      {/* Stepper — 5 circles connected by a thin line at vertical center.
+       * 32px from the header above (spec). */}
+      <div className="mt-[32px]">
+        <Stepper currentStep={safeStep} />
       </div>
 
-      {/* Stepper row — 5 status circles connected by line segments, labels below */}
-      <Stepper currentStep={currentStep} />
+      {/* Hairline divider — 28px below the stepper, 22px above the action
+       * area. The divider visually separates "where you are in the journey"
+       * from "what to do next." */}
+      <div className="mt-[28px] border-t border-[color:rgba(0,0,0,0.06)]" />
 
-      {/* Hairline divider between the stepper and the active-step block — gives
-       * a clear hand-off between "where you are in the journey" and "what to
-       * do next" without taking vertical space. */}
-      <div className="mt-[22px] border-t border-border" />
+      {/* Action area — 2-col grid. Row 1: title (with optional time pill) +
+       * step counter. Row 2: description + CTA. align-items: end on the grid
+       * + align-self: end on the CTA pins the CTA's bottom edge to row 2's
+       * bottom edge, so the CTA tracks the description regardless of length. */}
+      <div className="mt-[22px] grid items-end gap-x-[24px] gap-y-[8px]" style={{ gridTemplateColumns: "1fr auto" }}>
+        {/* Row 1 / Col 1 — title + inline time pill */}
+        <div
+          className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]"
+          style={{ alignSelf: "start", gridRow: 1, gridColumn: 1 }}
+        >
+          <h3 className="text-[16px] font-medium text-[color:#1A1A1A] leading-tight">{currentDef.title}</h3>
+          {currentDef.time && <TimePill label={currentDef.time} />}
+        </div>
 
-      {/* Active-step row — Stripe / Linear pattern: the whole bottom row is
-       * the interactive element, not a card-with-a-button-inside. Eliminates
-       * the wasted middle space that happens when a short description sits
-       * on the left and a small button sits on the right with a void
-       * between them. Description fills the row; the action label + arrow
-       * sit inline-link style at the end. Hover lights the whole row. */}
-      <button
-        type="button"
-        onClick={onAdvance}
-        className={cn(
-          "group/cta mt-[14px] flex w-full items-center justify-between gap-[20px] rounded-[8px]",
-          "-mx-[8px] px-[10px] py-[10px] text-left",
-          "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/[0.04]",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/25",
-        )}
-        aria-label={`${currentDef.cta}: ${currentDef.label}`}
-      >
-        <p className="min-w-0 flex-1 text-[14px] text-foreground leading-[1.5]">{currentDef.description}</p>
-        <span className="shrink-0 inline-flex items-center gap-[6px] text-[13px] font-medium text-foreground">
-          <span>{currentDef.cta}</span>
-          <ArrowRightIcon
-            size={14}
-            aria-hidden
-            className="text-brand-yellow transition-transform duration-150 ease-out group-hover/cta:translate-x-[2px]"
-          />
+        {/* Row 1 / Col 2 — step counter, top-aligned right */}
+        <span
+          className="font-mono text-[11px] text-[color:#5A5A5A] tabular-nums"
+          style={{
+            alignSelf: "start",
+            justifySelf: "end",
+            gridRow: 1,
+            gridColumn: 2,
+            letterSpacing: "0.14em",
+          }}
+        >
+          Step {safeStep} of {STEPS.length}
         </span>
-      </button>
+
+        {/* Row 2 / Col 1 — description, capped at 46ch so line length stays
+         * comfortable and the block sits as ~2 lines at default widths. */}
+        <p
+          className="text-[14px] text-[color:#5A5A5A] max-w-[46ch]"
+          style={{ alignSelf: "start", gridRow: 2, gridColumn: 1, lineHeight: 1.55 }}
+        >
+          {currentDef.description}
+        </p>
+
+        {/* Row 2 / Col 2 — primary CTA pinned to the bottom-right of row 2.
+         * Intentionally no arrow icon: a high-contrast filled button at the
+         * bottom-right of an action area already reads "click me" via
+         * position and contrast; an arrow on top of that was decoration. */}
+        <button
+          type="button"
+          onClick={onAdvance}
+          className={cn(
+            "rounded-[10px] bg-[color:#1A1A1A] px-[22px] py-[11px] text-[14px] font-medium text-white",
+            "transition-colors duration-100 ease-out cursor-pointer hover:bg-black",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(0,0,0,0.35)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F8F6F0]",
+          )}
+          style={{ alignSelf: "end", justifySelf: "end", gridRow: 2, gridColumn: 2 }}
+          aria-label={`${currentDef.cta} — ${currentDef.title}`}
+        >
+          {currentDef.cta}
+        </button>
+      </div>
     </section>
+  );
+}
+
+function TimePill({ label }: { label: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-[5px] rounded-full bg-[rgba(0,0,0,0.05)]",
+        "px-[9px] py-[3px] font-mono text-[10.5px] uppercase text-[color:#5A5A5A]",
+      )}
+      style={{ letterSpacing: "0.08em" }}
+    >
+      <ClockIcon size={11} aria-hidden />
+      <span>{label}</span>
+    </span>
   );
 }
 
 function Stepper({ currentStep }: { currentStep: number }) {
   return (
-    <div className="grid grid-cols-5">
-      {STEPS.map((step, idx) => {
-        const stepNumber = idx + 1;
-        const completed = stepNumber < currentStep;
-        const current = stepNumber === currentStep;
-        const isFirst = idx === 0;
-        const isLast = idx === STEPS.length - 1;
+    <div className="flex flex-col">
+      {/* Circles + connectors — flex row with space-between so circles sit at
+       * fixed positions and the 1px connectors fill the gaps between them. */}
+      <div className="flex items-center">
+        {STEPS.map((step, idx) => {
+          const stepNumber = idx + 1;
+          const completed = stepNumber < currentStep;
+          const current = stepNumber === currentStep;
+          const isLast = idx === STEPS.length - 1;
 
-        // Each step owns the connector segments on either side of its circle.
-        // - Left half: filled when this step has been reached (current or done).
-        //   Hidden entirely on the first step so the line doesn't dangle.
-        // - Right half: filled when this step is done (we've moved past it).
-        //   Hidden entirely on the last step.
-        const leftFilled = !isFirst && (completed || current);
-        const rightFilled = !isLast && completed;
+          // The connector AFTER this circle is filled iff this circle is done.
+          // Rule of thumb: a segment is "covered" when the user has finished
+          // the step on its left side.
+          const connectorFilled = completed;
 
-        return (
-          <div key={step.key} className="flex flex-col items-center">
-            {/* Circle row — left half connector, circle, right half connector.
-             * The two halves are flex-1 so circles always sit centered in
-             * their grid column and the connectors stop cleanly at each
-             * column boundary — never overlapping the label below. */}
-            <div className="flex w-full items-center">
-              <ConnectorSegment visible={!isFirst} filled={leftFilled} />
+          return (
+            <div key={step.key} className="flex flex-1 items-center last:flex-none">
               <StatusCircle completed={completed} current={current} stepNumber={stepNumber} />
-              <ConnectorSegment visible={!isLast} filled={rightFilled} />
+              {!isLast && (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "h-[1px] flex-1 mx-[6px]",
+                    connectorFilled ? "bg-[color:#1A1A1A]" : "bg-[color:rgba(0,0,0,0.18)]",
+                  )}
+                />
+              )}
             </div>
-            {/* Label — sits below the circle in its own grid column, so it
-             * never extends into the connector area. */}
+          );
+        })}
+      </div>
+      {/* Labels — sit 14px under the circles, centered under each. Using a
+       * 5-column grid keeps each label centered under its corresponding
+       * circle regardless of the connector widths above. */}
+      <div className="mt-[14px] grid grid-cols-5">
+        {STEPS.map((step, idx) => {
+          const stepNumber = idx + 1;
+          const current = stepNumber === currentStep;
+          return (
             <span
+              key={step.key}
               className={cn(
-                "mt-[10px] text-[11.5px] leading-[1.2]",
-                current ? "font-medium text-foreground" : "text-muted-foreground",
+                "text-center text-[12px] leading-[1.2]",
+                current ? "font-medium text-[color:#1A1A1A]" : "font-normal text-[color:#999]",
               )}
             >
               {step.shortLabel}
             </span>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
-  );
-}
-
-function ConnectorSegment({ visible, filled }: { visible: boolean; filled: boolean }) {
-  return (
-    <div
-      aria-hidden
-      className={cn(
-        "h-[2px] flex-1 rounded-full",
-        !visible && "bg-transparent",
-        // Neutral dark for the completed trail — the brand identity in the
-        // stepper lives on the circles (yellow current + yellow checks).
-        visible && filled && "bg-foreground/40",
-        visible && !filled && "bg-foreground/12",
-      )}
-    />
   );
 }
 
@@ -213,23 +289,24 @@ function StatusCircle({
   return (
     <span
       className={cn(
-        "flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full",
+        "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        // Completed: neutral dark fill with a brand-yellow check — the
-        // check is the only brand accent on each completed step.
-        completed && "bg-foreground/70 text-brand-yellow",
-        // Current: brand-yellow fill with dark text + a neutral foreground
-        // ring so the yellow circle doesn't dissolve into the white card.
-        // This is the page's brightest brand spot — the "you are here."
-        current && "bg-brand-yellow text-foreground ring-2 ring-foreground/30 ring-offset-2 ring-offset-card",
-        !completed && !current && "border-[1.5px] border-foreground/20 bg-card text-foreground/35",
+        // Done: solid dark fill, white check. The check is white (not yellow)
+        // because brand yellow lives ONLY on the active circle.
+        completed && "bg-[color:#1A1A1A] text-white",
+        // Active: brand-yellow fill with a soft yellow halo so the eye lands
+        // here first. The numeral inside is dark, weight 500.
+        current && "bg-[#FFE600] text-[color:#1A1A1A]",
+        // Todo: transparent fill with a hairline border + gray numeral.
+        !completed && !current && "border border-[color:rgba(0,0,0,0.18)] text-[color:#999]",
       )}
+      style={current ? { boxShadow: "0 0 0 5px rgba(255,230,0,0.22)" } : undefined}
       aria-hidden
     >
       {completed ? (
-        <CheckIcon size={12} weight="bold" />
+        <CheckIcon size={14} weight="bold" />
       ) : (
-        <span className="text-[11px] font-semibold tabular-nums leading-none">{stepNumber}</span>
+        <span className="text-[12px] font-medium tabular-nums leading-none">{stepNumber}</span>
       )}
     </span>
   );

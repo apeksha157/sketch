@@ -11,6 +11,7 @@
  * users see them appear in place.
  */
 import { AlertTriangleIcon, ArrowRightIcon } from "@/components/sketch/icons";
+import { XIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 
 export type SetupStep = 1 | 2 | 3 | 4 | 5;
@@ -28,52 +29,82 @@ export interface SetupBannerProps {
   step: SetupStep;
   /** Click target — routes the user to the step's setup flow. */
   onAdvance?: () => void;
+  /**
+   * When provided, renders a dismiss (×) affordance on the right edge of the
+   * banner. Dismissal moves the setup affordance to the sidebar nudge — it
+   * does NOT abandon setup. Wire it to a state setter in the route.
+   */
+  onDismiss?: () => void;
 }
 
-export function SetupBanner({ step, onAdvance }: SetupBannerProps) {
+export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
   return (
-    <button
-      type="button"
-      onClick={onAdvance}
+    <div
       className={cn(
-        "sketch-banner-in group flex w-full items-center gap-[12px] px-[18px] py-[11px] cursor-pointer",
+        "sketch-banner-in group flex w-full items-center gap-[12px] px-[18px] py-[11px]",
         // Pale-yellow surface matches the tile icon containers so brand
         // identity reads consistently across the page. Brown text holds the
         // contrast; hover steps the bg slightly darker for affordance.
         "bg-[#FAF3BD] text-brand-brown text-left",
         "border-b border-brand-brown/15",
-        "transition-colors duration-100 ease-out hover:bg-[#F4E89E]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40 focus-visible:ring-inset",
       )}
       style={{ animation: "sketch-banner-in 200ms ease-out" }}
-      aria-label={`Continue setup: ${SETUP_STEP_LABELS[step]}`}
     >
-      <div className="flex items-center gap-[6px]" aria-hidden>
-        {[1, 2, 3, 4, 5].map((dot) => {
-          const completed = dot < step;
-          const current = dot === step;
-          return (
-            <span
-              key={dot}
-              className={cn(
-                "h-[6px] w-[6px] rounded-full transition-colors",
-                completed && "bg-brand-brown",
-                current && "bg-brand-brown ring-2 ring-brand-brown/25 ring-offset-1 ring-offset-[#FAF3BD]",
-                !completed && !current && "bg-brand-brown/25",
-              )}
-            />
-          );
-        })}
-      </div>
-      <span className="flex-1 text-[12px] font-medium leading-tight">
-        <span className="opacity-65">Up next ·</span> <span>{SETUP_STEP_LABELS[step]}</span>
-      </span>
-      <ArrowRightIcon
-        size={14}
-        aria-hidden
-        className="transition-transform duration-150 ease-out group-hover:translate-x-[2px]"
-      />
-    </button>
+      {/* Main click target — everything except the dismiss X. Restructured
+       * from a single <button> wrapper to a button + separate X because
+       * nesting an interactive element inside a button is invalid HTML. */}
+      <button
+        type="button"
+        onClick={onAdvance}
+        className={cn(
+          "group/cta -my-[11px] -ml-[18px] flex flex-1 items-center gap-[12px] px-[18px] py-[11px] cursor-pointer text-left",
+          "transition-colors duration-100 ease-out hover:bg-[#F4E89E]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40 focus-visible:ring-inset",
+        )}
+        aria-label={`Continue setup: ${SETUP_STEP_LABELS[step]}`}
+      >
+        <div className="flex items-center gap-[6px]" aria-hidden>
+          {[1, 2, 3, 4, 5].map((dot) => {
+            const completed = dot < step;
+            const current = dot === step;
+            return (
+              <span
+                key={dot}
+                className={cn(
+                  "h-[6px] w-[6px] rounded-full transition-colors",
+                  completed && "bg-brand-brown",
+                  current && "bg-brand-brown ring-2 ring-brand-brown/25 ring-offset-1 ring-offset-[#FAF3BD]",
+                  !completed && !current && "bg-brand-brown/25",
+                )}
+              />
+            );
+          })}
+        </div>
+        <span className="flex-1 text-[12px] font-medium leading-tight">
+          <span className="opacity-65">Up next ·</span> <span>{SETUP_STEP_LABELS[step]}</span>
+        </span>
+        <ArrowRightIcon
+          size={14}
+          aria-hidden
+          className="transition-transform duration-150 ease-out group-hover/cta:translate-x-[2px]"
+        />
+      </button>
+      {onDismiss && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss setup banner (continue from sidebar)"
+          className={cn(
+            "shrink-0 -mr-[6px] inline-flex h-[24px] w-[24px] items-center justify-center rounded-[6px]",
+            "text-brand-brown/70 hover:text-brand-brown hover:bg-brand-brown/[0.08]",
+            "transition-colors duration-100 ease-out cursor-pointer",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40",
+          )}
+        >
+          <XIcon size={12} weight="bold" aria-hidden />
+        </button>
+      )}
+    </div>
   );
 }
 

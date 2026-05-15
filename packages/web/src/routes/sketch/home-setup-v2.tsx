@@ -12,6 +12,15 @@
  *   - Recents stays — visible whenever there are conversations, hidden when
  *     empty. Same behavior as today.
  *
+ * Sidebar / dismissal behavior (different from v1):
+ *   - The sidebar setup nudge is present *from the start*, not only after a
+ *     dismiss. The inline home card only exists on /home — without the
+ *     sidebar nudge, navigating to Channels / Integrations / etc. would
+ *     leave the user with no view of setup progress.
+ *   - The inline card has a dismiss (×). Clicking it hides the on-page card
+ *     and leaves the sidebar nudge as the only setup affordance — setup is
+ *     never abandoned, just collapsed.
+ *
  * This route exists so the redesign can be reviewed alongside the current
  * /home/setup without committing to the change. If approved, /home/setup will
  * be rewritten to match this and this route will go away.
@@ -26,10 +35,22 @@ import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { Link, createRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
+/** Mirrors the step titles in setup-checklist.tsx (Get Started Card spec).
+ *  Kept in this file so the sidebar nudge label stays in lockstep with the
+ *  current step without exporting internals from the checklist component. */
+const STEP_NEXT_LABEL: Record<SetupStep, string> = {
+  1: "Set up your channel",
+  2: "Invite a teammate",
+  3: "Connect an integration",
+  4: "Create a skill",
+  5: "Choose a schedule",
+};
+
 function HomeSetupV2Page() {
   const auth = useSketchAuth();
   const navigate = useNavigate();
   const [step, setStep] = useState<SetupStep>(2);
+  const [cardDismissed, setCardDismissed] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function advance() {
@@ -53,6 +74,14 @@ function HomeSetupV2Page() {
         identifier: auth.displayIdentifier,
       }}
       orgName={auth.orgName}
+      // Sidebar nudge is always present in v2 — the inline home card is only
+      // visible on /home, so without this the affordance vanishes the moment
+      // the user navigates elsewhere.
+      setupNudge={{
+        currentStep: step,
+        nextLabel: STEP_NEXT_LABEL[step],
+        href: "/home/setup-v2",
+      }}
     >
       <div className="mx-auto w-full max-w-4xl px-10 py-8">
         {/* Hero — setup-specific greeting + chat input. The chip row is
@@ -67,10 +96,14 @@ function HomeSetupV2Page() {
 
         {/* Setup checklist — the primary affordance. Sits between the chat
          * input and the rest of the home rail so the page structure stays
-         * stable as the user transitions from new → mid-setup → complete. */}
-        <div className="mt-7">
-          <SetupChecklist currentStep={step} onAdvance={advance} />
-        </div>
+         * stable as the user transitions from new → mid-setup → complete.
+         * The × on this card collapses it to just the sidebar nudge; it
+         * doesn't abandon setup. */}
+        {!cardDismissed && (
+          <div className="mt-7">
+            <SetupChecklist currentStep={step} onAdvance={advance} onDismiss={() => setCardDismissed(true)} />
+          </div>
+        )}
 
         {/* Recents — appears once the user has any conversations. Hidden
          * entirely when empty (no "your conversations will appear here"
