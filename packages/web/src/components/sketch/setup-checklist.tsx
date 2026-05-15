@@ -56,7 +56,7 @@ interface StepDef {
 const STEPS: StepDef[] = [
   {
     key: "channel",
-    shortLabel: "Chat",
+    shortLabel: "Platforms",
     title: "Plug Sketch into your chat",
     description: "Slack or WhatsApp — wherever your team's already talking.",
     time: "~30 sec",
@@ -64,7 +64,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "teammate",
-    shortLabel: "Crew",
+    shortLabel: "Team",
     title: "Bring in a teammate",
     description: "Sketch gets sharper the more of your team it works with.",
     time: "~1 min",
@@ -72,7 +72,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "integration",
-    shortLabel: "Tools",
+    shortLabel: "Apps",
     title: "Hook up a tool",
     description: "Gmail, Notion, Drive, Linear, or any of 300+ others — give Sketch the context it needs.",
     time: "~2 min",
