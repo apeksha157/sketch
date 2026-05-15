@@ -165,10 +165,15 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
        * from "what to do next." */}
       <div className="mt-[28px] border-t border-border" />
 
-      {/* Action area — 2-col grid. Row 1: title (with optional time pill) +
-       * step counter. Row 2: description + CTA. align-items: end on the grid
-       * + align-self: end on the CTA pins the CTA's bottom edge to row 2's
-       * bottom edge, so the CTA tracks the description regardless of length. */}
+      {/* Action area — 2-col grid. Row 1: title (with optional time pill) in
+       * col 1, col 2 left empty so the CTA below can occupy it.
+       * Row 2: description + CTA. align-items: end on the grid + align-self:
+       * end on the CTA pins the CTA's bottom edge to row 2's bottom edge,
+       * so the CTA tracks the description regardless of length.
+       *
+       * The "Step N of 5" counter previously lived in row 1 / col 2 -- it
+       * duplicated information the stepper above already shows visually
+       * (done check, active yellow, todo dots), so it was dropped. */}
       <div className="mt-[22px] grid items-end gap-x-[24px] gap-y-[8px]" style={{ gridTemplateColumns: "1fr auto" }}>
         {/* Row 1 / Col 1 — title + inline time pill */}
         <div
@@ -178,22 +183,6 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
           <h3 className="text-[17px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
           {currentDef.time && <TimePill label={currentDef.time} />}
         </div>
-
-        {/* Row 1 / Col 2 — step counter, top-aligned right. Uppercase mono
-         * to match the card label and the rest of the product's eyebrow
-         * convention. */}
-        <span
-          className="font-mono text-[11px] uppercase text-muted-foreground tabular-nums"
-          style={{
-            alignSelf: "start",
-            justifySelf: "end",
-            gridRow: 1,
-            gridColumn: 2,
-            letterSpacing: "0.14em",
-          }}
-        >
-          Step {safeStep} of {STEPS.length}
-        </span>
 
         {/* Row 2 / Col 1 — description, capped at 46ch so line length stays
          * comfortable and the block sits as ~2 lines at default widths. */}
