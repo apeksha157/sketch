@@ -92,7 +92,10 @@ const STEPS: StepDef[] = [
     title: "Set a schedule",
     description: "Pick a cadence — Sketch runs it on its own from there.",
     time: "~1 min",
-    cta: "Choose",
+    // "Automate" reads more confident than "Choose" (which begged the
+    // question "choose what?") and captures the outcome the user cares
+    // about: this is the step that makes Sketch run on its own.
+    cta: "Automate",
   },
 ];
 
