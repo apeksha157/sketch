@@ -168,7 +168,11 @@ function Stepper({ currentStep }: { currentStep: number }) {
   );
 }
 
-function StatusCircle({ completed, current, stepNumber }: { completed: boolean; current: boolean; stepNumber: number }) {
+function StatusCircle({
+  completed,
+  current,
+  stepNumber,
+}: { completed: boolean; current: boolean; stepNumber: number }) {
   return (
     <span
       className={cn(
