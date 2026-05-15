@@ -289,8 +289,12 @@ function Stepper({ currentStep }: { currentStep: number }) {
  * Single source of truth for the stepper circle diameter. The stepper grid's
  * column template references this constant directly, so changing it here
  * propagates both to the circle visuals and to the row layout.
+ *
+ * Sized at 40px after walking back from a 48px experiment that read too
+ * heavy in-place. The edge-flush grid does most of the work of filling
+ * the row visually; the circles don't need to.
  */
-const CIRCLE_PX = 48;
+const CIRCLE_PX = 40;
 
 function StatusCircle({
   completed,
@@ -320,12 +324,12 @@ function StatusCircle({
       style={{
         height: CIRCLE_PX,
         width: CIRCLE_PX,
-        boxShadow: current ? "0 0 0 6px rgba(254,237,1,0.22)" : undefined,
+        boxShadow: current ? "0 0 0 5px rgba(254,237,1,0.22)" : undefined,
       }}
       aria-hidden
     >
       {completed ? (
-        <CheckIcon size={18} weight="bold" />
+        <CheckIcon size={16} weight="bold" />
       ) : (
         // Hand-drawn numerals in Gloria Hallelujah -- same family the
         // onboarding / trial banners use for ceremonial moments. Lives on
@@ -336,7 +340,7 @@ function StatusCircle({
         // GH's baseline sits a touch low inside its em-box; nudging the
         // glyph up 1px restores optical centering inside the circle.
         <span
-          className="text-[28px] leading-none"
+          className="text-[24px] leading-none"
           style={{
             fontFamily: "'Gloria Hallelujah', cursive",
             transform: "translateY(-1px)",
