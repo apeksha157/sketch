@@ -111,17 +111,20 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
   return (
     <section
       className={cn(
-        "relative flex flex-col rounded-[12px] border border-[color:rgba(0,0,0,0.08)]",
-        // Card surface per spec — slightly warmer than the page background,
-        // sits visually inside the page without competing with it.
-        "bg-[#F8F6F0]",
+        "relative flex flex-col rounded-[12px] border border-border",
+        // Sourced from the dashboard's design tokens (bg-card / border-border)
+        // so the card harmonizes with every other surface in the app and
+        // survives a theme switch. Earlier pass used a hard-coded cream
+        // (#F8F6F0) per the spec; trading that for the token because the
+        // spec hex was authored for an isolated artboard, not in-place.
+        "bg-card",
         "pt-[22px] pb-[26px] px-[32px]",
         className,
       )}
     >
       {/* Header — card label on the left, dismiss × absolutely positioned
        * top-right so it stands isolated from any metadata. */}
-      <h2 className="font-mono text-[11px] text-[color:#1A1A1A]" style={{ letterSpacing: "0.14em" }}>
+      <h2 className="font-mono text-[11px] text-foreground" style={{ letterSpacing: "0.14em" }}>
         Get started
       </h2>
       {onDismiss && (
@@ -131,8 +134,8 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
           aria-label="Dismiss setup card (continue from sidebar)"
           className={cn(
             "absolute top-[16px] right-[16px] inline-flex h-[32px] w-[32px] items-center justify-center rounded-[8px]",
-            "text-[color:#888] hover:bg-[rgba(0,0,0,0.06)] transition-colors duration-100 ease-out cursor-pointer",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(0,0,0,0.18)]",
+            "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground transition-colors duration-100 ease-out cursor-pointer",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20",
           )}
         >
           <XIcon size={18} aria-hidden />
@@ -148,7 +151,7 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
       {/* Hairline divider — 28px below the stepper, 22px above the action
        * area. The divider visually separates "where you are in the journey"
        * from "what to do next." */}
-      <div className="mt-[28px] border-t border-[color:rgba(0,0,0,0.06)]" />
+      <div className="mt-[28px] border-t border-border" />
 
       {/* Action area — 2-col grid. Row 1: title (with optional time pill) +
        * step counter. Row 2: description + CTA. align-items: end on the grid
@@ -160,13 +163,13 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
           className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]"
           style={{ alignSelf: "start", gridRow: 1, gridColumn: 1 }}
         >
-          <h3 className="text-[16px] font-medium text-[color:#1A1A1A] leading-tight">{currentDef.title}</h3>
+          <h3 className="text-[16px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
           {currentDef.time && <TimePill label={currentDef.time} />}
         </div>
 
         {/* Row 1 / Col 2 — step counter, top-aligned right */}
         <span
-          className="font-mono text-[11px] text-[color:#5A5A5A] tabular-nums"
+          className="font-mono text-[11px] text-muted-foreground tabular-nums"
           style={{
             alignSelf: "start",
             justifySelf: "end",
@@ -181,7 +184,7 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
         {/* Row 2 / Col 1 — description, capped at 46ch so line length stays
          * comfortable and the block sits as ~2 lines at default widths. */}
         <p
-          className="text-[14px] text-[color:#5A5A5A] max-w-[46ch]"
+          className="text-[14px] text-muted-foreground max-w-[46ch]"
           style={{ alignSelf: "start", gridRow: 2, gridColumn: 1, lineHeight: 1.55 }}
         >
           {currentDef.description}
@@ -195,9 +198,9 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
           type="button"
           onClick={onAdvance}
           className={cn(
-            "rounded-[10px] bg-[color:#1A1A1A] px-[22px] py-[11px] text-[14px] font-medium text-white",
-            "transition-colors duration-100 ease-out cursor-pointer hover:bg-black",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(0,0,0,0.35)] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F8F6F0]",
+            "rounded-[10px] bg-foreground px-[22px] py-[11px] text-[14px] font-medium text-background",
+            "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/90",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
           )}
           style={{ alignSelf: "end", justifySelf: "end", gridRow: 2, gridColumn: 2 }}
           aria-label={`${currentDef.cta} — ${currentDef.title}`}
@@ -213,8 +216,8 @@ function TimePill({ label }: { label: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-[5px] rounded-full bg-[rgba(0,0,0,0.05)]",
-        "px-[9px] py-[3px] font-mono text-[10.5px] uppercase text-[color:#5A5A5A]",
+        "inline-flex items-center gap-[5px] rounded-full bg-foreground/[0.05]",
+        "px-[9px] py-[3px] font-mono text-[10.5px] uppercase text-muted-foreground",
       )}
       style={{ letterSpacing: "0.08em" }}
     >
@@ -247,10 +250,7 @@ function Stepper({ currentStep }: { currentStep: number }) {
               {!isLast && (
                 <span
                   aria-hidden
-                  className={cn(
-                    "h-[1px] flex-1 mx-[6px]",
-                    connectorFilled ? "bg-[color:#1A1A1A]" : "bg-[color:rgba(0,0,0,0.18)]",
-                  )}
+                  className={cn("h-[1px] flex-1 mx-[6px]", connectorFilled ? "bg-foreground" : "bg-foreground/20")}
                 />
               )}
             </div>
@@ -269,7 +269,7 @@ function Stepper({ currentStep }: { currentStep: number }) {
               key={step.key}
               className={cn(
                 "text-center text-[12px] leading-[1.2]",
-                current ? "font-medium text-[color:#1A1A1A]" : "font-normal text-[color:#999]",
+                current ? "font-medium text-foreground" : "font-normal text-muted-foreground",
               )}
             >
               {step.shortLabel}
@@ -291,16 +291,16 @@ function StatusCircle({
       className={cn(
         "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        // Done: solid dark fill, white check. The check is white (not yellow)
-        // because brand yellow lives ONLY on the active circle.
-        completed && "bg-[color:#1A1A1A] text-white",
+        // Done: solid foreground fill with a background-tone check. The check
+        // is not yellow because brand yellow lives ONLY on the active circle.
+        completed && "bg-foreground text-background",
         // Active: brand-yellow fill with a soft yellow halo so the eye lands
         // here first. The numeral inside is dark, weight 500.
-        current && "bg-[#FFE600] text-[color:#1A1A1A]",
-        // Todo: transparent fill with a hairline border + gray numeral.
-        !completed && !current && "border border-[color:rgba(0,0,0,0.18)] text-[color:#999]",
+        current && "bg-brand-yellow text-foreground",
+        // Todo: transparent fill with a hairline border + muted numeral.
+        !completed && !current && "border border-foreground/20 text-muted-foreground",
       )}
-      style={current ? { boxShadow: "0 0 0 5px rgba(255,230,0,0.22)" } : undefined}
+      style={current ? { boxShadow: "0 0 0 5px rgba(254,237,1,0.22)" } : undefined}
       aria-hidden
     >
       {completed ? (
