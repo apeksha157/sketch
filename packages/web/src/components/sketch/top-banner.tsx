@@ -3,7 +3,7 @@
  *
  * Three variants share the same shape (full-width of main pane, padding 11px 18px)
  * with different palettes:
- *   - <SetupBanner>  — soft card surface, hand-drawn stepper, brand-yellow accent.
+ *   - <SetupBanner>  — neutral card surface, 5-dot progress, brand-yellow accent.
  *   - <ErrorBanner>  — yellow, remedial. Always paired with a CTA (Reconnect, etc.)
  *   - <DangerBanner> — red, critical. Used for credits-low and paused states.
  *
@@ -12,9 +12,8 @@
  */
 import { AlertTriangleIcon } from "@/components/sketch/icons";
 import { STEPS } from "@/components/sketch/setup-checklist";
-import { CheckIcon, ClockIcon, XIcon } from "@phosphor-icons/react";
+import { XIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
-import { Fragment } from "react";
 
 export type SetupStep = 1 | 2 | 3 | 4 | 5;
 
@@ -32,26 +31,31 @@ export interface SetupBannerProps {
 }
 
 /**
- * SetupBanner — slim, sticky-at-top variant of the v2 SetupChecklist card.
+ * SetupBanner — slim sticky strip at the top of /home/setup.
  *
- * Pulls the v2 card's visual language into a single-row format so the same
- * design system reads consistently whether it lives in a content card or in
- * the page chrome:
+ * Designed for the banner context, not as a port of the v2 SetupChecklist
+ * card. The banner is page chrome, not content; it earns a single glance,
+ * not a study. That dictates everything below.
  *
- *   - Surface: `bg-card` + hairline `border-b` (was: pale-yellow #FAF3BD).
- *     Yellow is reserved for one accent — the active stepper circle.
- *   - Stepper: 5 × 24px circles, hand-drawn Gloria Hallelujah numerals,
- *     brand-yellow fill + halo on the current circle, `bg-foreground` with
- *     a white check on completed circles. Mirrors the v2 stepper at ~half
- *     the diameter so it fits a banner row.
- *   - Eyebrow: "GET STARTED" in uppercase IBM Plex Mono — product-wide
- *     convention for mono eyebrow text.
- *   - Title + optional time pill mirror v2's action area.
- *   - CTA: high-contrast `bg-foreground text-background` filled button.
- *     Verb-first ("Connect", "Invite", "Automate") — same labels v2 uses.
+ * What translates from v2:
+ *   - Surface direction: neutral `bg-card` instead of the prior pale yellow.
+ *     The yellow used to fight the dashboard's palette; making it the page
+ *     chrome amplified the problem.
+ *   - Brand yellow appears in exactly one place: the active dot.
+ *   - Filled high-contrast CTA button (`bg-foreground text-background`).
+ *   - Copy sourced from the canonical `STEPS` array in setup-checklist.tsx,
+ *     so banner and card can't drift on titles or CTA verbs.
  *
- * Data source: `STEPS` is imported from setup-checklist.tsx so the banner
- * and the card cannot drift on copy.
+ * What was tried and discarded as banner-inappropriate:
+ *   - Hand-drawn Gloria Hallelujah numerals — a third font on a 40px row.
+ *   - "GET STARTED" eyebrow in IBM Plex Mono — second font for one word.
+ *   - Numbered 24px circles — too heavy a progress signal for chrome.
+ *   - Time pill (`~1 MIN`) — earns its place in a card; clutter in chrome.
+ *
+ * Single font family. Single accent. Single line. The five dots carry the
+ * progress signal; the CTA carries the action. The "Up next ·" prefix gives
+ * context without inventing a typographic treatment for it — same font,
+ * muted color.
  */
 export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
   const safeStep = Math.max(1, Math.min(STEPS.length, step)) as SetupStep;
@@ -60,38 +64,32 @@ export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
   return (
     <div
       className={cn(
-        "sketch-banner-in relative flex w-full items-center gap-[18px]",
+        "sketch-banner-in flex w-full items-center gap-[16px]",
         "bg-card text-foreground border-b border-border",
         "px-[20px] py-[10px]",
       )}
       style={{ animation: "sketch-banner-in 200ms ease-out" }}
     >
-      {/* Eyebrow — same mono-uppercase treatment as the v2 card's "Get
-       * started" header. Reads as the banner's title; the stepper to its
-       * right is the data. */}
-      <span className="shrink-0 font-mono text-[10.5px] uppercase text-foreground" style={{ letterSpacing: "0.14em" }}>
-        Get started
+      {/* Five-dot progress. No numerals: dot count + active highlight
+       * carry the meaning at this size. The brand-yellow halo on the
+       * active dot is the banner's one chromatic accent. */}
+      <ProgressDots currentStep={safeStep} />
+
+      {/* Title — one font, one weight. "Up next ·" prefix in muted-
+       * foreground gives sequence context without inventing a second
+       * typographic treatment for it. */}
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
+        <span className="text-muted-foreground">Up next ·</span>{" "}
+        <span className="text-foreground">{stepDef.title}</span>
       </span>
 
-      {/* Mini stepper — five hand-drawn circles, brand-yellow halo on the
-       * active one. Doubles as a progress indicator + a visual signature
-       * tying this banner to the v2 card. */}
-      <BannerStepper currentStep={safeStep} />
-
-      {/* Current step title + optional time pill. flex-1 with min-w-0
-       * keeps the title from forcing the row to wrap when descriptions
-       * are long; the CTA + dismiss sit on the right edge. */}
-      <div className="flex min-w-0 flex-1 items-center gap-[10px]">
-        <span className="truncate text-[13px] font-medium text-foreground">{stepDef.title}</span>
-        {stepDef.time && <TimePill label={stepDef.time} />}
-      </div>
-
-      {/* CTA — verb-first, high contrast. Matches the v2 card's button. */}
+      {/* CTA — same filled-foreground button as the v2 card. No arrow:
+       * the button's contrast does the affordance work on its own. */}
       <button
         type="button"
         onClick={onAdvance}
         className={cn(
-          "shrink-0 rounded-[8px] bg-foreground px-[16px] py-[7px] text-[12.5px] font-medium text-background",
+          "shrink-0 rounded-[8px] bg-foreground px-[14px] py-[6px] text-[12.5px] font-medium text-background",
           "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/90",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
         )}
@@ -108,8 +106,8 @@ export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
           onClick={onDismiss}
           aria-label="Dismiss setup banner (continue from sidebar)"
           className={cn(
-            "shrink-0 -mr-[6px] inline-flex h-[26px] w-[26px] items-center justify-center rounded-[6px]",
-            "text-muted-foreground hover:text-foreground hover:bg-foreground/[0.06]",
+            "-mr-[6px] inline-flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[6px]",
+            "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
             "transition-colors duration-100 ease-out cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
           )}
@@ -121,96 +119,37 @@ export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
   );
 }
 
-/**
- * Single source of truth for the banner-stepper circle diameter. Same role as
- * CIRCLE_PX in setup-checklist.tsx, but scaled down (~half) so five circles +
- * four connectors fit a banner row without crowding the title and CTA.
- */
-const BANNER_CIRCLE_PX = 24;
-
-function BannerStepper({ currentStep }: { currentStep: number }) {
+function ProgressDots({ currentStep }: { currentStep: number }) {
   return (
-    <div className="flex shrink-0 items-center gap-[6px]" aria-hidden>
+    // No `role="progressbar"` here: that role requires the element be
+    // focusable, and a passive visual indicator inside a sticky banner
+    // shouldn't be in the tab order. The aria-label gives screen readers
+    // the same step-count context without the interactive contract.
+    <div className="flex shrink-0 items-center gap-[8px]" aria-label={`Setup step ${currentStep} of ${STEPS.length}`}>
       {STEPS.map((step, idx) => {
-        const stepNumber = idx + 1;
-        const completed = stepNumber < currentStep;
-        const current = stepNumber === currentStep;
-        const isLast = idx === STEPS.length - 1;
+        const n = idx + 1;
+        const done = n < currentStep;
+        const current = n === currentStep;
         return (
-          <Fragment key={step.key}>
-            <BannerCircle completed={completed} current={current} stepNumber={stepNumber} />
-            {!isLast && (
-              <span
-                className={cn(
-                  "h-[1px] w-[14px] rounded-full transition-colors",
-                  completed ? "bg-foreground" : "bg-foreground/20",
-                )}
-              />
+          <span
+            key={step.key}
+            aria-hidden
+            className={cn(
+              "h-[7px] w-[7px] rounded-full transition-colors",
+              done && "bg-foreground",
+              current && "bg-brand-yellow",
+              !done && !current && "bg-foreground/[0.15]",
             )}
-          </Fragment>
+            style={{
+              // Soft yellow halo on the active dot — the one place the
+              // banner allows itself a chromatic moment. 3px ring with
+              // 22% opacity reads as a glow, not a beacon.
+              boxShadow: current ? "0 0 0 3px rgba(254,237,1,0.22)" : undefined,
+            }}
+          />
         );
       })}
     </div>
-  );
-}
-
-function BannerCircle({
-  completed,
-  current,
-  stepNumber,
-}: {
-  completed: boolean;
-  current: boolean;
-  stepNumber: number;
-}) {
-  return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center justify-center rounded-full",
-        "transition-colors duration-150 ease-out",
-        completed && "bg-foreground text-background",
-        current && "bg-brand-yellow text-foreground",
-        !completed && !current && "bg-foreground/[0.07] text-muted-foreground",
-      )}
-      style={{
-        height: BANNER_CIRCLE_PX,
-        width: BANNER_CIRCLE_PX,
-        // Halo matches the v2 card's ring effect on the active circle —
-        // proportionally smaller (3px vs 5px) to suit the smaller circle.
-        boxShadow: current ? "0 0 0 3px rgba(254,237,1,0.22)" : undefined,
-      }}
-    >
-      {completed ? (
-        <CheckIcon size={11} weight="bold" />
-      ) : (
-        // Hand-drawn numerals — identical font + nudge to the v2 card so
-        // the personality reads consistent at both sizes.
-        <span
-          className="text-[13px] leading-none"
-          style={{
-            fontFamily: "'Gloria Hallelujah', cursive",
-            transform: "translateY(-1px)",
-          }}
-        >
-          {stepNumber}
-        </span>
-      )}
-    </span>
-  );
-}
-
-function TimePill({ label }: { label: string }) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 inline-flex items-center gap-[4px] rounded-full bg-foreground/[0.05]",
-        "px-[8px] py-[2px] font-mono text-[10px] uppercase text-muted-foreground",
-      )}
-      style={{ letterSpacing: "0.08em" }}
-    >
-      <ClockIcon size={10} aria-hidden />
-      <span>{label}</span>
-    </span>
   );
 }
 
