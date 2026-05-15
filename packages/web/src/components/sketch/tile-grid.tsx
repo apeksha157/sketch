@@ -95,15 +95,16 @@ function TileItem({ tile }: { tile: TileDef }) {
   const Inner = (
     <>
       {/*
-       * Icon slot — static SKETCH_TILE treatment carried over from the prior
-       * member home: low-opacity brand-yellow wash with a muted-gold glyph in
-       * light mode (full-yellow glyph in dark). Brand stays present at rest;
-       * hover is neutral on the row, not on the icon.
+       * Icon slot — solid pale-yellow surface with a muted-gold glyph in
+       * light mode (deep amber surface + full-yellow glyph in dark). Solid
+       * rather than alpha so the container's visual weight doesn't dissolve
+       * when the surrounding card-bg shifts on hover. Brand stays present
+       * at rest; hover is neutral on the row, not on the icon.
        */}
       <span
         className={cn(
           "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[8px]",
-          "bg-[#FEED01]/15 dark:bg-[#FEED01]/[0.06] text-[#8B7A00] dark:text-[#FEED01]",
+          "bg-[#FAF3BD] text-[#8B7A00] dark:bg-[#322B0C] dark:text-[#FEED01]",
         )}
         aria-hidden
       >
