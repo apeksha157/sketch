@@ -112,30 +112,21 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
        * do next" without taking vertical space. */}
       <div className="mt-[22px] border-t border-border" />
 
-      {/* Active-step block.
+      {/* Active-step block — form-footer pattern.
        *
-       * Top row: step title (h3) on the left, CTA button on the right —
-       *   button vertically centered on the title line, so the title reads
-       *   as the action and the button is the affordance to take it.
-       * Bottom row: description spans the full card width below, with proper
-       *   line length for readability (no longer wedged into a half-column
-       *   next to a button).
-       *
-       * This is the pattern Stripe / Linear / Notion use for setup-card
-       * active-step blocks — clear hierarchy, generous line length, the
-       * action sits as a confident peer to the title.
+       * Description sits on its own row, full width, proper line length.
+       * CTA button sits on its own row below, right-aligned. No competing
+       * h3 heading — the stepper above already communicates which step
+       * is current, so a separate title would be redundant noise.
        */}
       <div className="mt-[18px]">
-        <div className="flex items-center justify-between gap-[20px]">
-          <h3 className="min-w-0 truncate text-[15px] font-medium text-foreground leading-[1.3]">{currentDef.label}</h3>
+        <p className="text-[14px] text-foreground leading-[1.55]">{currentDef.description}</p>
+        <div className="mt-[14px] flex justify-end">
           <button
             type="button"
             onClick={onAdvance}
             className={cn(
-              "shrink-0 inline-flex items-center gap-[6px] rounded-[6px]",
-              // Neutral dark primary with a brand-yellow arrow accent — the
-              // arrow is the brand wink, the button itself stays clean and
-              // legible.
+              "inline-flex items-center gap-[6px] rounded-[6px]",
               "bg-foreground text-background px-[14px] py-[8px] text-[13px] font-medium",
               "transition-all duration-100 ease-out cursor-pointer",
               "hover:bg-foreground/90 active:scale-[0.98]",
@@ -147,7 +138,6 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
             <ArrowRightIcon size={13} aria-hidden className="text-brand-yellow" />
           </button>
         </div>
-        <p className="mt-[6px] text-[13px] text-muted-foreground leading-[1.5]">{currentDef.description}</p>
       </div>
     </section>
   );
