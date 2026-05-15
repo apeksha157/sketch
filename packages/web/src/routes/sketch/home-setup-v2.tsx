@@ -74,14 +74,19 @@ function HomeSetupV2Page() {
         identifier: auth.displayIdentifier,
       }}
       orgName={auth.orgName}
-      // Sidebar nudge is always present in v2 — the inline home card is only
-      // visible on /home, so without this the affordance vanishes the moment
-      // the user navigates elsewhere.
-      setupNudge={{
-        currentStep: step,
-        nextLabel: STEP_NEXT_LABEL[step],
-        href: "/home/setup-v2",
-      }}
+      // Sidebar nudge only shows when the on-page card is dismissed. While the
+      // card is visible on this home route the two would duplicate the same
+      // affordance in two places. After dismissal -- or once the user
+      // navigates away to another route -- the sidebar nudge takes over.
+      setupNudge={
+        cardDismissed
+          ? {
+              currentStep: step,
+              nextLabel: STEP_NEXT_LABEL[step],
+              href: "/home/setup-v2",
+            }
+          : undefined
+      }
     >
       <div className="mx-auto w-full max-w-4xl px-10 py-8">
         {/* Hero — setup-specific greeting + chat input. The chip row is

@@ -88,7 +88,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "schedule",
-    shortLabel: "Rhythm",
+    shortLabel: "Tasks",
     title: "Set a schedule",
     description: "Pick a cadence — Sketch runs it on its own from there.",
     time: "~1 min",
