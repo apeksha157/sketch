@@ -80,7 +80,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "skill",
-    shortLabel: "Skill",
+    shortLabel: "Skills",
     title: "Teach Sketch a skill",
     description: "Show it a workflow once — it'll run that on a schedule or whenever you ask.",
     time: "~3 min",
