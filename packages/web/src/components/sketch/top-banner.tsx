@@ -36,26 +36,43 @@ export function SetupBanner({ step, onAdvance }: SetupBannerProps) {
       type="button"
       onClick={onAdvance}
       className={cn(
-        "sketch-banner-in flex w-full items-center gap-[12px] px-[18px] py-[11px] cursor-pointer",
-        "bg-brand-yellow text-brand-brown text-left",
-        "border-b border-brand-brown/100",
+        "sketch-banner-in group flex w-full items-center gap-[12px] px-[18px] py-[11px] cursor-pointer",
+        // Pale-yellow surface matches the tile icon containers so brand
+        // identity reads consistently across the page. Brown text holds the
+        // contrast; hover steps the bg slightly darker for affordance.
+        "bg-[#FAF3BD] text-brand-brown text-left",
+        "border-b border-brand-brown/15",
+        "transition-colors duration-100 ease-out hover:bg-[#F4E89E]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40 focus-visible:ring-inset",
       )}
       style={{ animation: "sketch-banner-in 200ms ease-out" }}
       aria-label={`Continue setup: ${SETUP_STEP_LABELS[step]}`}
     >
       <div className="flex items-center gap-[6px]" aria-hidden>
-        {[1, 2, 3, 4, 5].map((dot) => (
-          <span
-            key={dot}
-            className="h-[6px] w-[6px] rounded-full bg-brand-brown"
-            style={{ opacity: dot < step || dot === step ? 1 : 0.22 }}
-          />
-        ))}
+        {[1, 2, 3, 4, 5].map((dot) => {
+          const completed = dot < step;
+          const current = dot === step;
+          return (
+            <span
+              key={dot}
+              className={cn(
+                "h-[6px] w-[6px] rounded-full transition-colors",
+                completed && "bg-brand-brown",
+                current && "bg-brand-brown ring-2 ring-brand-brown/25 ring-offset-1 ring-offset-[#FAF3BD]",
+                !completed && !current && "bg-brand-brown/25",
+              )}
+            />
+          );
+        })}
       </div>
       <span className="flex-1 text-[12px] font-medium leading-tight">
         <span className="opacity-65">Up next ·</span> <span>{SETUP_STEP_LABELS[step]}</span>
       </span>
-      <ArrowRightIcon size={14} aria-hidden />
+      <ArrowRightIcon
+        size={14}
+        aria-hidden
+        className="transition-transform duration-150 ease-out group-hover:translate-x-[2px]"
+      />
     </button>
   );
 }
@@ -72,8 +89,11 @@ export function ErrorBanner({ message, buttonLabel, onAction }: ErrorBannerProps
       role="alert"
       className={cn(
         "sketch-banner-in flex w-full items-center gap-[12px] px-[18px] py-[11px]",
-        "bg-brand-yellow text-brand-brown",
-        "border-b border-brand-brown/100",
+        // Same pale-yellow family as SetupBanner — consistent banner palette
+        // across remedial states (channel disconnected, automation failed).
+        // Danger / billing states use the red DangerBanner instead.
+        "bg-[#FAF3BD] text-brand-brown",
+        "border-b border-brand-brown/15",
       )}
       style={{ animation: "sketch-banner-in 200ms ease-out" }}
     >
@@ -83,8 +103,9 @@ export function ErrorBanner({ message, buttonLabel, onAction }: ErrorBannerProps
         type="button"
         onClick={onAction}
         className={cn(
-          "rounded-[6px] border border-brand-brown px-[10px] py-[4px] text-[11px] font-medium",
-          "bg-white/40 text-brand-brown hover:bg-white/60 transition-colors duration-100 ease-out cursor-pointer",
+          "rounded-[6px] border border-brand-brown/60 px-[10px] py-[4px] text-[11px] font-medium",
+          "bg-transparent text-brand-brown hover:bg-brand-brown/[0.08] transition-colors duration-100 ease-out cursor-pointer",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40",
         )}
       >
         {buttonLabel}

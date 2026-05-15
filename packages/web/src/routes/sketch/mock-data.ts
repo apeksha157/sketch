@@ -126,6 +126,17 @@ export const MOCK_DIGEST: HomeDigest = {
   scheduledToday: 2,
 };
 
+/** Brand-new workspace — pickSubtitle's daysActive < 7 branch surfaces nudges
+ * instead of production-state snapshots, which is the right framing for the
+ * /home/setup state. */
+export const MOCK_SETUP_DIGEST: HomeDigest = {
+  daysActive: 0,
+  tasksRanToday: 0,
+  hoursSavedThisWeek: 0,
+  runningNow: 0,
+  scheduledToday: 0,
+};
+
 export const MOCK_CREDITS = {
   count: 1240,
   total: 1500,

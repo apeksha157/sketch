@@ -11,7 +11,7 @@
 import { HomePane } from "@/components/sketch/home-pane";
 import { SketchShell } from "@/components/sketch/shell";
 import { SetupBanner, type SetupStep } from "@/components/sketch/top-banner";
-import { MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_RECENTS, MOCK_SETUP_DIGEST } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -45,6 +45,7 @@ function HomeSetupPage() {
       <HomePane
         firstName={firstNameOf(auth)}
         recents={step >= 3 ? MOCK_RECENTS.slice(0, 2) : []}
+        digest={MOCK_SETUP_DIGEST}
         onSubmit={handleSubmit}
       />
     </SketchShell>
