@@ -117,16 +117,18 @@ function TileItem({ tile }: { tile: TileDef }) {
   );
 
   /**
-   * Bento card — horizontal layout (icon left, text right). Hover applies the
-   * same light yellow wash as the ChipRow above so the page reads as one
-   * visual family on interaction. Brand colour stays anchored in the icon
-   * container at rest; hover adds a hint of warmth to the row.
+   * Bento card — horizontal layout (icon left, text right). Hover follows the
+   * industry-standard interactive-card pattern: neutral bg darkening + a
+   * subtle border emphasis + a tiny lift for tactility. Brand colour stays
+   * anchored in the icon container at rest so hover doesn't compete with the
+   * brand handhold already on the card.
    */
   const baseClass = cn(
     "group flex items-center gap-[12px] rounded-[10px] bg-card border border-border",
-    "transition-colors duration-150 ease-out cursor-pointer text-left",
-    "hover:bg-[#FEED01]/[0.08] dark:hover:bg-[#FEED01]/[0.05]",
-    "hover:border-[#FEED01]/25 dark:hover:border-[#FEED01]/15",
+    "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
+    "hover:bg-muted/60 hover:border-foreground/20",
+    "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
+    "active:translate-y-0 active:shadow-none",
     "px-[14px] py-[12px]",
   );
 
