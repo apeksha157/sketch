@@ -275,9 +275,16 @@ function Stepper({ currentStep }: { currentStep: number }) {
         const isLast = idx === STEPS.length - 1;
         return (
           <Fragment key={`label-${step.key}`}>
+            {/* min-w-0 + overflow-visible: labels longer than the circle
+             * column ("Platforms", "Skills") would otherwise force the
+             * grid column to grow to fit their min-content, pushing the
+             * circle (50px, start-aligned) off-center from the label
+             * (text-center within the expanded column). With min-w-0
+             * the column stays at CIRCLE_PX and the label overflows
+             * equally on both sides, sharing the circle's centerline. */}
             <span
               className={cn(
-                "whitespace-nowrap text-center text-[16px] leading-[1.1]",
+                "min-w-0 overflow-visible whitespace-nowrap text-center text-[16px] leading-[1.1]",
                 current ? "text-foreground" : "text-muted-foreground",
               )}
               style={{ fontFamily: "'Gloria Hallelujah', cursive" }}
