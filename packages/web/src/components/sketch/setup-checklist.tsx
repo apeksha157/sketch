@@ -165,47 +165,41 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
        * from "what to do next." */}
       <div className="mt-[28px] border-t border-border" />
 
-      {/* Action area — 2-col grid. Row 1: title (with optional time pill) in
-       * col 1, col 2 left empty so the CTA below can occupy it.
-       * Row 2: description + CTA. align-items: end on the grid + align-self:
-       * end on the CTA pins the CTA's bottom edge to row 2's bottom edge,
-       * so the CTA tracks the description regardless of length.
+      {/* Action area — left column stacks title (with optional time pill)
+       * and description; right column holds the CTA, vertically centered
+       * against the full height of the left stack.
        *
-       * The "Step N of 5" counter previously lived in row 1 / col 2 -- it
-       * duplicated information the stepper above already shows visually
-       * (done check, active yellow, todo dots), so it was dropped. */}
-      <div className="mt-[22px] grid items-end gap-x-[24px] gap-y-[8px]" style={{ gridTemplateColumns: "1fr auto" }}>
-        {/* Row 1 / Col 1 — title + inline time pill */}
-        <div
-          className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]"
-          style={{ alignSelf: "start", gridRow: 1, gridColumn: 1 }}
-        >
-          <h3 className="text-[17px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
-          {currentDef.time && <TimePill label={currentDef.time} />}
+       * Earlier pass used a 2-col grid with the CTA pinned to row 2's
+       * bottom edge so it tracked the description. That worked while a
+       * step counter occupied row 1 / col 2, but once the counter was
+       * dropped the bottom-pin left a void above the CTA. Switching to
+       * flex + items-center centers the CTA against the whole left
+       * stack instead, so the right column reads balanced regardless of
+       * description length.
+       *
+       * Intentionally no arrow icon on the CTA: a high-contrast filled
+       * button at the right of an action area already reads "click me"
+       * via position and contrast; an arrow on top of that was decoration. */}
+      <div className="mt-[22px] flex items-center gap-[24px]">
+        <div className="flex min-w-0 flex-1 flex-col gap-[8px]">
+          <div className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]">
+            <h3 className="text-[17px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
+            {currentDef.time && <TimePill label={currentDef.time} />}
+          </div>
+          {/* Description — capped at 46ch so line length stays comfortable
+           * and the block sits as ~2 lines at default widths. */}
+          <p className="text-[14px] text-muted-foreground max-w-[46ch]" style={{ lineHeight: 1.55 }}>
+            {currentDef.description}
+          </p>
         </div>
-
-        {/* Row 2 / Col 1 — description, capped at 46ch so line length stays
-         * comfortable and the block sits as ~2 lines at default widths. */}
-        <p
-          className="text-[14px] text-muted-foreground max-w-[46ch]"
-          style={{ alignSelf: "start", gridRow: 2, gridColumn: 1, lineHeight: 1.55 }}
-        >
-          {currentDef.description}
-        </p>
-
-        {/* Row 2 / Col 2 — primary CTA pinned to the bottom-right of row 2.
-         * Intentionally no arrow icon: a high-contrast filled button at the
-         * bottom-right of an action area already reads "click me" via
-         * position and contrast; an arrow on top of that was decoration. */}
         <button
           type="button"
           onClick={onAdvance}
           className={cn(
-            "rounded-[10px] bg-foreground px-[22px] py-[11px] text-[14px] font-medium text-background",
+            "shrink-0 rounded-[10px] bg-foreground px-[22px] py-[11px] text-[14px] font-medium text-background",
             "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/90",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
           )}
-          style={{ alignSelf: "end", justifySelf: "end", gridRow: 2, gridColumn: 2 }}
           aria-label={`${currentDef.cta} — ${currentDef.title}`}
         >
           {currentDef.cta}
