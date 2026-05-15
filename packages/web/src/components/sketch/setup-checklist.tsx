@@ -158,14 +158,18 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
       {/* Stepper — 5 circles connected by a thin line at vertical center.
        * 32px from the header above (spec).
        *
-       * Width-constrained to ~440px and centered. The card is wider than
-       * the stepper needs to be; letting the 1fr connectors fill the full
-       * card width stretched each connector to ~170px and made the steps
-       * feel disconnected. Capping at 440px gives roughly 60-65px of line
-       * between adjacent circles, which is comfortable without being
-       * sparse. The empty space outside the stepper is intentional
-       * breathing room around it, not wasted space inside it. */}
-      <div className="mt-[32px] mx-auto w-full max-w-[440px]">
+       * Width-capped at 520px and centered inside the card. The card is
+       * wider than the stepper needs to be; letting the 1fr connectors
+       * fill the full card width stretched each line to ~170px and made
+       * the steps feel disconnected. An earlier 440px cap tightened them
+       * to ~60px, which then read as the steps being cramped together.
+       * 520px lands ~80px of line between adjacent circles -- enough
+       * breathing room to read as a journey, not so much that adjacent
+       * steps lose connection.
+       *
+       * The empty space outside the stepper is intentional breathing
+       * room around it, not wasted space inside it. */}
+      <div className="mt-[32px] mx-auto w-full max-w-[520px]">
         <Stepper currentStep={safeStep} />
       </div>
 
@@ -298,11 +302,19 @@ function Stepper({ currentStep }: { currentStep: number }) {
  * column template references this constant directly, so changing it here
  * propagates both to the circle visuals and to the row layout.
  *
- * Sized at 40px after walking back from a 48px experiment that read too
- * heavy in-place. The edge-flush grid does most of the work of filling
- * the row visually; the circles don't need to.
+ * 42px. Picked after a 40 -> 48 -> 40 -> 42 walk:
+ *   - 48 was too heavy.
+ *   - 40 with edge-flush had ~170px of connector stretching between steps.
+ *   - 40 with max-w 440 tightened connectors to ~60px, but that read as
+ *     the steps being cramped together.
+ *   - 42 with max-w 520 (below) lands ~80px connectors, which gives the
+ *     stepper room to breathe without disconnecting the steps.
+ *
+ * Font sizes inside the circle (24px GH, 16px check) stay put -- the
+ * 2px size bump is just a hair of extra circle to give the row a little
+ * more confidence.
  */
-const CIRCLE_PX = 40;
+const CIRCLE_PX = 42;
 
 function StatusCircle({
   completed,
