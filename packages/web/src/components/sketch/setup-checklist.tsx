@@ -107,35 +107,47 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
       {/* Hairline divider between the stepper and the active-step block — gives
        * a clear hand-off between "where you are in the journey" and "what to
        * do next" without taking vertical space. */}
-      <div className="mt-[20px] border-t border-border" />
+      <div className="mt-[22px] border-t border-border" />
 
-      {/* Active-step block — title + description on the left, CTA button on the
-       * right aligned to the title baseline. Reads as a proper card row, not a
-       * floating button next to a wrapping paragraph. */}
-      <div className="mt-[18px] flex items-start justify-between gap-[24px]">
-        <div className="min-w-0 flex-1">
-          <h3 className="text-[15px] font-medium text-foreground leading-[1.3]">{currentDef.label}</h3>
-          <p className="mt-[4px] text-[13px] text-muted-foreground leading-[1.5]">{currentDef.description}</p>
+      {/* Active-step block.
+       *
+       * Top row: step title (h3) on the left, CTA button on the right —
+       *   button vertically centered on the title line, so the title reads
+       *   as the action and the button is the affordance to take it.
+       * Bottom row: description spans the full card width below, with proper
+       *   line length for readability (no longer wedged into a half-column
+       *   next to a button).
+       *
+       * This is the pattern Stripe / Linear / Notion use for setup-card
+       * active-step blocks — clear hierarchy, generous line length, the
+       * action sits as a confident peer to the title.
+       */}
+      <div className="mt-[18px]">
+        <div className="flex items-center justify-between gap-[20px]">
+          <h3 className="min-w-0 truncate text-[15px] font-medium text-foreground leading-[1.3]">
+            {currentDef.label}
+          </h3>
+          <button
+            type="button"
+            onClick={onAdvance}
+            className={cn(
+              "shrink-0 inline-flex items-center gap-[6px] rounded-[6px]",
+              // Brand-brown bg with near-white text + a brand-yellow arrow
+              // accent. Keeps the button on-brand (the brown is unmistakably
+              // Sketch) while reading as a clean modern primary action —
+              // not the saturated brown-on-yellow combo that read kitsch.
+              "bg-brand-brown text-background px-[14px] py-[8px] text-[13px] font-medium",
+              "transition-all duration-100 ease-out cursor-pointer",
+              "hover:bg-brand-brown/90 active:scale-[0.98]",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+            )}
+            aria-label={`${currentDef.cta}: ${currentDef.label}`}
+          >
+            <span>{currentDef.cta}</span>
+            <ArrowRightIcon size={13} aria-hidden className="text-brand-yellow" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onAdvance}
-          className={cn(
-            "shrink-0 inline-flex items-center gap-[6px] rounded-[6px]",
-            // Neutral dark primary — matches the rest of the dashboard's
-            // button language (clean foreground/background pair). The
-            // brand brown-on-yellow combo is reserved for the chat-input
-            // submit pip, where it actually earns the saturation.
-            "bg-foreground text-background px-[14px] py-[8px] text-[13px] font-medium",
-            "transition-all duration-100 ease-out cursor-pointer",
-            "hover:bg-foreground/90 active:scale-[0.98]",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-          )}
-          aria-label={`${currentDef.cta}: ${currentDef.label}`}
-        >
-          <span>{currentDef.cta}</span>
-          <ArrowRightIcon size={13} aria-hidden />
-        </button>
+        <p className="mt-[6px] text-[13px] text-muted-foreground leading-[1.5]">{currentDef.description}</p>
       </div>
     </section>
   );
@@ -143,42 +155,61 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
 
 function Stepper({ currentStep }: { currentStep: number }) {
   return (
-    <div className="flex w-full items-start">
+    <div className="grid grid-cols-5">
       {STEPS.map((step, idx) => {
         const stepNumber = idx + 1;
         const completed = stepNumber < currentStep;
         const current = stepNumber === currentStep;
+        const isFirst = idx === 0;
         const isLast = idx === STEPS.length - 1;
+
+        // Each step owns the connector segments on either side of its circle.
+        // - Left half: filled when this step has been reached (current or done).
+        //   Hidden entirely on the first step so the line doesn't dangle.
+        // - Right half: filled when this step is done (we've moved past it).
+        //   Hidden entirely on the last step.
+        const leftFilled = !isFirst && (completed || current);
+        const rightFilled = !isLast && completed;
+
         return (
-          <div key={step.key} className={cn("flex shrink-0 items-start", isLast ? "" : "flex-1")}>
-            {/* Step cell — circle + label below, centered on the circle */}
-            <div className="flex shrink-0 flex-col items-center gap-[8px]">
+          <div key={step.key} className="flex flex-col items-center">
+            {/* Circle row — left half connector, circle, right half connector.
+             * The two halves are flex-1 so circles always sit centered in
+             * their grid column and the connectors stop cleanly at each
+             * column boundary — never overlapping the label below. */}
+            <div className="flex w-full items-center">
+              <ConnectorSegment visible={!isFirst} filled={leftFilled} />
               <StatusCircle completed={completed} current={current} stepNumber={stepNumber} />
-              <span
-                className={cn(
-                  "text-[11.5px] leading-[1.2] text-center whitespace-nowrap",
-                  current ? "font-medium text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {step.shortLabel}
-              </span>
+              <ConnectorSegment visible={!isLast} filled={rightFilled} />
             </div>
-            {/* Connector line — fills the space between this circle and the next */}
-            {!isLast && (
-              <div
-                className={cn(
-                  "h-[2px] flex-1 self-start rounded-full",
-                  // Vertically align with the center of the 24px circle (y = 11px).
-                  "mt-[11px]",
-                  completed ? "bg-foreground/40" : "bg-foreground/12",
-                )}
-                aria-hidden
-              />
-            )}
+            {/* Label — sits below the circle in its own grid column, so it
+             * never extends into the connector area. */}
+            <span
+              className={cn(
+                "mt-[10px] text-[11.5px] leading-[1.2]",
+                current ? "font-medium text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {step.shortLabel}
+            </span>
           </div>
         );
       })}
     </div>
+  );
+}
+
+function ConnectorSegment({ visible, filled }: { visible: boolean; filled: boolean }) {
+  return (
+    <div
+      aria-hidden
+      className={cn(
+        "h-[2px] flex-1 rounded-full",
+        !visible && "bg-transparent",
+        visible && filled && "bg-foreground/40",
+        visible && !filled && "bg-foreground/12",
+      )}
+    />
   );
 }
 
@@ -193,7 +224,7 @@ function StatusCircle({
         "flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
         completed && "bg-foreground/70 text-background",
-        current && "bg-foreground text-background ring-2 ring-foreground/15 ring-offset-2 ring-offset-card",
+        current && "bg-brand-brown text-brand-yellow ring-2 ring-brand-brown/15 ring-offset-2 ring-offset-card",
         !completed && !current && "border-[1.5px] border-foreground/20 bg-card text-foreground/35",
       )}
       aria-hidden
