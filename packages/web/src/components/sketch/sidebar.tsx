@@ -252,14 +252,6 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
         )}
         aria-current={isActive ? "page" : undefined}
       >
-        {/* Brand-yellow left-edge marker for the active page (expanded only —
-         * in collapsed mode the bg fill carries the signal alone). */}
-        {isActive && !collapsed && (
-          <span
-            aria-hidden
-            className="absolute left-[-2px] top-1/2 h-[16px] w-[2px] -translate-y-1/2 rounded-full bg-brand-yellow"
-          />
-        )}
         <span className="relative inline-flex items-center justify-center">
           <Icon size={16} aria-hidden />
           {pulse && collapsed && <RunningPulse className="absolute -top-1 -right-1" />}
