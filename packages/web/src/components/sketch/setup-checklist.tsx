@@ -104,18 +104,32 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
       {/* Stepper row — 5 status circles connected by line segments, labels below */}
       <Stepper currentStep={currentStep} />
 
-      {/* Active-step description + CTA */}
-      <div className="mt-[20px] flex items-center justify-between gap-[16px]">
-        <p className="min-w-0 flex-1 text-[13.5px] text-muted-foreground leading-[1.5]">{currentDef.description}</p>
+      {/* Hairline divider between the stepper and the active-step block — gives
+       * a clear hand-off between "where you are in the journey" and "what to
+       * do next" without taking vertical space. */}
+      <div className="mt-[20px] border-t border-border" />
+
+      {/* Active-step block — title + description on the left, CTA button on the
+       * right aligned to the title baseline. Reads as a proper card row, not a
+       * floating button next to a wrapping paragraph. */}
+      <div className="mt-[18px] flex items-start justify-between gap-[24px]">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-[15px] font-medium text-foreground leading-[1.3]">{currentDef.label}</h3>
+          <p className="mt-[4px] text-[13px] text-muted-foreground leading-[1.5]">{currentDef.description}</p>
+        </div>
         <button
           type="button"
           onClick={onAdvance}
           className={cn(
             "shrink-0 inline-flex items-center gap-[6px] rounded-[6px]",
-            "bg-brand-brown text-brand-yellow px-[14px] py-[7px] text-[13px] font-medium",
+            // Neutral dark primary — matches the rest of the dashboard's
+            // button language (clean foreground/background pair). The
+            // brand brown-on-yellow combo is reserved for the chat-input
+            // submit pip, where it actually earns the saturation.
+            "bg-foreground text-background px-[14px] py-[8px] text-[13px] font-medium",
             "transition-all duration-100 ease-out cursor-pointer",
-            "hover:bg-brand-brown/90 active:scale-[0.98]",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-brown/40",
+            "hover:bg-foreground/90 active:scale-[0.98]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 focus-visible:ring-offset-2 focus-visible:ring-offset-card",
           )}
           aria-label={`${currentDef.cta}: ${currentDef.label}`}
         >
@@ -178,8 +192,8 @@ function StatusCircle({
       className={cn(
         "flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        completed && "bg-foreground/80 text-background",
-        current && "bg-foreground text-background ring-4 ring-foreground/10",
+        completed && "bg-foreground/70 text-background",
+        current && "bg-foreground text-background ring-2 ring-foreground/15 ring-offset-2 ring-offset-card",
         !completed && !current && "border-[1.5px] border-foreground/20 bg-card text-foreground/35",
       )}
       aria-hidden
