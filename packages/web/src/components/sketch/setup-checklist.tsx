@@ -124,9 +124,7 @@ export function SetupChecklist({ currentStep, onAdvance, className }: SetupCheck
        */}
       <div className="mt-[18px]">
         <div className="flex items-center justify-between gap-[20px]">
-          <h3 className="min-w-0 truncate text-[15px] font-medium text-foreground leading-[1.3]">
-            {currentDef.label}
-          </h3>
+          <h3 className="min-w-0 truncate text-[15px] font-medium text-foreground leading-[1.3]">{currentDef.label}</h3>
           <button
             type="button"
             onClick={onAdvance}
