@@ -55,7 +55,7 @@ interface StepDef {
 const STEPS: StepDef[] = [
   {
     key: "channel",
-    shortLabel: "Channel",
+    shortLabel: "Chat",
     title: "Plug Sketch into your chat",
     description: "Slack or WhatsApp — wherever your team's already talking.",
     time: "~30 sec",
@@ -63,7 +63,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "teammate",
-    shortLabel: "Teammate",
+    shortLabel: "Crew",
     title: "Bring in a teammate",
     description: "Sketch gets sharper the more of your team it works with.",
     time: "~1 min",
@@ -71,7 +71,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "integration",
-    shortLabel: "Integration",
+    shortLabel: "Tools",
     title: "Hook up a tool",
     description: "Gmail, Notion, Drive, Linear, or any of 300+ others — give Sketch the context it needs.",
     time: "~2 min",
@@ -87,7 +87,7 @@ const STEPS: StepDef[] = [
   },
   {
     key: "schedule",
-    shortLabel: "Schedule",
+    shortLabel: "Rhythm",
     title: "Set a schedule",
     description: "Pick a cadence — Sketch runs it on its own from there.",
     time: "~1 min",
@@ -135,17 +135,22 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
         Get started
       </h2>
       {onDismiss && (
+        // Sized to match the 11px eyebrow's visual weight. Previous pass
+        // had a 32x32 hit target with an 18px glyph -- the X dwarfed the
+        // "Get started" label next to it. Dropped to a 28x28 hit target
+        // with a 14px glyph so the corners of the header read balanced.
+        // 28 stays comfortably above the 24x24 minimum touch target.
         <button
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss setup card (continue from sidebar)"
           className={cn(
-            "absolute top-[16px] right-[16px] inline-flex h-[32px] w-[32px] items-center justify-center rounded-[8px]",
+            "absolute top-[14px] right-[14px] inline-flex h-[28px] w-[28px] items-center justify-center rounded-[8px]",
             "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground transition-colors duration-100 ease-out cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/20",
           )}
         >
-          <XIcon size={18} aria-hidden />
+          <XIcon size={14} aria-hidden />
         </button>
       )}
 
@@ -170,7 +175,7 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
           className="flex flex-wrap items-center gap-x-[10px] gap-y-[6px]"
           style={{ alignSelf: "start", gridRow: 1, gridColumn: 1 }}
         >
-          <h3 className="text-[16px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
+          <h3 className="text-[17px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
           {currentDef.time && <TimePill label={currentDef.time} />}
         </div>
 
@@ -267,11 +272,17 @@ function Stepper({ currentStep }: { currentStep: number }) {
               <StatusCircle completed={completed} current={current} stepNumber={stepNumber} />
               <ConnectorHalf visible={!isLast} filled={rightFilled} />
             </div>
+            {/* Milestone label — Gloria Hallelujah to echo the script
+             * numerals inside the circles, so the whole stepper carries
+             * the same ceremonial personality. GH is single-weight, so
+             * the active/inactive distinction lives purely in color
+             * (foreground vs muted-foreground); the size stays uniform. */}
             <span
               className={cn(
-                "mt-[14px] text-center text-[12px] leading-[1.2]",
-                current ? "font-medium text-foreground" : "font-normal text-muted-foreground",
+                "mt-[12px] text-center text-[16px] leading-[1.1]",
+                current ? "text-foreground" : "text-muted-foreground",
               )}
+              style={{ fontFamily: "'Gloria Hallelujah', cursive" }}
             >
               {step.shortLabel}
             </span>
@@ -301,39 +312,47 @@ function StatusCircle({
   current,
   stepNumber,
 }: { completed: boolean; current: boolean; stepNumber: number }) {
+  // All three states render as filled shapes -- same outer weight, contrast
+  // comes from fill color. Previous pass mixed a solid-dark done, a solid-
+  // yellow active, and a hairline-bordered todo; the border on todo made it
+  // read as a different kind of object than the others. Soft foreground/[0.06]
+  // fill on todo gives the same shape weight as done/active while staying
+  // recessive.
+  //
+  // 40x40 (was 32x32) so the Gloria Hallelujah numerals have room to breathe.
+  // GH renders smaller than system faces; at 20px in a 32px circle it felt
+  // cramped. 24px in a 40px circle reads cleanly.
   return (
     <span
       className={cn(
-        "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-full",
+        "flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        // Done: solid foreground fill with a background-tone check. The check
-        // is not yellow because brand yellow lives ONLY on the active circle.
+        // Done: solid foreground fill, background-tone check. Brand yellow
+        // lives only on the active circle, so the check here is neutral.
         completed && "bg-foreground text-background",
-        // Active: brand-yellow fill with a soft yellow halo so the eye lands
-        // here first. The numeral inside is dark, weight 500.
+        // Active: brand-yellow fill + soft yellow halo. The eye lands here.
         current && "bg-brand-yellow text-foreground",
-        // Todo: transparent fill with a hairline border + muted numeral.
-        !completed && !current && "border border-foreground/20 text-muted-foreground",
+        // Todo: soft foreground tint, no border. Same shape weight as the
+        // other two; recessive via lower contrast, not via missing fill.
+        !completed && !current && "bg-foreground/[0.06] text-muted-foreground",
       )}
       style={current ? { boxShadow: "0 0 0 5px rgba(254,237,1,0.22)" } : undefined}
       aria-hidden
     >
       {completed ? (
-        <CheckIcon size={14} weight="bold" />
+        <CheckIcon size={16} weight="bold" />
       ) : (
-        // Hand-drawn numerals in Gloria Hallelujah — same family the
+        // Hand-drawn numerals in Gloria Hallelujah -- same family the
         // onboarding / trial banners use for ceremonial moments. Gives the
-        // stepper a touch of personality without leaning on a second
-        // accent color. The script lives on every numeral circle so the
-        // pattern reads as the stepper's personality; the brand-yellow
-        // halo + fill on the active circle still do the "you are here"
-        // signaling on their own.
+        // stepper a touch of personality without introducing a second accent
+        // color. Lives on every numeral circle so it reads as the stepper's
+        // personality; the brand-yellow halo + fill on the active circle do
+        // the "you are here" signaling on their own.
         //
-        // Slight translate-y tweak: Gloria Hallelujah's baseline sits a
-        // touch low inside its em-box; nudging up 1px restores optical
-        // centering inside the 32×32 circle.
+        // GH's baseline sits a touch low inside its em-box; nudging the
+        // glyph up 1px restores optical centering inside the circle.
         <span
-          className="text-[20px] leading-none"
+          className="text-[24px] leading-none"
           style={{
             fontFamily: "'Gloria Hallelujah', cursive",
             transform: "translateY(-1px)",
