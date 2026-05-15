@@ -35,6 +35,7 @@ import { CheckIcon, ClockIcon, XIcon } from "@phosphor-icons/react";
  *     makes metadata informative.
  */
 import { cn } from "@sketch/ui/lib/utils";
+import { Fragment } from "react";
 
 export type SetupStepKey = "channel" | "teammate" | "integration" | "skill" | "schedule";
 
@@ -225,70 +226,71 @@ function TimePill({ label }: { label: string }) {
 }
 
 function Stepper({ currentStep }: { currentStep: number }) {
-  // Each step owns ONE grid column carrying both its circle (with the two
-  // connector halves on either side) and its label below. Same column for
-  // both rows = circle and label are guaranteed to share a centerline.
-  // The earlier flex-with-flex-1 layout broke alignment because the last
-  // step shrank to circle-width while the others kept connector room,
-  // pushing every circle off the column center of its label.
+  // 9-column grid: circle, connector, circle, connector, ... circle.
+  // Circles are fixed-width (matching CIRCLE_PX) sitting in the odd
+  // columns; connectors fill the 1fr space between circles in the even
+  // columns. First and last circles end up flush against the stepper's
+  // outer edges -- the previous `grid-cols-5` layout indented each
+  // circle to the center of a 1/5 column, which read as ~10% of empty
+  // space wasted on either side of the row.
+  //
+  // Row 2 holds the labels, anchored under their circles (odd columns).
+  // Empty placeholders go in the connector columns so the label row
+  // tracks the same 9-column layout.
+  const TEMPLATE = `${CIRCLE_PX}px 1fr ${CIRCLE_PX}px 1fr ${CIRCLE_PX}px 1fr ${CIRCLE_PX}px 1fr ${CIRCLE_PX}px`;
+
   return (
-    <div className="grid grid-cols-5">
+    <div className="grid items-center gap-y-[14px]" style={{ gridTemplateColumns: TEMPLATE }}>
+      {/* Row 1 — circles + connectors interleaved */}
       {STEPS.map((step, idx) => {
         const stepNumber = idx + 1;
         const completed = stepNumber < currentStep;
         const current = stepNumber === currentStep;
-        const isFirst = idx === 0;
         const isLast = idx === STEPS.length - 1;
-
-        // Each circle owns the two connector halves around it.
-        // - Left half is filled when the user has reached this step (done or current).
-        // - Right half is filled only when this step is done (we've moved past it).
-        // - Outer edges (left half of step 1, right half of step 5) are invisible
-        //   so the line doesn't dangle past the first/last circles.
-        const leftFilled = !isFirst && (completed || current);
-        const rightFilled = !isLast && completed;
-
         return (
-          <div key={step.key} className="flex flex-col items-center">
-            <div className="flex w-full items-center">
-              <ConnectorHalf visible={!isFirst} filled={leftFilled} />
-              <StatusCircle completed={completed} current={current} stepNumber={stepNumber} />
-              <ConnectorHalf visible={!isLast} filled={rightFilled} />
-            </div>
-            {/* Milestone label — Gloria Hallelujah to echo the script
-             * numerals inside the circles, so the whole stepper carries
-             * the same ceremonial personality. GH is single-weight, so
-             * the active/inactive distinction lives purely in color
-             * (foreground vs muted-foreground); the size stays uniform. */}
+          <Fragment key={`circle-${step.key}`}>
+            <StatusCircle completed={completed} current={current} stepNumber={stepNumber} />
+            {!isLast && (
+              <span aria-hidden className={cn("mx-[6px] h-[1px]", completed ? "bg-foreground" : "bg-foreground/20")} />
+            )}
+          </Fragment>
+        );
+      })}
+
+      {/* Row 2 — Gloria Hallelujah milestone labels under each circle.
+       * Empty placeholders fill the connector columns so the labels
+       * stay locked to their circles' grid columns. GH is single-
+       * weight, so the active/inactive distinction lives purely in
+       * color (foreground vs muted-foreground); size is uniform. */}
+      {STEPS.map((step, idx) => {
+        const stepNumber = idx + 1;
+        const current = stepNumber === currentStep;
+        const isLast = idx === STEPS.length - 1;
+        return (
+          <Fragment key={`label-${step.key}`}>
             <span
               className={cn(
-                "mt-[12px] text-center text-[16px] leading-[1.1]",
+                "whitespace-nowrap text-center text-[16px] leading-[1.1]",
                 current ? "text-foreground" : "text-muted-foreground",
               )}
               style={{ fontFamily: "'Gloria Hallelujah', cursive" }}
             >
               {step.shortLabel}
             </span>
-          </div>
+            {!isLast && <span aria-hidden />}
+          </Fragment>
         );
       })}
     </div>
   );
 }
 
-function ConnectorHalf({ visible, filled }: { visible: boolean; filled: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "h-[1px] flex-1",
-        !visible && "bg-transparent",
-        visible && filled && "bg-foreground",
-        visible && !filled && "bg-foreground/20",
-      )}
-    />
-  );
-}
+/**
+ * Single source of truth for the stepper circle diameter. The stepper grid's
+ * column template references this constant directly, so changing it here
+ * propagates both to the circle visuals and to the row layout.
+ */
+const CIRCLE_PX = 48;
 
 function StatusCircle({
   completed,
@@ -296,46 +298,45 @@ function StatusCircle({
   stepNumber,
 }: { completed: boolean; current: boolean; stepNumber: number }) {
   // All three states render as filled shapes -- same outer weight, contrast
-  // comes from fill color. Previous pass mixed a solid-dark done, a solid-
+  // comes from fill color. Earlier passes mixed a solid-dark done, a solid-
   // yellow active, and a hairline-bordered todo; the border on todo made it
   // read as a different kind of object than the others. Soft foreground/[0.06]
-  // fill on todo gives the same shape weight as done/active while staying
+  // fill on todo gives the same shape weight as the other two while staying
   // recessive.
   //
-  // 40x40 (was 32x32) so the Gloria Hallelujah numerals have room to breathe.
-  // GH renders smaller than system faces; at 20px in a 32px circle it felt
-  // cramped. 24px in a 40px circle reads cleanly.
+  // 48 (was 40, was 32 originally) so the Gloria Hallelujah numerals have
+  // room to breathe AND the row uses up the empty space that the previous
+  // 1/5-column grid layout left on the outer edges. Halo + numeral / check
+  // sizes step up proportionally.
   return (
     <span
       className={cn(
-        "flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full",
+        "flex shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        // Done: solid foreground fill, background-tone check. Brand yellow
-        // lives only on the active circle, so the check here is neutral.
         completed && "bg-foreground text-background",
-        // Active: brand-yellow fill + soft yellow halo. The eye lands here.
         current && "bg-brand-yellow text-foreground",
-        // Todo: soft foreground tint, no border. Same shape weight as the
-        // other two; recessive via lower contrast, not via missing fill.
         !completed && !current && "bg-foreground/[0.06] text-muted-foreground",
       )}
-      style={current ? { boxShadow: "0 0 0 5px rgba(254,237,1,0.22)" } : undefined}
+      style={{
+        height: CIRCLE_PX,
+        width: CIRCLE_PX,
+        boxShadow: current ? "0 0 0 6px rgba(254,237,1,0.22)" : undefined,
+      }}
       aria-hidden
     >
       {completed ? (
-        <CheckIcon size={16} weight="bold" />
+        <CheckIcon size={18} weight="bold" />
       ) : (
         // Hand-drawn numerals in Gloria Hallelujah -- same family the
-        // onboarding / trial banners use for ceremonial moments. Gives the
-        // stepper a touch of personality without introducing a second accent
-        // color. Lives on every numeral circle so it reads as the stepper's
-        // personality; the brand-yellow halo + fill on the active circle do
-        // the "you are here" signaling on their own.
+        // onboarding / trial banners use for ceremonial moments. Lives on
+        // every numeral circle so it reads as the stepper's personality;
+        // the brand-yellow halo + fill on the active circle do the
+        // "you are here" signaling on their own.
         //
         // GH's baseline sits a touch low inside its em-box; nudging the
         // glyph up 1px restores optical centering inside the circle.
         <span
-          className="text-[24px] leading-none"
+          className="text-[28px] leading-none"
           style={{
             fontFamily: "'Gloria Hallelujah', cursive",
             transform: "translateY(-1px)",
