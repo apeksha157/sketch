@@ -194,9 +194,12 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
             <h3 className="text-[17px] font-medium text-foreground leading-tight">{currentDef.title}</h3>
             {currentDef.time && <TimePill label={currentDef.time} />}
           </div>
-          {/* Description — capped at 46ch so line length stays comfortable
-           * and the block sits as ~2 lines at default widths. */}
-          <p className="text-[14px] text-muted-foreground max-w-[46ch]" style={{ lineHeight: 1.55 }}>
+          {/* Description fills the column's available width (CTA on the
+           * right gets its own column via gap-[24px] + shrink-0). Earlier
+           * pass capped at 46ch per the original spec, but that pre-empted
+           * line breaks the layout would have prevented on its own -- step
+           * 3's ~87-char description fits cleanly in the available room. */}
+          <p className="text-[14px] text-muted-foreground" style={{ lineHeight: 1.55 }}>
             {currentDef.description}
           </p>
         </div>
