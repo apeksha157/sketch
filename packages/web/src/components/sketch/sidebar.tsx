@@ -137,23 +137,23 @@ export function SketchSidebar({
           ))}
         </div>
 
-        {/* Credits card (only when setup complete, hidden when collapsed or paused) */}
+        {/* Account zone — credits + profile chip grouped via spacing, with
+         * extra breathing room above to separate from the workspace nav. */}
         {!paused && credits && !collapsed && (
-          <div className="mt-[10px]">
+          <div className="mt-[18px]">
             <CreditsCard {...credits} />
           </div>
         )}
 
         {/* Paused-state replacement for the credits card (§5.7) */}
         {paused && !collapsed && (
-          <div className="mt-[10px] px-[12px] text-[11px] font-medium text-destructive">Account paused</div>
+          <div className="mt-[18px] px-[12px] text-[11px] font-medium text-destructive">Account paused</div>
         )}
 
-        {/* Profile chip — sits below credits card */}
         <ProfileChip
           {...profile}
           collapsed={collapsed}
-          className={!collapsed && (credits || paused) ? "mt-2" : "mt-[10px]"}
+          className={!collapsed && (credits || paused) ? "mt-[6px]" : "mt-[18px]"}
         />
       </div>
     </aside>
@@ -190,7 +190,7 @@ function BrandRow({
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
         className={cn(
           "shrink-0 rounded-[6px] p-[4px] text-muted-foreground transition-colors duration-100 ease-out cursor-pointer",
-          "hover:text-foreground hover:bg-accent",
+          "hover:text-foreground hover:bg-foreground/[0.06]",
         )}
       >
         <SidebarSimpleIcon size={16} aria-hidden weight="regular" />
@@ -216,8 +216,8 @@ function SearchTrigger({
         onKeyDown={onKeyDown}
         aria-label="Open search palette"
         className={cn(
-          "mb-[10px] flex items-center rounded-[6px] bg-muted/40 text-muted-foreground/75",
-          "transition-colors duration-100 ease-out cursor-pointer hover:bg-muted/70 hover:text-foreground",
+          "mb-[10px] flex items-center rounded-[6px] bg-foreground/[0.04] text-muted-foreground/75",
+          "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/[0.08] hover:text-foreground",
           collapsed ? "h-[30px] w-[30px] mx-auto justify-center" : "px-[8px] py-[7px] gap-[10px]",
         )}
       >
@@ -246,8 +246,8 @@ function NavItem({ item, isActive }: { item: NavItemDef; isActive: boolean }) {
         className={cn(
           "group relative flex items-center rounded-[6px] transition-colors duration-100 ease-out cursor-pointer",
           isActive
-            ? "text-foreground font-medium bg-muted"
-            : "text-muted-foreground font-normal hover:bg-accent hover:text-foreground",
+            ? "text-foreground font-medium bg-foreground/[0.07]"
+            : "text-muted-foreground font-normal hover:bg-foreground/[0.04] hover:text-foreground",
           collapsed ? "h-[30px] w-[30px] mx-auto justify-center" : "px-[8px] py-[7px] gap-[10px] text-[13px]",
         )}
         aria-current={isActive ? "page" : undefined}

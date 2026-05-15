@@ -73,20 +73,16 @@ export function ProfileChip({
   );
 
   return (
-    <div
-      className={cn(
-        "border-t border-border",
-        collapsed ? "pt-[10px] pb-[2px] flex items-center justify-center" : "pt-[10px] pb-[2px]",
-        className,
-      )}
-    >
+    <div className={cn(collapsed ? "pb-[2px] flex items-center justify-center" : "pb-[2px]", className)}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             className={cn(
               "flex w-full items-center rounded-[8px] transition-colors duration-100 ease-out cursor-pointer outline-none",
-              collapsed ? "p-0 justify-center hover:opacity-90" : "px-[8px] py-[8px] gap-[10px] hover:bg-accent",
+              collapsed
+                ? "p-0 justify-center hover:opacity-90"
+                : "px-[8px] py-[8px] gap-[10px] hover:bg-foreground/[0.04]",
             )}
             aria-label={`Account menu, signed in as ${name}`}
           >
@@ -97,11 +93,8 @@ export function ProfileChip({
                   <div className="flex w-full items-center gap-[6px]">
                     <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
                     {isAdmin && (
-                      <span
-                        className="inline-flex shrink-0 items-center rounded-[3px] bg-muted px-[5px] py-[1px] text-[10px] font-semibold text-muted-foreground"
-                        style={{ letterSpacing: 0 }}
-                      >
-                        ADMIN
+                      <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">
+                        Admin
                       </span>
                     )}
                   </div>
@@ -124,8 +117,8 @@ export function ProfileChip({
               <div className="flex items-center gap-[6px]">
                 <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
                 {isAdmin && (
-                  <span className="inline-flex shrink-0 items-center rounded-[3px] bg-muted px-[5px] py-[1px] text-[10px] font-semibold text-muted-foreground">
-                    ADMIN
+                  <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">
+                    Admin
                   </span>
                 )}
               </div>

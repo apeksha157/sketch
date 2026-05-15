@@ -46,7 +46,7 @@ export function CreditsCard({ count, total, renewsAt, low, onClick }: CreditsCar
       aria-label={`${formatCount(count)} credits left, renews ${renewsAt}`}
       className={cn(
         "group flex w-full flex-col gap-[6px] rounded-[6px] px-[8px] py-[8px] text-left",
-        "transition-colors duration-100 ease-out cursor-pointer hover:bg-accent",
+        "transition-colors duration-100 ease-out cursor-pointer hover:bg-foreground/[0.04]",
       )}
     >
       <span className="flex items-baseline justify-between gap-[8px]">
@@ -63,10 +63,7 @@ export function CreditsCard({ count, total, renewsAt, low, onClick }: CreditsCar
       </span>
       <span className="h-[2px] w-full overflow-hidden rounded-full bg-border" aria-hidden>
         <span
-          className={cn(
-            "block h-full rounded-full",
-            isLow ? "bg-destructive" : "bg-muted-foreground group-hover:bg-foreground",
-          )}
+          className={cn("block h-full rounded-full", isLow ? "bg-destructive" : "bg-foreground")}
           style={{
             width: `${Math.max(2, ratio * 100)}%`,
             transition: "width 200ms ease-out, background-color 100ms ease-out",
