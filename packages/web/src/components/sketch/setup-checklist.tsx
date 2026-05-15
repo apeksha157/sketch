@@ -56,42 +56,42 @@ const STEPS: StepDef[] = [
   {
     key: "channel",
     shortLabel: "Channel",
-    title: "Set up your channel",
-    description: "Hook up Slack or WhatsApp — Sketch can live where your team already talks.",
+    title: "Plug Sketch into your chat",
+    description: "Slack or WhatsApp — wherever your team's already talking.",
     time: "~30 sec",
-    cta: "Create",
+    cta: "Connect",
   },
   {
     key: "teammate",
     shortLabel: "Teammate",
-    title: "Invite a teammate",
-    description: "Bring someone else into the workspace — Sketch gets sharper with more context.",
+    title: "Bring in a teammate",
+    description: "Sketch gets sharper the more of your team it works with.",
     time: "~1 min",
-    cta: "Add member",
+    cta: "Invite",
   },
   {
     key: "integration",
     shortLabel: "Integration",
-    title: "Connect an integration",
-    description: "Hook up Gmail, Notion, Drive, Linear, or any of 300+ others — Sketch gets the context it needs.",
+    title: "Hook up a tool",
+    description: "Gmail, Notion, Drive, Linear, or any of 300+ others — give Sketch the context it needs.",
     time: "~2 min",
     cta: "Connect",
   },
   {
     key: "skill",
     shortLabel: "Skill",
-    title: "Create a skill",
-    description: "Teach Sketch a workflow your team uses — it can then run on a schedule or on demand.",
+    title: "Teach Sketch a skill",
+    description: "Show it a workflow once — it'll run that on a schedule or whenever you ask.",
     time: "~3 min",
     cta: "Build",
   },
   {
     key: "schedule",
     shortLabel: "Schedule",
-    title: "Choose a schedule",
-    description: "Pick when Sketch runs your skill — daily, weekly, or on a custom cadence.",
+    title: "Set a schedule",
+    description: "Pick a cadence — Sketch runs it on its own from there.",
     time: "~1 min",
-    cta: "Set up",
+    cta: "Choose",
   },
 ];
 
@@ -237,56 +237,62 @@ function TimePill({ label }: { label: string }) {
 }
 
 function Stepper({ currentStep }: { currentStep: number }) {
+  // Each step owns ONE grid column carrying both its circle (with the two
+  // connector halves on either side) and its label below. Same column for
+  // both rows = circle and label are guaranteed to share a centerline.
+  // The earlier flex-with-flex-1 layout broke alignment because the last
+  // step shrank to circle-width while the others kept connector room,
+  // pushing every circle off the column center of its label.
   return (
-    <div className="flex flex-col">
-      {/* Circles + connectors — flex row with space-between so circles sit at
-       * fixed positions and the 1px connectors fill the gaps between them. */}
-      <div className="flex items-center">
-        {STEPS.map((step, idx) => {
-          const stepNumber = idx + 1;
-          const completed = stepNumber < currentStep;
-          const current = stepNumber === currentStep;
-          const isLast = idx === STEPS.length - 1;
+    <div className="grid grid-cols-5">
+      {STEPS.map((step, idx) => {
+        const stepNumber = idx + 1;
+        const completed = stepNumber < currentStep;
+        const current = stepNumber === currentStep;
+        const isFirst = idx === 0;
+        const isLast = idx === STEPS.length - 1;
 
-          // The connector AFTER this circle is filled iff this circle is done.
-          // Rule of thumb: a segment is "covered" when the user has finished
-          // the step on its left side.
-          const connectorFilled = completed;
+        // Each circle owns the two connector halves around it.
+        // - Left half is filled when the user has reached this step (done or current).
+        // - Right half is filled only when this step is done (we've moved past it).
+        // - Outer edges (left half of step 1, right half of step 5) are invisible
+        //   so the line doesn't dangle past the first/last circles.
+        const leftFilled = !isFirst && (completed || current);
+        const rightFilled = !isLast && completed;
 
-          return (
-            <div key={step.key} className="flex flex-1 items-center last:flex-none">
+        return (
+          <div key={step.key} className="flex flex-col items-center">
+            <div className="flex w-full items-center">
+              <ConnectorHalf visible={!isFirst} filled={leftFilled} />
               <StatusCircle completed={completed} current={current} stepNumber={stepNumber} />
-              {!isLast && (
-                <span
-                  aria-hidden
-                  className={cn("h-[1px] flex-1 mx-[6px]", connectorFilled ? "bg-foreground" : "bg-foreground/20")}
-                />
-              )}
+              <ConnectorHalf visible={!isLast} filled={rightFilled} />
             </div>
-          );
-        })}
-      </div>
-      {/* Labels — sit 14px under the circles, centered under each. Using a
-       * 5-column grid keeps each label centered under its corresponding
-       * circle regardless of the connector widths above. */}
-      <div className="mt-[14px] grid grid-cols-5">
-        {STEPS.map((step, idx) => {
-          const stepNumber = idx + 1;
-          const current = stepNumber === currentStep;
-          return (
             <span
-              key={step.key}
               className={cn(
-                "text-center text-[12px] leading-[1.2]",
+                "mt-[14px] text-center text-[12px] leading-[1.2]",
                 current ? "font-medium text-foreground" : "font-normal text-muted-foreground",
               )}
             >
               {step.shortLabel}
             </span>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
+  );
+}
+
+function ConnectorHalf({ visible, filled }: { visible: boolean; filled: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "h-[1px] flex-1",
+        !visible && "bg-transparent",
+        visible && filled && "bg-foreground",
+        visible && !filled && "bg-foreground/20",
+      )}
+    />
   );
 }
 
@@ -315,7 +321,26 @@ function StatusCircle({
       {completed ? (
         <CheckIcon size={14} weight="bold" />
       ) : (
-        <span className="text-[12px] font-medium tabular-nums leading-none">{stepNumber}</span>
+        // Hand-drawn numerals in Gloria Hallelujah — same family the
+        // onboarding / trial banners use for ceremonial moments. Gives the
+        // stepper a touch of personality without leaning on a second
+        // accent color. The script lives on every numeral circle so the
+        // pattern reads as the stepper's personality; the brand-yellow
+        // halo + fill on the active circle still do the "you are here"
+        // signaling on their own.
+        //
+        // Slight translate-y tweak: Gloria Hallelujah's baseline sits a
+        // touch low inside its em-box; nudging up 1px restores optical
+        // centering inside the 32×32 circle.
+        <span
+          className="text-[20px] leading-none"
+          style={{
+            fontFamily: "'Gloria Hallelujah', cursive",
+            transform: "translateY(-1px)",
+          }}
+        >
+          {stepNumber}
+        </span>
       )}
     </span>
   );
