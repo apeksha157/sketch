@@ -35,41 +35,44 @@ interface StepDef {
   cta: string;
 }
 
+// CTA strings are verb-only on purpose — the title already says the noun,
+// so the button just confirms the intent. Avoids "Schedule a task: Schedule
+// a task" duplication.
 const STEPS: StepDef[] = [
   {
     key: "channel",
     shortLabel: "Channel",
     label: "Connect a channel",
     description: "Hook up Slack or WhatsApp so Sketch can live where your team already talks.",
-    cta: "Connect a channel",
+    cta: "Connect",
   },
   {
     key: "teammate",
     shortLabel: "Teammate",
     label: "Invite a teammate",
     description: "Bring someone else into the workspace — Sketch gets sharper with more context.",
-    cta: "Invite a teammate",
+    cta: "Invite",
   },
   {
     key: "integration",
     shortLabel: "Integration",
     label: "Connect an integration",
     description: "Hook up Gmail, Notion, Drive, Linear, or any of 300+ others so Sketch has context.",
-    cta: "Add an integration",
+    cta: "Connect",
   },
   {
     key: "skill",
     shortLabel: "Skill",
     label: "Create your first skill",
     description: "Teach Sketch a workflow your team uses so it can run on a schedule or on demand.",
-    cta: "Create a skill",
+    cta: "Create",
   },
   {
     key: "schedule",
     shortLabel: "Schedule",
     label: "Schedule a task",
     description: "Automate something you do every week — Sketch will run it without you asking.",
-    cta: "Schedule a task",
+    cta: "Schedule",
   },
 ];
 
@@ -204,7 +207,9 @@ function ConnectorSegment({ visible, filled }: { visible: boolean; filled: boole
       className={cn(
         "h-[2px] flex-1 rounded-full",
         !visible && "bg-transparent",
-        visible && filled && "bg-foreground/40",
+        // Completed segments use brand-brown — visible against the white card
+        // and gives the page a clear branded progression trail.
+        visible && filled && "bg-brand-brown",
         visible && !filled && "bg-foreground/12",
       )}
     />
@@ -221,8 +226,14 @@ function StatusCircle({
       className={cn(
         "flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-full",
         "transition-colors duration-150 ease-out",
-        completed && "bg-foreground/70 text-background",
-        current && "bg-brand-brown text-brand-yellow ring-2 ring-brand-brown/15 ring-offset-2 ring-offset-card",
+        // Completed: brand pair in normal orientation. Brown bg with yellow
+        // check reads as "Sketch did this," and matches the brown connector
+        // trail behind it.
+        completed && "bg-brand-brown text-brand-yellow",
+        // Current: inverted brand pair so the active step pops against the
+        // white card. The brown ring gives the yellow circle an outline so
+        // it doesn't dissolve into the page background.
+        current && "bg-brand-yellow text-brand-brown ring-2 ring-brand-brown ring-offset-2 ring-offset-card",
         !completed && !current && "border-[1.5px] border-foreground/20 bg-card text-foreground/35",
       )}
       aria-hidden
