@@ -39,7 +39,7 @@ import { Fragment } from "react";
 
 export type SetupStepKey = "channel" | "teammate" | "integration" | "skill" | "schedule";
 
-interface StepDef {
+export interface StepDef {
   key: SetupStepKey;
   /** Single-noun label rendered under the circle in the stepper. Never a verb. */
   shortLabel: string;
@@ -53,7 +53,13 @@ interface StepDef {
   cta: string;
 }
 
-const STEPS: StepDef[] = [
+/**
+ * Canonical step data — exported so the v1 SetupBanner can mirror the exact
+ * copy and verb choices the v2 card landed on, without drift risk from
+ * duplicating an array. Keep this list in sync with product onboarding state;
+ * the banner, the card, and the sidebar nudge all read from here.
+ */
+export const STEPS: StepDef[] = [
   {
     key: "channel",
     shortLabel: "Platforms",

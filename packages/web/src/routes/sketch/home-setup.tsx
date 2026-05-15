@@ -12,22 +12,23 @@
  *
  * The sidebar deliberately has no credits card during setup (credits only
  * appear once setup is complete).
+ *
+ * NOTE on cross-page persistence:
+ *   The banner currently lives on this route only. The sidebar nudge is the
+ *   affordance that travels with the user once they navigate to /channels,
+ *   /integrations, etc. Making the banner itself appear on every page would
+ *   require lifting setup state into a context that SketchShell reads on
+ *   every route — left as a follow-up since the nudge already covers that
+ *   surface area.
  */
 import { HomePane } from "@/components/sketch/home-pane";
+import { STEPS } from "@/components/sketch/setup-checklist";
 import { SketchShell } from "@/components/sketch/shell";
 import { SetupBanner, type SetupStep } from "@/components/sketch/top-banner";
 import { MOCK_RECENTS, MOCK_SETUP_DIGEST } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
-
-const STEP_LABELS: Record<SetupStep, string> = {
-  1: "Connect a channel",
-  2: "Invite a teammate",
-  3: "Connect an integration",
-  4: "Create your first skill",
-  5: "Set up an automation",
-};
 
 function HomeSetupPage() {
   const auth = useSketchAuth();
@@ -42,6 +43,10 @@ function HomeSetupPage() {
   function handleSubmit(_message: string) {
     void navigate({ to: "/chat/$conversationId", params: { conversationId: "active" } });
   }
+
+  // Sidebar nudge label sourced from the canonical STEPS array (setup-
+  // checklist.tsx) so banner + nudge can't drift on copy.
+  const nudgeLabel = STEPS[step - 1].title;
 
   return (
     <SketchShell
@@ -60,7 +65,7 @@ function HomeSetupPage() {
         bannerDismissed
           ? {
               currentStep: step,
-              nextLabel: STEP_LABELS[step],
+              nextLabel: nudgeLabel,
               href: "/home/setup",
             }
           : undefined
