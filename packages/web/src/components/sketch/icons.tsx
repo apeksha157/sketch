@@ -19,6 +19,7 @@ export {
   CalendarDotsIcon as CalendarTimeIcon, // ti-calendar-time
   CaretUpIcon as ChevronUpIcon, // ti-chevron-up
   ChartBarIcon, // ti-chart-bar
+  CheckIcon, // ti-check
   ChatCircleIcon as MessageCircle2Icon, // ti-message-circle-2
   ChatIcon as MessageSquareIcon, // ti-message-2
   ChatsCircleIcon as ChannelsIcon, // sidebar "Channels" nav — neutral, not Slack-coded
