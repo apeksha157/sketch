@@ -22,8 +22,11 @@ import { CheckIcon, ClockIcon, XIcon } from "@phosphor-icons/react";
  *   - Action area is a 2-col CSS grid with align-items: end so the CTA's
  *     bottom edge tracks the description's bottom edge regardless of
  *     description length. No floating button vs. empty column.
- *   - Sentence-case mono for the card label and step counter, not
- *     ALL-CAPS — calmer, more current than a decade-old SaaS pattern.
+ *   - Uppercase IBM Plex Mono for the card label and step counter. This
+ *     overrides the spec's sentence-case decision: the rest of the product
+ *     (recents header, credits-card meta, sidebar eyebrows) renders mono
+ *     eyebrows in ALL CAPS, and consistency across the dashboard outweighs
+ *     the standalone spec.
  *   - Dismiss button is absolutely positioned in the top-right and isolated
  *     from any other header metadata: it's destructive and shouldn't share
  *     visual weight with anything.
@@ -123,8 +126,12 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
       )}
     >
       {/* Header — card label on the left, dismiss × absolutely positioned
-       * top-right so it stands isolated from any metadata. */}
-      <h2 className="font-mono text-[11px] text-foreground" style={{ letterSpacing: "0.14em" }}>
+       * top-right so it stands isolated from any metadata.
+       *
+       * Uppercase IBM Plex Mono is the product-wide convention for mono
+       * eyebrow / label text (matches "RECENT CONVERSATIONS", credits-card
+       * meta, etc.) — overrides the spec's sentence-case decision. */}
+      <h2 className="font-mono text-[11px] uppercase text-foreground" style={{ letterSpacing: "0.14em" }}>
         Get started
       </h2>
       {onDismiss && (
@@ -167,9 +174,11 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
           {currentDef.time && <TimePill label={currentDef.time} />}
         </div>
 
-        {/* Row 1 / Col 2 — step counter, top-aligned right */}
+        {/* Row 1 / Col 2 — step counter, top-aligned right. Uppercase mono
+         * to match the card label and the rest of the product's eyebrow
+         * convention. */}
         <span
-          className="font-mono text-[11px] text-muted-foreground tabular-nums"
+          className="font-mono text-[11px] uppercase text-muted-foreground tabular-nums"
           style={{
             alignSelf: "start",
             justifySelf: "end",
