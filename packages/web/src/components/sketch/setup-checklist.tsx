@@ -158,18 +158,13 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
       {/* Stepper — 5 circles connected by a thin line at vertical center.
        * 32px from the header above (spec).
        *
-       * Width-capped at 520px and centered inside the card. The card is
-       * wider than the stepper needs to be; letting the 1fr connectors
-       * fill the full card width stretched each line to ~170px and made
-       * the steps feel disconnected. An earlier 440px cap tightened them
-       * to ~60px, which then read as the steps being cramped together.
-       * 520px lands ~80px of line between adjacent circles -- enough
-       * breathing room to read as a journey, not so much that adjacent
-       * steps lose connection.
+       * Width-capped at 580px and centered inside the card. The cap moves
+       * in lockstep with CIRCLE_PX so the ~80px connector length stays
+       * roughly constant: 5 * 50 + 4 * conn = 580 -> conn ≈ 82px.
        *
        * The empty space outside the stepper is intentional breathing
        * room around it, not wasted space inside it. */}
-      <div className="mt-[32px] mx-auto w-full max-w-[520px]">
+      <div className="mt-[32px] mx-auto w-full max-w-[580px]">
         <Stepper currentStep={safeStep} />
       </div>
 
@@ -302,19 +297,13 @@ function Stepper({ currentStep }: { currentStep: number }) {
  * column template references this constant directly, so changing it here
  * propagates both to the circle visuals and to the row layout.
  *
- * 42px. Picked after a 40 -> 48 -> 40 -> 42 walk:
- *   - 48 was too heavy.
- *   - 40 with edge-flush had ~170px of connector stretching between steps.
- *   - 40 with max-w 440 tightened connectors to ~60px, but that read as
- *     the steps being cramped together.
- *   - 42 with max-w 520 (below) lands ~80px connectors, which gives the
- *     stepper room to breathe without disconnecting the steps.
- *
- * Font sizes inside the circle (24px GH, 16px check) stay put -- the
- * 2px size bump is just a hair of extra circle to give the row a little
- * more confidence.
+ * 50px. Walked here from 32 -> 40 -> 48 -> 40 -> 42 -> 50. Font sizes
+ * inside the circle (24px GH, 16px check) and halo (5px) intentionally
+ * unchanged from the 42px iteration -- this bump is just more circle.
+ * The stepper max-width below was raised in lockstep so each ~80px
+ * connector length is preserved across the change.
  */
-const CIRCLE_PX = 42;
+const CIRCLE_PX = 50;
 
 function StatusCircle({
   completed,
