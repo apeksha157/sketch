@@ -75,11 +75,15 @@ export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
        * active dot is the banner's one chromatic accent. */}
       <ProgressDots currentStep={safeStep} />
 
-      {/* Title — one font, one weight. "Up next ·" prefix in muted-
-       * foreground gives sequence context without inventing a second
-       * typographic treatment for it. */}
+      {/* Title — one font, one weight. The prefix in muted-foreground
+       * gives sequence context without a second typographic treatment;
+       * its wording shifts with the step so it reads the user's position
+       * in the arc, not just "another step":
+       *   step 1 → "Get started"   (matches the v2 card's eyebrow)
+       *   2–4    → "Up next"        (mid-flow, neutral)
+       *   step 5 → "Almost done"    (signals the finish line) */}
       <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
-        <span className="text-muted-foreground">Up next ·</span>{" "}
+        <span className="text-muted-foreground">{prefixFor(safeStep)} ·</span>{" "}
         <span className="text-foreground">{stepDef.title}</span>
       </span>
 
@@ -117,6 +121,24 @@ export function SetupBanner({ step, onAdvance, onDismiss }: SetupBannerProps) {
       )}
     </div>
   );
+}
+
+/**
+ * Step-aware prefix for the banner's title line.
+ *
+ * The five-step arc has two transition points worth marking — the start
+ * ("you're beginning") and the end ("you're almost there"). The middle
+ * three reuse one phrase ("Up next") because at that point there's
+ * nothing meaningful to distinguish them.
+ *
+ * Implemented as a function rather than a Record<SetupStep, string> map
+ * so it stays correct if STEPS grows or shrinks — only the first and
+ * last indices carry special copy, the rest fall through.
+ */
+function prefixFor(step: SetupStep): string {
+  if (step === 1) return "Get started";
+  if (step === STEPS.length) return "Almost done";
+  return "Up next";
 }
 
 function ProgressDots({ currentStep }: { currentStep: number }) {

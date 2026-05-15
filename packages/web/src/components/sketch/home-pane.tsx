@@ -30,6 +30,16 @@ export interface HomePaneProps {
   disabled?: boolean;
   /** Renders the celebration card between chip row and tile grid (§5.10). */
   celebration?: { onDismiss: () => void };
+  /**
+   * When true, the Recents section is omitted entirely (header + body) while
+   * `recents` is empty. Used on /home/setup where an empty placeholder
+   * competes with the setup banner for attention without adding signal;
+   * the section reappears as soon as the user has any conversations.
+   *
+   * Default false — preserves the labelled-empty-state behavior on the
+   * default home variant where Recents is always part of the page rhythm.
+   */
+  hideRecentsWhenEmpty?: boolean;
   /** Override the chat submit — used to navigate to /chat/:new. */
   onSubmit?: ChatInputProps["onSubmit"];
   /** Override the "Show me what's possible" tile. */
@@ -46,7 +56,16 @@ export interface HomePaneProps {
  * them so the page reads as two parallel sections, not a hero with a special
  * Quick actions break.
  */
-export function HomePane({ firstName, teamSize, recents, digest, disabled, celebration, onSubmit }: HomePaneProps) {
+export function HomePane({
+  firstName,
+  teamSize,
+  recents,
+  digest,
+  disabled,
+  celebration,
+  hideRecentsWhenEmpty,
+  onSubmit,
+}: HomePaneProps) {
   const tiles = getDefaultTiles(teamSize);
   const inputRef = useRef<HTMLInputElement>(null);
   const [prefill, setPrefill] = useState<string>("");
@@ -73,7 +92,10 @@ export function HomePane({ firstName, teamSize, recents, digest, disabled, celeb
       <div className="mt-7 flex flex-col gap-7">
         {celebration && <CelebrationCard onDismiss={celebration.onDismiss} />}
         <QuickActions tiles={tiles} disabled={disabled} />
-        <Recents conversations={recents} />
+        {/* Recents — hidden entirely when empty during setup so the page's
+         * call-to-action (the banner) isn't competing with a placeholder
+         * "your conversations will appear here" footer that adds no signal. */}
+        {(!hideRecentsWhenEmpty || recents.length > 0) && <Recents conversations={recents} />}
       </div>
     </div>
   );

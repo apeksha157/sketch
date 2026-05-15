@@ -78,6 +78,12 @@ function HomeSetupPage() {
         firstName={firstNameOf(auth)}
         recents={step >= 3 ? MOCK_RECENTS.slice(0, 2) : []}
         digest={MOCK_SETUP_DIGEST}
+        // During setup the empty Recents header + "your conversations will
+        // appear here" placeholder visually competes with the banner's
+        // call-to-action. Suppress the whole section until the user has
+        // any conversations; it reappears naturally from step 3 onward
+        // when the demo seeds two MOCK_RECENTS.
+        hideRecentsWhenEmpty
         onSubmit={handleSubmit}
       />
     </SketchShell>
