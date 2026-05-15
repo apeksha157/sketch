@@ -156,8 +156,16 @@ export function SetupChecklist({ currentStep, onAdvance, onDismiss, className }:
       )}
 
       {/* Stepper — 5 circles connected by a thin line at vertical center.
-       * 32px from the header above (spec). */}
-      <div className="mt-[32px]">
+       * 32px from the header above (spec).
+       *
+       * Width-constrained to ~440px and centered. The card is wider than
+       * the stepper needs to be; letting the 1fr connectors fill the full
+       * card width stretched each connector to ~170px and made the steps
+       * feel disconnected. Capping at 440px gives roughly 60-65px of line
+       * between adjacent circles, which is comfortable without being
+       * sparse. The empty space outside the stepper is intentional
+       * breathing room around it, not wasted space inside it. */}
+      <div className="mt-[32px] mx-auto w-full max-w-[440px]">
         <Stepper currentStep={safeStep} />
       </div>
 
