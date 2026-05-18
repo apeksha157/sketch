@@ -146,3 +146,22 @@ export const MOCK_CREDITS_LOW = {
   renewsAt: "Renews May 21",
   low: true,
 };
+
+/**
+ * Files card mock — the "brain of the org" surface in the sidebar. Three
+ * meaningful buckets (docs / calls / memos) so the breakdown line reads as
+ * org memory rather than a generic file dump.
+ */
+export const MOCK_FILES = {
+  total: 197,
+  breakdown: {
+    docs: 128,
+    calls: 47,
+    memos: 22,
+  },
+};
+
+/** Cold-start variant — new workspace, nothing ingested yet. */
+export const MOCK_FILES_EMPTY = {
+  total: 0,
+};

@@ -17,6 +17,7 @@ export {
   ArrowsClockwiseIcon as RefreshIcon, // ti-refresh
   BrowserIcon, // in-product / dashboard conversations — "this happened in the web app"
   CalendarDotsIcon as CalendarTimeIcon, // ti-calendar-time
+  CaretRightIcon as ChevronRightIcon, // ti-chevron-right — used for the collapsed-sidebar expand toggle
   CaretUpIcon as ChevronUpIcon, // ti-chevron-up
   ChartBarIcon, // ti-chart-bar
   CheckIcon, // ti-check

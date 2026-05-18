@@ -12,7 +12,7 @@ import { CreditsCard, type CreditsCardProps } from "@/components/sketch/credits-
 import {
   CalendarTimeIcon,
   ChannelsIcon,
-  FilesIcon,
+  ChevronRightIcon,
   HomeIcon,
   type IconProps,
   PuzzleIcon,
@@ -22,6 +22,7 @@ import {
 } from "@/components/sketch/icons";
 import { ProfileChip, type ProfileChipProps } from "@/components/sketch/profile-chip";
 import { useSidebarState } from "@/components/sketch/sidebar-context";
+import { SidebarFilesCard, type SidebarFilesCardProps } from "@/components/sketch/sidebar-files-card";
 import { SidebarSetupNudge, type SidebarSetupNudgeProps } from "@/components/sketch/sidebar-setup-nudge";
 import { NavBadge, RunningPulse } from "@/components/sketch/status-indicators";
 import { SidebarSimpleIcon } from "@phosphor-icons/react";
@@ -49,10 +50,7 @@ const MIDDLE_NAV: NavItemDef[] = [
   { label: "Scheduled tasks", icon: CalendarTimeIcon, href: "/scheduled-tasks" },
 ];
 
-const BOTTOM_NAV: NavItemDef[] = [
-  { label: "Team", icon: UsersIcon, href: "/team" },
-  { label: "Files", icon: FilesIcon, href: "/files" },
-];
+const BOTTOM_NAV: NavItemDef[] = [{ label: "Team", icon: UsersIcon, href: "/team" }];
 
 export interface SketchSidebarProps {
   profile: ProfileChipProps;
@@ -65,6 +63,13 @@ export interface SketchSidebarProps {
   navState?: Record<string, { badgeCount?: number; pulse?: boolean }>;
   /** When provided, renders the credits card between Files and the profile chip. */
   credits?: CreditsCardProps;
+  /**
+   * Files — promoted out of the nav into its own card-styled slot (above
+   * setup-nudge / credits / profile). Renders the "brain of the org" surface
+   * with live count + breakdown. When omitted, the Files affordance is hidden
+   * entirely — callers must opt in.
+   */
+  files?: SidebarFilesCardProps;
   /** When true, the credits card slot is replaced with a "Account paused" line (§5.7). */
   paused?: boolean;
   /**
@@ -83,6 +88,7 @@ export function SketchSidebar({
   orgName,
   navState,
   credits,
+  files,
   paused,
   setupNudge,
   onOpenSearchPalette,
@@ -118,13 +124,23 @@ export function SketchSidebar({
     <aside
       data-collapsed={collapsed ? "true" : "false"}
       className={cn(
-        "flex h-screen flex-col bg-sidebar border-r border-border",
+        // Position relative so the collapsed-state expand button can overhang
+        // the right edge — keeps the toggle visually out of the cramped rail
+        // while staying anchored to the sidebar (not the main pane).
+        "relative flex h-screen flex-col bg-sidebar border-r border-border",
         collapsed ? "w-[52px] py-[14px] px-0" : "w-[256px] px-[12px] py-[14px]",
         "shrink-0 select-none",
       )}
     >
-      {/* Brand row — Sketch logo + org name + collapse toggle */}
+      {/* Brand row — Sketch logo + org name + (when expanded) collapse toggle.
+       * The toggle gets lifted out and rendered as a floating affordance when
+       * the rail is collapsed; see <FloatingExpandToggle /> below. */}
       <BrandRow collapsed={collapsed} onToggle={toggle} orgName={orgName} />
+
+      {/* Floating expand toggle — only rendered while collapsed. Sits half
+       * outside the rail's right edge so it reads as a distinct "pull to
+       * open" affordance rather than yet another sidebar icon. */}
+      {collapsed && <FloatingExpandToggle onClick={toggle} />}
 
       {/* Search trigger */}
       <SearchTrigger collapsed={collapsed} onClick={onOpenSearchPalette} onKeyDown={handleSearchKey} />
@@ -138,13 +154,21 @@ export function SketchSidebar({
       </div>
 
       {/* Bottom block — Team + Files separated from the primary nav by a thin
-       * divider so the workspace vs. account groups read as distinct families. */}
+       * divider so the workspace vs. account groups read as distinct families.
+       * Files lives in its own card-styled slot (the "brain of the org"
+       * affordance), below Team and above the account zone. */}
       <div className={cn("mt-auto flex flex-col", collapsed ? "" : "border-t border-border pt-[10px]")}>
         <div className="flex flex-col gap-[2px]">
           {bottomNav.map((item) => (
             <NavItem key={item.href} item={item} isActive={pathname.startsWith(item.href)} />
           ))}
         </div>
+
+        {files && (
+          <div className={collapsed ? "mt-[6px] flex justify-center" : "mt-[8px]"}>
+            <SidebarFilesCard {...files} />
+          </div>
+        )}
 
         {/* Account zone — setup-nudge / credits / paused-line + profile chip
          * share the same vertical slot. Precedence: setupNudge wins while
@@ -180,6 +204,11 @@ export function SketchSidebar({
 /**
  * Brand row — logo carries the brand; the wordmark gets dropped so the org
  * name can read at proper presence beside the icon instead of as a footnote.
+ *
+ * The collapse toggle only renders here when the rail is expanded. In the
+ * collapsed state the toggle moves out to <FloatingExpandToggle /> so it
+ * isn't fighting nav icons for space (and so a new user has a more obvious
+ * affordance to reopen the rail).
  */
 function BrandRow({
   collapsed,
@@ -194,25 +223,62 @@ function BrandRow({
   const logoSrc = resolvedTheme === "dark" ? "/logos/sketch-icon-darkmode.png" : "/logos/sketch-icon-lightmode.png";
 
   return (
-    <div className={cn("mb-3 flex items-center", collapsed ? "flex-col gap-3 px-0" : "gap-[10px] px-[8px] py-[4px]")}>
+    <div className={cn("mb-3 flex items-center", collapsed ? "justify-center px-0" : "gap-[10px] px-[8px] py-[4px]")}>
       <img src={logoSrc} alt="Sketch" className="h-[28px] w-[28px] shrink-0 select-none" draggable={false} />
       {!collapsed && (
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground tracking-tight">
-          {orgName}
-        </span>
+        <>
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground tracking-tight">
+            {orgName}
+          </span>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-label="Collapse sidebar"
+            className={cn(
+              "shrink-0 rounded-[6px] p-[4px] text-muted-foreground transition-colors duration-100 ease-out cursor-pointer",
+              "hover:text-foreground hover:bg-foreground/[0.06]",
+            )}
+          >
+            <SidebarSimpleIcon size={16} aria-hidden weight="regular" />
+          </button>
+        </>
       )}
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        className={cn(
-          "shrink-0 rounded-[6px] p-[4px] text-muted-foreground transition-colors duration-100 ease-out cursor-pointer",
-          "hover:text-foreground hover:bg-foreground/[0.06]",
-        )}
-      >
-        <SidebarSimpleIcon size={16} aria-hidden weight="regular" />
-      </button>
     </div>
+  );
+}
+
+/**
+ * Floating expand toggle — visible only while the sidebar is collapsed.
+ *
+ * Sits half outside the rail's right edge (translated +50%) so it reads as a
+ * distinct "drawer pull" rather than another icon competing with Home / Files
+ * / etc. inside the cramped 52px rail. Chevron points right (universal "open
+ * this") and the surface has card chrome + a soft shadow so it pops against
+ * both the sidebar and the main pane behind it.
+ *
+ * The vertical position aligns with the brand row's center so the user's eye
+ * finds it next to the Sketch logo — the natural "header" of the sidebar.
+ */
+function FloatingExpandToggle({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Expand sidebar"
+      className={cn(
+        // top: align with the brand row's logo center (14px py + 14px to logo center).
+        // right: -14px translates the button half-out of the rail.
+        "absolute top-[18px] right-[-14px] z-30",
+        "flex h-[28px] w-[28px] items-center justify-center rounded-full",
+        "bg-background text-muted-foreground border border-border shadow-sm",
+        "transition-all duration-150 ease-out cursor-pointer",
+        "hover:text-foreground hover:bg-foreground/[0.04] hover:shadow",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
+      )}
+      title="Expand sidebar"
+    >
+      <ChevronRightIcon size={14} aria-hidden weight="bold" />
+    </button>
   );
 }
 

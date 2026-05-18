@@ -8,7 +8,7 @@
  */
 import { HomePane } from "@/components/sketch/home-pane";
 import { SketchShell } from "@/components/sketch/shell";
-import { MOCK_CREDITS, MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_CREDITS, MOCK_FILES, MOCK_RECENTS } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -31,6 +31,7 @@ function HomeCelebrationPage() {
       }}
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
+      files={MOCK_FILES}
     >
       <HomePane
         firstName={firstNameOf(auth)}

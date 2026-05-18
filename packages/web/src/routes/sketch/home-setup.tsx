@@ -22,10 +22,9 @@
  *   surface area.
  */
 import { HomePane } from "@/components/sketch/home-pane";
-import { STEPS } from "@/components/sketch/setup-checklist";
 import { SketchShell } from "@/components/sketch/shell";
 import { SetupBanner, type SetupStep } from "@/components/sketch/top-banner";
-import { MOCK_RECENTS, MOCK_SETUP_DIGEST } from "@/routes/sketch/mock-data";
+import { MOCK_FILES, MOCK_FILES_EMPTY, MOCK_RECENTS, MOCK_SETUP_DIGEST } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -44,10 +43,6 @@ function HomeSetupPage() {
     void navigate({ to: "/chat/$conversationId", params: { conversationId: "active" } });
   }
 
-  // Sidebar nudge label sourced from the canonical STEPS array (setup-
-  // checklist.tsx) so banner + nudge can't drift on copy.
-  const nudgeLabel = STEPS[step - 1].title;
-
   return (
     <SketchShell
       profile={{
@@ -56,6 +51,10 @@ function HomeSetupPage() {
         identifier: auth.displayIdentifier,
       }}
       orgName={auth.orgName}
+      // Files starts empty and fills in as the user connects integrations —
+      // shows the cold-start variant in early steps and the populated card
+      // once tools come online (mirrors the recents-during-setup ramp).
+      files={step >= 3 ? MOCK_FILES : MOCK_FILES_EMPTY}
       banner={
         bannerDismissed ? undefined : (
           <SetupBanner step={step} onAdvance={advance} onDismiss={() => setBannerDismissed(true)} />
@@ -65,7 +64,6 @@ function HomeSetupPage() {
         bannerDismissed
           ? {
               currentStep: step,
-              nextLabel: nudgeLabel,
               href: "/home/setup",
             }
           : undefined

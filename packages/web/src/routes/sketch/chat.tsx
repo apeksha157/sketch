@@ -10,7 +10,7 @@ import { SketchMessage, UserMessage } from "@/components/sketch/chat-message";
 import { ArrowLeftIcon, DotsIcon, SparklesIcon } from "@/components/sketch/icons";
 import { InlineArtifact } from "@/components/sketch/inline-artifact";
 import { SketchShell } from "@/components/sketch/shell";
-import { MOCK_CREDITS } from "@/routes/sketch/mock-data";
+import { MOCK_CREDITS, MOCK_FILES } from "@/routes/sketch/mock-data";
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { cn } from "@sketch/ui/lib/utils";
 import { createRoute, useNavigate, useParams } from "@tanstack/react-router";
@@ -33,6 +33,7 @@ function ChatPage() {
       }}
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
+      files={MOCK_FILES}
     >
       <div className="flex h-full min-h-0 flex-col">
         <ChatHeader title={resolveTitle(conversationId)} onBack={() => navigate({ to: "/home/default" })} />

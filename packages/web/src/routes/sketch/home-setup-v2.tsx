@@ -30,21 +30,10 @@ import { ConversationRow } from "@/components/sketch/conversation-row";
 import { SetupChecklist } from "@/components/sketch/setup-checklist";
 import { SketchShell } from "@/components/sketch/shell";
 import type { SetupStep } from "@/components/sketch/top-banner";
-import { MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_FILES, MOCK_FILES_EMPTY, MOCK_RECENTS } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { Link, createRoute, useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
-
-/** Mirrors the step titles in setup-checklist.tsx (Get Started Card spec).
- *  Kept in this file so the sidebar nudge label stays in lockstep with the
- *  current step without exporting internals from the checklist component. */
-const STEP_NEXT_LABEL: Record<SetupStep, string> = {
-  1: "Set up your channel",
-  2: "Invite a teammate",
-  3: "Connect an integration",
-  4: "Create a skill",
-  5: "Choose a schedule",
-};
 
 function HomeSetupV2Page() {
   const auth = useSketchAuth();
@@ -74,6 +63,9 @@ function HomeSetupV2Page() {
         identifier: auth.displayIdentifier,
       }}
       orgName={auth.orgName}
+      // Files ramps from empty to populated as integrations come online — the
+      // same step-gated transition the recents section uses.
+      files={step >= 3 ? MOCK_FILES : MOCK_FILES_EMPTY}
       // Sidebar nudge only shows when the on-page card is dismissed. While the
       // card is visible on this home route the two would duplicate the same
       // affordance in two places. After dismissal -- or once the user
@@ -82,7 +74,6 @@ function HomeSetupV2Page() {
         cardDismissed
           ? {
               currentStep: step,
-              nextLabel: STEP_NEXT_LABEL[step],
               href: "/home/setup-v2",
             }
           : undefined

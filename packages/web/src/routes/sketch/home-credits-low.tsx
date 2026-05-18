@@ -5,7 +5,7 @@
 import { HomePane } from "@/components/sketch/home-pane";
 import { SketchShell } from "@/components/sketch/shell";
 import { DangerBanner } from "@/components/sketch/top-banner";
-import { MOCK_CREDITS_LOW, MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_CREDITS_LOW, MOCK_FILES, MOCK_RECENTS } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 
@@ -31,6 +31,7 @@ function HomeCreditsLowPage() {
       }}
       orgName={auth.orgName}
       credits={{ ...MOCK_CREDITS_LOW, onClick: handleTopUp }}
+      files={MOCK_FILES}
       banner={
         <DangerBanner
           message={`Only ${MOCK_CREDITS_LOW.count} credits left — top up to keep automations running.`}

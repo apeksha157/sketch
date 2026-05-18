@@ -10,7 +10,7 @@ import { DateGroupHeader } from "@/components/sketch/date-group-header";
 import { FilterPill } from "@/components/sketch/filter-pill";
 import { SearchIcon } from "@/components/sketch/icons";
 import { SketchShell } from "@/components/sketch/shell";
-import { MOCK_ALL_CONVERSATIONS, MOCK_CREDITS } from "@/routes/sketch/mock-data";
+import { MOCK_ALL_CONVERSATIONS, MOCK_CREDITS, MOCK_FILES } from "@/routes/sketch/mock-data";
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { cn } from "@sketch/ui/lib/utils";
 import { createRoute } from "@tanstack/react-router";
@@ -112,6 +112,7 @@ function ConversationsPage() {
       }}
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
+      files={MOCK_FILES}
     >
       <div className="mx-auto w-full max-w-4xl px-10 py-8">
         <div className="mb-[18px] flex items-baseline gap-[10px]">

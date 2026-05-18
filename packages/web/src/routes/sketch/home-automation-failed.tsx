@@ -10,7 +10,7 @@ import { HomePane } from "@/components/sketch/home-pane";
 import { AlertTriangleIcon } from "@/components/sketch/icons";
 import { SketchShell } from "@/components/sketch/shell";
 import { Toast, ToastStack } from "@/components/sketch/toast";
-import { MOCK_CREDITS, MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_CREDITS, MOCK_FILES, MOCK_RECENTS } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -33,6 +33,7 @@ function HomeAutomationFailedPage() {
       }}
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
+      files={MOCK_FILES}
       navState={{ "/scheduled-tasks": { badgeCount: 2 } }}
     >
       <HomePane firstName={firstNameOf(auth)} recents={MOCK_RECENTS} onSubmit={handleSubmit} />
