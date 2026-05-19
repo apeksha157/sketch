@@ -3,7 +3,7 @@
  * follows them across routes. The collapse toggle lives in the brand row of
  * the sidebar (§4.1) and applies to every route in the new shell.
  */
-import { type ReactNode, createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { type ReactNode, createContext, useCallback, useContext, useMemo, useState } from "react";
 
 interface SidebarStateValue {
   collapsed: boolean;
@@ -15,8 +15,7 @@ const SidebarStateContext = createContext<SidebarStateValue | undefined>(undefin
 
 const STORAGE_KEY = "sketch.sidebar.collapsed";
 
-function readInitial(forceCollapsed: boolean | undefined): boolean {
-  if (forceCollapsed !== undefined) return forceCollapsed;
+function readInitial(): boolean {
   if (typeof window === "undefined") return false;
   try {
     return window.localStorage.getItem(STORAGE_KEY) === "1";
@@ -27,30 +26,17 @@ function readInitial(forceCollapsed: boolean | undefined): boolean {
 
 interface ProviderProps {
   children: ReactNode;
-  /** Overrides the persisted value — used by /home/default-collapsed demo. */
-  forceCollapsed?: boolean;
 }
 
-export function SidebarStateProvider({ children, forceCollapsed }: ProviderProps) {
-  const [collapsed, setCollapsedState] = useState<boolean>(() => readInitial(forceCollapsed));
+export function SidebarStateProvider({ children }: ProviderProps) {
+  const [collapsed, setCollapsedState] = useState<boolean>(readInitial);
 
-  useEffect(() => {
-    if (forceCollapsed !== undefined) {
-      setCollapsedState(forceCollapsed);
-    }
-  }, [forceCollapsed]);
-
-  const setCollapsed = useCallback(
-    (next: boolean) => {
-      setCollapsedState(next);
-      if (forceCollapsed === undefined) {
-        try {
-          window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-        } catch {}
-      }
-    },
-    [forceCollapsed],
-  );
+  const setCollapsed = useCallback((next: boolean) => {
+    setCollapsedState(next);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
+    } catch {}
+  }, []);
 
   const toggle = useCallback(() => setCollapsed(!collapsed), [collapsed, setCollapsed]);
 

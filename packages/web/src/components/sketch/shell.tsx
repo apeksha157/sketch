@@ -21,17 +21,15 @@ interface SketchShellProps extends SketchSidebarProps {
   banner?: ReactNode;
   /** Main pane content. */
   children: ReactNode;
-  /** Forces the sidebar collapsed for this page (used by /home/default-collapsed demo). */
-  forceCollapsed?: boolean;
   /** Optional extra classes on the main scroll container. */
   mainClassName?: string;
 }
 
-export function SketchShell({ banner, children, forceCollapsed, mainClassName, ...sidebarProps }: SketchShellProps) {
+export function SketchShell({ banner, children, mainClassName, ...sidebarProps }: SketchShellProps) {
   const trialVisible = useTrialTickerVisible();
 
   return (
-    <SidebarStateProvider forceCollapsed={forceCollapsed}>
+    <SidebarStateProvider>
       <div className="flex h-screen w-full bg-background text-foreground">
         <SketchSidebar {...sidebarProps} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
