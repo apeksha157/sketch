@@ -149,24 +149,16 @@ function SidecarHeader({ threadTitle }: { threadTitle: string }) {
 /**
  * ComposerCard — the chat rail in its contracted state.
  *
- * 88px wide. Inspired by Cursor's Composer-as-panel and shadcn's
- * collapsed-rail (48–64px) pattern. Reads as a *participant*, not a nav
- * rail: bg-card chrome with subtle elevation, a Tab pull-handle on the
- * right edge, a persistent "Reply" capsule at the bottom (mirrors the
- * chat input's vertical slot in the expanded state).
+ * 44px wide. A chat icon at the top identifies the rail (no Sketch
+ * logo — the workspace sidebar to the left already carries the brand).
+ * Below the icon: empty by design. Signals (unread count, working
+ * pulse, attention dot) layer on later when wired to real state.
  *
  * The whole rail is click-to-expand on empty space — bails out if the
- * click landed on an existing button/link so the Reply / Tab keep their
- * own handlers without double-firing.
+ * click landed on the ExpandToggle so the toggle keeps its own handler
+ * without double-firing.
  */
 function ComposerCard({ onExpand }: { onExpand: () => void }) {
-  /**
-   * Click/Enter/Space anywhere on empty rail space expands. Bails out if the
-   * target landed on a real button/link so nested affordances keep their own
-   * handlers without double-firing. The keyboard branch is required so the
-   * mouse-convenience behaviour has a parity for assistive tech, even though
-   * the aside itself isn't tab-focusable (the ExpandToggle button is).
-   */
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     if (isOnInteractiveElement(event.target)) return;
     onExpand();
@@ -183,50 +175,13 @@ function ComposerCard({ onExpand }: { onExpand: () => void }) {
       onKeyDown={handleKeyDown}
       className={cn(
         // `group/rail` lets the ExpandToggle react to hovers on the whole rail.
-        "group/rail relative flex h-full w-[88px] shrink-0 flex-col items-center cursor-pointer",
-        "border-r border-border bg-card px-[10px] py-[18px]",
+        "group/rail relative flex h-full w-[44px] shrink-0 flex-col items-center cursor-pointer",
+        "border-r border-border bg-card pt-[16px]",
       )}
       style={{ borderRightWidth: "0.5px", boxShadow: "1px 0 0 0 rgba(0,0,0,0.02)" }}
     >
       <ExpandToggle onClick={onExpand} ariaLabel="Expand chat" />
-
-      {/* Top slot — passive status. Mirrors the expanded SidecarHeader's
-       * vertical position (top of panel = "what state is this thread in").
-       * Mock state for the demo: "READY" with the emerald dot. In production
-       * this is driven by live agent state — idle/working/attention.
-       *
-       * No Sketch logo / "SKETCH" eyebrow on top: the workspace sidebar
-       * immediately to the left already carries the org brand. Status pill
-       * does the identity work via shape + colour, not via the brand mark. */}
-      <div className="flex flex-col items-center gap-[6px]">
-        <div className="flex items-center gap-[6px] rounded-full bg-background px-[8px] py-[3px] ring-1 ring-border">
-          <span className="block h-[6px] w-[6px] rounded-full bg-emerald-500" aria-hidden />
-          <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-foreground/80">Ready</span>
-        </div>
-        <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">2m</span>
-      </div>
-
-      {/* "Reply" composer capsule — anchored to the bottom so it mirrors the
-       * chat input's position in the expanded state. `mt-auto` pushes it down
-       * past the breathing room in the middle. */}
-      <button
-        type="button"
-        onClick={onExpand}
-        aria-label="Continue chat"
-        className={cn(
-          "group mt-auto flex w-full flex-col items-center gap-[6px] rounded-[10px]",
-          "border border-border bg-background px-[6px] py-[10px] cursor-pointer",
-          "transition-colors duration-100 ease-out hover:bg-foreground/[0.04]",
-        )}
-      >
-        <ChatIcon
-          size={14}
-          weight="regular"
-          aria-hidden
-          className="text-muted-foreground/80 group-hover:text-foreground"
-        />
-        <span className="text-[10px] text-muted-foreground/75 group-hover:text-foreground">Reply</span>
-      </button>
+      <ChatIcon size={18} weight="regular" aria-hidden className="text-muted-foreground/80" />
     </aside>
   );
 }
