@@ -17,8 +17,9 @@
  *   2. Rail hover — widens to 12px, warm card tone (#FBFAF6), chevron
  *      brightens. Fires when the cursor is anywhere on the parent rail
  *      (parent must own `group/rail`).
- *   3. Direct hover — widens to 16px, pale brand-yellow tint (#FFFAD0),
- *      yellow-warm border, full-contrast chevron, shadow lifts.
+ *   3. Direct hover — widens to 16px, slightly darker neutral (#F0EEE7),
+ *      full-contrast chevron, shadow lifts. Stays in the same hue family
+ *      as rest + rail-hover so the progression reads as depth, not accent.
  */
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
@@ -45,7 +46,7 @@ export function ExpandToggle({ onClick, ariaLabel, direction = "right" }: Expand
         "cursor-pointer transition-all duration-200 ease-out",
         "touch-manipulation",
         "group-hover/rail:w-[12px] group-hover/rail:bg-[#FBFAF6]",
-        "hover:w-[16px] hover:bg-[#FFFAD0] hover:border-[#F5E27A] hover:shadow",
+        "hover:w-[16px] hover:bg-[#F0EEE7] hover:shadow",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
       )}
     >

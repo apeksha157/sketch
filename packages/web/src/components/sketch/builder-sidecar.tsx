@@ -20,7 +20,7 @@
  */
 import { ChatInput } from "@/components/sketch/chat-input";
 import { ExpandToggle } from "@/components/sketch/expand-toggle";
-import { ChatIcon } from "@phosphor-icons/react";
+import { ChatCircleIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { type ReactNode, useState } from "react";
 
@@ -181,7 +181,7 @@ function ComposerCard({ onExpand }: { onExpand: () => void }) {
       style={{ borderRightWidth: "0.5px", boxShadow: "1px 0 0 0 rgba(0,0,0,0.02)" }}
     >
       <ExpandToggle onClick={onExpand} ariaLabel="Expand chat" />
-      <ChatIcon size={18} weight="regular" aria-hidden className="text-muted-foreground/80" />
+      <ChatCircleIcon size={20} weight="regular" aria-hidden className="text-muted-foreground/80" />
     </aside>
   );
 }
