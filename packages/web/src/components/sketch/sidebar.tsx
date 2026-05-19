@@ -9,10 +9,10 @@
  * — they're all conceptually parts of the same chat surface.
  */
 import { CreditsCard, type CreditsCardProps } from "@/components/sketch/credits-card";
+import { ExpandToggle } from "@/components/sketch/expand-toggle";
 import {
   CalendarTimeIcon,
   ChannelsIcon,
-  ChevronRightIcon,
   HomeIcon,
   type IconProps,
   PuzzleIcon,
@@ -29,7 +29,7 @@ import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import { useTheme } from "@sketch/ui/hooks/use-theme";
 import { cn } from "@sketch/ui/lib/utils";
 import { Link, useLocation } from "@tanstack/react-router";
-import { type ComponentType, type KeyboardEvent, useCallback } from "react";
+import { type ComponentType, type KeyboardEvent, type MouseEvent, useCallback } from "react";
 
 interface SidebarNavBadge {
   count: number;
@@ -51,6 +51,11 @@ const MIDDLE_NAV: NavItemDef[] = [
 ];
 
 const BOTTOM_NAV: NavItemDef[] = [{ label: "Team", icon: UsersIcon, href: "/team" }];
+
+/** Helper for the rail click-to-expand: was the click on an existing button/link? */
+function isOnInteractiveElement(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('button, a, [role="button"]'));
+}
 
 export interface SketchSidebarProps {
   profile: ProfileChipProps;
@@ -120,27 +125,53 @@ export function SketchSidebar({
     [onOpenSearchPalette],
   );
 
+  /**
+   * Click/Enter/Space anywhere on empty rail space expands (collapsed only).
+   * Bails out if the target landed on a real button/link so nav items still
+   * navigate and the search trigger still opens its palette without also
+   * expanding. The keyboard branch is required so the mouse-convenience
+   * behaviour has parity for assistive tech, even though the aside itself
+   * isn't tab-focusable (the ExpandToggle and nav buttons are).
+   */
+  const handleRailClick = useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      if (!collapsed) return;
+      if (isOnInteractiveElement(event.target)) return;
+      toggle();
+    },
+    [collapsed, toggle],
+  );
+  const handleRailKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      if (!collapsed) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if (isOnInteractiveElement(event.target)) return;
+      event.preventDefault();
+      toggle();
+    },
+    [collapsed, toggle],
+  );
+
   return (
     <aside
       data-collapsed={collapsed ? "true" : "false"}
+      onClick={collapsed ? handleRailClick : undefined}
+      onKeyDown={collapsed ? handleRailKeyDown : undefined}
       className={cn(
-        // Position relative so the collapsed-state expand button can overhang
-        // the right edge — keeps the toggle visually out of the cramped rail
-        // while staying anchored to the sidebar (not the main pane).
-        "relative flex h-screen flex-col bg-sidebar border-r border-border",
-        collapsed ? "w-[52px] py-[14px] px-0" : "w-[256px] px-[12px] py-[14px]",
+        // `group/rail` lets the ExpandToggle react to hovers on the whole rail.
+        "group/rail relative flex h-screen flex-col bg-sidebar border-r border-border",
+        collapsed ? "w-[52px] py-[14px] px-0 cursor-pointer" : "w-[256px] px-[12px] py-[14px]",
         "shrink-0 select-none",
       )}
     >
       {/* Brand row — Sketch logo + org name + (when expanded) collapse toggle.
        * The toggle gets lifted out and rendered as a floating affordance when
-       * the rail is collapsed; see <FloatingExpandToggle /> below. */}
+       * the rail is collapsed; see <ExpandToggle /> below. */}
       <BrandRow collapsed={collapsed} onToggle={toggle} orgName={orgName} />
 
-      {/* Floating expand toggle — only rendered while collapsed. Sits half
-       * outside the rail's right edge so it reads as a distinct "pull to
-       * open" affordance rather than yet another sidebar icon. */}
-      {collapsed && <FloatingExpandToggle onClick={toggle} />}
+      {/* Expand toggle — only rendered while collapsed. Same Tab pull-handle
+       * idiom as the chat sidecar so users learn one affordance for both rails. */}
+      {collapsed && <ExpandToggle onClick={toggle} ariaLabel="Expand sidebar" />}
 
       {/* Search trigger */}
       <SearchTrigger collapsed={collapsed} onClick={onOpenSearchPalette} onKeyDown={handleSearchKey} />
@@ -206,7 +237,7 @@ export function SketchSidebar({
  * name can read at proper presence beside the icon instead of as a footnote.
  *
  * The collapse toggle only renders here when the rail is expanded. In the
- * collapsed state the toggle moves out to <FloatingExpandToggle /> so it
+ * collapsed state the toggle moves out to a floating <ExpandToggle /> so it
  * isn't fighting nav icons for space (and so a new user has a more obvious
  * affordance to reopen the rail).
  */
@@ -244,41 +275,6 @@ function BrandRow({
         </>
       )}
     </div>
-  );
-}
-
-/**
- * Floating expand toggle — visible only while the sidebar is collapsed.
- *
- * Sits half outside the rail's right edge (translated +50%) so it reads as a
- * distinct "drawer pull" rather than another icon competing with Home / Files
- * / etc. inside the cramped 52px rail. Chevron points right (universal "open
- * this") and the surface has card chrome + a soft shadow so it pops against
- * both the sidebar and the main pane behind it.
- *
- * The vertical position aligns with the brand row's center so the user's eye
- * finds it next to the Sketch logo — the natural "header" of the sidebar.
- */
-function FloatingExpandToggle({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label="Expand sidebar"
-      className={cn(
-        // top: align with the brand row's logo center (14px py + 14px to logo center).
-        // right: -14px translates the button half-out of the rail.
-        "absolute top-[18px] right-[-14px] z-30",
-        "flex h-[28px] w-[28px] items-center justify-center rounded-full",
-        "bg-background text-muted-foreground border border-border shadow-sm",
-        "transition-all duration-150 ease-out cursor-pointer",
-        "hover:text-foreground hover:bg-foreground/[0.04] hover:shadow",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
-      )}
-      title="Expand sidebar"
-    >
-      <ChevronRightIcon size={14} aria-hidden weight="bold" />
-    </button>
   );
 }
 

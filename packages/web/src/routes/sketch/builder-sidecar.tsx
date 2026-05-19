@@ -1,17 +1,19 @@
 /**
- * /scheduled-tasks/builder-sidecar — Variant B.
+ * /scheduled-tasks/builder-sidecar — chat-driven automation builder.
  *
- * Split builder. User got here by clicking "Open builder + chat" on the
- * artifact in /chat/automation-sidecar. The chat continues in a right rail
- * next to the canvas — same conversation, still live. Power users can
- * collapse the rail down to a thin strip via the chevron.
+ * User got here by clicking "Open builder" on the artifact in
+ * /chat/automation-sidecar. The chat continues in a left rail next to the
+ * canvas — same conversation, still live. Power users can collapse the
+ * rail down to the ComposerCard via the Tab pull-handle on its right edge.
  *
- * Same BuilderCanvas as Variant A — only the wrapper is different.
+ * Chat is the lead surface (left), canvas is the working surface (right)
+ * so the canvas has room for its own right-edge details panel — populated
+ * separately, not scaffolded here.
  */
 import { BuilderCanvas } from "@/components/sketch/builder-canvas";
 import { BuilderSidecar } from "@/components/sketch/builder-sidecar";
 import { SketchShell } from "@/components/sketch/shell";
-import { MOCK_CREDITS } from "@/routes/sketch/mock-data";
+import { MOCK_CREDITS, MOCK_FILES } from "@/routes/sketch/mock-data";
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 
@@ -28,12 +30,13 @@ function BuilderSidecarPage() {
       }}
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
+      files={MOCK_FILES}
     >
       <div className="flex h-full min-h-0">
+        <BuilderSidecar threadTitle="Sharing five-star Trustpilot reviews" />
         <div className="flex min-w-0 flex-1 flex-col">
           <BuilderCanvas placeholder onSave={() => navigate({ to: "/chat/automation-sidecar" })} />
         </div>
-        <BuilderSidecar threadTitle="Sharing five-star Trustpilot reviews" />
       </div>
     </SketchShell>
   );

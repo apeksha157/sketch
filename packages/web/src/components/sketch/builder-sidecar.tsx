@@ -1,10 +1,12 @@
 /**
- * BuilderSidecar — the chat rail that sits to the right of the builder canvas
- * in Variant B. Same conversation that started on /chat/:id, continued inside
- * the builder. Used only by Variant B.
+ * BuilderSidecar — the chat rail that sits to the left of the builder canvas.
+ * Same conversation that started on /chat/:id, continued inside the builder.
+ *
+ * Chat is the lead surface; the canvas (right of this rail) owns the working
+ * area and its own future right-edge details panel.
  *
  * Sized at 400px — wide enough for messages to breathe (Slack thread sidebar
- * ~420, Linear right rail similar) without crowding the form on the left.
+ * ~420, Linear rail similar) without crowding the canvas next to it.
  *
  * Messages render without per-message avatars — the sidecar header already
  * carries the Sketch icon + thread title, so repeating the avatar on every
@@ -13,12 +15,19 @@
  * (full surface) keeps per-message avatars because it has the vertical space
  * to make the rhythm work.
  *
- * Includes a collapse handle so power users can hide the rail.
+ * Collapsed state renders a 88px ComposerCard with a Tab pull-handle for
+ * expanding — see ComposerCard + ExpandToggle.
  */
 import { ChatInput } from "@/components/sketch/chat-input";
-import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { ExpandToggle } from "@/components/sketch/expand-toggle";
+import { CaretLeftIcon, ChatIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { type ReactNode, useState } from "react";
+
+/** Helper for the rail click-to-expand: was the click on an existing button/link? */
+function isOnInteractiveElement(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('button, a, [role="button"]'));
+}
 
 export interface BuilderSidecarProps {
   threadTitle: string;
@@ -29,45 +38,13 @@ export function BuilderSidecar({ threadTitle, initiallyCollapsed = false }: Buil
   const [collapsed, setCollapsed] = useState(initiallyCollapsed);
 
   if (collapsed) {
-    return (
-      <aside
-        className="h-full w-[52px] shrink-0 border-l border-border bg-background"
-        style={{ borderLeftWidth: "0.5px" }}
-      >
-        <button
-          type="button"
-          onClick={() => setCollapsed(false)}
-          aria-label="Expand chat"
-          className={cn(
-            "group flex h-full w-full flex-col items-center gap-[16px] py-[14px]",
-            "transition-colors duration-150 ease-out cursor-pointer hover:bg-foreground/[0.04]",
-          )}
-        >
-          <span
-            className={cn(
-              "flex h-[24px] w-[24px] items-center justify-center rounded-[6px]",
-              "text-muted-foreground/70 group-hover:text-foreground group-hover:bg-foreground/[0.05] transition-colors duration-100 ease-out",
-            )}
-            aria-hidden
-          >
-            <CaretLeftIcon size={11} weight="bold" aria-hidden />
-          </span>
-          <span className="relative" aria-hidden>
-            <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[22px] w-[22px]" />
-            <span
-              className="absolute -bottom-[2px] -right-[2px] block h-[8px] w-[8px] rounded-full bg-brand-yellow ring-2 ring-background"
-              aria-label="New activity in chat"
-            />
-          </span>
-        </button>
-      </aside>
-    );
+    return <ComposerCard onExpand={() => setCollapsed(false)} />;
   }
 
   return (
     <aside
-      className="flex h-full w-[400px] shrink-0 flex-col border-l border-border bg-background"
-      style={{ borderLeftWidth: "0.5px" }}
+      className="flex h-full w-[400px] shrink-0 flex-col border-r border-border bg-background"
+      style={{ borderRightWidth: "0.5px" }}
     >
       <SidecarHeader threadTitle={threadTitle} onCollapse={() => setCollapsed(true)} />
       <div className="relative min-h-0 flex-1">
@@ -166,8 +143,83 @@ function SidecarHeader({ threadTitle, onCollapse }: { threadTitle: string; onCol
           "text-muted-foreground/70 hover:bg-foreground/[0.05] hover:text-foreground transition-colors duration-100 ease-out cursor-pointer",
         )}
       >
-        <CaretRightIcon size={11} weight="bold" aria-hidden />
+        <CaretLeftIcon size={11} weight="bold" aria-hidden />
       </button>
     </div>
+  );
+}
+
+/**
+ * ComposerCard — the chat rail in its contracted state.
+ *
+ * 88px wide. Inspired by Cursor's Composer-as-panel and shadcn's
+ * collapsed-rail (48–64px) pattern. Reads as a *participant*, not a nav
+ * rail: bg-card chrome with subtle elevation, a Tab pull-handle on the
+ * right edge, a persistent "Reply" capsule at the bottom (mirrors the
+ * chat input's vertical slot in the expanded state).
+ *
+ * The whole rail is click-to-expand on empty space — bails out if the
+ * click landed on an existing button/link so the Reply / Tab keep their
+ * own handlers without double-firing.
+ */
+function ComposerCard({ onExpand }: { onExpand: () => void }) {
+  /**
+   * Click/Enter/Space anywhere on empty rail space expands. Bails out if the
+   * target landed on a real button/link so nested affordances keep their own
+   * handlers without double-firing. The keyboard branch is required so the
+   * mouse-convenience behaviour has a parity for assistive tech, even though
+   * the aside itself isn't tab-focusable (the ExpandToggle button is).
+   */
+  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (isOnInteractiveElement(event.target)) return;
+    onExpand();
+  };
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (isOnInteractiveElement(event.target)) return;
+    event.preventDefault();
+    onExpand();
+  };
+  return (
+    <aside
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        // `group/rail` lets the ExpandToggle react to hovers on the whole rail.
+        "group/rail relative flex h-full w-[88px] shrink-0 flex-col items-center cursor-pointer",
+        "border-r border-border bg-card px-[10px] py-[18px]",
+      )}
+      style={{ borderRightWidth: "0.5px", boxShadow: "1px 0 0 0 rgba(0,0,0,0.02)" }}
+    >
+      <ExpandToggle onClick={onExpand} ariaLabel="Expand chat" />
+
+      {/* No Sketch logo / "SKETCH" eyebrow at the top: the workspace sidebar
+       * immediately to the left already carries the org brand, and duplicating
+       * it here would clone the mark twice in the same horizontal row. The
+       * Reply capsule at the bottom + the bg-card chrome + the Tab affordance
+       * carry enough identity that this rail reads as the chat panel. */}
+
+      {/* "Reply" composer capsule — anchored to the bottom so it mirrors the
+       * chat input's position in the expanded state. `mt-auto` pushes it down
+       * since the top of the rail is now intentionally empty. */}
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-label="Continue chat"
+        className={cn(
+          "group mt-auto flex w-full flex-col items-center gap-[6px] rounded-[10px]",
+          "border border-border bg-background px-[6px] py-[10px] cursor-pointer",
+          "transition-colors duration-100 ease-out hover:bg-foreground/[0.04]",
+        )}
+      >
+        <ChatIcon
+          size={14}
+          weight="regular"
+          aria-hidden
+          className="text-muted-foreground/80 group-hover:text-foreground"
+        />
+        <span className="text-[10px] text-muted-foreground/75 group-hover:text-foreground">Reply</span>
+      </button>
+    </aside>
   );
 }

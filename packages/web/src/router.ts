@@ -70,10 +70,9 @@ import {
   plansTrialUrgencyRoute,
 } from "./routes/plans";
 import { rootRoute } from "./routes/root";
-import { builderInlineRoute } from "./routes/sketch/builder-inline";
 import { builderSidecarRoute } from "./routes/sketch/builder-sidecar";
 import { chatRoute } from "./routes/sketch/chat";
-import { chatAutomationInlineRoute, chatAutomationSidecarRoute } from "./routes/sketch/chat-automation-demo";
+import { chatAutomationSidecarRoute } from "./routes/sketch/chat-automation-demo";
 import { conversationsRoute } from "./routes/sketch/conversations";
 import { homeAutomationFailedRoute } from "./routes/sketch/home-automation-failed";
 import { homeCelebrationRoute } from "./routes/sketch/home-celebration";
@@ -165,9 +164,7 @@ const routeTree = rootRoute.addChildren([
     homeWorkspacePausedRoute,
     homeCelebrationRoute,
     chatRoute,
-    chatAutomationInlineRoute,
     chatAutomationSidecarRoute,
-    builderInlineRoute,
     builderSidecarRoute,
     conversationsRoute,
   ]),

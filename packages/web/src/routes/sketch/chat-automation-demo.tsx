@@ -1,16 +1,8 @@
 /**
- * /chat/automation-inline and /chat/automation-sidecar — twin demo routes.
- *
- * Both render the same chat conversation up until the inline artifact
- * appears. They only differ in:
- *   - Variant A (inline): artifact CTA is "Open builder" → full-page builder
- *     at /scheduled-tasks/builder-inline. The chat is left behind.
- *   - Variant B (sidecar): artifact CTA is "Open builder + chat" → split
- *     builder at /scheduled-tasks/builder-sidecar. The chat continues in a
- *     right rail next to the builder canvas.
- *
- * The chat page itself is otherwise identical between variants so they can be
- * compared apples-to-apples for screenshots.
+ * /chat/automation-sidecar — chat conversation that produces an automation
+ * artifact, with an "Open builder" CTA that takes the user into the split
+ * builder at /scheduled-tasks/builder-sidecar. The chat continues live in a
+ * left rail next to the canvas.
  */
 import { ChatInput } from "@/components/sketch/chat-input";
 import { SketchMessage, UserMessage } from "@/components/sketch/chat-message";
@@ -22,9 +14,7 @@ import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { cn } from "@sketch/ui/lib/utils";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 
-type Variant = "inline" | "sidecar";
-
-function AutomationChatPage({ variant }: { variant: Variant }) {
+function AutomationChatPage() {
   const auth = useSketchAuth();
   const navigate = useNavigate();
 
@@ -33,11 +23,7 @@ function AutomationChatPage({ variant }: { variant: Variant }) {
   }
 
   function openBuilder() {
-    if (variant === "inline") {
-      void navigate({ to: "/scheduled-tasks/builder-inline" });
-    } else {
-      void navigate({ to: "/scheduled-tasks/builder-sidecar" });
-    }
+    void navigate({ to: "/scheduled-tasks/builder-sidecar" });
   }
 
   return (
@@ -149,14 +135,8 @@ function ChatHeader({ title, onBack }: { title: string; onBack: () => void }) {
   );
 }
 
-export const chatAutomationInlineRoute = createRoute({
-  getParentRoute: () => sketchRoute,
-  path: "/chat/automation-inline",
-  component: () => <AutomationChatPage variant="inline" />,
-});
-
 export const chatAutomationSidecarRoute = createRoute({
   getParentRoute: () => sketchRoute,
   path: "/chat/automation-sidecar",
-  component: () => <AutomationChatPage variant="sidecar" />,
+  component: AutomationChatPage,
 });
