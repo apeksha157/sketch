@@ -82,7 +82,6 @@ import { homeCreditsLowRoute } from "./routes/sketch/home-credits-low";
 import { homeDefaultRoute } from "./routes/sketch/home-default";
 import { homePaymentLapsedRoute } from "./routes/sketch/home-payment-lapsed";
 import { homeSetupRoute } from "./routes/sketch/home-setup";
-import { homeSetupV2Route } from "./routes/sketch/home-setup-v2";
 import { homeTrialExpiredRoute } from "./routes/sketch/home-trial-expired";
 import { homeWorkspacePausedRoute } from "./routes/sketch/home-workspace-paused";
 import { sketchRoute } from "./routes/sketch/route";
@@ -157,7 +156,6 @@ const routeTree = rootRoute.addChildren([
   // ── Sketch v1 spec routes (the new primary surface) ────────────────────────
   sketchRoute.addChildren([
     homeSetupRoute,
-    homeSetupV2Route,
     homeDefaultRoute,
     homeChannelDisconnectedRoute,
     homeAutomationFailedRoute,

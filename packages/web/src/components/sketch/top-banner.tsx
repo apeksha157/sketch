@@ -11,7 +11,7 @@
  * users see them appear in place.
  */
 import { AlertTriangleIcon } from "@/components/sketch/icons";
-import { STEPS } from "@/components/sketch/setup-checklist";
+import { STEPS } from "@/components/sketch/setup-steps";
 import { XIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 
@@ -37,14 +37,14 @@ export interface SetupBannerProps {
  * card. The banner is page chrome, not content; it earns a single glance,
  * not a study. That dictates everything below.
  *
- * What translates from v2:
- *   - Surface direction: neutral `bg-card` instead of the prior pale yellow.
- *     The yellow used to fight the dashboard's palette; making it the page
- *     chrome amplified the problem.
+ * Design decisions:
+ *   - Surface direction: neutral `bg-card` instead of pale yellow. The yellow
+ *     used to fight the dashboard's palette; making it the page chrome
+ *     amplified the problem.
  *   - Brand yellow appears in exactly one place: the active dot.
  *   - Filled high-contrast CTA button (`bg-foreground text-background`).
- *   - Copy sourced from the canonical `STEPS` array in setup-checklist.tsx,
- *     so banner and card can't drift on titles or CTA verbs.
+ *   - Copy sourced from the canonical `STEPS` array in setup-steps.ts, so the
+ *     banner and the sidebar nudge can't drift on titles or CTA verbs.
  *
  * What was tried and discarded as banner-inappropriate:
  *   - Hand-drawn Gloria Hallelujah numerals — a third font on a 40px row.

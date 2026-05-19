@@ -9,7 +9,7 @@
  *   - Make the step counter (X/5) the dominant element — it's the only piece
  *     of state the user needs at a glance.
  *   - Single-noun label sourced from the canonical STEPS.shortLabel vocabulary
- *     used by the v2 setup checklist (PLATFORMS / TEAM / APPS / SKILLS / TASKS).
+ *     (PLATFORMS / TEAM / APPS / SKILLS / TASKS).
  *   - More brand identity: card chrome (tinted bg + thin border), IBM Plex
  *     Mono for the counter and label, brand-yellow underline on the current
  *     numeral, brand-yellow accents on the completed progress segments.
@@ -17,7 +17,7 @@
  * The collapsed-sidebar variant keeps the existing 28px yellow step circle
  * — it already reads as a brand-coded affordance.
  */
-import { STEPS } from "@/components/sketch/setup-checklist";
+import { STEPS } from "@/components/sketch/setup-steps";
 import { useSidebarState } from "@/components/sketch/sidebar-context";
 import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
