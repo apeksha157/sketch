@@ -20,7 +20,7 @@
  */
 import { ChatInput } from "@/components/sketch/chat-input";
 import { ExpandToggle } from "@/components/sketch/expand-toggle";
-import { CaretLeftIcon, ChatIcon } from "@phosphor-icons/react";
+import { ChatIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { type ReactNode, useState } from "react";
 
@@ -43,10 +43,13 @@ export function BuilderSidecar({ threadTitle, initiallyCollapsed = false }: Buil
 
   return (
     <aside
-      className="flex h-full w-[400px] shrink-0 flex-col border-r border-border bg-background"
+      className="group/rail relative flex h-full w-[400px] shrink-0 flex-col border-r border-border bg-background"
       style={{ borderRightWidth: "0.5px" }}
     >
-      <SidecarHeader threadTitle={threadTitle} onCollapse={() => setCollapsed(true)} />
+      {/* Collapse toggle — same right-edge midpoint position as the
+       * collapsed-state Tab. Only the chevron direction flips. */}
+      <ExpandToggle onClick={() => setCollapsed(true)} ariaLabel="Collapse chat" direction="left" />
+      <SidecarHeader threadTitle={threadTitle} />
       <div className="relative min-h-0 flex-1">
         <div
           className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[24px] bg-gradient-to-b from-background to-transparent"
@@ -127,24 +130,18 @@ function SidecarSketchMessage({ children }: { children: ReactNode }) {
   );
 }
 
-function SidecarHeader({ threadTitle, onCollapse }: { threadTitle: string; onCollapse: () => void }) {
+/**
+ * Sidecar header — icon + thread title only. The collapse affordance is
+ * NOT here; it lives as the floating <ExpandToggle /> on the rail's right
+ * edge in both expanded and collapsed states (one predictable location).
+ */
+function SidecarHeader({ threadTitle }: { threadTitle: string }) {
   return (
     <div className="flex shrink-0 items-center gap-[10px] bg-foreground/[0.025] px-[14px] py-[9px]">
       <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[16px] w-[16px] shrink-0" />
       <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/85 leading-tight">
         {threadTitle}
       </h2>
-      <button
-        type="button"
-        onClick={onCollapse}
-        aria-label="Collapse chat"
-        className={cn(
-          "flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[6px]",
-          "text-muted-foreground/70 hover:bg-foreground/[0.05] hover:text-foreground transition-colors duration-100 ease-out cursor-pointer",
-        )}
-      >
-        <CaretLeftIcon size={11} weight="bold" aria-hidden />
-      </button>
     </div>
   );
 }
@@ -193,15 +190,25 @@ function ComposerCard({ onExpand }: { onExpand: () => void }) {
     >
       <ExpandToggle onClick={onExpand} ariaLabel="Expand chat" />
 
-      {/* No Sketch logo / "SKETCH" eyebrow at the top: the workspace sidebar
-       * immediately to the left already carries the org brand, and duplicating
-       * it here would clone the mark twice in the same horizontal row. The
-       * Reply capsule at the bottom + the bg-card chrome + the Tab affordance
-       * carry enough identity that this rail reads as the chat panel. */}
+      {/* Top slot — passive status. Mirrors the expanded SidecarHeader's
+       * vertical position (top of panel = "what state is this thread in").
+       * Mock state for the demo: "READY" with the emerald dot. In production
+       * this is driven by live agent state — idle/working/attention.
+       *
+       * No Sketch logo / "SKETCH" eyebrow on top: the workspace sidebar
+       * immediately to the left already carries the org brand. Status pill
+       * does the identity work via shape + colour, not via the brand mark. */}
+      <div className="flex flex-col items-center gap-[6px]">
+        <div className="flex items-center gap-[6px] rounded-full bg-background px-[8px] py-[3px] ring-1 ring-border">
+          <span className="block h-[6px] w-[6px] rounded-full bg-emerald-500" aria-hidden />
+          <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-foreground/80">Ready</span>
+        </div>
+        <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">2m</span>
+      </div>
 
       {/* "Reply" composer capsule — anchored to the bottom so it mirrors the
        * chat input's position in the expanded state. `mt-auto` pushes it down
-       * since the top of the rail is now intentionally empty. */}
+       * past the breathing room in the middle. */}
       <button
         type="button"
         onClick={onExpand}

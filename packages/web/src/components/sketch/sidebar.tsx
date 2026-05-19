@@ -25,7 +25,6 @@ import { useSidebarState } from "@/components/sketch/sidebar-context";
 import { SidebarFilesCard, type SidebarFilesCardProps } from "@/components/sketch/sidebar-files-card";
 import { SidebarSetupNudge, type SidebarSetupNudgeProps } from "@/components/sketch/sidebar-setup-nudge";
 import { NavBadge, RunningPulse } from "@/components/sketch/status-indicators";
-import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import { useTheme } from "@sketch/ui/hooks/use-theme";
 import { cn } from "@sketch/ui/lib/utils";
 import { Link, useLocation } from "@tanstack/react-router";
@@ -164,14 +163,21 @@ export function SketchSidebar({
         "shrink-0 select-none",
       )}
     >
-      {/* Brand row — Sketch logo + org name + (when expanded) collapse toggle.
-       * The toggle gets lifted out and rendered as a floating affordance when
-       * the rail is collapsed; see <ExpandToggle /> below. */}
-      <BrandRow collapsed={collapsed} onToggle={toggle} orgName={orgName} />
+      {/* Brand row — Sketch logo + org name. The collapse/expand toggle is
+       * NOT here; it lives as a single floating <ExpandToggle /> at the
+       * right-edge midpoint in BOTH states, just flipping chevron direction.
+       * That keeps the affordance in one predictable location regardless of
+       * state. */}
+      <BrandRow collapsed={collapsed} orgName={orgName} />
 
-      {/* Expand toggle — only rendered while collapsed. Same Tab pull-handle
-       * idiom as the chat sidecar so users learn one affordance for both rails. */}
-      {collapsed && <ExpandToggle onClick={toggle} ariaLabel="Expand sidebar" />}
+      {/* Expand/collapse toggle — same Tab pull-handle in both states. Right
+       * edge, vertical midpoint, half-protruding. Chevron flips: left when
+       * the rail is open (click to close), right when closed (click to open). */}
+      <ExpandToggle
+        onClick={toggle}
+        ariaLabel={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        direction={collapsed ? "right" : "left"}
+      />
 
       {/* Search trigger */}
       <SearchTrigger collapsed={collapsed} onClick={onOpenSearchPalette} onKeyDown={handleSearchKey} />
@@ -236,18 +242,15 @@ export function SketchSidebar({
  * Brand row — logo carries the brand; the wordmark gets dropped so the org
  * name can read at proper presence beside the icon instead of as a footnote.
  *
- * The collapse toggle only renders here when the rail is expanded. In the
- * collapsed state the toggle moves out to a floating <ExpandToggle /> so it
- * isn't fighting nav icons for space (and so a new user has a more obvious
- * affordance to reopen the rail).
+ * No collapse button in here: the collapse/expand affordance lives as a
+ * single <ExpandToggle /> on the rail's right edge in BOTH states (one
+ * predictable location), so the brand row stays purely identity.
  */
 function BrandRow({
   collapsed,
-  onToggle,
   orgName,
 }: {
   collapsed: boolean;
-  onToggle: () => void;
   orgName: string;
 }) {
   const { resolvedTheme } = useTheme();
@@ -257,22 +260,9 @@ function BrandRow({
     <div className={cn("mb-3 flex items-center", collapsed ? "justify-center px-0" : "gap-[10px] px-[8px] py-[4px]")}>
       <img src={logoSrc} alt="Sketch" className="h-[28px] w-[28px] shrink-0 select-none" draggable={false} />
       {!collapsed && (
-        <>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground tracking-tight">
-            {orgName}
-          </span>
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-label="Collapse sidebar"
-            className={cn(
-              "shrink-0 rounded-[6px] p-[4px] text-muted-foreground transition-colors duration-100 ease-out cursor-pointer",
-              "hover:text-foreground hover:bg-foreground/[0.06]",
-            )}
-          >
-            <SidebarSimpleIcon size={16} aria-hidden weight="regular" />
-          </button>
-        </>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground tracking-tight">
+          {orgName}
+        </span>
       )}
     </div>
   );

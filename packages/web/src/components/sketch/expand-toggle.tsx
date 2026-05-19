@@ -1,30 +1,37 @@
 /**
- * Shared expand-toggle — the vertical drawer pull-handle that sits on the
- * right edge of any collapsed rail (workspace sidebar, chat composer card).
+ * Shared expand/collapse toggle — the vertical drawer pull-handle that sits
+ * on the right edge of any rail (workspace sidebar, chat composer card),
+ * in BOTH expanded and collapsed states.
  *
- * One affordance idiom across both rails so the user learns it once.
+ * Why one component for both states: keeps the affordance in a single
+ * predictable location at all times (right edge, vertical midpoint). The
+ * only thing that flips between states is the chevron direction:
+ *   - `direction="right"` → caret points right ("click to expand")
+ *   - `direction="left"`  → caret points left ("click to collapse")
  *
- * Three-step interaction ladder, every state uses SOLID colors (no
- * opacity-based tints — those read as "translucent button" rather than
- * "active button"):
- *   1. Rest — 10×56, white bg, muted chevron. Always visible (good for
- *      first-time discoverability on desktop AND touch).
+ * One affordance idiom across both rails AND both states so the user learns
+ * the position once and the meaning is unambiguous.
+ *
+ * Three-step interaction ladder, every state uses SOLID colors:
+ *   1. Rest — 10×56, white bg, muted chevron. Always visible.
  *   2. Rail hover — widens to 12px, warm card tone (#FBFAF6), chevron
  *      brightens. Fires when the cursor is anywhere on the parent rail
- *      (parent must own `group/rail`). No-op on touch — but that's fine;
- *      rest state is already discoverable.
+ *      (parent must own `group/rail`).
  *   3. Direct hover — widens to 16px, pale brand-yellow tint (#FFFAD0),
  *      yellow-warm border, full-contrast chevron, shadow lifts.
  */
-import { CaretRightIcon } from "@phosphor-icons/react";
+import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 
 export interface ExpandToggleProps {
   onClick: () => void;
   ariaLabel: string;
+  /** Which way the chevron points. Default "right" (expand affordance). */
+  direction?: "left" | "right";
 }
 
-export function ExpandToggle({ onClick, ariaLabel }: ExpandToggleProps) {
+export function ExpandToggle({ onClick, ariaLabel, direction = "right" }: ExpandToggleProps) {
+  const Caret = direction === "left" ? CaretLeftIcon : CaretRightIcon;
   return (
     <button
       type="button"
@@ -42,7 +49,7 @@ export function ExpandToggle({ onClick, ariaLabel }: ExpandToggleProps) {
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
       )}
     >
-      <CaretRightIcon
+      <Caret
         size={10}
         weight="bold"
         aria-hidden
