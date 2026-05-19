@@ -13,10 +13,11 @@ export function UserMessage({ children }: { children: ReactNode }) {
     <div className="flex justify-end">
       <div
         className={cn(
-          "max-w-[78%] rounded-[12px] bg-card border border-border",
-          "px-[13px] py-[10px] text-[13px] text-foreground",
+          "max-w-[78%] inline-flex items-center gap-[8px] rounded-[12px] border border-border",
+          "bg-[#ebebea] dark:bg-white/[0.06]",
+          "px-[16px] py-[10px] text-[14px] text-foreground",
         )}
-        style={{ borderRadius: "12px 12px 4px 12px", lineHeight: 1.45 }}
+        style={{ lineHeight: 1.5 }}
       >
         {children}
       </div>
@@ -26,15 +27,14 @@ export function UserMessage({ children }: { children: ReactNode }) {
 
 export function SketchMessage({ children, streaming }: { children: ReactNode; streaming?: boolean }) {
   return (
-    <div className="flex items-start gap-[12px]">
-      <span
-        className="mt-[1px] flex h-[24px] w-[24px] shrink-0 items-center justify-center rounded-[6px] bg-brand-yellow text-brand-brown"
-        style={{ fontSize: 13, fontWeight: 500, lineHeight: 1 }}
+    <div className="flex max-w-[78%] items-start gap-[12px]">
+      <img
+        src="/logos/sketch-icon-lightmode.png"
+        alt=""
         aria-label="Sketch"
-      >
-        S
-      </span>
-      <div className="min-w-0 flex-1 text-[13px] text-foreground" style={{ lineHeight: 1.5 }}>
+        className="mt-[2px] block h-[24px] w-[24px] shrink-0"
+      />
+      <div className="min-w-0 flex-1 text-[14px] text-foreground" style={{ lineHeight: 1.7 }}>
         {children}
         {streaming && <StreamingCaret />}
       </div>

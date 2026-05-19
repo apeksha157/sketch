@@ -14,8 +14,7 @@
  * Disabled state (paused routes) keeps the same chrome but greys the text
  * and inert-locks the controls.
  */
-import { ArrowUpIcon } from "@/components/sketch/icons";
-import { PaperclipIcon, PlusIcon } from "@phosphor-icons/react";
+import { PaperPlaneTiltIcon, PaperclipIcon, PlusIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import {
   type ChangeEvent,
@@ -187,7 +186,7 @@ function SubmitButton({ disabled, empty, onClick }: { disabled: boolean; empty: 
           : "bg-muted text-muted-foreground/70 cursor-not-allowed",
       )}
     >
-      <ArrowUpIcon size={16} weight="bold" aria-hidden />
+      <PaperPlaneTiltIcon size={14} weight="fill" aria-hidden />
     </button>
   );
 }

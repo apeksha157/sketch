@@ -4,10 +4,14 @@
  * Rendered inside a Sketch message when Sketch produces structured output —
  * a new skill, a scheduled task, a file, etc. The primary action installs/saves
  * the artifact; secondary opens it in its full editor (e.g. /skills/new).
+ *
+ * Hierarchy: eyebrow (10 mono) → title (20 medium) → description (14) →
+ * meta line (10 mono dotted) → CTAs. Title is the visual anchor; CTAs sit at
+ * the foot, evenly weighted as the second-loudest band on the card.
  */
 import type { IconProps } from "@/components/sketch/icons";
 import { cn } from "@sketch/ui/lib/utils";
-import type { ComponentType } from "react";
+import { Fragment, type ComponentType } from "react";
 
 export interface InlineArtifactProps {
   /** Uppercase eyebrow, e.g. "NEW SKILL" or "SCHEDULED TASK". */
@@ -31,47 +35,61 @@ export function InlineArtifact({
 }: InlineArtifactProps) {
   return (
     <div
-      className={cn(
-        "mt-[8px] flex flex-col gap-[12px] rounded-[10px] border bg-[#fafaf8] dark:bg-white/[0.03] p-[14px]",
-        "border-border",
-      )}
+      className={cn("mt-[12px] rounded-[12px] border bg-card p-[20px]", "border-border")}
       style={{ borderWidth: "0.5px" }}
     >
-      <div className="flex items-center gap-[12px]">
+      <span
+        className="block font-mono text-[10px] uppercase text-muted-foreground"
+        style={{ letterSpacing: "0.08em" }}
+      >
+        {kind}
+      </span>
+
+      <div className="mt-[10px] flex items-center gap-[10px]">
         <span
-          className="flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[6px] bg-brand-yellow text-brand-brown"
+          className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[6px] bg-brand-yellow text-brand-brown"
           aria-hidden
         >
-          <Icon size={15} />
+          <Icon size={14} />
         </span>
-        <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
-          <span className="font-mono text-[10px] uppercase text-muted-foreground" style={{ letterSpacing: "0.07em" }}>
-            {kind}
-          </span>
-          <span className="truncate text-[13px] font-medium text-foreground">{title}</span>
-        </div>
+        <h3 className="min-w-0 text-[17px] font-medium text-foreground leading-tight">{title}</h3>
       </div>
-      <p className="text-[12px] text-muted-foreground" style={{ lineHeight: 1.5 }}>
+
+      <p className="mt-[12px] text-[13.5px] text-foreground/85" style={{ lineHeight: 1.6 }}>
         {description}
       </p>
+
       {tags && tags.length > 0 && (
-        <div className="flex flex-wrap gap-[10px]">
-          {tags.map((tag) => (
-            <span key={tag} className="rounded-[4px] bg-card px-[8px] py-[2px] text-[11px] text-muted-foreground">
-              {tag}
-            </span>
+        <div className="mt-[14px] flex flex-wrap items-center gap-[8px]">
+          {tags.map((tag, i) => (
+            <Fragment key={tag}>
+              {i > 0 && (
+                <span className="text-muted-foreground/40" aria-hidden>
+                  ·
+                </span>
+              )}
+              <span
+                className="font-mono text-[10px] uppercase text-muted-foreground"
+                style={{ letterSpacing: "0.08em" }}
+              >
+                {tag}
+              </span>
+            </Fragment>
           ))}
         </div>
       )}
+
       {(primaryAction || secondaryAction) && (
-        <div className="flex flex-wrap gap-[8px]">
+        <div className="mt-[18px] flex flex-wrap gap-[10px]">
           {primaryAction && (
             <button
               type="button"
               onClick={primaryAction.onClick}
               className={cn(
-                "rounded-[6px] border border-brand-brown bg-brand-yellow px-[14px] py-[7px]",
-                "text-[12px] font-medium text-brand-brown hover:bg-brand-yellow/90 transition-colors duration-100 ease-out cursor-pointer",
+                "rounded-[12px] bg-brand-yellow px-[24px] py-[13px]",
+                "font-mono text-[13px] font-bold uppercase tracking-[0.08em]",
+                "text-[#0a0a0a]",
+                "transition-opacity duration-150 ease-out hover:opacity-90 cursor-pointer",
               )}
             >
               {primaryAction.label}
@@ -82,11 +100,12 @@ export function InlineArtifact({
               type="button"
               onClick={secondaryAction.onClick}
               className={cn(
-                "rounded-[6px] border bg-transparent px-[14px] py-[7px]",
-                "border-border text-[12px] font-medium text-foreground",
-                "hover:bg-accent transition-colors duration-100 ease-out cursor-pointer",
+                "rounded-[12px] border bg-transparent px-[24px] py-[13px]",
+                "font-mono text-[13px] font-bold uppercase tracking-[0.08em]",
+                "border-foreground/15 text-muted-foreground",
+                "transition-[background-color,border-color,color] duration-150 ease-out cursor-pointer",
+                "hover:border-foreground/30 hover:text-foreground hover:bg-foreground/[0.03]",
               )}
-              style={{ borderWidth: "0.5px" }}
             >
               {secondaryAction.label}
             </button>
