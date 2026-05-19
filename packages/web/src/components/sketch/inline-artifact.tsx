@@ -11,7 +11,7 @@
  */
 import type { IconProps } from "@/components/sketch/icons";
 import { cn } from "@sketch/ui/lib/utils";
-import { Fragment, type ComponentType } from "react";
+import { type ComponentType, Fragment } from "react";
 
 export interface InlineArtifactProps {
   /** Uppercase eyebrow, e.g. "NEW SKILL" or "SCHEDULED TASK". */
@@ -38,10 +38,7 @@ export function InlineArtifact({
       className={cn("mt-[12px] rounded-[12px] border bg-card p-[20px]", "border-border")}
       style={{ borderWidth: "0.5px" }}
     >
-      <span
-        className="block font-mono text-[10px] uppercase text-muted-foreground"
-        style={{ letterSpacing: "0.08em" }}
-      >
+      <span className="block font-mono text-[10px] uppercase text-muted-foreground" style={{ letterSpacing: "0.08em" }}>
         {kind}
       </span>
 

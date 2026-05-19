@@ -97,8 +97,7 @@ function PlaceholderOverlay() {
       <div
         className="absolute inset-0 bg-foreground/[0.02]"
         style={{
-          maskImage:
-            "linear-gradient(to bottom, transparent 0, black 36px, black calc(100% - 36px), transparent 100%)",
+          maskImage: "linear-gradient(to bottom, transparent 0, black 36px, black calc(100% - 36px), transparent 100%)",
           WebkitMaskImage:
             "linear-gradient(to bottom, transparent 0, black 36px, black calc(100% - 36px), transparent 100%)",
         }}
@@ -271,10 +270,7 @@ function Section({
   return (
     <section className="flex flex-col gap-[14px]">
       <SectionHeading step={step} eyebrow={eyebrow} label={label} />
-      <div
-        className="rounded-[14px] border border-border bg-card p-[22px]"
-        style={{ borderWidth: "0.5px" }}
-      >
+      <div className="rounded-[14px] border border-border bg-card p-[22px]" style={{ borderWidth: "0.5px" }}>
         <div className="flex flex-col gap-[14px]">{children}</div>
       </div>
     </section>
@@ -291,10 +287,7 @@ function SectionHeading({ step, eyebrow, label }: { step: string; eyebrow: strin
         {step}
       </span>
       <span className="block h-px w-[18px] bg-border" aria-hidden />
-      <span
-        className="font-mono text-[10px] uppercase text-muted-foreground"
-        style={{ letterSpacing: "0.08em" }}
-      >
+      <span className="font-mono text-[10px] uppercase text-muted-foreground" style={{ letterSpacing: "0.08em" }}>
         {eyebrow}
       </span>
       <span className="text-[16px] font-medium text-foreground leading-tight">{label}</span>
@@ -314,10 +307,7 @@ function FieldRow({
   return (
     <div className={cn("flex gap-[16px]", align === "start" ? "items-start" : "items-center")}>
       <span
-        className={cn(
-          "w-[120px] shrink-0 text-[12px] text-muted-foreground",
-          align === "start" ? "pt-[10px]" : "",
-        )}
+        className={cn("w-[120px] shrink-0 text-[12px] text-muted-foreground", align === "start" ? "pt-[10px]" : "")}
       >
         {label}
       </span>

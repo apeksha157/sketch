@@ -16,8 +16,8 @@
  * Includes a collapse handle so power users can hide the rail.
  */
 import { ChatInput } from "@/components/sketch/chat-input";
-import { cn } from "@sketch/ui/lib/utils";
 import { CaretLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { cn } from "@sketch/ui/lib/utils";
 import { type ReactNode, useState } from "react";
 
 export interface BuilderSidecarProps {
@@ -53,12 +53,7 @@ export function BuilderSidecar({ threadTitle, initiallyCollapsed = false }: Buil
             <CaretLeftIcon size={11} weight="bold" aria-hidden />
           </span>
           <span className="relative" aria-hidden>
-            <img
-              src="/logos/sketch-icon-lightmode.png"
-              alt=""
-              aria-hidden
-              className="block h-[22px] w-[22px]"
-            />
+            <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[22px] w-[22px]" />
             <span
               className="absolute -bottom-[2px] -right-[2px] block h-[8px] w-[8px] rounded-full bg-brand-yellow ring-2 ring-background"
               aria-label="New activity in chat"
@@ -87,7 +82,8 @@ export function BuilderSidecar({ threadTitle, initiallyCollapsed = false }: Buil
         <div className="absolute inset-0 overflow-y-auto px-[16px] py-[14px]">
           <div className="flex flex-col gap-[16px]">
             <SidecarUserMessage>
-              I want to do a better job celebrating customer wins inside the team. Right now they just sit in a tab no one's looking at.
+              I want to do a better job celebrating customer wins inside the team. Right now they just sit in a tab no
+              one's looking at.
             </SidecarUserMessage>
             <SidecarSketchMessage>
               Which source has the most signal — Trustpilot, the App Store, Intercom, somewhere else?
@@ -99,7 +95,8 @@ export function BuilderSidecar({ threadTitle, initiallyCollapsed = false }: Buil
               Got it. And where should they show up — a Slack channel, a weekly digest, somewhere quieter?
             </SidecarSketchMessage>
             <SidecarUserMessage>
-              Slack. There's already a #design-wins channel that's basically tumbleweeds — want to bring it back to life.
+              Slack. There's already a #design-wins channel that's basically tumbleweeds — want to bring it back to
+              life.
             </SidecarUserMessage>
             <SidecarSketchMessage>
               Makes sense. Want every five-star review routed there, or only the ones that actually mention design?

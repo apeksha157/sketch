@@ -15,8 +15,8 @@
  *     gets full canvas width below.
  */
 import { ChatInput } from "@/components/sketch/chat-input";
-import { cn } from "@sketch/ui/lib/utils";
 import { ArrowSquareOutIcon, ChatsCircleIcon } from "@phosphor-icons/react";
+import { cn } from "@sketch/ui/lib/utils";
 import type { ReactNode } from "react";
 
 export interface ConversationContextProps {
@@ -38,10 +38,7 @@ export function ConversationContext({ threadTitle, messageCount, onView }: Conve
       <div className="flex items-center justify-between gap-[12px] px-[20px] pt-[18px]">
         <div className="flex items-center gap-[8px]">
           <ChatsCircleIcon size={13} className="text-muted-foreground" aria-hidden />
-          <span
-            className="font-mono text-[10px] uppercase text-muted-foreground"
-            style={{ letterSpacing: "0.08em" }}
-          >
+          <span className="font-mono text-[10px] uppercase text-muted-foreground" style={{ letterSpacing: "0.08em" }}>
             From conversation · {messageCount} messages
           </span>
         </div>
@@ -61,9 +58,7 @@ export function ConversationContext({ threadTitle, messageCount, onView }: Conve
       </div>
 
       {/* Thread title */}
-      <h3 className="mt-[8px] px-[20px] text-[14px] font-medium text-foreground/85 leading-tight">
-        {threadTitle}
-      </h3>
+      <h3 className="mt-[8px] px-[20px] text-[14px] font-medium text-foreground/85 leading-tight">{threadTitle}</h3>
 
       {/* Message history — scrollable, capped */}
       <div className="mt-[14px] max-h-[260px] overflow-y-auto px-[20px] pb-[16px]">

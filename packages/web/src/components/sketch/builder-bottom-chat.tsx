@@ -1,3 +1,4 @@
+import { CaretDownIcon, CaretUpIcon, PaperPlaneTiltIcon, PaperclipIcon } from "@phosphor-icons/react";
 /**
  * BuilderBottomChat — bottom-docked chat panel for Variant A.
  *
@@ -31,7 +32,6 @@
  * Drag-resize and persistent state across sessions are out of scope for v1.
  */
 import { cn } from "@sketch/ui/lib/utils";
-import { CaretDownIcon, CaretUpIcon, PaperPlaneTiltIcon, PaperclipIcon } from "@phosphor-icons/react";
 import {
   type ChangeEvent,
   type KeyboardEvent,
@@ -98,13 +98,7 @@ export function BuilderBottomChat({ threadTitle, lastActivity }: BuilderBottomCh
   }, [handleDragMove, handleDragEnd]);
 
   if (collapsed) {
-    return (
-      <CollapsedDock
-        threadTitle={threadTitle}
-        lastActivity={lastActivity}
-        onExpand={() => setCollapsed(false)}
-      />
-    );
+    return <CollapsedDock threadTitle={threadTitle} lastActivity={lastActivity} onExpand={() => setCollapsed(false)} />;
   }
 
   return (
@@ -135,8 +129,6 @@ function DragHandle({ onDragStart }: { onDragStart: (event: ReactMouseEvent) => 
   return (
     <div
       onMouseDown={onDragStart}
-      role="separator"
-      aria-orientation="horizontal"
       aria-label="Drag to resize chat"
       className={cn(
         "group absolute inset-x-0 top-0 z-20 flex h-[8px] -translate-y-[4px] cursor-ns-resize items-center justify-center",
@@ -171,12 +163,7 @@ function CollapsedDock({
       aria-label="Expand chat with Sketch"
     >
       <div className="mx-auto flex w-full max-w-6xl items-center gap-[10px] px-[20px] py-[9px]">
-        <img
-          src="/logos/sketch-icon-lightmode.png"
-          alt=""
-          aria-hidden
-          className="block h-[16px] w-[16px] shrink-0"
-        />
+        <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[16px] w-[16px] shrink-0" />
         <span className="min-w-0 truncate text-[13px] font-medium text-foreground/85">{threadTitle}</span>
         {lastActivity && (
           <span
@@ -207,12 +194,7 @@ function DockHeader({ threadTitle, onCollapse }: { threadTitle: string; onCollap
   return (
     <div className="shrink-0 bg-foreground/[0.025]">
       <div className="mx-auto flex w-full max-w-6xl items-center gap-[10px] px-[20px] py-[9px]">
-        <img
-          src="/logos/sketch-icon-lightmode.png"
-          alt=""
-          aria-hidden
-          className="block h-[18px] w-[18px] shrink-0"
-        />
+        <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[18px] w-[18px] shrink-0" />
         <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/85 leading-tight">
           {threadTitle}
         </h2>
@@ -238,14 +220,13 @@ function MessageList() {
       <div className="mx-auto w-full max-w-6xl px-[20px] py-[8px]">
         <div className="flex flex-col gap-[14px]">
           <MiniUserMessage>
-            I want to do a better job celebrating customer wins inside the team. Right now they just sit in a tab no one's looking at.
+            I want to do a better job celebrating customer wins inside the team. Right now they just sit in a tab no
+            one's looking at.
           </MiniUserMessage>
           <MiniSketchMessage>
             Which source has the most signal — Trustpilot, the App Store, Intercom, somewhere else?
           </MiniSketchMessage>
-          <MiniUserMessage>
-            Trustpilot. The five-star ones especially — those land hardest internally.
-          </MiniUserMessage>
+          <MiniUserMessage>Trustpilot. The five-star ones especially — those land hardest internally.</MiniUserMessage>
           <MiniSketchMessage>
             Got it. And where should they show up — a Slack channel, a weekly digest, somewhere quieter?
           </MiniSketchMessage>

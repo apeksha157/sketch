@@ -51,10 +51,7 @@ function AutomationChatPage({ variant }: { variant: Variant }) {
       credits={MOCK_CREDITS}
     >
       <div className="flex h-full min-h-0 flex-col">
-        <ChatHeader
-          title="Sharing five-star Trustpilot reviews"
-          onBack={() => navigate({ to: "/home/default" })}
-        />
+        <ChatHeader title="Sharing five-star Trustpilot reviews" onBack={() => navigate({ to: "/home/default" })} />
         <div className="relative min-h-0 flex-1">
           <div
             className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[28px] bg-gradient-to-b from-background to-transparent"
@@ -66,56 +63,56 @@ function AutomationChatPage({ variant }: { variant: Variant }) {
           />
           <div className="absolute inset-0 overflow-y-auto">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-[24px] px-10 pt-8 pb-12">
-            <UserMessage>
-              I want to do a better job celebrating customer wins inside the team. Right now they just sit in a tab no one's looking at.
-            </UserMessage>
+              <UserMessage>
+                I want to do a better job celebrating customer wins inside the team. Right now they just sit in a tab no
+                one's looking at.
+              </UserMessage>
 
-            <SketchMessage>
-              Which source has the most signal — Trustpilot, the App Store, Intercom, somewhere else?
-            </SketchMessage>
+              <SketchMessage>
+                Which source has the most signal — Trustpilot, the App Store, Intercom, somewhere else?
+              </SketchMessage>
 
-            <UserMessage>
-              Trustpilot. The five-star ones especially — those land hardest internally.
-            </UserMessage>
+              <UserMessage>Trustpilot. The five-star ones especially — those land hardest internally.</UserMessage>
 
-            <SketchMessage>
-              Got it. And where should they show up — a Slack channel, a weekly digest, somewhere quieter?
-            </SketchMessage>
+              <SketchMessage>
+                Got it. And where should they show up — a Slack channel, a weekly digest, somewhere quieter?
+              </SketchMessage>
 
-            <UserMessage>
-              Slack. There's already a #design-wins channel that's basically tumbleweeds — want to bring it back to life.
-            </UserMessage>
+              <UserMessage>
+                Slack. There's already a #design-wins channel that's basically tumbleweeds — want to bring it back to
+                life.
+              </UserMessage>
 
-            <SketchMessage>
-              Makes sense. Want every five-star review routed there, or only the ones that actually mention design?
-            </SketchMessage>
+              <SketchMessage>
+                Makes sense. Want every five-star review routed there, or only the ones that actually mention design?
+              </SketchMessage>
 
-            <UserMessage>
-              Whenever we get a five-star Trustpilot review mentioning design, share it in #design-wins.
-            </UserMessage>
+              <UserMessage>
+                Whenever we get a five-star Trustpilot review mentioning design, share it in #design-wins.
+              </UserMessage>
 
-            <SketchMessage>On it — let me sketch that out.</SketchMessage>
+              <SketchMessage>On it — let me sketch that out.</SketchMessage>
 
-            <UserMessage>Also DM me when one fires, don't want to miss the moment.</UserMessage>
+              <UserMessage>Also DM me when one fires, don't want to miss the moment.</UserMessage>
 
-            <SketchMessage>
-              All set — here's the draft. Tweak anything before I save it.
-              <InlineArtifact
-                kind="New automation"
-                title="Surface design wins from Trustpilot"
-                description="Every five-star Trustpilot review mentioning design lands in #design-wins. I'll DM you the moment it goes out."
-                icon={CalendarTimeIcon}
-                tags={["Trustpilot", "Slack", "Always-on"]}
-                primaryAction={{
-                  label: "Open builder",
-                  onClick: openBuilder,
-                }}
-                secondaryAction={{
-                  label: "Save as-is",
-                  onClick: openBuilder,
-                }}
-              />
-            </SketchMessage>
+              <SketchMessage>
+                All set — here's the draft. Tweak anything before I save it.
+                <InlineArtifact
+                  kind="New automation"
+                  title="Surface design wins from Trustpilot"
+                  description="Every five-star Trustpilot review mentioning design lands in #design-wins. I'll DM you the moment it goes out."
+                  icon={CalendarTimeIcon}
+                  tags={["Trustpilot", "Slack", "Always-on"]}
+                  primaryAction={{
+                    label: "Open builder",
+                    onClick: openBuilder,
+                  }}
+                  secondaryAction={{
+                    label: "Save as-is",
+                    onClick: openBuilder,
+                  }}
+                />
+              </SketchMessage>
             </div>
           </div>
         </div>
