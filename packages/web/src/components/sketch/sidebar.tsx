@@ -404,7 +404,7 @@ function PausedCard() {
   return (
     <output aria-label="Account paused" className="flex w-full flex-col gap-[6px] rounded-[6px] px-[8px] py-[8px]">
       <span className="flex items-center gap-[6px] text-[12px] leading-none">
-        <PauseCircleIcon size={12} weight="fill" aria-hidden className="shrink-0 text-destructive" />
+        <PauseCircleIcon size={14} weight="fill" aria-hidden className="shrink-0 text-destructive" />
         <span className="font-medium text-destructive">Account paused</span>
       </span>
       <span className="h-[2px] w-full rounded-full bg-destructive/25" aria-hidden>

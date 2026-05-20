@@ -90,7 +90,7 @@ export function ProfileChip({
             {!collapsed && (
               <>
                 <div className="flex min-w-0 flex-1 flex-col items-start text-left leading-none">
-                  <div className="flex w-full items-center gap-[6px]">
+                  <div className="flex w-full items-baseline gap-[6px]">
                     <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
                     {isAdmin && (
                       <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">
@@ -114,7 +114,7 @@ export function ProfileChip({
           <div className="flex items-center gap-[10px] px-[12px] py-[12px]">
             {Avatar}
             <div className="flex min-w-0 flex-1 flex-col items-start text-left leading-none">
-              <div className="flex items-center gap-[6px]">
+              <div className="flex items-baseline gap-[6px]">
                 <span className="truncate text-[13px] font-medium text-foreground">{name}</span>
                 {isAdmin && (
                   <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">
