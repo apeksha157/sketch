@@ -36,24 +36,36 @@ export function SketchMessage({ children, streaming }: { children: ReactNode; st
       />
       <div className="min-w-0 flex-1 text-[14px] text-foreground" style={{ lineHeight: 1.7 }}>
         {children}
-        {streaming && <StreamingCaret />}
+        {streaming && <StreamingIndicator />}
       </div>
     </div>
   );
 }
 
 /**
- * Streaming caret — the "Sketch is thinking" affordance. Originally rendered
- * in brand-yellow, which fails the no-yellow-on-white rule and made the caret
- * effectively invisible. Foreground tone with a soft pulse reads clearly on
- * both light and dark backgrounds without competing with the message body.
+ * Streaming indicator — "Sketch is still typing" / "more text coming."
+ *
+ * Three small dots pulsing in sequence is the chat-native idiom for this
+ * (iMessage, Slack, Messenger all converge on it). It reads as a true
+ * indicator rather than as continuation marker, which the earlier block
+ * cursor implementation conflated. The dots inherit `sketch-caret-pulse`
+ * (opacity-only loop) with staggered delays so they wave, not blink.
+ *
+ * aria-label sits on the wrapper so screen readers announce the streaming
+ * state once, not three times for three dots.
  */
-function StreamingCaret() {
+function StreamingIndicator() {
   return (
-    <span
-      className="ml-[2px] inline-block align-[-2px] rounded-[1px] bg-foreground/70"
-      style={{ width: 6, height: 14, animation: "sketch-caret-pulse 1.1s ease-in-out infinite" }}
-      aria-hidden
-    />
+    <output className="ml-[6px] inline-flex items-center gap-[3px] align-[2px]" aria-label="Sketch is still typing">
+      {[0, 0.18, 0.36].map((delay, i) => (
+        <span
+          // biome-ignore lint/suspicious/noArrayIndexKey: positional dots, never reorder
+          key={i}
+          className="block h-[4px] w-[4px] rounded-full bg-foreground/55"
+          style={{ animation: `sketch-caret-pulse 1.2s ease-in-out ${delay}s infinite` }}
+          aria-hidden
+        />
+      ))}
+    </output>
   );
 }
