@@ -183,6 +183,15 @@
     transform: translateX(0);
   }
 }
+@keyframes sketch-caret-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 
 /* Scroll containers that should hide their scrollbar (§4.5 chip row). */
 .sketch-scrollbar-hide {
@@ -200,6 +209,10 @@
   .sketch-banner-in,
   .sketch-celebration-in,
   .sketch-toast-in {
+    animation: none !important;
+  }
+  /* Streaming caret holds steady at rest opacity when reduced-motion is on. */
+  [style*="sketch-caret-pulse"] {
     animation: none !important;
   }
 }

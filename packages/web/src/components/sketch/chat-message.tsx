@@ -42,8 +42,18 @@ export function SketchMessage({ children, streaming }: { children: ReactNode; st
   );
 }
 
+/**
+ * Streaming caret — the "Sketch is thinking" affordance. Originally rendered
+ * in brand-yellow, which fails the no-yellow-on-white rule and made the caret
+ * effectively invisible. Foreground tone with a soft pulse reads clearly on
+ * both light and dark backgrounds without competing with the message body.
+ */
 function StreamingCaret() {
   return (
-    <span className="ml-[2px] inline-block align-[-2px] bg-brand-yellow" style={{ width: 6, height: 14 }} aria-hidden />
+    <span
+      className="ml-[2px] inline-block align-[-2px] rounded-[1px] bg-foreground/70"
+      style={{ width: 6, height: 14, animation: "sketch-caret-pulse 1.1s ease-in-out infinite" }}
+      aria-hidden
+    />
   );
 }
