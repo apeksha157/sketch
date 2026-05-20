@@ -4,17 +4,24 @@
  * Active palette uses solid greys (#ededeb in light, rgba(255,255,255,0.10)
  * in dark) so it reads as a state, not as an accent. Count appears in 70%
  * opacity to subordinate it to the label.
+ *
+ * Channel-specific pills can pass a small leading icon so the filter row
+ * echoes the channel glyphs used on the conversation rows below.
  */
+import type { IconProps } from "@/components/sketch/icons";
 import { cn } from "@sketch/ui/lib/utils";
+import type { ComponentType } from "react";
 
 export interface FilterPillProps {
   label: string;
   count: number;
   active?: boolean;
   onClick?: () => void;
+  /** Optional leading icon — e.g., a channel brand glyph. */
+  icon?: ComponentType<IconProps>;
 }
 
-export function FilterPill({ label, count, active, onClick }: FilterPillProps) {
+export function FilterPill({ label, count, active, onClick, icon: Icon }: FilterPillProps) {
   return (
     <button
       type="button"
@@ -29,6 +36,7 @@ export function FilterPill({ label, count, active, onClick }: FilterPillProps) {
       )}
       style={{ borderWidth: "0.5px" }}
     >
+      {Icon && <Icon size={11} aria-hidden className="shrink-0" />}
       <span>{label}</span>
       <span className="opacity-70 tabular-nums">{count}</span>
     </button>
