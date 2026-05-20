@@ -31,7 +31,7 @@ function HomeWorkspacePausedPage() {
       banner={
         <DangerBanner
           message="Workspace paused by your admin — contact them to restore access."
-          action={{ label: "Contact admin", onClick: contactAdmin, asLink: true }}
+          action={{ label: "Contact admin", onClick: contactAdmin }}
         />
       }
     >

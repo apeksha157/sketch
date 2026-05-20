@@ -214,10 +214,18 @@ export function ErrorBanner({ message, buttonLabel, onAction }: ErrorBannerProps
 
 export interface DangerBannerProps {
   message: string;
-  /** Optional inline action — if null/undefined, the banner is informational only (e.g. workspace-paused contact admin link). */
-  action?: { label: string; onClick: () => void; asLink?: boolean };
+  /** Optional inline action. Omit for informational-only banners. */
+  action?: { label: string; onClick: () => void };
 }
 
+/**
+ * DangerBanner — red, critical state (billing, paused workspace).
+ *
+ * CTA treatment is uniform across every consumer: outlined destructive stroke
+ * at rest, solid destructive fill with white text on hover. The "outline →
+ * solid on hover" idiom signals "ready to act" without the rest state ever
+ * shouting — important here because the banner is already chromatically loud.
+ */
 export function DangerBanner({ message, action }: DangerBannerProps) {
   return (
     <div
@@ -231,28 +239,21 @@ export function DangerBanner({ message, action }: DangerBannerProps) {
     >
       <AlertTriangleIcon size={15} aria-hidden className="text-destructive" />
       <span className="flex-1 text-[12px] font-medium leading-tight">{message}</span>
-      {action &&
-        (action.asLink ? (
-          <button
-            type="button"
-            onClick={action.onClick}
-            className="text-[11px] font-medium text-destructive hover:underline cursor-pointer"
-          >
-            {action.label} →
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={action.onClick}
-            className={cn(
-              "rounded-[6px] border border-[color:var(--destructive)] bg-transparent px-[10px] py-[4px]",
-              "text-[11px] font-medium text-destructive",
-              "hover:bg-[color:var(--destructive)]/10 transition-colors duration-100 ease-out cursor-pointer",
-            )}
-          >
-            {action.label}
-          </button>
-        ))}
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          className={cn(
+            "rounded-[6px] border border-[color:var(--destructive)] bg-transparent px-[10px] py-[4px]",
+            "text-[11px] font-medium text-destructive",
+            "hover:bg-[color:var(--destructive)] hover:text-background",
+            "transition-colors duration-100 ease-out cursor-pointer",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--destructive)]/40",
+          )}
+        >
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }
