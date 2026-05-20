@@ -192,6 +192,25 @@
     opacity: 0.35;
   }
 }
+/* Streaming avatar — gentle opacity + outward scale "breathing" loop on the
+ * SketchMessage logo while a response streams. The slight 1 → 1.06 scale
+ * reads as the rays around the "S" radiating outward; the opacity drop
+ * confirms "still working" without yanking attention from the message text. */
+@keyframes sketch-icon-thinking {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.06);
+  }
+}
+.sketch-icon-thinking {
+  animation: sketch-icon-thinking 1.4s ease-in-out infinite;
+  transform-origin: center;
+}
 
 /* Scroll containers that should hide their scrollbar (§4.5 chip row). */
 .sketch-scrollbar-hide {
@@ -214,5 +233,10 @@
   /* Streaming caret holds steady at rest opacity when reduced-motion is on. */
   [style*="sketch-caret-pulse"] {
     animation: none !important;
+  }
+  /* Thinking avatar holds at rest scale; user still gets the aria-label cue. */
+  .sketch-icon-thinking {
+    animation: none !important;
+    opacity: 0.7;
   }
 }

@@ -1,9 +1,16 @@
 /**
- * Chat message bubbles + streaming caret — §4.17.
+ * Chat message bubbles + streaming affordance — §4.17.
  *
  * User messages are right-aligned bubbles. Sketch messages are left-aligned with
- * a 24×24 yellow logo avatar and no bubble background — the avatar carries the
+ * a 24×24 logo avatar and no bubble background — the avatar carries the
  * identity and the text reads as a quiet response.
+ *
+ * Streaming state is signalled through the avatar itself: a gentle pulse +
+ * subtle scale loop on the icon, no separate dots or caret. The avatar
+ * already establishes "this is from Sketch" — making it breathe while text
+ * streams just intensifies that signal without adding chrome to the message
+ * body. (We can't independently animate the rays around the "S" because the
+ * logo ships as PNG; pulsing the whole image is the closest approximation.)
  */
 import { cn } from "@sketch/ui/lib/utils";
 import type { ReactNode } from "react";
@@ -31,41 +38,12 @@ export function SketchMessage({ children, streaming }: { children: ReactNode; st
       <img
         src="/logos/sketch-icon-lightmode.png"
         alt=""
-        aria-label="Sketch"
-        className="mt-[2px] block h-[24px] w-[24px] shrink-0"
+        aria-label={streaming ? "Sketch is thinking" : "Sketch"}
+        className={cn("mt-[2px] block h-[24px] w-[24px] shrink-0", streaming && "sketch-icon-thinking")}
       />
       <div className="min-w-0 flex-1 text-[14px] text-foreground" style={{ lineHeight: 1.7 }}>
         {children}
-        {streaming && <StreamingIndicator />}
       </div>
     </div>
-  );
-}
-
-/**
- * Streaming indicator — "Sketch is still typing" / "more text coming."
- *
- * Three small dots pulsing in sequence is the chat-native idiom for this
- * (iMessage, Slack, Messenger all converge on it). It reads as a true
- * indicator rather than as continuation marker, which the earlier block
- * cursor implementation conflated. The dots inherit `sketch-caret-pulse`
- * (opacity-only loop) with staggered delays so they wave, not blink.
- *
- * aria-label sits on the wrapper so screen readers announce the streaming
- * state once, not three times for three dots.
- */
-function StreamingIndicator() {
-  return (
-    <output className="ml-[6px] inline-flex items-center gap-[3px] align-[2px]" aria-label="Sketch is still typing">
-      {[0, 0.18, 0.36].map((delay, i) => (
-        <span
-          // biome-ignore lint/suspicious/noArrayIndexKey: positional dots, never reorder
-          key={i}
-          className="block h-[4px] w-[4px] rounded-full bg-foreground/55"
-          style={{ animation: `sketch-caret-pulse 1.2s ease-in-out ${delay}s infinite` }}
-          aria-hidden
-        />
-      ))}
-    </output>
   );
 }
