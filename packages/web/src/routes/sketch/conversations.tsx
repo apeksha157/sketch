@@ -158,70 +158,76 @@ function ConversationsPage() {
       credits={MOCK_CREDITS}
       files={MOCK_FILES}
     >
-      <div className="mx-auto w-full max-w-4xl px-10 py-8">
-        <header className="mb-[18px]">
+      <div className="mx-auto max-w-4xl px-10 py-8">
+        {/* Header — matches the H1 + subtitle pattern used by GreetingBar
+         * (home) and scheduled-tasks: text-xl semibold + mt-2 text-sm muted. */}
+        <header>
           <h1 className="text-xl font-semibold text-foreground">Conversations</h1>
-          {!isWorkspaceEmpty && <p className="mt-[2px] text-[12px] text-muted-foreground/75">{subtitle}</p>}
+          {!isWorkspaceEmpty && <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>}
         </header>
 
-        {/* In-place text filter. Narrows the conversation list by title. The
-         * global ⌘K palette is still available via the sidebar's Search; this
-         * input is scoped to the current page so the affordance does what its
-         * label says. */}
-        <SearchInput value={query} onChange={setQuery} disabled={isWorkspaceEmpty} />
+        {/* mt-6 between header and first content section mirrors the
+         * scheduled-tasks page's rhythm. */}
+        <div className="mt-6">
+          {/* In-place text filter. Narrows the conversation list by title. The
+           * global ⌘K palette is still available via the sidebar's Search;
+           * this input is scoped to the current page so the affordance does
+           * what its label says. */}
+          <SearchInput value={query} onChange={setQuery} disabled={isWorkspaceEmpty} />
 
-        <div className="mt-[14px] flex flex-wrap gap-[6px]">
-          <FilterPill
-            label="All"
-            count={counts.all}
-            active={filter === "all"}
-            onClick={() => setFilter("all")}
-            icon={GridIcon}
-            iconWeight="bold"
-          />
-          <FilterPill
-            label="Slack"
-            count={counts.slack}
-            active={filter === "slack"}
-            onClick={() => setFilter("slack")}
-            icon={SlackBrandIcon}
-          />
-          <FilterPill
-            label="WhatsApp"
-            count={counts.whatsapp}
-            active={filter === "whatsapp"}
-            onClick={() => setFilter("whatsapp")}
-            icon={WhatsappBrandIcon}
-          />
-          <FilterPill
-            label="Web"
-            count={counts.web}
-            active={filter === "web"}
-            onClick={() => setFilter("web")}
-            icon={BrowserIcon}
-          />
-        </div>
-
-        <div className="mt-[6px]">
-          {groups.map((group) => (
-            <div key={group.label} className="mt-[14px]">
-              <DateGroupHeader label={group.label} className="mb-[6px]" />
-              <div className="flex flex-col">
-                {group.items.map((item) => (
-                  <ConversationRow key={item.id} {...item} />
-                ))}
-              </div>
-            </div>
-          ))}
-          {groups.length === 0 && (
-            <EmptyState
-              isWorkspaceEmpty={isWorkspaceEmpty}
-              filter={filter}
-              hasQuery={trimmedQuery.length > 0}
-              onClearFilter={() => setFilter("all")}
-              onClearQuery={() => setQuery("")}
+          <div className="mt-4 flex flex-wrap gap-1.5">
+            <FilterPill
+              label="All"
+              count={counts.all}
+              active={filter === "all"}
+              onClick={() => setFilter("all")}
+              icon={GridIcon}
+              iconWeight="bold"
             />
-          )}
+            <FilterPill
+              label="Slack"
+              count={counts.slack}
+              active={filter === "slack"}
+              onClick={() => setFilter("slack")}
+              icon={SlackBrandIcon}
+            />
+            <FilterPill
+              label="WhatsApp"
+              count={counts.whatsapp}
+              active={filter === "whatsapp"}
+              onClick={() => setFilter("whatsapp")}
+              icon={WhatsappBrandIcon}
+            />
+            <FilterPill
+              label="Web"
+              count={counts.web}
+              active={filter === "web"}
+              onClick={() => setFilter("web")}
+              icon={BrowserIcon}
+            />
+          </div>
+
+          <div className="mt-6">
+            {groups.map((group, idx) => (
+              <div key={group.label} className={idx === 0 ? "" : "mt-6"}>
+                <DateGroupHeader label={group.label} className="mb-2" />
+                <div className="flex flex-col">
+                  {group.items.map((item) => (
+                    <ConversationRow key={item.id} {...item} />
+                  ))}
+                </div>
+              </div>
+            ))}
+            {groups.length === 0 && (
+              <EmptyState
+                isWorkspaceEmpty={isWorkspaceEmpty}
+                filter={filter}
+                hasQuery={trimmedQuery.length > 0}
+                onClearFilter={() => setFilter("all")}
+                onClearQuery={() => setQuery("")}
+              />
+            )}
+          </div>
         </div>
       </div>
     </SketchShell>
@@ -258,10 +264,10 @@ function EmptyState({
 }) {
   if (isWorkspaceEmpty) {
     return (
-      <div className="mt-[28px] px-[6px]">
-        <p className="text-[13px] font-medium text-foreground/85">No conversations yet.</p>
-        <p className="mt-[4px] max-w-[44ch] text-[12.5px] text-muted-foreground/80">
-          Start one by mentioning <strong className="text-foreground/85">@Sketch</strong> in Slack, messaging the bot on
+      <div className="mt-6 px-1.5">
+        <p className="text-sm font-medium text-foreground">No conversations yet.</p>
+        <p className="mt-1 max-w-[44ch] text-sm text-muted-foreground">
+          Start one by mentioning <strong className="text-foreground">@Sketch</strong> in Slack, messaging the bot on
           WhatsApp, or{" "}
           <Link to="/home/default" className="text-foreground underline-offset-2 hover:underline">
             starting a thread from home
@@ -274,13 +280,13 @@ function EmptyState({
 
   if (hasQuery) {
     return (
-      <div className="mt-[28px] flex items-center gap-[10px] px-[6px]">
-        <p className="text-[12.5px] text-muted-foreground/80">No conversations match your search.</p>
+      <div className="mt-6 flex items-center gap-2.5 px-1.5">
+        <p className="text-sm text-muted-foreground">No conversations match your search.</p>
         <button
           type="button"
           onClick={onClearQuery}
           className={cn(
-            "rounded-full border border-border bg-card px-[10px] py-[3px] text-[11px] text-foreground",
+            "rounded-full border border-border bg-card px-2.5 py-0.5 text-xs text-foreground",
             "transition-colors duration-100 ease-out cursor-pointer hover:bg-accent",
           )}
           style={{ borderWidth: "0.5px" }}
@@ -294,13 +300,13 @@ function EmptyState({
   if (filter !== "all") {
     const channelName = CHANNEL_LABEL_FOR_EMPTY[filter];
     return (
-      <div className="mt-[28px] flex items-center gap-[10px] px-[6px]">
-        <p className="text-[12.5px] text-muted-foreground/80">No {channelName} conversations yet.</p>
+      <div className="mt-6 flex items-center gap-2.5 px-1.5">
+        <p className="text-sm text-muted-foreground">No {channelName} conversations yet.</p>
         <button
           type="button"
           onClick={onClearFilter}
           className={cn(
-            "rounded-full border border-border bg-card px-[10px] py-[3px] text-[11px] text-foreground",
+            "rounded-full border border-border bg-card px-2.5 py-0.5 text-xs text-foreground",
             "transition-colors duration-100 ease-out cursor-pointer hover:bg-accent",
           )}
           style={{ borderWidth: "0.5px" }}
@@ -313,7 +319,7 @@ function EmptyState({
 
   // Defensive fallback — `all` filter, no query, but no items. Shouldn't
   // happen because !isWorkspaceEmpty guarantees at least one item.
-  return <p className="mt-[24px] px-[6px] text-[12px] text-muted-foreground/65">No conversations to show.</p>;
+  return <p className="mt-6 px-[6px] text-sm text-muted-foreground/65">No conversations to show.</p>;
 }
 
 function SearchInput({
@@ -328,14 +334,14 @@ function SearchInput({
   return (
     <label
       className={cn(
-        "flex w-full items-center gap-[10px] rounded-[6px] bg-muted/40",
-        "px-[12px] py-[9px] text-[13px]",
+        "flex w-full items-center gap-2.5 rounded-md bg-muted/40",
+        "px-3 py-2 text-sm",
         "transition-colors duration-100 ease-out",
         !disabled && "focus-within:bg-muted/70 focus-within:ring-1 focus-within:ring-border",
         disabled && "opacity-50",
       )}
     >
-      <SearchIcon size={13} aria-hidden className="shrink-0 text-muted-foreground/75" />
+      <SearchIcon size={14} aria-hidden className="shrink-0 text-muted-foreground/75" />
       <input
         type="search"
         value={value}
