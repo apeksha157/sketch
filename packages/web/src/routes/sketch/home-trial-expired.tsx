@@ -6,7 +6,7 @@
 import { HomePane } from "@/components/sketch/home-pane";
 import { SketchShell } from "@/components/sketch/shell";
 import { DangerBanner } from "@/components/sketch/top-banner";
-import { MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_FILES, MOCK_RECENTS } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 
@@ -22,10 +22,11 @@ function HomeTrialExpiredPage() {
         identifier: auth.displayIdentifier,
       }}
       orgName={auth.orgName}
+      files={MOCK_FILES}
       paused
       banner={
         <DangerBanner
-          message="Your trial ended on May 12. Upgrade to keep using Sketch."
+          message="Trial ended May 12 — upgrade to keep using Sketch."
           action={{ label: "Upgrade", onClick: () => void navigate({ to: "/plans" }) }}
         />
       }

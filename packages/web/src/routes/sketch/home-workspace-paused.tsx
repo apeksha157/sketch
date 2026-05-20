@@ -6,7 +6,7 @@
 import { HomePane } from "@/components/sketch/home-pane";
 import { SketchShell } from "@/components/sketch/shell";
 import { DangerBanner } from "@/components/sketch/top-banner";
-import { MOCK_RECENTS } from "@/routes/sketch/mock-data";
+import { MOCK_FILES, MOCK_RECENTS } from "@/routes/sketch/mock-data";
 import { firstNameOf, sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import { createRoute } from "@tanstack/react-router";
 
@@ -26,10 +26,11 @@ function HomeWorkspacePausedPage() {
         identifier: auth.displayIdentifier,
       }}
       orgName={auth.orgName}
+      files={MOCK_FILES}
       paused
       banner={
         <DangerBanner
-          message="Your admin paused this workspace. Contact your admin to restore access."
+          message="Workspace paused by your admin — contact them to restore access."
           action={{ label: "Contact admin", onClick: contactAdmin, asLink: true }}
         />
       }
