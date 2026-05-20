@@ -94,22 +94,18 @@ function TileItem({ tile }: { tile: TileDef }) {
   const Icon = tile.icon;
   const Inner = (
     <>
-      {/*
-       * Icon slot — solid pale-yellow surface with a muted-gold glyph in
-       * light mode (deep amber surface + full-yellow glyph in dark). Solid
-       * rather than alpha so the container's visual weight doesn't dissolve
-       * when the surrounding card-bg shifts on hover. Brand stays present
-       * at rest; hover is neutral on the row, not on the icon.
-       */}
-      <span
-        className={cn(
-          "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[8px]",
-          "bg-[#FAF3BD] text-[#8B7A00] dark:bg-[#322B0C] dark:text-[#FEED01]",
-        )}
+      {/* Bare icon — no surface, no brand-color container. Quick-action
+       * tiles aren't primary CTAs (yellow is reserved for those), so the
+       * brand handhold is dropped. The icon brightens on hover instead,
+       * which is the same chromatic-moment-on-hover idiom the DangerBanner
+       * CTA uses. mt-[2px] aligns the icon's optical center with the
+       * title's x-height instead of the full text-block midpoint. */}
+      <Icon
+        size={18}
+        weight="regular"
         aria-hidden
-      >
-        <Icon size={16} weight="regular" />
-      </span>
+        className="mt-[2px] shrink-0 text-muted-foreground transition-colors duration-150 ease-out group-hover:text-foreground"
+      />
       <div className="flex min-w-0 flex-col gap-[3px]">
         <span className="text-[13.5px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
         <span className="text-[12px] text-muted-foreground leading-[1.4]">{tile.description}</span>
@@ -118,19 +114,18 @@ function TileItem({ tile }: { tile: TileDef }) {
   );
 
   /**
-   * Bento card — horizontal layout (icon left, text right). Hover follows the
-   * industry-standard interactive-card pattern: neutral bg darkening + a
-   * subtle border emphasis + a tiny lift for tactility. Brand colour stays
-   * anchored in the icon container at rest so hover doesn't compete with the
-   * brand handhold already on the card.
+   * Card chrome — neutral surface + border at rest, subtle bg darken +
+   * border emphasis + 0.5px lift on hover. No brand color anywhere in
+   * the tile at rest; the icon's hover brighten is the only chromatic
+   * accent in the entire affordance.
    */
   const baseClass = cn(
-    "group flex items-center gap-[12px] rounded-[10px] bg-card border border-border",
+    "group flex items-start gap-[14px] rounded-[10px] bg-card border border-border",
     "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
     "hover:bg-muted/60 hover:border-foreground/20",
     "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
     "active:translate-y-0 active:shadow-none",
-    "px-[14px] py-[12px]",
+    "px-[14px] py-[11px]",
   );
 
   if (tile.href) {
