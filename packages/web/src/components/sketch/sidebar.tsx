@@ -15,6 +15,7 @@ import {
   ChannelsIcon,
   HomeIcon,
   type IconProps,
+  PauseCircleIcon,
   PuzzleIcon,
   SearchIcon,
   SparklesIcon,
@@ -223,10 +224,13 @@ export function SketchSidebar({
           </div>
         )}
 
-        {/* Paused-state replacement for the credits card (§5.7) */}
-        {!setupNudge && paused && !collapsed && (
-          <div className="mt-[18px] px-[12px] text-[11px] font-medium text-destructive">Account paused</div>
-        )}
+        {/* Paused-state replacement for the credits card (§5.7).
+         * Mirrors CreditsCard's container exactly so the sidebar silhouette
+         * stays the same when the account flips active ↔ paused — same
+         * rounded box, same padding, same two-row layout. Top row: pause
+         * icon + label. Bottom row: solid destructive bar in place of the
+         * progress bar's "credits remaining" affordance. */}
+        {!setupNudge && paused && !collapsed && <PausedCard />}
 
         <ProfileChip
           {...profile}
@@ -385,4 +389,27 @@ function applyNavState(
       pulse: entry.pulse,
     };
   });
+}
+
+/**
+ * Paused-state indicator that mirrors CreditsCard's container shape so the
+ * sidebar's silhouette doesn't change between active and paused states.
+ *
+ * Same outer container (rounded-[6px] px-[8px] py-[8px], two-row layout) as
+ * CreditsCard. Top row: pause icon + label. Bottom row: a solid destructive
+ * bar in place of the CreditsCard's progress affordance — a deliberate visual
+ * "no available capacity" cue without pretending to be a real meter.
+ */
+function PausedCard() {
+  return (
+    <output aria-label="Account paused" className="flex w-full flex-col gap-[6px] rounded-[6px] px-[8px] py-[8px]">
+      <span className="flex items-center gap-[6px] text-[12px] leading-none">
+        <PauseCircleIcon size={12} weight="fill" aria-hidden className="shrink-0 text-destructive" />
+        <span className="font-medium text-destructive">Account paused</span>
+      </span>
+      <span className="h-[2px] w-full rounded-full bg-destructive/25" aria-hidden>
+        <span className="block h-full w-full rounded-full bg-destructive/70" />
+      </span>
+    </output>
+  );
 }

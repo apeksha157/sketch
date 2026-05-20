@@ -31,6 +31,7 @@ export {
   FilesIcon, // ti-files
   HashIcon, // ti-hash
   HouseIcon as HomeIcon, // ti-home
+  PauseCircleIcon, // sidebar paused-state indicator
   LightbulbIcon as BulbIcon, // ti-bulb
   MagnifyingGlassIcon as SearchIcon, // ti-search
   PencilSimpleIcon as PencilIcon, // ti-pencil
