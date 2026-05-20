@@ -19,9 +19,15 @@ export interface FilterPillProps {
   onClick?: () => void;
   /** Optional leading icon — e.g., a channel brand glyph. */
   icon?: ComponentType<IconProps>;
+  /**
+   * Phosphor weight for the leading icon. Defaults to "regular"; pass
+   * "bold" or "fill" for line-art icons (e.g., the 3×3 grid) that need
+   * to match the visual weight of denser brand glyphs.
+   */
+  iconWeight?: IconProps["weight"];
 }
 
-export function FilterPill({ label, count, active, onClick, icon: Icon }: FilterPillProps) {
+export function FilterPill({ label, count, active, onClick, icon: Icon, iconWeight = "regular" }: FilterPillProps) {
   return (
     <button
       type="button"
@@ -36,7 +42,7 @@ export function FilterPill({ label, count, active, onClick, icon: Icon }: Filter
       )}
       style={{ borderWidth: "0.5px" }}
     >
-      {Icon && <Icon size={11} aria-hidden className="shrink-0" />}
+      {Icon && <Icon size={11} weight={iconWeight} aria-hidden className="shrink-0" />}
       <span>{label}</span>
       <span className="opacity-70 tabular-nums">{count}</span>
     </button>

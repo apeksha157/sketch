@@ -177,6 +177,7 @@ function ConversationsPage() {
             active={filter === "all"}
             onClick={() => setFilter("all")}
             icon={GridIcon}
+            iconWeight="bold"
           />
           <FilterPill
             label="Slack"
