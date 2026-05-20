@@ -188,9 +188,18 @@ function ChatPage() {
 
               <UserMessage>Can you adjust it to also flag anything from Tom?</UserMessage>
 
-              <SketchMessage streaming>
+              <SketchMessage>
                 On it — updating the rule to prioritise messages from <strong>tom@</strong> before the standard
                 categorisation pass.
+              </SketchMessage>
+
+              <UserMessage>How long until it picks up the change?</UserMessage>
+
+              {/* Pure "thinking" state — Sketch has acknowledged but text isn't written yet.
+                  The avatar carries the signal (sketch-icon-thinking pulse), with a quiet
+                  muted "Thinking…" label so the state is legible even in a still frame. */}
+              <SketchMessage streaming>
+                <span className="text-muted-foreground italic">Thinking…</span>
               </SketchMessage>
             </div>
           </div>
