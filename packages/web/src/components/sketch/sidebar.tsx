@@ -402,10 +402,10 @@ function applyNavState(
  */
 function PausedCard() {
   return (
-    <output aria-label="Account paused" className="flex w-full flex-col gap-[6px] rounded-[6px] px-[8px] py-[8px]">
-      <span className="flex items-center gap-[6px] text-[12px] leading-none">
-        <PauseCircleIcon size={14} weight="fill" aria-hidden className="shrink-0 text-destructive" />
-        <span className="font-medium text-destructive">Account paused</span>
+    <output aria-label="Account paused" className="flex w-full flex-col gap-[6px] rounded-[8px] px-[10px] py-[9px]">
+      <span className="flex items-center gap-[10px]">
+        <PauseCircleIcon size={16} weight="fill" aria-hidden className="shrink-0 text-destructive" />
+        <span className="flex-1 text-[13px] font-medium leading-none text-destructive">Account paused</span>
       </span>
       <span className="h-[2px] w-full rounded-full bg-destructive/25" aria-hidden>
         <span className="block h-full w-full rounded-full bg-destructive/70" />
