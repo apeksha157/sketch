@@ -31,7 +31,7 @@ import { MOCK_ALL_CONVERSATIONS, MOCK_CREDITS, MOCK_FILES } from "@/routes/sketc
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
 import type { IconProps } from "@phosphor-icons/react";
 import { createRoute, useNavigate, useParams } from "@tanstack/react-router";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 
 type Channel = "slack" | "whatsapp" | "web";
 
@@ -99,15 +99,78 @@ function ChatPage() {
           />
           <div className="absolute inset-0 overflow-y-auto">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-[24px] px-10 pt-8 pb-12">
-              <UserMessage>Can you create a skill that triages my inbox each morning?</UserMessage>
+              <UserMessage>Can you triage my inbox from the last 24 hours?</UserMessage>
+
+              <SketchMessage>Pulling Gmail now. Anything to prioritise, or just a standard pass?</SketchMessage>
+
+              <UserMessage>Standard. Just flag anything from customers.</UserMessage>
 
               <SketchMessage>
-                Sure — here's a draft. It scans your Gmail inbox at 8am, groups messages by intent, and posts a summary
-                to <strong>#inbox-triage</strong>. You can edit before installing.
+                Done — 23 emails since yesterday at 3pm. Six internal updates and three marketing are already
+                auto-archived. Four from customers worth a look, plus seven others worth a quick scan.
+                <br />
+                <br />
+                One needs your attention today: <strong>Tom Cooper at Hubspot</strong> is asking about extending his
+                trial — looks time-sensitive.
+              </SketchMessage>
+
+              <UserMessage>Show me Tom's.</UserMessage>
+
+              <SketchMessage>
+                Landed at 3:14pm today, no reply yet:
+                <EmailQuote
+                  from="Tom Cooper"
+                  fromContext="Hubspot · tom@hubspot.com"
+                  subject="Re: Trial extension"
+                  body={
+                    <>
+                      <p>
+                        Hey — we've got 2 days left on the trial and the team is still evaluating. Any chance we could
+                        get another week? Otherwise we'll just have to wind down on Friday, which would be a shame given
+                        how close we are.
+                      </p>
+                      <p>Let me know either way.</p>
+                      <p>Best, Tom</p>
+                    </>
+                  }
+                />
+              </SketchMessage>
+
+              <UserMessage>Draft a reply offering 7 more days.</UserMessage>
+
+              <SketchMessage>
+                How's this read?
+                <DraftReply
+                  body={
+                    <>
+                      <p>Hi Tom,</p>
+                      <p>
+                        Happy to extend by another 7 days — no need to rush. If there's anything specific the team is
+                        still evaluating, let me know and I can help unblock it on our side.
+                      </p>
+                      <p>— Apeksha</p>
+                    </>
+                  }
+                />
+              </SketchMessage>
+
+              <UserMessage>Looks good — send it.</UserMessage>
+
+              <SketchMessage>
+                Sent. Tom should see it in the next minute or two.
+                <br />
+                <br />
+                Want me to set up a recurring morning triage so urgent things like this catch earlier next time?
+              </SketchMessage>
+
+              <UserMessage>Yes — daily at 8am.</UserMessage>
+
+              <SketchMessage>
+                Here's a draft. You can edit before installing.
                 <InlineArtifact
                   kind="New skill"
                   title="Morning inbox triage"
-                  description="Runs every weekday at 8am. Categorises overnight email, surfaces the top 5 items needing reply, and drops a summary in your preferred Slack channel."
+                  description="Runs every weekday at 8am. Categorises overnight email, surfaces the top items needing reply, and drops a summary in your preferred Slack channel."
                   icon={SparklesIcon}
                   tags={["Gmail", "Slack", "Daily"]}
                   primaryAction={{ label: "Install skill", onClick: () => {} }}
@@ -160,6 +223,52 @@ function ChatHeader({ thread, onBack }: { thread: ResolvedThread; onBack: () => 
       >
         <DotsIcon size={16} aria-hidden />
       </button>
+    </div>
+  );
+}
+
+/**
+ * Inline preview of an email Sketch pulled from the user's inbox. Lightweight
+ * card chrome (border + card bg) so it reads as a quoted artifact inside the
+ * Sketch message, not as a separate message. From/subject sit on top, body
+ * paragraphs render with normal prose spacing.
+ */
+function EmailQuote({
+  from,
+  fromContext,
+  subject,
+  body,
+}: {
+  from: string;
+  fromContext?: string;
+  subject: string;
+  body: ReactNode;
+}) {
+  return (
+    <div className="mt-3 overflow-hidden rounded-[10px] border border-border bg-card">
+      <div className="border-b border-border px-4 py-3">
+        <div className="text-[13px] font-medium text-foreground">
+          {from}
+          {fromContext && <span className="ml-[6px] font-normal text-muted-foreground">· {fromContext}</span>}
+        </div>
+        <div className="mt-[2px] text-[12px] text-muted-foreground">{subject}</div>
+      </div>
+      <div className="space-y-3 px-4 py-3 text-[13px] leading-[1.6] text-foreground/85">{body}</div>
+    </div>
+  );
+}
+
+/**
+ * Inline preview of a reply Sketch drafted on the user's behalf. Same family
+ * as EmailQuote but uses a soft accent left rule (instead of full border) to
+ * signal "this is from you, not from them" — keeps the visual distinction
+ * between quoted-incoming and drafted-outgoing readable at a glance.
+ */
+function DraftReply({ body }: { body: ReactNode }) {
+  return (
+    <div className="mt-3 rounded-r-[8px] border-l-[3px] border-foreground/40 bg-foreground/[0.03] py-3 pl-4 pr-4">
+      <div className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">Draft reply</div>
+      <div className="mt-2 space-y-3 text-[13px] leading-[1.6] text-foreground/85">{body}</div>
     </div>
   );
 }
