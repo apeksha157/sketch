@@ -5,7 +5,7 @@
  * Sidebar: Home stays the active nav item because /conversations is
  * conceptually a sub-route of home (§4.1 active-route logic).
  */
-import { ConversationRow, type ConversationRowProps, formatRelative } from "@/components/sketch/conversation-row";
+import { ConversationRow, type ConversationRowProps } from "@/components/sketch/conversation-row";
 import { DateGroupHeader } from "@/components/sketch/date-group-header";
 import { FilterPill } from "@/components/sketch/filter-pill";
 import { BrowserIcon, SearchIcon, SlackBrandIcon, WhatsappBrandIcon } from "@/components/sketch/icons";
@@ -17,6 +17,23 @@ import { Link, createRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
 type FilterKey = "all" | "slack" | "whatsapp" | "web";
+
+/**
+ * Warm, action-inviting subtitles. Randomised once on mount so each page
+ * load has its own framing without flickering on re-render. Frames the
+ * page as a place to resume rather than as a static history list.
+ */
+const SUBTITLE_OPTIONS = [
+  "Pick up where you left off.",
+  "Jump back in.",
+  "Resume any conversation.",
+  "Pick a thread, keep going.",
+  "Where would you like to pick up?",
+] as const;
+
+function pickSubtitle(): string {
+  return SUBTITLE_OPTIONS[Math.floor(Math.random() * SUBTITLE_OPTIONS.length)];
+}
 
 const MONTH_NAMES = [
   "January",
@@ -104,6 +121,8 @@ function ConversationsPage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim().toLowerCase();
+  // Init via lazy useState so the random pick happens exactly once per mount.
+  const [subtitle] = useState(pickSubtitle);
 
   const counts = useMemo(() => {
     const c: Record<FilterKey, number> = {
@@ -127,13 +146,6 @@ function ConversationsPage() {
 
   const totalConversations = MOCK_ALL_CONVERSATIONS.length;
   const isWorkspaceEmpty = totalConversations === 0;
-  const mostRecent = useMemo(() => {
-    if (isWorkspaceEmpty) return null;
-    const sorted = [...MOCK_ALL_CONVERSATIONS].sort(
-      (a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime(),
-    );
-    return sorted[0];
-  }, [isWorkspaceEmpty]);
 
   return (
     <SketchShell
@@ -149,11 +161,7 @@ function ConversationsPage() {
       <div className="mx-auto w-full max-w-4xl px-10 py-8">
         <header className="mb-[18px]">
           <h1 className="text-xl font-semibold text-foreground">Conversations</h1>
-          {!isWorkspaceEmpty && mostRecent && (
-            <p className="mt-[2px] text-[12px] text-muted-foreground/75">
-              Last active {formatRelative(mostRecent.occurredAt)} ago
-            </p>
-          )}
+          {!isWorkspaceEmpty && <p className="mt-[2px] text-[12px] text-muted-foreground/75">{subtitle}</p>}
         </header>
 
         {/* In-place text filter. Narrows the conversation list by title. The
