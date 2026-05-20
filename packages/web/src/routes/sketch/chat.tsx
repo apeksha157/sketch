@@ -21,6 +21,7 @@ import {
   ArrowLeftIcon,
   BrowserIcon,
   DotsIcon,
+  PencilIcon,
   SlackBrandIcon,
   SparklesIcon,
   WhatsappBrandIcon,
@@ -29,7 +30,14 @@ import { InlineArtifact } from "@/components/sketch/inline-artifact";
 import { SketchShell } from "@/components/sketch/shell";
 import { MOCK_ALL_CONVERSATIONS, MOCK_CREDITS, MOCK_FILES } from "@/routes/sketch/mock-data";
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
-import type { IconProps } from "@phosphor-icons/react";
+import { ArchiveBoxIcon, DownloadSimpleIcon, type IconProps, PushPinIcon, TrashIcon } from "@phosphor-icons/react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@sketch/ui/components/dropdown-menu";
 import { createRoute, useNavigate, useParams } from "@tanstack/react-router";
 import type { ComponentType, ReactNode } from "react";
 
@@ -216,14 +224,59 @@ function ChatHeader({ thread, onBack }: { thread: ResolvedThread; onBack: () => 
         <ChannelIcon size={16} weight="regular" aria-hidden />
       </span>
       <h1 className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground/85">{thread.title}</h1>
-      <button
-        type="button"
-        aria-label="Thread options"
-        className="shrink-0 text-muted-foreground/70 hover:text-foreground transition-colors duration-100 ease-out cursor-pointer"
-      >
-        <DotsIcon size={16} aria-hidden />
-      </button>
+      <ThreadOptionsMenu />
     </div>
+  );
+}
+
+/**
+ * Thread-level actions exposed under the header's dots affordance.
+ *
+ * Five canonical options for a saved chat — Rename, Pin, Export, Archive,
+ * Delete. The first four are non-destructive and grouped together; Delete
+ * sits below a separator with destructive coloring (matching ProfileChip's
+ * "Sign out" treatment) so the dangerous option never sits next to its
+ * peaceful neighbors.
+ *
+ * Handlers are stubbed for the demo — flipping these to real callbacks is
+ * a one-line swap per item once the runtime ships.
+ */
+function ThreadOptionsMenu() {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label="Thread options"
+          className="shrink-0 rounded-[6px] p-[4px] text-muted-foreground/70 hover:bg-foreground/[0.05] hover:text-foreground transition-colors duration-100 ease-out cursor-pointer outline-none"
+        >
+          <DotsIcon size={16} aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={6} className="w-[200px] p-[4px]">
+        <DropdownMenuItem className="gap-[10px] rounded-[4px] px-[10px] py-[7px] text-[13px]">
+          <PencilIcon size={16} className="text-muted-foreground" aria-hidden />
+          <span>Rename thread</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem className="gap-[10px] rounded-[4px] px-[10px] py-[7px] text-[13px]">
+          <PushPinIcon size={16} className="text-muted-foreground" aria-hidden />
+          <span>Pin to home</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem className="gap-[10px] rounded-[4px] px-[10px] py-[7px] text-[13px]">
+          <DownloadSimpleIcon size={16} className="text-muted-foreground" aria-hidden />
+          <span>Export…</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem className="gap-[10px] rounded-[4px] px-[10px] py-[7px] text-[13px]">
+          <ArchiveBoxIcon size={16} className="text-muted-foreground" aria-hidden />
+          <span>Archive</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="my-[4px]" />
+        <DropdownMenuItem className="gap-[10px] rounded-[4px] px-[10px] py-[7px] text-[13px] text-destructive focus:text-destructive">
+          <TrashIcon size={16} aria-hidden />
+          <span>Delete thread</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
