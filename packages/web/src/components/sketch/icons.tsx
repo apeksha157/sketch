@@ -24,6 +24,7 @@ export {
   ChatCircleIcon as MessageCircle2Icon, // ti-message-circle-2
   ChatIcon as MessageSquareIcon, // ti-message-2
   ChatsCircleIcon as ChannelsIcon, // sidebar "Channels" nav — neutral, not Slack-coded
+  DotsNineIcon as GridIcon, // 3×3 grid — used for "All" / catch-all affordances
   DotsThreeIcon as DotsIcon, // ti-dots
   EnvelopeIcon as MailIcon, // ti-mail
   FileIcon, // ti-file

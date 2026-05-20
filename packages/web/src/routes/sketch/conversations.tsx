@@ -8,7 +8,7 @@
 import { ConversationRow, type ConversationRowProps } from "@/components/sketch/conversation-row";
 import { DateGroupHeader } from "@/components/sketch/date-group-header";
 import { FilterPill } from "@/components/sketch/filter-pill";
-import { BrowserIcon, SearchIcon, SlackBrandIcon, WhatsappBrandIcon } from "@/components/sketch/icons";
+import { BrowserIcon, GridIcon, SearchIcon, SlackBrandIcon, WhatsappBrandIcon } from "@/components/sketch/icons";
 import { SketchShell } from "@/components/sketch/shell";
 import { MOCK_ALL_CONVERSATIONS, MOCK_CREDITS, MOCK_FILES } from "@/routes/sketch/mock-data";
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
@@ -171,7 +171,13 @@ function ConversationsPage() {
         <SearchInput value={query} onChange={setQuery} disabled={isWorkspaceEmpty} />
 
         <div className="mt-[14px] flex flex-wrap gap-[6px]">
-          <FilterPill label="All" count={counts.all} active={filter === "all"} onClick={() => setFilter("all")} />
+          <FilterPill
+            label="All"
+            count={counts.all}
+            active={filter === "all"}
+            onClick={() => setFilter("all")}
+            icon={GridIcon}
+          />
           <FilterPill
             label="Slack"
             count={counts.slack}
