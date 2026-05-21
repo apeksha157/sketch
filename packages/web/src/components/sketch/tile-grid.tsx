@@ -99,27 +99,27 @@ function TileItem({ tile }: { tile: TileDef }) {
   const Icon = tile.icon;
   const Inner = (
     <>
-      <span
+      {/* Bare brown phosphor — no container, no fill. Brand stays implicit
+       * through the brown tone (matches the logo); card chrome carries the
+       * rest. Subtle 1.08 scale on hover gives a tiny moment of personality
+       * without needing chromatic weight on the row at rest. */}
+      <Icon
+        size={22}
+        weight="regular"
         aria-hidden
-        className={cn(
-          "flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[10px]",
-          "bg-[#FEED01] text-[#412402]",
-          "transition-transform duration-200 ease-out group-hover:scale-[1.08]",
-        )}
-      >
-        <Icon size={20} weight="regular" />
-      </span>
-      <span className="block text-center text-[13px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
+        className="text-[#412402] transition-transform duration-200 ease-out group-hover:scale-[1.08] dark:text-[#FEED01]"
+      />
+      <span className="text-left text-[13px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
     </>
   );
 
   const baseClass = cn(
-    "group flex flex-col items-center justify-start gap-[12px] rounded-[12px] bg-card border border-border",
-    "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-center",
+    "group flex flex-col items-start justify-start gap-[16px] rounded-[12px] bg-card border border-border",
+    "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
     "hover:bg-muted/60 hover:border-foreground/20",
     "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
     "active:translate-y-0 active:shadow-none",
-    "px-[12px] pt-[18px] pb-[16px]",
+    "px-[14px] pt-[14px] pb-[14px]",
   );
 
   if (tile.href) {
