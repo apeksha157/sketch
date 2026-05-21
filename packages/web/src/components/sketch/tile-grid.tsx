@@ -20,30 +20,10 @@ import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 import type { ComponentType } from "react";
 
-/**
- * Per-tile accent palette. Each accent renders as a soft pastel surface
- * behind the icon, paired with a deeper saturated glyph color. Tiles vary
- * accents so the grid reads as four distinct affordances at a glance,
- * not "four yellow blocks." Brand yellow is reserved for the primary
- * scheduling action; the other three pull from a complementary muted set
- * (lavender / sage / peach) so the page feels designed, not monotonous,
- * without breaking the no-yellow-on-non-CTA rule.
- */
-export type TileAccent = "yellow" | "lavender" | "sage" | "peach";
-
-const ACCENT_CLASSES: Record<TileAccent, string> = {
-  yellow: "bg-[#FAF3BD] text-[#8B7A00] dark:bg-[#322B0C] dark:text-[#FEED01]",
-  lavender: "bg-[#ECE6F8] text-[#6B4FBB] dark:bg-[#241D38] dark:text-[#B9A6F0]",
-  sage: "bg-[#E3EFE4] text-[#3F7B4A] dark:bg-[#1B2A1D] dark:text-[#9BC6A0]",
-  peach: "bg-[#F8E4D6] text-[#A85A2D] dark:bg-[#2D1F1A] dark:text-[#D9A39E]",
-};
-
 export interface TileDef {
   title: string;
   description: string;
   icon: ComponentType<IconProps>;
-  /** Color identity — anchors the tile visually so the grid isn't monotone. */
-  accent: TileAccent;
   /** Provide either an href (Link) or onClick (button). */
   href?: string;
   onClick?: () => void;
@@ -53,35 +33,30 @@ const TILE_AUTOMATION: TileDef = {
   title: "Set up an automation",
   description: "Schedule a recurring task that runs on its own.",
   icon: CalendarTimeIcon,
-  accent: "yellow",
   href: "/scheduled-tasks/new",
 };
 const TILE_SKILL: TileDef = {
   title: "Create a skill",
   description: "Teach Sketch a new capability your team can re-use.",
   icon: SparklesIcon,
-  accent: "lavender",
   href: "/skills/new",
 };
 const TILE_INVITE: TileDef = {
   title: "Invite a teammate",
   description: "Bring someone else into your workspace.",
   icon: UserPlusIcon,
-  accent: "sage",
   href: "/team/invite",
 };
 const TILE_INTEGRATION: TileDef = {
   title: "Connect an integration",
   description: "Wire up Gmail, Notion, Linear, and 300+ more.",
   icon: PuzzleIcon,
-  accent: "sage",
   href: "/integrations",
 };
 const TILE_POSSIBLE: TileDef = {
   title: "Show me what's possible",
   description: "Browse examples from other teams.",
   icon: BulbIcon,
-  accent: "peach",
 };
 
 /**
@@ -102,70 +77,126 @@ export interface TileGridProps {
   className?: string;
 }
 
+/**
+ * Bento layout: one featured tile on top (the primary, brand-anchored action)
+ * spans full width; three supporting tiles sit below in a 3-column row.
+ *
+ * The size difference creates the visual hierarchy that color-variety
+ * couldn't honestly carry — brand yellow lives only on the featured tile
+ * (where it earns its placement), and the supporting tiles stay neutral.
+ * Page reads as "one primary, three supporting," not "four equal blocks."
+ */
 export function TileGrid({ tiles = DEFAULT_TILES, disabled, className }: TileGridProps) {
+  const [featured, ...supporting] = tiles;
   return (
-    <div
-      className={cn("grid w-full gap-[12px]", disabled && "pointer-events-none opacity-60", className)}
-      style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
-    >
-      {tiles.map((tile) => (
-        <TileItem key={tile.title} tile={tile} />
-      ))}
+    <div className={cn("flex w-full flex-col gap-[12px]", disabled && "pointer-events-none opacity-60", className)}>
+      {featured && <FeaturedTile tile={featured} />}
+      {supporting.length > 0 && (
+        <div
+          className="grid w-full gap-[12px]"
+          style={{ gridTemplateColumns: `repeat(${supporting.length}, minmax(0, 1fr))` }}
+        >
+          {supporting.map((tile) => (
+            <SupportingTile key={tile.title} tile={tile} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function TileItem({ tile }: { tile: TileDef }) {
+/**
+ * Card chrome shared between the featured and supporting tiles. The featured
+ * variant adds extra padding + the brand SparkleIcon watermark; supporting
+ * tiles keep it tight. Hover identical across both so the grid feels like
+ * one coordinated affordance, not two design languages.
+ */
+const TILE_BASE = cn(
+  "group relative flex items-center gap-[12px] overflow-hidden rounded-[10px] bg-card border border-border",
+  "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
+  "hover:bg-muted/60 hover:border-foreground/20",
+  "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
+  "active:translate-y-0 active:shadow-none",
+);
+
+function FeaturedTile({ tile }: { tile: TileDef }) {
   const Icon = tile.icon;
+  const className = cn(TILE_BASE, "px-[16px] py-[14px]");
   const Inner = (
     <>
-      {/* Colored icon surface — per-tile accent (see ACCENT_CLASSES). Each
-       * tile carries a distinct muted palette so the grid reads as four
-       * affordances with their own identity, not a row of indistinguishable
-       * cards. The icon nudges up 8% on hover (sketch-tile-icon-hover), a
-       * small character moment that confirms the row is alive without
-       * relying on the underlying card chrome to do it. */}
+      {/* Brand-yellow icon container — earns its placement here because
+       * Featured represents the most consequential action on the page.
+       * The hover scale (1.08) is the small character moment users get
+       * when their cursor lands on the row. */}
       <span
         aria-hidden
         className={cn(
-          "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[8px]",
+          "flex h-[36px] w-[36px] shrink-0 items-center justify-center rounded-[8px]",
+          "bg-[#FAF3BD] text-[#8B7A00] dark:bg-[#322B0C] dark:text-[#FEED01]",
           "transition-transform duration-200 ease-out group-hover:scale-[1.08]",
-          ACCENT_CLASSES[tile.accent],
         )}
       >
-        <Icon size={16} weight="regular" />
+        <Icon size={18} weight="regular" />
       </span>
       <div className="flex min-w-0 flex-col gap-[3px]">
-        <span className="text-[13.5px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
+        <span className="text-[14px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
         <span className="text-[12px] text-muted-foreground leading-[1.4]">{tile.description}</span>
       </div>
+      {/* Brand sparkle watermark — same character ray that haloes the "S"
+       * in the Sketch logo, used here as a signature decorative motif so
+       * the featured tile feels like a Sketch tile, not a generic SaaS card.
+       * Low opacity (~10%) keeps it as background texture, not a primary
+       * visual; brightens slightly on hover. */}
+      <SparklesIcon
+        aria-hidden
+        size={56}
+        weight="duotone"
+        className={cn(
+          "pointer-events-none absolute -right-[6px] -top-[6px] text-[#FEED01]",
+          "opacity-[0.18] transition-opacity duration-200 ease-out group-hover:opacity-[0.3]",
+        )}
+      />
     </>
   );
-
-  /**
-   * Card chrome — neutral surface + border at rest, subtle bg darken +
-   * border emphasis + 0.5px lift on hover. The chromatic personality lives
-   * inside the icon container (per-tile accent + hover scale); the card
-   * itself stays restrained so the four accents read clearly side by side.
-   */
-  const baseClass = cn(
-    "group flex items-center gap-[12px] rounded-[10px] bg-card border border-border",
-    "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
-    "hover:bg-muted/60 hover:border-foreground/20",
-    "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
-    "active:translate-y-0 active:shadow-none",
-    "px-[14px] py-[12px]",
-  );
-
   if (tile.href) {
     return (
-      <Link to={tile.href} className={baseClass}>
+      <Link to={tile.href} className={className}>
         {Inner}
       </Link>
     );
   }
   return (
-    <button type="button" onClick={tile.onClick} className={baseClass}>
+    <button type="button" onClick={tile.onClick} className={className}>
+      {Inner}
+    </button>
+  );
+}
+
+function SupportingTile({ tile }: { tile: TileDef }) {
+  const Icon = tile.icon;
+  const className = cn(TILE_BASE, "px-[12px] py-[11px]");
+  const Inner = (
+    <>
+      <Icon
+        size={16}
+        weight="regular"
+        aria-hidden
+        className="shrink-0 text-muted-foreground transition-colors duration-150 ease-out group-hover:text-foreground"
+      />
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground leading-[1.3]">
+        {tile.title}
+      </span>
+    </>
+  );
+  if (tile.href) {
+    return (
+      <Link to={tile.href} className={className}>
+        {Inner}
+      </Link>
+    );
+  }
+  return (
+    <button type="button" onClick={tile.onClick} className={className}>
       {Inner}
     </button>
   );
