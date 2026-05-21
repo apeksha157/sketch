@@ -10,7 +10,7 @@ import { CelebrationCard } from "@/components/sketch/celebration-card";
 import { ChatInput, type ChatInputProps } from "@/components/sketch/chat-input";
 import { ChipRow, type ChipSuggestion } from "@/components/sketch/chip-row";
 import { ConversationRow, type ConversationRowProps } from "@/components/sketch/conversation-row";
-import { TileGrid, getDefaultTiles } from "@/components/sketch/tile-grid";
+import { type TileDef, TileGrid, getDefaultTiles } from "@/components/sketch/tile-grid";
 import { GreetingBar, type HomeDigest } from "@/routes/home";
 import { MOCK_DIGEST } from "@/routes/sketch/mock-data";
 import { cn } from "@sketch/ui/lib/utils";
@@ -44,6 +44,18 @@ export interface HomePaneProps {
   onSubmit?: ChatInputProps["onSubmit"];
   /** Override the "Show me what's possible" tile. */
   onShowPossibilities?: () => void;
+  /**
+   * Override the Workspace tile set — drives the lifecycle variant (new /
+   * familiar / power). When omitted, falls back to the default power-user
+   * state via getDefaultTiles().
+   */
+  tiles?: TileDef[];
+  /**
+   * Override the "Workspace" section eyebrow — lets new-user variants
+   * replace it with friendlier copy ("Get started", "What's here") while
+   * keeping the same component.
+   */
+  workspaceHeading?: string;
 }
 
 /**
@@ -65,8 +77,10 @@ export function HomePane({
   celebration,
   hideRecentsWhenEmpty,
   onSubmit,
+  tiles: tilesProp,
+  workspaceHeading = "Workspace",
 }: HomePaneProps) {
-  const tiles = getDefaultTiles(teamSize);
+  const tiles = tilesProp ?? getDefaultTiles(teamSize);
   const inputRef = useRef<HTMLInputElement>(null);
   const [prefill, setPrefill] = useState<string>("");
 
@@ -91,7 +105,7 @@ export function HomePane({
        * uniform; the section headings themselves carry the separation. */}
       <div className="mt-7 flex flex-col gap-7">
         {celebration && <CelebrationCard onDismiss={celebration.onDismiss} />}
-        <QuickActions tiles={tiles} disabled={disabled} />
+        <QuickActions tiles={tiles} disabled={disabled} heading={workspaceHeading} />
         {/* Recents — hidden entirely when empty during setup so the page's
          * call-to-action (the banner) isn't competing with a placeholder
          * "your conversations will appear here" footer that adds no signal. */}
@@ -104,15 +118,16 @@ export function HomePane({
 interface QuickActionsProps {
   tiles: ReturnType<typeof getDefaultTiles>;
   disabled?: boolean;
+  heading?: string;
   className?: string;
 }
 
-function QuickActions({ tiles, disabled, className }: QuickActionsProps) {
+function QuickActions({ tiles, disabled, heading = "Workspace", className }: QuickActionsProps) {
   return (
     <section className={cn("flex flex-col", className)}>
       <div className="mb-[10px] flex items-baseline justify-between px-[6px]">
         <h2 className="font-mono text-xs uppercase text-foreground" style={{ letterSpacing: "0.08em" }}>
-          Workspace
+          {heading}
         </h2>
       </div>
       <TileGrid tiles={tiles} disabled={disabled} />

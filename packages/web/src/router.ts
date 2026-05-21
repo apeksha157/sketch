@@ -79,6 +79,8 @@ import { homeCelebrationRoute } from "./routes/sketch/home-celebration";
 import { homeChannelDisconnectedRoute } from "./routes/sketch/home-channel-disconnected";
 import { homeCreditsLowRoute } from "./routes/sketch/home-credits-low";
 import { homeDefaultRoute } from "./routes/sketch/home-default";
+import { homeFamiliarRoute } from "./routes/sketch/home-familiar";
+import { homeNewUserRoute } from "./routes/sketch/home-new-user";
 import { homePaymentLapsedRoute } from "./routes/sketch/home-payment-lapsed";
 import { homeSetupRoute } from "./routes/sketch/home-setup";
 import { homeTrialExpiredRoute } from "./routes/sketch/home-trial-expired";
@@ -156,6 +158,8 @@ const routeTree = rootRoute.addChildren([
   sketchRoute.addChildren([
     homeSetupRoute,
     homeDefaultRoute,
+    homeNewUserRoute,
+    homeFamiliarRoute,
     homeChannelDisconnectedRoute,
     homeAutomationFailedRoute,
     homeCreditsLowRoute,
