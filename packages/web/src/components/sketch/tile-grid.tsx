@@ -15,57 +15,37 @@ import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 import type { ComponentType } from "react";
 
-/**
- * Brand-paired accents — yellow vs brown, full saturation. The two
- * categories of workspace primitives use opposite halves of the Sketch
- * brand pair, so the section reads as a real content categorization
- * made visible:
- *   - yellow → what Sketch produces (automation, skill)
- *   - brown  → workspace foundation (integration, invite)
- */
-export type TileAccent = "yellow" | "brown";
-
-const ACCENT_CLASSES: Record<TileAccent, string> = {
-  yellow: "bg-[#FEED01] text-[#412402]",
-  brown: "bg-[#412402] text-[#FEED01]",
-};
-
 export interface TileDef {
   title: string;
   description: string;
   icon: ComponentType<IconProps>;
-  accent: TileAccent;
   /** Provide either an href (Link) or onClick (button). */
   href?: string;
   onClick?: () => void;
 }
 
 const TILE_AUTOMATION: TileDef = {
-  title: "Set up an automation",
-  description: "Schedule a recurring task that runs on its own.",
+  title: "Schedule a task",
+  description: "Set up something that runs on its own.",
   icon: CalendarTimeIcon,
-  accent: "yellow",
   href: "/scheduled-tasks/new",
 };
 const TILE_SKILL: TileDef = {
-  title: "Create a skill",
-  description: "Teach Sketch a new capability your team can re-use.",
+  title: "Teach Sketch a skill",
+  description: "Add a reusable capability for the team.",
   icon: SparklesIcon,
-  accent: "yellow",
   href: "/skills/new",
 };
 const TILE_INTEGRATION: TileDef = {
-  title: "Connect an integration",
+  title: "Plug in a tool",
   description: "Wire up Gmail, Notion, Linear, and 300+ more.",
   icon: PuzzleIcon,
-  accent: "brown",
   href: "/integrations",
 };
 const TILE_INVITE: TileDef = {
-  title: "Invite a teammate",
-  description: "Bring someone else into your workspace.",
+  title: "Pull in a teammate",
+  description: "Bring someone else into the workspace.",
   icon: UserPlusIcon,
-  accent: "brown",
   href: "/team/invite",
 };
 
@@ -91,17 +71,22 @@ export interface TileGridProps {
 }
 
 /**
- * 2x2 grid with brand-paired accents. Yellow-Yellow on the top row
- * (outputs Sketch produces), brown-brown on the bottom (workspace
- * foundation). The pairing is content categorization made visible:
- * automations + skills are creation primitives; integrations + invites
- * are foundation primitives. Each row reads as a category.
+ * Single horizontal row of four — icon stacked on top, title centered
+ * below. This vertical arrangement is what earns the row-of-4 visually:
+ * it reads as "destinations" (icon as anchor, label as caption) rather
+ * than "buttons" (icon as bullet, label as text), and the orientation
+ * deliberately diverges from the chip row's horizontal pill shape so
+ * the two surfaces don't compete.
+ *
+ * All four tiles share a single brand-yellow icon container (no two-tone
+ * split); the visual rhythm comes from the vertical-stack layout itself,
+ * not from chromatic variation between cards.
  */
 export function TileGrid({ tiles = DEFAULT_TILES, disabled, className }: TileGridProps) {
   return (
     <div
-      className={cn("grid w-full gap-[12px]", disabled && "pointer-events-none opacity-60", className)}
-      style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
+      className={cn("grid w-full gap-[10px]", disabled && "pointer-events-none opacity-60", className)}
+      style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
     >
       {tiles.map((tile) => (
         <TileItem key={tile.title} tile={tile} />
@@ -117,27 +102,24 @@ function TileItem({ tile }: { tile: TileDef }) {
       <span
         aria-hidden
         className={cn(
-          "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[8px]",
-          ACCENT_CLASSES[tile.accent],
+          "flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-[10px]",
+          "bg-[#FEED01] text-[#412402]",
           "transition-transform duration-200 ease-out group-hover:scale-[1.08]",
         )}
       >
-        <Icon size={16} weight="regular" />
+        <Icon size={20} weight="regular" />
       </span>
-      <div className="flex min-w-0 flex-col gap-[3px]">
-        <span className="text-[13.5px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
-        <span className="text-[12px] text-muted-foreground leading-[1.4]">{tile.description}</span>
-      </div>
+      <span className="block text-center text-[13px] font-medium text-foreground leading-[1.3]">{tile.title}</span>
     </>
   );
 
   const baseClass = cn(
-    "group flex items-center gap-[12px] rounded-[10px] bg-card border border-border",
-    "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
+    "group flex flex-col items-center justify-start gap-[12px] rounded-[12px] bg-card border border-border",
+    "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-center",
     "hover:bg-muted/60 hover:border-foreground/20",
     "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
     "active:translate-y-0 active:shadow-none",
-    "px-[14px] py-[12px]",
+    "px-[12px] pt-[18px] pb-[16px]",
   );
 
   if (tile.href) {
