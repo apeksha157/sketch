@@ -112,7 +112,7 @@ function QuickActions({ tiles, disabled, className }: QuickActionsProps) {
     <section className={cn("flex flex-col", className)}>
       <div className="mb-[10px] flex items-baseline justify-between px-[6px]">
         <h2 className="font-mono text-xs uppercase text-foreground" style={{ letterSpacing: "0.08em" }}>
-          Quick actions
+          Workspace
         </h2>
       </div>
       <TileGrid tiles={tiles} disabled={disabled} />
