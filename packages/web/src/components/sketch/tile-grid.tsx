@@ -176,36 +176,52 @@ function TileItem({ tile }: { tile: TileDef }) {
   const Icon = tile.icon;
   const Inner = (
     <>
-      {/* Label row — icon + primitive name. Quiet (muted-foreground)
-       * because it's a header for the state below, not the focal point. */}
+      {/* Label row — icon + primitive name in sentence case. Sentence case
+       * (vs the earlier uppercase + tracking) drops the visual weight of
+       * the label so the primary metric below clearly owns the focal point;
+       * also breaks the double-uppercase stack with the "WORKSPACE" /
+       * "GET STARTED" section eyebrow. */}
       <div className="flex items-center gap-[8px]">
         <Icon size={16} weight="regular" aria-hidden className="shrink-0 text-[#412402] dark:text-[#FEED01]" />
-        <span className="text-[12px] font-medium uppercase tracking-[0.06em] text-muted-foreground">{tile.title}</span>
+        <span className="text-[12px] font-medium text-muted-foreground">{tile.title}</span>
       </div>
-      {/* State block — primary metric is the focal point, secondary line
-       * gives context. Empty-state variant softens the primary tone so it
-       * doesn't shout when there's nothing to announce. */}
-      <div className="mt-[12px] flex flex-col">
+      {/* State block — primary metric at 18px (down from 20px so it doesn't
+       * dominate the 12px label/secondary lines), secondary muted context.
+       * Empty-state softens primary to read as invitation, not statement. */}
+      <div className="mt-[10px] flex flex-col">
         <span
           className={cn(
-            "text-[20px] font-semibold leading-[1.2]",
+            "text-[18px] font-semibold leading-[1.25]",
             tile.empty ? "text-foreground/85" : "text-foreground",
           )}
         >
           {tile.primary}
         </span>
-        <span className="mt-[4px] text-[12px] leading-[1.4] text-muted-foreground">{tile.secondary}</span>
+        <span className="mt-[4px] text-[12px] leading-[1.45] text-muted-foreground">{tile.secondary}</span>
       </div>
+      {/* Brand sparkle — the character ray that haloes the "S" in the
+       * Sketch logo, reused here as a quiet signature element so each tile
+       * reads as "a Sketch card" without a heavy color block. ~15% opacity
+       * at rest keeps it as texture; brightens slightly on hover. */}
+      <SparklesIcon
+        aria-hidden
+        size={32}
+        weight="duotone"
+        className={cn(
+          "pointer-events-none absolute -right-[4px] -top-[4px] text-[#FEED01]",
+          "opacity-[0.18] transition-opacity duration-200 ease-out group-hover:opacity-[0.32]",
+        )}
+      />
     </>
   );
 
   const baseClass = cn(
-    "group flex flex-col rounded-[12px] bg-card border border-border",
+    "group relative flex flex-col overflow-hidden rounded-[12px] bg-card border border-border",
     "transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out cursor-pointer text-left",
     "hover:bg-muted/40 hover:border-foreground/20",
     "hover:-translate-y-[0.5px] hover:shadow-[0_2px_6px_-2px_rgba(0,0,0,0.06)]",
     "active:translate-y-0 active:shadow-none",
-    "px-[16px] pt-[14px] pb-[16px]",
+    "px-[16px] py-[14px]",
   );
 
   if (tile.href) {
