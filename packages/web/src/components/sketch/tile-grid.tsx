@@ -15,10 +15,26 @@ import { cn } from "@sketch/ui/lib/utils";
 import { Link } from "@tanstack/react-router";
 import type { ComponentType } from "react";
 
+/**
+ * Brand-paired accents — yellow vs brown, full saturation. The two
+ * categories of workspace primitives use opposite halves of the Sketch
+ * brand pair, so the section reads as a real content categorization
+ * made visible:
+ *   - yellow → what Sketch produces (automation, skill)
+ *   - brown  → workspace foundation (integration, invite)
+ */
+export type TileAccent = "yellow" | "brown";
+
+const ACCENT_CLASSES: Record<TileAccent, string> = {
+  yellow: "bg-[#FEED01] text-[#412402]",
+  brown: "bg-[#412402] text-[#FEED01]",
+};
+
 export interface TileDef {
   title: string;
   description: string;
   icon: ComponentType<IconProps>;
+  accent: TileAccent;
   /** Provide either an href (Link) or onClick (button). */
   href?: string;
   onClick?: () => void;
@@ -28,24 +44,28 @@ const TILE_AUTOMATION: TileDef = {
   title: "Set up an automation",
   description: "Schedule a recurring task that runs on its own.",
   icon: CalendarTimeIcon,
+  accent: "yellow",
   href: "/scheduled-tasks/new",
 };
 const TILE_SKILL: TileDef = {
   title: "Create a skill",
   description: "Teach Sketch a new capability your team can re-use.",
   icon: SparklesIcon,
+  accent: "yellow",
   href: "/skills/new",
 };
 const TILE_INTEGRATION: TileDef = {
   title: "Connect an integration",
   description: "Wire up Gmail, Notion, Linear, and 300+ more.",
   icon: PuzzleIcon,
+  accent: "brown",
   href: "/integrations",
 };
 const TILE_INVITE: TileDef = {
   title: "Invite a teammate",
   description: "Bring someone else into your workspace.",
   icon: UserPlusIcon,
+  accent: "brown",
   href: "/team/invite",
 };
 
@@ -71,11 +91,11 @@ export interface TileGridProps {
 }
 
 /**
- * 2x2 equal-weight baseline. All four primitives are parallel in role —
- * none is more important than another, so the layout treats them
- * identically. This is the honest starting point for the layout
- * conversation: no fake hierarchy from size, no invented colors, just
- * four tiles that share the same chrome.
+ * 2x2 grid with brand-paired accents. Yellow-Yellow on the top row
+ * (outputs Sketch produces), brown-brown on the bottom (workspace
+ * foundation). The pairing is content categorization made visible:
+ * automations + skills are creation primitives; integrations + invites
+ * are foundation primitives. Each row reads as a category.
  */
 export function TileGrid({ tiles = DEFAULT_TILES, disabled, className }: TileGridProps) {
   return (
@@ -98,7 +118,7 @@ function TileItem({ tile }: { tile: TileDef }) {
         aria-hidden
         className={cn(
           "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[8px]",
-          "bg-[#FAF3BD] text-[#8B7A00] dark:bg-[#322B0C] dark:text-[#FEED01]",
+          ACCENT_CLASSES[tile.accent],
           "transition-transform duration-200 ease-out group-hover:scale-[1.08]",
         )}
       >
