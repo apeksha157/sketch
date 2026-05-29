@@ -81,6 +81,13 @@ import { homeCreditsLowRoute } from "./routes/sketch/home-credits-low";
 import { homeDefaultRoute } from "./routes/sketch/home-default";
 import { homeFamiliarRoute } from "./routes/sketch/home-familiar";
 import { homeNewUserRoute } from "./routes/sketch/home-new-user";
+import { homeOnboardingRoute } from "./routes/sketch/home-onboarding";
+import { homeOnboardingConcept1MidRoute, homeOnboardingConcept1Route } from "./routes/sketch/home-onboarding-concept-1";
+import { homeOnboardingConcept1ResumeRoute } from "./routes/sketch/home-onboarding-concept-1-resume";
+import { homeOnboardingConcept2MidRoute, homeOnboardingConcept2Route } from "./routes/sketch/home-onboarding-concept-2";
+import { homeOnboardingConcept2ResumeRoute } from "./routes/sketch/home-onboarding-concept-2-resume";
+import { homeOnboardingConcept3MidRoute, homeOnboardingConcept3Route } from "./routes/sketch/home-onboarding-concept-3";
+import { homeOnboardingConcept3ResumeRoute } from "./routes/sketch/home-onboarding-concept-3-resume";
 import { homePaymentLapsedRoute } from "./routes/sketch/home-payment-lapsed";
 import { homeSetupRoute } from "./routes/sketch/home-setup";
 import { homeTrialExpiredRoute } from "./routes/sketch/home-trial-expired";
@@ -167,6 +174,16 @@ const routeTree = rootRoute.addChildren([
     homePaymentLapsedRoute,
     homeWorkspacePausedRoute,
     homeCelebrationRoute,
+    homeOnboardingConcept1Route,
+    homeOnboardingConcept1MidRoute,
+    homeOnboardingConcept1ResumeRoute,
+    homeOnboardingConcept2Route,
+    homeOnboardingConcept2MidRoute,
+    homeOnboardingConcept2ResumeRoute,
+    homeOnboardingConcept3Route,
+    homeOnboardingConcept3MidRoute,
+    homeOnboardingConcept3ResumeRoute,
+    homeOnboardingRoute,
     chatRoute,
     chatAutomationSidecarRoute,
     builderSidecarRoute,

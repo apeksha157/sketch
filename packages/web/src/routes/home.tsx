@@ -333,7 +333,17 @@ function pickGreetingForName(firstName: string, hour: number): string {
   return getGreeting(hour);
 }
 
-export function GreetingBar({ firstName, digest }: { firstName: string; digest: HomeDigest }) {
+export function GreetingBar({
+  firstName,
+  digest,
+  subtitleOverride,
+}: {
+  firstName: string;
+  digest: HomeDigest;
+  /** When set, replaces the rotating nudge subtitle. Used by onboarding mockups
+   * where the rotating "Connect Notion…" nudges read wrong for a brand-new user. */
+  subtitleOverride?: string;
+}) {
   // Lazy init pins both the greeting and subtitle picks to mount (stable on render).
   // The interval re-rolls every 30 min for users who leave the page open.
   const [greeting, setGreeting] = useState(() => pickGreetingForName(firstName, new Date().getHours()));
@@ -352,7 +362,7 @@ export function GreetingBar({ firstName, digest }: { firstName: string; digest: 
       <h1 className="text-xl font-semibold text-foreground">
         {greeting}, {firstName}
       </h1>
-      <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
+      <p className="mt-2 text-sm text-muted-foreground">{subtitleOverride ?? subtitle}</p>
     </div>
   );
 }

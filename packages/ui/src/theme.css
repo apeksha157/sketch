@@ -212,6 +212,209 @@
   transform-origin: center;
 }
 
+/* Onboarding bubble (Concept 4b) — gentle resting pulse on the floating Sketch
+ * icon to read as "I'm here if you need me" without being demanding. */
+/* One-time arrival halo for the helper bubble — a soft brand-yellow ring
+ * that expands outward from the bubble and fades, so the bubble's arrival
+ * after setup completion reads as a moment rather than a silent reveal.
+ * Plays once per mount; the bubble's continuous sketch-bubble-pulse takes
+ * over after. */
+@keyframes sketch-bubble-arrival-halo {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+.sketch-bubble-arrival-halo {
+  animation: sketch-bubble-arrival-halo 720ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes sketch-bubble-pulse {
+  0%,
+  100% {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22), 0 0 0 0 rgba(254, 237, 1, 0.55);
+  }
+  60% {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22), 0 0 0 12px rgba(254, 237, 1, 0);
+  }
+}
+.sketch-bubble-pulse {
+  animation: sketch-bubble-pulse 2.6s ease-out infinite;
+}
+
+/* Helper panel that pops above the bubble — quick fade + lift. */
+@keyframes sketch-bubble-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.sketch-bubble-panel-in {
+  animation: sketch-bubble-panel-in 160ms ease-out;
+  transform-origin: bottom right;
+}
+
+/* Onboarding video overlay — fade backdrop + lift card. */
+@keyframes sketch-video-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.sketch-video-overlay-in {
+  animation: sketch-video-overlay-in 180ms ease-out;
+}
+
+/* Setup tray slide-up on first render — keeps the tray from feeling like a
+ * static page element when the user transitions from the prompt modal. */
+@keyframes sketch-tray-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.sketch-tray-in {
+  animation: sketch-tray-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Tray exit — opacity + translate together with a slow ease-out so the
+ * surface leaves gently rather than dropping. Pairs with the bubble's
+ * entrance to read as one continuous chrome handoff. */
+@keyframes sketch-tray-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+.sketch-tray-out {
+  animation: sketch-tray-out 360ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Celebration entrance for the all-done tray — a brief swell so the yellow
+ * bar arrival feels like a moment, not just a colour swap. */
+@keyframes sketch-celebrate-tray {
+  0% {
+    background-color: #fff7b0;
+    box-shadow: 0 0 0 0 rgba(254, 237, 1, 0.5), 0 -8px 22px rgba(254, 237, 1, 0.18);
+    transform: translateY(0) scale(1);
+  }
+  40% {
+    background-color: #fff7b0;
+    box-shadow: 0 0 0 6px rgba(254, 237, 1, 0.25), 0 -10px 28px rgba(254, 237, 1, 0.22);
+    transform: translateY(-1px) scale(1.003);
+  }
+  100% {
+    background-color: #fffbd9;
+    box-shadow: 0 0 0 0 rgba(254, 237, 1, 0), 0 -6px 18px rgba(254, 237, 1, 0.08);
+    transform: translateY(0) scale(1);
+  }
+}
+.sketch-celebrate-tray {
+  animation: sketch-celebrate-tray 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Sparkle particles that drift up from the celebration tray for ~1s. */
+@keyframes sketch-sparkle-rise {
+  0% {
+    opacity: 0;
+    transform: translate(var(--sx, 0px), 0) scale(0.6);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(var(--sx, 0px) + var(--sdx, 0px)), -80px) scale(1.1);
+  }
+}
+.sketch-sparkle {
+  animation: sketch-sparkle-rise 1100ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Step chip — done chips get a quick check pop so marking something feels
+ * satisfying rather than purely visual state. */
+@keyframes sketch-chip-check-pop {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.sketch-chip-check-pop {
+  animation: sketch-chip-check-pop 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Celebration sequence — when the tray hits 5/5 we don't switch to a
+ * separate dark "celebration bar" any more. Instead the Sketch icon pops
+ * up in the existing strip, breathes for a moment, then the strip slides
+ * out and the icon's identity carries through to the bottom-right bubble. */
+@keyframes sketch-icon-pop {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.sketch-icon-pop {
+  animation: sketch-icon-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both, sketch-icon-breathe 1400ms ease-in-out 380ms
+    infinite;
+}
+@keyframes sketch-icon-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes sketch-celebrate-text-in {
+  0% {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.sketch-celebrate-text-in {
+  animation: sketch-celebrate-text-in 320ms cubic-bezier(0.22, 1, 0.36, 1) 180ms both;
+}
+
 /* Scroll containers that should hide their scrollbar (§4.5 chip row). */
 .sketch-scrollbar-hide {
   scrollbar-width: none;
@@ -227,7 +430,18 @@
   }
   .sketch-banner-in,
   .sketch-celebration-in,
-  .sketch-toast-in {
+  .sketch-toast-in,
+  .sketch-bubble-pulse,
+  .sketch-bubble-panel-in,
+  .sketch-video-overlay-in,
+  .sketch-tray-in,
+  .sketch-tray-out,
+  .sketch-celebrate-tray,
+  .sketch-sparkle,
+  .sketch-icon-pop,
+  .sketch-celebrate-text-in,
+  .sketch-bubble-arrival-halo,
+  .sketch-chip-check-pop {
     animation: none !important;
   }
   /* Streaming caret holds steady at rest opacity when reduced-motion is on. */

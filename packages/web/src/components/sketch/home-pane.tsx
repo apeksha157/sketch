@@ -56,6 +56,9 @@ export interface HomePaneProps {
    * keeping the same component.
    */
   workspaceHeading?: string;
+  /** Replace the rotating nudge subtitle under the greeting (used by onboarding
+   * mockups so brand-new users see a welcome line rather than a returning-user nudge). */
+  subtitleOverride?: string;
 }
 
 /**
@@ -79,6 +82,7 @@ export function HomePane({
   onSubmit,
   tiles: tilesProp,
   workspaceHeading = "Workspace",
+  subtitleOverride,
 }: HomePaneProps) {
   const tiles = tilesProp ?? getDefaultTiles(teamSize);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -93,7 +97,7 @@ export function HomePane({
     <div className="mx-auto w-full max-w-4xl px-10 py-8">
       {/* Hero — greeting + chat input + chip row. */}
       <section className="flex flex-col">
-        <GreetingBar firstName={firstName} digest={digest ?? MOCK_DIGEST} />
+        <GreetingBar firstName={firstName} digest={digest ?? MOCK_DIGEST} subtitleOverride={subtitleOverride} />
         <div className="mt-7 flex flex-col gap-3">
           <ChatInput ref={inputRef} key={prefill} initialValue={prefill} disabled={disabled} onSubmit={onSubmit} />
           <ChipRow onPick={handleChip} disabled={disabled} />
