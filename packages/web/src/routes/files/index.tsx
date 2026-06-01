@@ -40,7 +40,7 @@ const PAGE_SIZE = 50;
 
 type FilesTab = "files" | "entities";
 
-function FilesPage() {
+export function FilesPage() {
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<FilesTab>("files");

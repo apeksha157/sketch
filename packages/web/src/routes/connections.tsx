@@ -74,7 +74,7 @@ type IntegrationsTab = "applications" | "mcps" | "environment";
 // Page
 // ---------------------------------------------------------------------------
 
-function ConnectionsPage() {
+export function ConnectionsPage() {
   const auth = useDashboardAuth();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<IntegrationsTab>(() => {

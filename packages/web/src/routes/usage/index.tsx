@@ -13,7 +13,7 @@ export const usageRoute = createRoute({
   component: UsagePage,
 });
 
-function UsagePage() {
+export function UsagePage() {
   const [activeTab, setActiveTab] = useState<AdminTab>("team");
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("Month");
 
