@@ -2,53 +2,31 @@
  * BuilderSidecar — the chat rail that sits to the left of the builder canvas.
  * Same conversation that started on /chat/:id, continued inside the builder.
  *
- * Chat is the lead surface; the canvas (right of this rail) owns the working
- * area and its own future right-edge details panel.
+ * Chat is the lead surface and is always present: in Sketch automations are only
+ * authored through chat (no manual canvas creation), so unlike Canvas there is no
+ * reason to collapse the rail. It stays persistent.
  *
  * Sized at 400px — wide enough for messages to breathe (Slack thread sidebar
  * ~420, Linear rail similar) without crowding the canvas next to it.
  *
  * Messages render without per-message avatars — the sidecar header already
  * carries the Sketch icon + thread title, so repeating the avatar on every
- * reply in a narrow rail becomes noise. Same reasoning as the dock; both
- * compact-chat contexts share the no-avatar pattern. The main chat page
- * (full surface) keeps per-message avatars because it has the vertical space
- * to make the rhythm work.
- *
- * Collapsed state renders a 88px ComposerCard with a Tab pull-handle for
- * expanding — see ComposerCard + ExpandToggle.
+ * reply in a narrow rail becomes noise.
  */
 import { ChatInput } from "@/components/sketch/chat-input";
-import { ExpandToggle } from "@/components/sketch/expand-toggle";
-import { ChatCircleIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
-import { type ReactNode, useState } from "react";
-
-/** Helper for the rail click-to-expand: was the click on an existing button/link? */
-function isOnInteractiveElement(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest('button, a, [role="button"]'));
-}
+import type { ReactNode } from "react";
 
 export interface BuilderSidecarProps {
   threadTitle: string;
-  initiallyCollapsed?: boolean;
 }
 
-export function BuilderSidecar({ threadTitle, initiallyCollapsed = false }: BuilderSidecarProps) {
-  const [collapsed, setCollapsed] = useState(initiallyCollapsed);
-
-  if (collapsed) {
-    return <ComposerCard onExpand={() => setCollapsed(false)} />;
-  }
-
+export function BuilderSidecar({ threadTitle }: BuilderSidecarProps) {
   return (
     <aside
-      className="group/rail relative flex h-full w-[400px] shrink-0 flex-col border-r border-border bg-background"
+      className="relative flex h-full w-[400px] shrink-0 flex-col border-r border-border bg-background"
       style={{ borderRightWidth: "0.5px" }}
     >
-      {/* Collapse toggle — same right-edge midpoint position as the
-       * collapsed-state Tab. Only the chevron direction flips. */}
-      <ExpandToggle onClick={() => setCollapsed(true)} ariaLabel="Collapse chat" direction="left" />
       <SidecarHeader threadTitle={threadTitle} />
       <div className="relative min-h-0 flex-1">
         <div
@@ -130,11 +108,7 @@ function SidecarSketchMessage({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * Sidecar header — icon + thread title only. The collapse affordance is
- * NOT here; it lives as the floating <ExpandToggle /> on the rail's right
- * edge in both expanded and collapsed states (one predictable location).
- */
+/** Sidecar header — icon + thread title only. */
 function SidecarHeader({ threadTitle }: { threadTitle: string }) {
   return (
     <div className="flex shrink-0 items-center gap-[10px] bg-foreground/[0.025] px-[14px] py-[9px]">
@@ -143,45 +117,5 @@ function SidecarHeader({ threadTitle }: { threadTitle: string }) {
         {threadTitle}
       </h2>
     </div>
-  );
-}
-
-/**
- * ComposerCard — the chat rail in its contracted state.
- *
- * 44px wide. A chat icon at the top identifies the rail (no Sketch
- * logo — the workspace sidebar to the left already carries the brand).
- * Below the icon: empty by design. Signals (unread count, working
- * pulse, attention dot) layer on later when wired to real state.
- *
- * The whole rail is click-to-expand on empty space — bails out if the
- * click landed on the ExpandToggle so the toggle keeps its own handler
- * without double-firing.
- */
-function ComposerCard({ onExpand }: { onExpand: () => void }) {
-  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
-    if (isOnInteractiveElement(event.target)) return;
-    onExpand();
-  };
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") return;
-    if (isOnInteractiveElement(event.target)) return;
-    event.preventDefault();
-    onExpand();
-  };
-  return (
-    <aside
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-      className={cn(
-        // `group/rail` lets the ExpandToggle react to hovers on the whole rail.
-        "group/rail relative flex h-full w-[44px] shrink-0 flex-col items-center cursor-pointer",
-        "border-r border-border bg-card pt-[16px]",
-      )}
-      style={{ borderRightWidth: "0.5px", boxShadow: "1px 0 0 0 rgba(0,0,0,0.02)" }}
-    >
-      <ExpandToggle onClick={onExpand} ariaLabel="Expand chat" />
-      <ChatCircleIcon size={20} weight="regular" aria-hidden className="text-muted-foreground/80" />
-    </aside>
   );
 }

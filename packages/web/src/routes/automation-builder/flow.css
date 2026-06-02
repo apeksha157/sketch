@@ -1,0 +1,50 @@
+/* Fully themed: handles, edges, connection line, and controls all resolve from
+   Sketch's CSS tokens, so the canvas adapts to light and dark mode. */
+
+.automation-flow .react-flow__handle {
+  border: none;
+  border-radius: 9999px;
+}
+
+.automation-flow .react-flow__handle-connecting {
+  background: var(--primary);
+}
+
+.automation-flow .react-flow__edge-path {
+  stroke: var(--muted-foreground);
+  stroke-opacity: 0.45;
+  stroke-width: 1.5;
+}
+
+.automation-flow .react-flow__edge.selected .react-flow__edge-path,
+.automation-flow .react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-opacity: 1;
+}
+
+.automation-flow .react-flow__connectionline {
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+}
+
+/* Controls re-skinned to Sketch tokens so they flip with the app theme. */
+.automation-flow .react-flow__controls {
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.15);
+}
+
+.automation-flow .react-flow__controls-button {
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+}
+
+.automation-flow .react-flow__controls-button:hover {
+  background: var(--accent);
+}
+
+.automation-flow .react-flow__controls-button svg {
+  fill: currentColor;
+}
