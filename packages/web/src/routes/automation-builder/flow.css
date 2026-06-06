@@ -1,29 +1,44 @@
 /* Fully themed: handles, edges, connection line, and controls all resolve from
    Sketch's CSS tokens, so the canvas adapts to light and dark mode. */
 
+/* One canvas-structure line colour — a notch darker than `--border` (mixed
+   toward `--muted-foreground`) so outlines, edges, handles, and idle dots read
+   clearly without going heavy. Derived from tokens, so it tracks light/dark:
+   on light it darkens `--border`, on dark it lifts it. The background grid stays
+   on plain `--border` (one shade lighter) to keep depth between grid and lines.
+   Single source of truth — the TS node renderer reads `var(--canvas-line)` too. */
+.automation-flow {
+  --canvas-line: color-mix(in oklch, var(--border) 80%, var(--muted-foreground));
+}
+
 .automation-flow .react-flow__handle {
   border: none;
   border-radius: 9999px;
 }
 
 .automation-flow .react-flow__handle-connecting {
-  background: var(--primary);
+  background: var(--foreground);
 }
 
+/* Edges share the node outline / handle colour so the whole connection system —
+   outline → handle dot → branch — reads as one cohesive light grey. */
 .automation-flow .react-flow__edge-path {
-  stroke: var(--muted-foreground);
-  stroke-opacity: 0.45;
+  stroke: var(--canvas-line);
+  stroke-opacity: 1;
   stroke-width: 1.5;
 }
 
+/* Emphasis state (hover / selected) picks up the accent ring — the same
+   `--ring` a selected node's outline uses, so structure and connections share
+   one selection language. Primary stays reserved for the Run CTA. */
 .automation-flow .react-flow__edge.selected .react-flow__edge-path,
 .automation-flow .react-flow__edge:hover .react-flow__edge-path {
-  stroke: var(--primary);
+  stroke: var(--foreground);
   stroke-opacity: 1;
 }
 
 .automation-flow .react-flow__connectionline {
-  stroke: var(--primary);
+  stroke: var(--foreground);
   stroke-width: 2;
   stroke-dasharray: 5 5;
 }

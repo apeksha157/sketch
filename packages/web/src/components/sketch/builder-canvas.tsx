@@ -455,7 +455,7 @@ function SlackPreview() {
           className="mt-[1px] flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[6px] bg-brand-yellow"
           aria-hidden
         >
-          <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="h-[15px] w-[15px]" />
+          <img src="/logos/sketch-icon-light.png" alt="" aria-hidden className="h-[15px] w-[15px]" />
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-[4px]">
           <div className="flex items-baseline gap-[6px]">

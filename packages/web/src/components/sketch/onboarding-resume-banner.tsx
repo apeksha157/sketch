@@ -56,7 +56,7 @@ export function OnboardingResumeBanner({
             className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-[#FEED01]"
             aria-hidden
           >
-            <img src="/logos/sketch-icon-lightmode.png" alt="" className="size-[14px]" />
+            <img src="/logos/sketch-icon-light.png" alt="" className="size-[14px]" />
           </span>
           <ProgressDots doneCount={doneCount} total={total} />
         </div>

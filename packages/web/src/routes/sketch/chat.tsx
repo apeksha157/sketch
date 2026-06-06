@@ -7,7 +7,7 @@
  * that surfaced when anything but the demo id was opened.
  *
  * Header geometry matches the sister surface at /chat/automation-sidecar
- * (max-w-4xl, px-10, py-[18px], text-[14px] title) so the two chat routes
+ * (max-w-4xl, px-10, h-[48px], text-[14px] title) so the two chat routes
  * share one visual idiom. Channel glyph sits next to the back arrow as a
  * persistent reminder of where the thread lives (Slack / WhatsApp / Web).
  *
@@ -217,7 +217,7 @@ function ChatPage() {
 function ChatHeader({ thread, onBack }: { thread: ResolvedThread; onBack: () => void }) {
   const ChannelIcon = CHANNEL_ICON[thread.channel];
   return (
-    <div className="mx-auto flex w-full max-w-4xl shrink-0 items-center gap-[12px] px-10 py-[18px]">
+    <div className="mx-auto flex h-[48px] w-full max-w-4xl shrink-0 items-center gap-[12px] px-10">
       <button
         type="button"
         onClick={onBack}

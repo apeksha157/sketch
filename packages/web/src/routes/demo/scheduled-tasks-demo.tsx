@@ -8,7 +8,7 @@ const now = new Date().toISOString();
 const tomorrow = new Date(Date.now() + 86400000).toISOString();
 const yesterday = new Date(Date.now() - 86400000).toISOString();
 
-const DEMO_DATA: ScheduledTaskListItem[] = [
+export const DEMO_DATA: ScheduledTaskListItem[] = [
   {
     id: "t1",
     platform: "slack",

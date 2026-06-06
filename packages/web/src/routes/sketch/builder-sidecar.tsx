@@ -14,13 +14,12 @@ import { SketchShell } from "@/components/sketch/shell";
 import { AutomationCanvas } from "@/routes/automation-builder/canvas";
 import { DRAFT_TRUSTPILOT } from "@/routes/automation-builder/data";
 import { NodeDrawer } from "@/routes/automation-builder/node-drawer";
-import { RunButton, RunsButton, RunsPanel, formatRunTime } from "@/routes/automation-builder/run-controls";
+import { BackToLatestButton, RunButton, RunsMenu } from "@/routes/automation-builder/run-controls";
 import type { AutomationRun, StepNodeData, StepRunResult } from "@/routes/automation-builder/types";
 import { MOCK_CREDITS, MOCK_FILES } from "@/routes/sketch/mock-data";
 import { sketchRoute, useSketchAuth } from "@/routes/sketch/route";
-import { ArrowCounterClockwiseIcon, FloppyDiskIcon, MoonIcon, SunIcon } from "@phosphor-icons/react";
+import { FloppyDiskIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
-import { useTheme } from "@sketch/ui/hooks/use-theme";
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
@@ -29,47 +28,84 @@ const automation = DRAFT_TRUSTPILOT;
 function BuilderSidecarPage() {
   const auth = useSketchAuth();
   const navigate = useNavigate();
-  const { resolvedTheme, setTheme } = useTheme();
 
   const [runs, setRuns] = useState<AutomationRun[]>(automation.runs ?? []);
   const [activeRunId, setActiveRunId] = useState<string | null>(runs[0]?.id ?? null);
   const [running, setRunning] = useState(false);
+  const [runningStepId, setRunningStepId] = useState<string | null>(null);
+  const [liveResults, setLiveResults] = useState<Record<string, StepRunResult> | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [runsOpen, setRunsOpen] = useState(false);
 
   const activeRun = runs.find((r) => r.id === activeRunId) ?? runs[0];
   const isLatest = !activeRun || activeRun.id === runs[0]?.id;
 
-  const runningResults = useMemo<Record<string, StepRunResult>>(
-    () => Object.fromEntries(automation.steps.map((s) => [s.id, { status: "running" as const }])),
-    [],
-  );
-  const runResults = running ? runningResults : (activeRun?.stepResults ?? automation.lastRun);
-  const runKey = running ? "running" : (activeRun?.id ?? "latest");
+  const runResults = activeRun?.stepResults ?? automation.lastRun;
+  const runKey = activeRun?.id ?? "latest";
 
   const stepsById = useMemo(() => new Map(automation.steps.map((s) => [s.id, s])), []);
   const selectedStep = selectedStepId ? stepsById.get(selectedStepId) : undefined;
   const selectedData: StepNodeData | null = selectedStep
-    ? { step: selectedStep, content: automation.content[selectedStep.id], run: runResults[selectedStep.id] }
+    ? {
+        step: selectedStep,
+        content: automation.content[selectedStep.id],
+        run:
+          liveResults?.[selectedStep.id] ??
+          (runningStepId === selectedStep.id ? { status: "running" as const } : runResults[selectedStep.id]),
+      }
     : null;
 
+  /** Simulate running a single step (the drawer's "Run step"), not the whole automation. */
+  function runStep(stepId: string) {
+    if (running || runningStepId) return;
+    setRunningStepId(stepId);
+    setTimeout(() => setRunningStepId(null), 1200);
+  }
+
+  /**
+   * Simulate a run as a gradual cascade — each step lights up "running", then
+   * settles to its result, before the next begins — so the states are legible
+   * instead of flipping all at once. A manual run uses the last successful run's
+   * per-step results, then commits a new run to history.
+   */
   function runNow() {
     if (running) return;
     setRunning(true);
-    setRunsOpen(false);
-    setTimeout(() => {
-      const newRun: AutomationRun = {
-        id: `run-${Date.now().toString(36)}`,
-        status: "success",
-        trigger: "manual",
-        startedAt: new Date().toISOString(),
-        durationMs: 4200,
-        stepResults: automation.lastRun,
-      };
-      setRuns((prev) => [newRun, ...prev]);
-      setActiveRunId(newRun.id);
-      setRunning(false);
-    }, 1600);
+    setSelectedStepId(null);
+
+    const okResults = automation.runs?.find((r) => r.status === "success")?.stepResults ?? automation.lastRun;
+    const order = automation.steps.map((s) => s.id);
+    const live: Record<string, StepRunResult> = {};
+    for (const id of order) live[id] = { status: "idle" };
+    setLiveResults({ ...live });
+
+    let i = 0;
+    const advance = () => {
+      if (i >= order.length) {
+        const newRun: AutomationRun = {
+          id: `run-${Date.now().toString(36)}`,
+          status: "success",
+          trigger: "manual",
+          startedAt: new Date().toISOString(),
+          durationMs: 4200,
+          stepResults: okResults,
+        };
+        setRuns((prev) => [newRun, ...prev]);
+        setActiveRunId(newRun.id);
+        setRunning(false);
+        setLiveResults(null);
+        return;
+      }
+      const id = order[i];
+      live[id] = { status: "running" };
+      setLiveResults({ ...live });
+      setTimeout(() => {
+        live[id] = okResults[id] ?? { status: "success" };
+        setLiveResults({ ...live });
+        i += 1;
+        setTimeout(advance, 220);
+      }, 620);
+    };
+    advance();
   }
 
   return (
@@ -78,69 +114,64 @@ function BuilderSidecarPage() {
       orgName={auth.orgName}
       credits={MOCK_CREDITS}
       files={MOCK_FILES}
+      defaultSidebarCollapsed
     >
       <div className="flex h-full min-h-0">
-        <BuilderSidecar threadTitle="Sharing five-star Trustpilot reviews" />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-[10px]">
-            <h1 className="min-w-0 flex-1 truncate text-[14px] font-medium text-foreground/85">{automation.title}</h1>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8"
-              aria-label="Toggle theme"
-              onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-            >
-              {resolvedTheme === "dark" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
-            </Button>
-            <RunsButton count={runs.length} onClick={() => setRunsOpen(true)} />
-            <RunButton running={running} onRun={runNow} />
+        <BuilderSidecar title={automation.title} />
+        {/* The canvas is chrome-free (no top header) — its title lives in the chat
+         *  rail, and the actions float over the surface like the zoom controls. */}
+        <div className="relative min-h-0 min-w-0 flex-1">
+          <AutomationCanvas
+            automation={automation}
+            runResults={runResults}
+            runKey={runKey}
+            liveResults={liveResults}
+            selectedStepId={selectedStepId}
+            onSelectStep={setSelectedStepId}
+          />
+
+          {/* History control, top-left: reads "Runs · N" at latest, flips to an
+           *  accent "Viewing · {time}" with a back-to-latest button when a past
+           *  run is loaded — so context + exit live on the control, not a banner. */}
+          <div className="absolute left-4 top-4 z-20 flex items-center gap-1.5">
+            <RunsMenu
+              runs={runs}
+              activeRunId={activeRun?.id ?? null}
+              isLatest={isLatest}
+              disabled={running}
+              onSelectRun={(id) => {
+                setActiveRunId(id);
+                setSelectedStepId(null);
+              }}
+            />
+            {!isLatest && <BackToLatestButton onClick={() => setActiveRunId(runs[0]?.id ?? null)} />}
+          </div>
+
+          {/* Edit/run actions, top-right. Both buttons are self-contained, so they
+           *  sit side by side with no separator; Run is the one solid CTA. */}
+          <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
             <Button
               variant="outline"
               size="sm"
-              className="h-7 gap-1.5"
+              className="h-7 gap-1.5 text-[13px] shadow-sm"
+              disabled={running}
               onClick={() => navigate({ to: "/chat/automation-sidecar" })}
             >
               <FloppyDiskIcon size={13} />
               Save
             </Button>
-          </div>
-
-          {!isLatest && activeRun && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-border bg-muted/40 px-5 py-1.5 text-xs text-muted-foreground">
-              <span>Viewing run from {formatRunTime(activeRun.startedAt)}</span>
-              <button
-                type="button"
-                className="ml-auto flex items-center gap-1 text-foreground hover:underline"
-                onClick={() => setActiveRunId(runs[0]?.id ?? null)}
-              >
-                <ArrowCounterClockwiseIcon size={12} />
-                Back to latest
-              </button>
-            </div>
-          )}
-
-          <div className="relative min-h-0 flex-1">
-            <AutomationCanvas
-              automation={automation}
-              runResults={runResults}
-              runKey={runKey}
-              onSelectStep={setSelectedStepId}
-            />
+            <RunButton running={running} onRun={runNow} />
           </div>
         </div>
       </div>
 
-      <NodeDrawer data={selectedData} onClose={() => setSelectedStepId(null)} onRun={runNow} running={running} />
-      <RunsPanel
-        open={runsOpen}
-        onOpenChange={setRunsOpen}
-        runs={runs}
-        activeRunId={activeRun?.id ?? null}
-        onSelectRun={(id) => {
-          setActiveRunId(id);
-          setRunsOpen(false);
+      <NodeDrawer
+        data={selectedData}
+        onClose={() => setSelectedStepId(null)}
+        onRun={() => {
+          if (selectedStepId) runStep(selectedStepId);
         }}
+        running={runningStepId === selectedStepId}
       />
     </SketchShell>
   );

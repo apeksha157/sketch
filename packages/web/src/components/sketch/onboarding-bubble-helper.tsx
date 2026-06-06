@@ -101,7 +101,7 @@ export function OnboardingBubbleHelper({
           )}
           style={{ width: BUBBLE_SIZE, height: BUBBLE_SIZE }}
         >
-          <img src="/logos/sketch-icon-lightmode.png" alt="" className="size-[26px]" draggable={false} />
+          <img src="/logos/sketch-icon-light.png" alt="" className="size-[26px]" draggable={false} />
           {/* Tiny progress badge — only relevant while setup is incomplete.
            * After setup, the bubble is purely a help affordance and shouldn't
            * carry a stale 5/5. */}

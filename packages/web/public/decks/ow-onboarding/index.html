@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sketch × Oliver Wyman — Onboarding</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=IBM+Plex+Mono:wght@300;400;500;600&family=Gloria+Hallelujah&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* site-accurate tokens (getsketch.ai) */
+    --ink: #040404;
+    --page: #f7f7f5;
+    --surface: #f4f4f2;
+    --surface-2: #f0f0ee;
+    --secondary: #5f5e5a;
+    --border: #d5d5d3;
+    --brand: #feed01;
+    /* dark theme (near-black, never brown) */
+    --dark-bg: #090909;
+    --dark-surface: #121212;
+    --dark-border: #252a37;
+    --dark-secondary: #a0a4ac;
+    /* 8pt spacing scale */
+    --s1: 8px; --s2: 16px; --s3: 24px; --s4: 32px; --s5: 48px; --s6: 64px; --s7: 96px;
+    --margin: 64px;
+
+    --sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --hand: "Gloria Hallelujah", cursive;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #2a2a28;
+    font-family: var(--sans);
+    display: flex; flex-direction: column; align-items: center;
+    gap: var(--s4); padding: var(--s5) 0 var(--s7);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .slide {
+    position: relative;
+    width: 1280px; height: 720px;
+    background: var(--page);
+    color: var(--ink);
+    overflow: hidden;
+    box-shadow: 0 18px 60px rgba(0,0,0,.45);
+    padding: var(--margin);
+    display: flex; flex-direction: column;
+  }
+
+  /* ---------- shared type ---------- */
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 13px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--secondary);
+  }
+  .title {
+    font-size: 44px; font-weight: 700; letter-spacing: -.018em; line-height: 1.07;
+    margin-top: var(--s3); max-width: 20ch;
+  }
+  .title.dense { font-size: 34px; max-width: 34ch; }
+  .lede {
+    font-size: 19px; font-weight: 400; line-height: 1.5; color: var(--secondary);
+    max-width: 58ch; margin-top: var(--s3);
+  }
+  .body { font-size: 14px; line-height: 1.6; color: var(--secondary); }
+  .block-label { font-size: 14px; font-weight: 600; color: var(--ink); }
+
+  .footer {
+    position: absolute; left: var(--margin); right: var(--margin); bottom: var(--s4);
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: var(--mono); font-size: 11px; letter-spacing: .06em; color: var(--secondary);
+  }
+  .wordmark { height: 24px; width: auto; display: block; }
+
+  /* ---------- hand-drawn marks (imperfect, off-register) ---------- */
+  .u-mark { position: relative; display: inline-block; white-space: nowrap; }
+  .u-mark > svg {
+    position: absolute; left: -1%; bottom: -.34em; width: 102%; height: .4em;
+    overflow: visible; transform: rotate(-.8deg);
+  }
+  .circle-mark { position: relative; display: inline-block; white-space: nowrap; }
+  .circle-mark > svg {
+    position: absolute; left: -14px; top: -9px;
+    width: calc(100% + 28px); height: calc(100% + 20px);
+    overflow: visible; transform: rotate(-2deg);
+  }
+
+  /* image / asset placeholder */
+  .img-ph {
+    border: 1.5px dashed var(--border); border-radius: 14px; background: var(--surface-2);
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    color: var(--secondary); font-family: var(--mono); font-size: 11.5px; line-height: 1.5; padding: var(--s3);
+  }
+  .img-ph.on-dark { background: #141414; border-color: var(--dark-border); color: var(--dark-secondary); }
+  .img-ph b { color: var(--ink); font-weight: 600; display:block; margin-bottom: 4px; }
+  .img-ph.on-dark b { color: #fff; }
+
+  /* ===================================================================
+     SLIDE 1 — COVER  (editorial, asymmetric, dark)
+     =================================================================== */
+  .cover {
+    background: var(--dark-bg); color: #fff;
+    padding: 56px var(--margin) var(--margin);
+    display: grid; grid-template-rows: auto 1fr auto;
+  }
+  .cover-top { display: flex; justify-content: space-between; align-items: center; }
+  .cobrand { display: flex; align-items: center; gap: var(--s3); }
+  .cobrand .x { color: var(--dark-secondary); font-family: var(--mono); font-size: 17px; }
+  .ow-ph {
+    border: 1.5px dashed var(--dark-border); border-radius: 8px; padding: 8px 14px;
+    font-family: var(--mono); font-size: 10px; color: var(--dark-secondary); letter-spacing: .04em; line-height: 1.4; text-align: center;
+  }
+  .cover-top .conf { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dark-secondary); }
+
+  .cover-hero { align-self: end; display: flex; flex-direction: column; margin-bottom: var(--s6); }
+  .cover-hero .eyebrow { color: var(--dark-secondary); }
+  .cover-title {
+    font-size: 78px; font-weight: 800; letter-spacing: -.035em; line-height: .96;
+    text-transform: uppercase; margin-top: var(--s4); max-width: 15ch;
+  }
+  .cover-hero .hand {
+    font-family: var(--hand); font-size: 26px; color: #fff; margin-top: var(--s5);
+    transform: rotate(-.6deg);
+  }
+  .cover-hero .hand .ink-word { color: #fff; }
+
+  .cover-foot { align-self: end; display: flex; justify-content: space-between; align-items: flex-end; }
+  .cover-foot .ctx { font-size: 14px; color: var(--dark-secondary); max-width: 46ch; }
+
+  /* ===================================================================
+     SLIDE 5 — KNOWLEDGE GRAPH  (hero diagram, central node dominant)
+     =================================================================== */
+  .kg-head { max-width: 60%; }
+  .flow {
+    position: relative; display: grid;
+    grid-template-columns: 0.85fr 64px 1.3fr 64px 0.85fr;
+    align-items: center; margin-top: var(--s5); flex: 1;
+  }
+  .flow-col { display: flex; flex-direction: column; justify-content: center; gap: var(--s1); }
+  .col-label { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--secondary); margin-bottom: var(--s1); }
+  .node {
+    border: 1px solid var(--border); background: #fff; border-radius: 10px;
+    padding: 12px 16px; font-size: 13.5px; font-weight: 500; color: var(--ink);
+  }
+  .connector { position: relative; height: 100%; }
+  .connector svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .flow-center { display: flex; align-items: center; justify-content: center; }
+  .graph-core {
+    background: var(--dark-bg); color: #fff; border-radius: 18px;
+    padding: var(--s5) var(--s4); text-align: center; width: 100%;
+    box-shadow: 0 20px 44px rgba(0,0,0,.20);
+  }
+  .graph-core .gc-title { font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+  .graph-core .gc-mark { display: block; margin: 12px auto 14px; }
+  .graph-core .gc-sub { font-family: var(--mono); font-size: 12.5px; color: var(--dark-secondary); line-height: 1.8; }
+
+  /* ===================================================================
+     SLIDE 11 — PRICING  (grid + dark punchline callout w/ one mark)
+     =================================================================== */
+  .price-note { font-size: 13px; font-style: italic; color: var(--secondary); margin-top: var(--s2); max-width: 86ch; }
+  .price-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2) var(--s6); margin-top: var(--s4); align-content: start; }
+  .price-item { display: flex; gap: var(--s2); }
+  .price-item .num { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--secondary); flex: 0 0 auto; padding-top: 1px; }
+  .pi-label { font-size: 14px; font-weight: 600; color: var(--ink); }
+  .pi-price { font-family: var(--mono); font-size: 12.5px; color: var(--ink); margin: 3px 0 4px; }
+  .pi-desc { font-size: 12px; line-height: 1.5; color: var(--secondary); }
+  .price-callout {
+    margin-top: var(--s4); background: var(--dark-bg); color: #fff; border-radius: 14px;
+    padding: var(--s3) var(--s5); display: flex; align-items: center; gap: var(--s5);
+  }
+  .pc-key { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--dark-secondary); white-space: nowrap; }
+  .pc-val { font-size: 18px; font-weight: 400; line-height: 1.45; color: var(--dark-secondary); flex: 1; }
+  .pc-val b { font-weight: 600; color: #fff; }
+  .pc-page { font-family: var(--mono); font-size: 11px; color: var(--dark-secondary); align-self: flex-end; }
+</style>
+</head>
+<body>
+
+  <!-- ================= SLIDE 1 — COVER ================= -->
+  <section id="s1" class="slide cover">
+    <div class="cover-top">
+      <div class="cobrand">
+        <img class="wordmark" src="/logos/sketch-logo-light.png" alt="Sketch" style="height:26px" />
+        <span class="x">×</span>
+        <span class="ow-ph">▢ OLIVER WYMAN<br/>logo · white-on-dark</span>
+      </div>
+      <span class="conf">Confidential · June 2026</span>
+    </div>
+
+    <div class="cover-hero">
+      <div class="eyebrow">Sketch × Oliver Wyman · by Canvas Labs</div>
+      <h1 class="cover-title">AI Agents for your banking practice</h1>
+      <p class="hand">Not an assistant. A
+        <span class="circle-mark">teammate<svg viewBox="0 0 150 52" preserveAspectRatio="none"><path d="M24 9 C 58 1, 120 2, 134 22 C 142 36, 110 47, 64 47 C 26 47, 4 39, 10 22 C 13 12, 19 9, 36 7" fill="none" stroke="#feed01" stroke-width="2.4" stroke-linecap="round"/></svg></span>.
+      </p>
+    </div>
+
+    <div class="cover-foot">
+      <span class="ctx">For Oliver Wyman — AI Agents for Greenfield Banking</span>
+    </div>
+  </section>
+
+  <!-- ================= SLIDE 5 — KNOWLEDGE GRAPH ================= -->
+  <section id="s5" class="slide">
+    <div class="kg-head">
+      <div class="eyebrow">The differentiator</div>
+      <h2 class="title">Five sources. One graph. Agents that actually
+        <span class="u-mark">know your org<svg viewBox="0 0 260 14" preserveAspectRatio="none"><path d="M4 9 Q 70 1, 132 6 T 256 5" fill="none" stroke="#feed01" stroke-width="4" stroke-linecap="round"/></svg></span>.
+      </h2>
+    </div>
+
+    <div class="flow">
+      <div class="flow-col">
+        <div class="col-label">Sources</div>
+        <div class="node">Email &amp; Calendar</div>
+        <div class="node">Confluence / Docs</div>
+        <div class="node">CRM / Client data</div>
+        <div class="node">Meetings &amp; Transcripts</div>
+        <div class="node">Slack / Comms</div>
+      </div>
+
+      <div class="connector">
+        <svg viewBox="0 0 64 220" preserveAspectRatio="none">
+          <path d="M2 30 Q 44 64, 62 108" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 75 Q 40 90, 62 110" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 110 Q 36 110, 62 110" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 145 Q 40 130, 62 112" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 190 Q 44 156, 62 112" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <div class="flow-center">
+        <div class="graph-core">
+          <div class="gc-title">Knowledge Graph</div>
+          <svg class="gc-mark" width="52" height="10" viewBox="0 0 52 10"><path d="M3 6 Q 16 1, 26 4 T 49 4" fill="none" stroke="#feed01" stroke-width="3" stroke-linecap="round"/></svg>
+          <div class="gc-sub">People · Projects<br/>Decisions · History</div>
+        </div>
+      </div>
+
+      <div class="connector">
+        <svg viewBox="0 0 64 220" preserveAspectRatio="none">
+          <path d="M2 110 Q 24 76, 62 48" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 110 Q 30 96, 62 88" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 110 Q 30 124, 62 132" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+          <path d="M2 110 Q 24 144, 62 172" fill="none" stroke="#feed01" stroke-width="1.6" stroke-dasharray="3 6" stroke-linecap="round"/>
+        </svg>
+      </div>
+
+      <div class="flow-col">
+        <div class="col-label">Agents with context</div>
+        <div class="node">Research Agent</div>
+        <div class="node">Comms Agent</div>
+        <div class="node">PM / Timeline Agent</div>
+        <div class="node">Deliverable QA Agent</div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Sketch × Oliver Wyman · Confidential</span><span>05</span></div>
+  </section>
+
+  <!-- ================= SLIDE 11 — PRICING ================= -->
+  <section id="s11" class="slide">
+    <div class="eyebrow">Engagement &amp; commercials</div>
+    <h2 class="title dense">Simple to start.
+      <span class="u-mark">Scales cleanly<svg viewBox="0 0 210 14" preserveAspectRatio="none"><path d="M4 9 Q 55 1, 105 6 T 206 5" fill="none" stroke="#feed01" stroke-width="4" stroke-linecap="round"/></svg></span>
+      per project.
+    </h2>
+    <p class="price-note">Shared for alignment ahead of papering. Builds on terms agreed with Abhishek (Apr 25); adds senior-time and platform lines discussed Jun 5.</p>
+
+    <div class="price-grid">
+      <div class="price-item"><span class="num">01</span><div>
+        <div class="pi-label">Dedicated resource (retainer)</div>
+        <div class="pi-price">USD 5,000 / mo · ~20 days · ≈ $250/day</div>
+        <div class="pi-desc">Dedicated to your project; the wider team absorbs peaks and lean days. Each additional resource = +$5,000/mo.</div></div></div>
+      <div class="price-item"><span class="num">02</span><div>
+        <div class="pi-label">Ad-hoc / beyond-retainer</div>
+        <div class="pi-price">USD 40 / hour</div>
+        <div class="pi-desc">For work beyond retainer scope — slightly above the retainer-equivalent rate, so both sides keep workstreams structured.</div></div></div>
+      <div class="price-item"><span class="num">03</span><div>
+        <div class="pi-label">Senior time (Himanshu / Roopak, CTO-level)</div>
+        <div class="pi-price">USD 200 / hour</div>
+        <div class="pi-desc">Complex work, reviews, direction. Mar→Jun billed at $40/hr; from July, 20 hrs included with a 2-resource retainer.</div></div></div>
+      <div class="price-item"><span class="num">04</span><div>
+        <div class="pi-label">Sketch platform license</div>
+        <div class="pi-price">USD 5,000 / mo · +$10–15k one-time setup</div>
+        <div class="pi-desc">Knowledge graph, ~3,000 connectors, agent runtime, RBAC — air-gapped on your infra. Covers all agents &amp; teams.</div></div></div>
+      <div class="price-item"><span class="num">05</span><div>
+        <div class="pi-label">Pass-through costs</div>
+        <div class="pi-price">At cost</div>
+        <div class="pi-desc">LLM usage, subscriptions, and project tooling billed transparently.</div></div></div>
+      <div class="price-item"><span class="num">06</span><div>
+        <div class="pi-label">Visibility &amp; ways of working</div>
+        <div class="pi-price">Task-level hour logging</div>
+        <div class="pi-desc">Full sprint plan, exactly what time went where each cycle. Saurabh coordinates. Happy to adopt your vendor template.</div></div></div>
+    </div>
+
+    <div class="price-callout">
+      <span class="pc-key">Indicative entry<br/>1 project</span>
+      <span class="pc-val"><b><span class="u-mark">~USD 10,000/mo<svg viewBox="0 0 230 14" preserveAspectRatio="none"><path d="M4 9 Q 60 2, 115 6 T 226 5" fill="none" stroke="#feed01" stroke-width="3.4" stroke-linecap="round"/></svg></span></b> (1 resource + platform) + <b>$10–15k</b> one-time · +1 resource per added project, same platform.</span>
+      <span class="pc-page">11</span>
+    </div>
+  </section>
+
+</body>
+</html>

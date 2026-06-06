@@ -96,5 +96,9 @@ export interface StepNodeData {
   step: AutomationStep;
   content?: StepContent;
   run?: StepRunResult;
+  /** Whether the resolved graph gives this node an in/out edge — drives which
+   * handles render, so terminal nodes don't show a dangling connector dot. */
+  hasIncoming?: boolean;
+  hasOutgoing?: boolean;
   [key: string]: unknown;
 }

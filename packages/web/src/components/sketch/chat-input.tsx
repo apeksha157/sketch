@@ -33,9 +33,11 @@ export interface ChatInputProps {
   disabled?: boolean;
   disabledPlaceholder?: string;
   onSubmit?: (value: string) => void;
+  /** Extra classes for the textarea — e.g. to match a surface's smaller type scale. */
+  inputClassName?: string;
 }
 
-const MIN_HEIGHT = 76; // px — roughly 3 lines of text
+const MIN_HEIGHT = 56; // px — roughly 2 lines of text
 const MAX_HEIGHT = 220; // px — caps at ~9 lines, then internal scroll
 
 /** Auto-resize a textarea to fit its content, capped between MIN/MAX. */
@@ -52,6 +54,7 @@ export const ChatInput = forwardRef<HTMLInputElement, ChatInputProps>(function C
     disabled = false,
     disabledPlaceholder = "Resolve account issue to continue",
     onSubmit,
+    inputClassName,
   },
   ref,
 ) {
@@ -108,16 +111,17 @@ export const ChatInput = forwardRef<HTMLInputElement, ChatInputProps>(function C
     >
       <textarea
         ref={taRef}
-        rows={3}
+        rows={2}
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         placeholder={disabled ? disabledPlaceholder : placeholder}
         disabled={disabled}
         className={cn(
-          "block w-full resize-none bg-transparent px-[18px] pt-[16px] pb-[6px]",
-          "text-[15px] leading-[1.55] text-foreground placeholder:text-muted-foreground",
+          "block w-full resize-none bg-transparent px-[18px] pt-[14px] pb-[6px]",
+          "text-[14px] leading-[1.55] text-foreground placeholder:text-muted-foreground",
           "outline-none disabled:cursor-not-allowed",
+          inputClassName,
         )}
         style={{ height: MIN_HEIGHT, maxHeight: MAX_HEIGHT }}
         aria-label="Message Sketch"
@@ -175,14 +179,17 @@ function SubmitButton({ disabled, empty, onClick }: { disabled: boolean; empty: 
       disabled={disabled || empty}
       aria-label="Send message"
       className={cn(
-        "flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full",
+        // Shares the rounded-square family with the attach/add buttons (just a
+        // touch more rounded + a hair larger) so the action row reads as one set
+        // — the brand fill, not a different silhouette, marks it as primary.
+        "flex h-[32px] w-[32px] shrink-0 items-center justify-center rounded-[10px]",
         "transition-all duration-200 ease-out cursor-pointer",
         // Active state — brand yellow with brown icon and a soft warm glow.
         // Idle state — muted, no glow, no shadow. The transition is the
         // affordance: it tells the user the form is "ready" the moment they
         // type anything.
         ready
-          ? "bg-brand-yellow text-brand-brown shadow-[0_4px_14px_-2px_rgba(254,237,1,0.45)] hover:scale-[1.04] active:scale-[0.97]"
+          ? "bg-brand-yellow text-brand-brown shadow-[0_3px_10px_-3px_rgba(254,237,1,0.5)] hover:scale-[1.04] active:scale-[0.97]"
           : "bg-muted text-muted-foreground/70 cursor-not-allowed",
       )}
     >

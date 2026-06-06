@@ -163,7 +163,7 @@ function CollapsedDock({
       aria-label="Expand chat with Sketch"
     >
       <div className="mx-auto flex w-full max-w-6xl items-center gap-[10px] px-[20px] py-[9px]">
-        <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[16px] w-[16px] shrink-0" />
+        <img src="/logos/sketch-icon-light.png" alt="" aria-hidden className="block h-[16px] w-[16px] shrink-0" />
         <span className="min-w-0 truncate text-[13px] font-medium text-foreground/85">{threadTitle}</span>
         {lastActivity && (
           <span
@@ -194,7 +194,7 @@ function DockHeader({ threadTitle, onCollapse }: { threadTitle: string; onCollap
   return (
     <div className="shrink-0 bg-foreground/[0.025]">
       <div className="mx-auto flex w-full max-w-6xl items-center gap-[10px] px-[20px] py-[9px]">
-        <img src="/logos/sketch-icon-lightmode.png" alt="" aria-hidden className="block h-[18px] w-[18px] shrink-0" />
+        <img src="/logos/sketch-icon-light.png" alt="" aria-hidden className="block h-[18px] w-[18px] shrink-0" />
         <h2 className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground/85 leading-tight">
           {threadTitle}
         </h2>

@@ -26,7 +26,7 @@ import { useCallback, useState } from "react";
 function SketchIcon({ size = 28, isDark = true }: { size?: number; isDark?: boolean }) {
   return (
     <img
-      src={isDark ? "/logos/sketch-icon-darkmode.png" : "/logos/sketch-icon-lightmode.png"}
+      src={isDark ? "/logos/sketch-icon-dark.png" : "/logos/sketch-icon-light.png"}
       alt=""
       width={size}
       height={size}

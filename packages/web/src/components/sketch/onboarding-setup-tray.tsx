@@ -171,7 +171,7 @@ export function OnboardingSetupTray({
               boxShadow: "0 1px 4px color-mix(in oklab, var(--brand-yellow) 35%, transparent)",
             }}
           >
-            <img src="/logos/sketch-icon-lightmode.png" alt="" className="size-[16px]" draggable={false} />
+            <img src="/logos/sketch-icon-light.png" alt="" className="size-[16px]" draggable={false} />
           </span>
           <span>Help</span>
         </button>

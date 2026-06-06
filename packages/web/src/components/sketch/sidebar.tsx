@@ -47,7 +47,7 @@ const MIDDLE_NAV: NavItemDef[] = [
   { label: "Channels", icon: ChannelsIcon, href: "/channels" },
   { label: "Integrations", icon: PuzzleIcon, href: "/integrations" },
   { label: "Skills", icon: SparklesIcon, href: "/skills" },
-  { label: "Scheduled tasks", icon: CalendarTimeIcon, href: "/scheduled-tasks" },
+  { label: "Scheduled tasks", icon: CalendarTimeIcon, href: "/scheduled-tasks/list" },
 ];
 
 const BOTTOM_NAV: NavItemDef[] = [{ label: "Team", icon: UsersIcon, href: "/team" }];
@@ -258,7 +258,7 @@ function BrandRow({
   orgName: string;
 }) {
   const { resolvedTheme } = useTheme();
-  const logoSrc = resolvedTheme === "dark" ? "/logos/sketch-icon-darkmode.png" : "/logos/sketch-icon-lightmode.png";
+  const logoSrc = resolvedTheme === "dark" ? "/logos/sketch-icon-dark.png" : "/logos/sketch-icon-light.png";
 
   return (
     <div className={cn("mb-3 flex items-center", collapsed ? "justify-center px-0" : "gap-[10px] px-[8px] py-[4px]")}>

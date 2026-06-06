@@ -23,13 +23,26 @@ interface SketchShellProps extends SketchSidebarProps {
   children: ReactNode;
   /** Optional extra classes on the main scroll container. */
   mainClassName?: string;
+  /**
+   * When true, the sidebar starts collapsed (thin rail) on this route, without
+   * overwriting the user's saved global preference. Used by space-constrained
+   * layouts like the builder so the canvas gets maximum width on entry; the
+   * user can still expand the rail manually.
+   */
+  defaultSidebarCollapsed?: boolean;
 }
 
-export function SketchShell({ banner, children, mainClassName, ...sidebarProps }: SketchShellProps) {
+export function SketchShell({
+  banner,
+  children,
+  mainClassName,
+  defaultSidebarCollapsed,
+  ...sidebarProps
+}: SketchShellProps) {
   const trialVisible = useTrialTickerVisible();
 
   return (
-    <SidebarStateProvider>
+    <SidebarStateProvider initialCollapsed={defaultSidebarCollapsed}>
       <div className="flex h-screen w-full bg-background text-foreground">
         <SketchSidebar {...sidebarProps} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">

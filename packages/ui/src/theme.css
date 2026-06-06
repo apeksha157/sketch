@@ -44,6 +44,8 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-brand-accent: var(--brand-accent);
+  --color-brand-yellow: var(--brand-yellow);
+  --color-brand-brown: var(--brand-brown);
 }
 
 :root {
@@ -84,6 +86,8 @@
   --sidebar-border: oklch(0.918 0.003 107.1);
   --sidebar-ring: oklch(0.489 0.103 103.3);
   --brand-accent: #feed01;
+  --brand-yellow: #feed01;
+  --brand-brown: #412402;
 }
 
 .dark {
@@ -123,4 +127,6 @@
   --sidebar-border: oklch(0.209 0 0);
   --sidebar-ring: oklch(0.93 0.196 104.3);
   --brand-accent: #feed01;
+  --brand-yellow: #feed01;
+  --brand-brown: #412402;
 }

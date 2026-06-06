@@ -26,10 +26,19 @@ function readInitial(): boolean {
 
 interface ProviderProps {
   children: ReactNode;
+  /**
+   * When set, the sidebar starts in this collapsed state on mount instead of
+   * reading the persisted preference — used by space-constrained routes (the
+   * builder) that should default to the thin rail. It is NOT written to
+   * storage, so the user's global preference is preserved for every other
+   * route, and a manual expand here stays a one-visit choice (re-entering the
+   * route collapses again).
+   */
+  initialCollapsed?: boolean;
 }
 
-export function SidebarStateProvider({ children }: ProviderProps) {
-  const [collapsed, setCollapsedState] = useState<boolean>(readInitial);
+export function SidebarStateProvider({ children, initialCollapsed }: ProviderProps) {
+  const [collapsed, setCollapsedState] = useState<boolean>(() => initialCollapsed ?? readInitial());
 
   const setCollapsed = useCallback((next: boolean) => {
     setCollapsedState(next);

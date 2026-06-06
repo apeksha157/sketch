@@ -13,6 +13,7 @@
  * pushing a related entity pushes a new id onto the stack; Back chip pops.
  */
 import { EntityShareDialog } from "@/components/entity-share-dialog";
+import { ResizableSheetContent, useDrawerWidth } from "@/components/side-drawer";
 import type { EntityDetail, EntityRelationEvidenceRow, EntityRelationView, EntityRelationsResponse } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, EntityChip, entityAccent, useEntityUi } from "@/lib/entity-ui";
@@ -26,7 +27,7 @@ import {
 } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
+import { Sheet, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { cn } from "@sketch/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
@@ -61,6 +62,9 @@ export function EntityDrawer() {
   const open = ui.stack.length > 0 && ui.mode === "drawer";
   const currentId = ui.stack[ui.stack.length - 1];
   const previousName = useDrawerPreviousName(ui.stack);
+  // A rich audit/provenance view — starts at the standard's wide end (720) but
+  // shares the same min/max + draggable resize as every other right drawer.
+  const { width, startResize } = useDrawerWidth(720);
 
   return (
     <Sheet
@@ -69,7 +73,7 @@ export function EntityDrawer() {
         if (!next) ui.closeAll();
       }}
     >
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-[720px]">
+      <ResizableSheetContent width={width} onResizeStart={startResize}>
         <SheetTitle className="sr-only">Entity drawer</SheetTitle>
         <SheetDescription className="sr-only">
           Provenance and audit view for the selected entity, with identity flags, summary, timeline, and relationships.
@@ -83,7 +87,7 @@ export function EntityDrawer() {
             onBack={ui.popEntity}
           />
         ) : null}
-      </SheetContent>
+      </ResizableSheetContent>
     </Sheet>
   );
 }

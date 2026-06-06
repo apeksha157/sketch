@@ -114,7 +114,7 @@ function AutomationChatPage() {
 
 function ChatHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
-    <div className="mx-auto flex w-full max-w-4xl shrink-0 items-center gap-[12px] px-10 py-[18px]">
+    <div className="mx-auto flex h-[48px] w-full max-w-4xl shrink-0 items-center gap-[12px] px-10">
       <button
         type="button"
         onClick={onBack}

@@ -8,7 +8,7 @@ import { useTheme } from "@sketch/ui";
  * - "light" variant: black icon, for use on light/yellow backgrounds
  */
 export function SketchIcon({ size = 20, variant = "dark" }: { size?: number; variant?: "dark" | "light" }) {
-  const src = variant === "light" ? "/logos/sketch-icon-lightmode.png" : "/logos/sketch-icon-darkmode.png";
+  const src = variant === "light" ? "/logos/sketch-icon-light.png" : "/logos/sketch-icon-dark.png";
   return (
     <img src={src} alt="" aria-hidden="true" width={size} height={size} style={{ display: "block", flexShrink: 0 }} />
   );

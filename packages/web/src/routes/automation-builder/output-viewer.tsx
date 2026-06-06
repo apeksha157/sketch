@@ -9,7 +9,6 @@
 import { BracketsCurlyIcon, CaretDownIcon, CaretRightIcon, CheckIcon, CodeIcon, CopyIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { useState } from "react";
-import { STATUS_COLOR } from "./node-meta";
 import type { StepRunResult } from "./types";
 
 // Theme-aware JSON syntax classes (work on light + dark surfaces).
@@ -230,7 +229,7 @@ function OutputViewer({ output }: { output: unknown }) {
   const [mode, setMode] = useState<"tree" | "raw">(parsed.json ? "tree" : "raw");
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-muted/40">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-muted/40">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="font-mono text-[11px] font-medium tracking-[0.06em] text-muted-foreground">OUTPUT</span>
         <div className="flex items-center gap-2">
@@ -249,7 +248,7 @@ function OutputViewer({ output }: { output: unknown }) {
         </div>
       </div>
 
-      <div className="max-h-[360px] overflow-auto p-3 font-mono text-[12px] leading-relaxed text-foreground">
+      <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[12px] leading-relaxed text-foreground">
         {parsed.json && mode === "tree" ? (
           <JsonTree data={parsed.value} />
         ) : (
@@ -263,29 +262,21 @@ function OutputViewer({ output }: { output: unknown }) {
 export function StepOutput({ run }: { run?: StepRunResult }) {
   if (!run) return <p className="text-sm text-muted-foreground">No run output yet.</p>;
 
-  const hasOutput = run.output != null && run.output !== "";
+  // Status + duration already live in the drawer header, so the Output tab shows
+  // just the result itself — the error, the data, or an empty state.
+  if (run.error) {
+    return (
+      <pre className="whitespace-pre-wrap rounded-lg border border-destructive/30 bg-destructive/5 p-3 font-mono text-xs leading-relaxed text-destructive">
+        {run.error}
+      </pre>
+    );
+  }
+
+  if (run.output != null && run.output !== "") return <OutputViewer output={run.output} />;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-3 text-sm">
-        <span className="flex items-center gap-1.5">
-          <span className="size-2 rounded-full" style={{ backgroundColor: STATUS_COLOR[run.status] }} />
-          {run.status}
-        </span>
-        {run.durationMs != null && <span className="text-muted-foreground">{run.durationMs} ms</span>}
-      </div>
-
-      {run.error ? (
-        <pre className="whitespace-pre-wrap rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-          {run.error}
-        </pre>
-      ) : hasOutput ? (
-        <OutputViewer output={run.output} />
-      ) : (
-        <div className="rounded-lg border border-border bg-muted/40 p-4">
-          <span className="text-xs text-muted-foreground">No output available yet. Run the node to see results.</span>
-        </div>
-      )}
+    <div className="rounded-lg border border-border bg-muted/40 p-4">
+      <span className="text-xs text-muted-foreground">No output available yet. Run the node to see results.</span>
     </div>
   );
 }

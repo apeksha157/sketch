@@ -57,6 +57,10 @@ import { homePaymentLapsedRoute } from "./routes/sketch/home-payment-lapsed";
 import { homeTrialExpiredRoute } from "./routes/sketch/home-trial-expired";
 import { homeWorkspacePausedRoute } from "./routes/sketch/home-workspace-paused";
 import { sketchRoute } from "./routes/sketch/route";
+import { scheduledTasksSketchRoute } from "./routes/sketch/scheduled-tasks-preview";
+import { taskRedesignARoute } from "./routes/sketch/task-redesign/direction-a-unified";
+import { taskRedesignBRoute } from "./routes/sketch/task-redesign/direction-b-split";
+import { taskRedesignCRoute } from "./routes/sketch/task-redesign/direction-c-console";
 import { skillsRoute } from "./routes/skills";
 import { teamRoute } from "./routes/team";
 import { usageRoute } from "./routes/usage";
@@ -130,6 +134,10 @@ const routeTree = rootRoute.addChildren([
     chatAutomationSidecarRoute,
     builderSidecarRoute,
     conversationsRoute,
+    scheduledTasksSketchRoute,
+    taskRedesignARoute,
+    taskRedesignBRoute,
+    taskRedesignCRoute,
   ]),
 ]);
 

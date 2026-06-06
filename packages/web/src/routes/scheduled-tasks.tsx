@@ -1,5 +1,5 @@
 import { type AutomationRunItem, type AutomationStepContentItem, type ScheduledTaskListItem, api } from "@/lib/api";
-import { useDashboardAuth } from "@/routes/dashboard";
+import type { AuthContext } from "@/routes/dashboard";
 import {
   CaretRightIcon,
   CheckCircleIcon,
@@ -40,7 +40,7 @@ import { Skeleton } from "@sketch/ui/components/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@sketch/ui/components/tooltip";
 import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, useRouteContext } from "@tanstack/react-router";
 import { type MouseEvent, useState } from "react";
 import { toast } from "sonner";
 import { dashboardRoute } from "./dashboard";
@@ -148,7 +148,8 @@ function getStepSummary(task: ScheduledTaskListItem): string | null {
 }
 
 export function ScheduledTasksPage() {
-  const auth = useDashboardAuth();
+  const routeContext = useRouteContext({ strict: false }) as { auth?: AuthContext };
+  const auth = routeContext.auth ?? { displayName: "User", displayIdentifier: "User" };
   const queryClient = useQueryClient();
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [deletingTask, setDeletingTask] = useState<ScheduledTaskListItem | null>(null);

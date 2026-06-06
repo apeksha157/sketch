@@ -36,7 +36,7 @@ export function SketchMessage({ children, streaming }: { children: ReactNode; st
   return (
     <div className="flex max-w-[78%] items-start gap-[12px]">
       <img
-        src="/logos/sketch-icon-lightmode.png"
+        src="/logos/sketch-icon-light.png"
         alt=""
         aria-label={streaming ? "Sketch is thinking" : "Sketch"}
         className={cn("mt-[2px] block h-[24px] w-[24px] shrink-0", streaming && "sketch-icon-thinking")}

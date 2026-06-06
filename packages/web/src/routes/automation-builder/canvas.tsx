@@ -6,29 +6,75 @@
  * Node status dots reflect `runResults` (the active run); pass a different run's
  * results + a changed `runKey` to re-render the graph against that run.
  */
-import { Background, BackgroundVariant, Controls, type Node, ReactFlow, ReactFlowProvider } from "@xyflow/react";
+import {
+  Background,
+  BackgroundVariant,
+  Controls,
+  type Node,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
+} from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useTheme } from "@sketch/ui/hooks/use-theme";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import "./flow.css";
 import { toFlowEdges, toFlowNodes } from "./layout";
 import { nodeTypes } from "./nodes";
 import type { Automation, StepNodeData, StepRunResult } from "./types";
 
+/**
+ * Drives React Flow's node selection from `selectedStepId` (the drawer's target)
+ * rather than letting React Flow own it. Without this, closing the drawer leaves
+ * the node stuck in its selected state — selection should mirror the drawer.
+ */
+function SelectionSync({ selectedStepId }: { selectedStepId: string | null }) {
+  const { setNodes } = useReactFlow();
+  useEffect(() => {
+    setNodes((nds) =>
+      nds.map((n) => {
+        const selected = n.id === selectedStepId;
+        return n.selected === selected ? n : { ...n, selected };
+      }),
+    );
+  }, [selectedStepId, setNodes]);
+  return null;
+}
+
+/**
+ * Updates node statuses in place during a live run (the gradual cascade), so the
+ * dots light up one-by-one without remounting the graph (which would reset pan /
+ * zoom). When `results` is null the baked run results stand.
+ */
+function RunResultsSync({ results }: { results: Record<string, StepRunResult> | null }) {
+  const { setNodes } = useReactFlow();
+  useEffect(() => {
+    if (!results) return;
+    setNodes((nds) =>
+      nds.map((n) => {
+        const next = results[n.id];
+        if (!next || n.data.run === next) return n;
+        return { ...n, data: { ...n.data, run: next } };
+      }),
+    );
+  }, [results, setNodes]);
+  return null;
+}
+
 export function AutomationCanvas({
   automation,
   runResults,
   runKey,
+  liveResults = null,
+  selectedStepId = null,
   onSelectStep,
 }: {
   automation: Automation;
   runResults?: Record<string, StepRunResult>;
   runKey?: string;
+  liveResults?: Record<string, StepRunResult> | null;
+  selectedStepId?: string | null;
   onSelectStep: (stepId: string | null) => void;
 }) {
-  const { resolvedTheme } = useTheme();
-  const dotColor = resolvedTheme === "dark" ? "#2a2f3a" : "#d8d8e0";
-
   const nodes = useMemo(() => toFlowNodes(automation, runResults), [automation, runResults]);
   const edges = useMemo(() => toFlowEdges(automation), [automation]);
 
@@ -49,7 +95,9 @@ export function AutomationCanvas({
           onNodeClick={(_, node: Node<StepNodeData>) => onSelectStep(node.id)}
           onPaneClick={() => onSelectStep(null)}
         >
-          <Background variant={BackgroundVariant.Dots} gap={16} size={2} color={dotColor} />
+          <SelectionSync selectedStepId={selectedStepId} />
+          <RunResultsSync results={liveResults} />
+          <Background variant={BackgroundVariant.Dots} gap={16} size={2} color="var(--border)" />
           <Controls showInteractive={false} />
         </ReactFlow>
       </ReactFlowProvider>

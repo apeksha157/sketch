@@ -104,7 +104,7 @@ function MiniSketchMessage({ children }: { children: ReactNode }) {
   return (
     <div className="flex max-w-[78%] items-start gap-[10px]">
       <img
-        src="/logos/sketch-icon-lightmode.png"
+        src="/logos/sketch-icon-light.png"
         alt=""
         aria-label="Sketch"
         className="mt-[1px] block h-[18px] w-[18px] shrink-0"

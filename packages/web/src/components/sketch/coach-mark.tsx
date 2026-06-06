@@ -449,7 +449,7 @@ function SketchAvatar({ floating, caret }: { floating: boolean; caret: TooltipPo
         )}
         style={{ width: AVATAR_SIZE, height: AVATAR_SIZE }}
       >
-        <img src="/logos/sketch-icon-lightmode.png" alt="" className="size-[18px]" />
+        <img src="/logos/sketch-icon-light.png" alt="" className="size-[18px]" />
       </div>
     );
   }
@@ -472,7 +472,7 @@ function SketchAvatar({ floating, caret }: { floating: boolean; caret: TooltipPo
         left: caret === "left" ? 18 : -8,
       }}
     >
-      <img src="/logos/sketch-icon-lightmode.png" alt="" className="size-[18px]" />
+      <img src="/logos/sketch-icon-light.png" alt="" className="size-[18px]" />
     </div>
   );
 }
