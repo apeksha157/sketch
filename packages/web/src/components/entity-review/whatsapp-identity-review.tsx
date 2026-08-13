@@ -32,25 +32,39 @@
 import { EntityPicker } from "@/components/entity-picker";
 import { EntityAvatar } from "@/lib/entity-ui";
 import { formatRelativeTime } from "@/routes/files/file-list";
-import { ArrowsLeftRightIcon, CheckIcon, UserFocusIcon, WhatsappLogoIcon, XIcon } from "@phosphor-icons/react";
+import {
+  ArrowsLeftRightIcon,
+  CheckIcon,
+  PhoneIcon,
+  UserFocusIcon,
+  WhatsappLogoIcon,
+  XIcon,
+} from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@sketch/ui/components/dialog";
-import { Input } from "@sketch/ui/components/input";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
 import { cn } from "@sketch/ui/lib/utils";
 import { useState } from "react";
 import { toast } from "sonner";
 import { EntryList, SectionLabel } from "../entity-drawer/drawer-kit";
+import {
+  type ContactKind,
+  type ContactMatch,
+  ContactPointsEditor,
+  type ContactRow,
+  contactRows,
+  contactValues,
+} from "./contact-points-editor";
 
-/** One WhatsApp group the contact has been seen in, with a recent excerpt to help place them. */
+/** One WhatsApp group the contact has been seen in, with recent excerpts to help place them. */
 export interface WhatsAppGroupSighting {
   groupJid: string;
   groupName: string;
   messageCount: number;
   lastMessageAt: string;
-  /** A recent message excerpt shown to the admin to aid identification. Not persisted/logged. */
-  snippet: string | null;
+  /** A few recent message excerpts (most recent first) shown to aid identification. Backend caps the count. */
+  snippets: string[];
 }
 
 /** Our best guess at who this identity belongs to — an existing entity (merge target) or just a name. */
@@ -97,21 +111,28 @@ export const WHATSAPP_IDENTITY_MOCK: WhatsAppIdentityReviewItem[] = [
         groupName: "Pfizer RFP",
         messageCount: 42,
         lastMessageAt: "2026-08-11T14:00:00Z",
-        snippet: "I'll send the revised pricing by EOD — looping in Sanaa for the Thursday call.",
+        snippets: [
+          "I'll send the revised pricing by EOD — looping in Sanaa for the Thursday call.",
+          "Can we push the review to 3pm? It clashes with the Pfizer standup.",
+          "Final deck is uploaded — the numbers we agreed on are on slide 12.",
+        ],
       },
       {
         groupJid: "g2",
         groupName: "Deal Room – APAC",
         messageCount: 12,
         lastMessageAt: "2026-08-08T10:00:00Z",
-        snippet: "Confirmed, our team can support the Q3 rollout in Mumbai.",
+        snippets: [
+          "Confirmed, our team can support the Q3 rollout in Mumbai.",
+          "Legal cleared the MSA this morning — good to countersign.",
+        ],
       },
       {
         groupJid: "g3",
         groupName: "Founders ⚡",
         messageCount: 3,
         lastMessageAt: "2026-07-24T18:00:00Z",
-        snippet: "Great meeting you all at the summit 🙏",
+        snippets: ["Great meeting you all at the summit 🙏", "Let's grab coffee next week — I'm in town till Friday."],
       },
     ],
   },
@@ -129,7 +150,10 @@ export const WHATSAPP_IDENTITY_MOCK: WhatsAppIdentityReviewItem[] = [
         groupName: "Oliver Wyman × Canvas",
         messageCount: 8,
         lastMessageAt: "2026-08-12T13:00:00Z",
-        snippet: "Sharing the deck now — let me know if the numbers on slide 6 look right.",
+        snippets: [
+          "Sharing the deck now — let me know if the numbers on slide 6 look right.",
+          "Thanks for the intro — we'll circle back with our POV by Monday.",
+        ],
       },
     ],
   },
@@ -152,18 +176,42 @@ export const WHATSAPP_IDENTITY_MOCK: WhatsAppIdentityReviewItem[] = [
         groupName: "Redseer diligence",
         messageCount: 19,
         lastMessageAt: "2026-08-13T08:00:00Z",
-        snippet: "The cohort data is in the shared folder — pulling churn next.",
+        snippets: [
+          "The cohort data is in the shared folder — pulling churn next.",
+          "Retention looks stronger than the last cut — I'll annotate the deltas.",
+        ],
       },
       {
         groupJid: "g6",
         groupName: "Sketch WhatsApp test",
         messageCount: 33,
         lastMessageAt: "2026-08-13T06:00:00Z",
-        snippet: "Testing — does the bot pick this up?",
+        snippets: ["Testing — does the bot pick this up?", "Second test, adding a reaction now."],
       },
     ],
   },
 ];
+
+/**
+ * Prototype stand-in for backend duplicate detection: a contact-point lookup
+ * keyed by value. When an admin enters a phone/email that already belongs to
+ * another entity, the drawer offers to merge into it instead of minting a second
+ * record — the "two entities that share a contact point are the same person"
+ * concept. The backend replaces this with a real search over existing contact
+ * points. Seeded so `wa-2`'s pre-filled number already resolves to a person.
+ */
+const KNOWN_CONTACT_POINTS: Array<{ kind: ContactKind; value: string; entityId: string; name: string }> = [
+  { kind: "phone", value: "+44 7700 900412", entityId: "person-nadia", name: "Nadia Rahman" },
+  { kind: "email", value: "nadia.rahman@owl.com", entityId: "person-nadia", name: "Nadia Rahman" },
+];
+
+const normalizeContactPoint = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+
+function findContactMatch(kind: ContactKind, value: string): ContactMatch | null {
+  const needle = normalizeContactPoint(value);
+  const hit = KNOWN_CONTACT_POINTS.find((cp) => cp.kind === kind && normalizeContactPoint(cp.value) === needle);
+  return hit ? { entityId: hit.entityId, name: hit.name } : null;
+}
 
 /**
  * Prototype data source. Only surfaces on person-scoped queues (WhatsApp
@@ -220,7 +268,7 @@ function IdentityAvatar({ item, size }: { item: WhatsAppIdentityReviewItem; size
 
 function GroupChip({ name }: { name: string }) {
   return (
-    <span className="inline-flex max-w-[12rem] items-center truncate rounded-full border border-border bg-background/40 px-2 py-0.5 text-[10.5px] text-foreground/80">
+    <span className="inline-flex max-w-[12rem] items-center truncate rounded-full border border-border bg-background/40 px-2 py-0.5 text-[10.5px] text-foreground/80 transition-colors group-hover:border-foreground/20 group-hover:bg-background/80">
       <span className="truncate">{name}</span>
     </span>
   );
@@ -252,7 +300,7 @@ export function WhatsAppIdentityRow({
 
   return (
     <div className="border-b border-border/60 last:border-b-0" data-testid={`wa-identity-row-${item.id}`}>
-      <div className="flex w-full items-start transition-colors hover:bg-foreground/10">
+      <div className="group flex w-full items-start transition-colors hover:bg-foreground/10">
         <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-2 text-left">
           <div className="flex w-full items-center gap-2">
             <IdentityAvatar item={item} size="sm" />
@@ -271,16 +319,20 @@ export function WhatsAppIdentityRow({
               size={13}
               weight="fill"
               aria-label="WhatsApp"
-              className="shrink-0 text-muted-foreground"
+              className="shrink-0 text-muted-foreground transition-all duration-200 group-hover:scale-110 group-hover:text-[#25D366]"
             />
             {shownGroups.map((group) => (
               <GroupChip key={group.groupJid} name={group.groupName} />
             ))}
             {moreGroups > 0 ? <span className="text-[10.5px] text-muted-foreground">+{moreGroups} more</span> : null}
             {item.phoneE164 ? (
-              <span className="ml-1 font-mono text-[10px] tracking-tight text-muted-foreground/70">
-                {item.phoneE164}
-              </span>
+              <>
+                <span className="h-3 w-px shrink-0 bg-border" aria-hidden="true" />
+                <PhoneIcon size={13} weight="fill" aria-label="Phone" className="shrink-0 text-muted-foreground" />
+                <span className="inline-flex shrink-0 items-center rounded-full border border-border bg-background/40 px-2 py-0.5 font-mono text-[10px] tracking-tight text-muted-foreground">
+                  {item.phoneE164}
+                </span>
+              </>
             ) : null}
           </div>
         </button>
@@ -358,23 +410,23 @@ function WhatsAppIdentityBody({
   onResolve: (message: string) => void;
 }) {
   const [name, setName] = useState(item.suggestion?.name ?? "");
-  const [phone, setPhone] = useState(item.phoneE164 ?? "");
-  const [email, setEmail] = useState("");
+  const [phones, setPhones] = useState<ContactRow[]>(() => contactRows([item.phoneE164 ?? ""]));
+  const [emails, setEmails] = useState<ContactRow[]>(() => contactRows([]));
   const [mergeOpen, setMergeOpen] = useState(false);
   const trimmedName = name.trim();
   const initialName = (item.suggestion?.name ?? "").trim();
   const initialPhone = (item.phoneE164 ?? "").trim();
-  const dirty = trimmedName !== initialName || phone.trim() !== initialPhone || email.trim().length > 0;
-  const canSave = trimmedName.length > 0 && dirty;
+  const phoneValues = contactValues(phones);
+  const emailValues = contactValues(emails);
+  const hasPhone = phoneValues.length > 0;
+  const dirty = trimmedName !== initialName || phoneValues.join("|") !== initialPhone || emailValues.length > 0;
+  const canSave = trimmedName.length > 0 && hasPhone && dirty;
   const hasGuess = item.suggestion !== null;
   const showSuggestionConfirm = hasGuess && !dirty;
   const confirmSuggestion = () => {
     onResolve(item.suggestion?.entityId ? `Merged into ${item.suggestion?.name}` : `Saved ${item.suggestion?.name}`);
   };
   const accent = "#f59e0b";
-  const helper = item.suggestion
-    ? "We've guessed a name below — confirm it, or merge them into someone you already know."
-    : "Name this contact from the groups below, or merge them into someone you already know.";
 
   return (
     <>
@@ -385,12 +437,34 @@ function WhatsAppIdentityBody({
         <div className="flex items-start gap-3">
           <IdentityAvatar item={item} size="lg" />
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-1.5">
+            <h2
+              className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5"
+              data-testid="wa-identity-display-name"
+            >
+              <span
+                className={cn(
+                  "min-w-0 max-w-full truncate font-serif text-[20px] leading-tight",
+                  trimmedName.length === 0
+                    ? "text-muted-foreground/50"
+                    : showSuggestionConfirm
+                      ? "text-foreground/85"
+                      : "text-foreground",
+                )}
+              >
+                {trimmedName.length > 0 ? name : "Unidentified contact"}
+              </span>
+              {showSuggestionConfirm ? (
+                <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                  ({item.suggestion?.confidence === "likely" ? "Likely" : "Possibly"})
+                </span>
+              ) : null}
+            </h2>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
                 Person
               </Badge>
               <Badge variant="outline" className="gap-1 text-[10px] uppercase tracking-wider">
-                <WhatsappLogoIcon size={10} weight="fill" />
+                <WhatsappLogoIcon size={10} weight="fill" className="text-[#25D366]" />
                 WhatsApp
               </Badge>
               <Badge
@@ -400,60 +474,30 @@ function WhatsAppIdentityBody({
                 Unidentified
               </Badge>
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{helper}</p>
           </div>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-4">
-        <div className="-mx-6 flex flex-col gap-3.5 border-b bg-muted/40 px-6 pb-5 pt-4 dark:bg-muted/20">
-          <div className="flex flex-col gap-1.5">
-            <SectionLabel className="font-medium">Name</SectionLabel>
-            <Input
-              value={name}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setName(e.target.value)}
-              placeholder="Name this contact"
-              aria-label="Name"
-              className="h-10 bg-background font-serif text-[17px]"
-              data-testid="wa-identity-name-input"
-            />
-            {showSuggestionConfirm ? (
-              <button
-                type="button"
-                onClick={confirmSuggestion}
-                className="inline-flex items-center gap-1.5 self-start rounded-full border border-emerald-400/60 bg-emerald-50/60 px-2.5 py-1 text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-100/70 dark:border-emerald-600/50 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-950/50"
-                data-testid="wa-identity-confirm-suggestion"
-              >
-                <CheckIcon size={11} weight="bold" />
-                {item.suggestion?.entityId ? "This is them" : "Use this name"}
-              </button>
-            ) : null}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <SectionLabel className="font-medium">
-              Phone <span className="normal-case tracking-normal opacity-70">(optional)</span>
-            </SectionLabel>
-            <Input
-              value={phone}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)}
-              placeholder="+91 98765 43210"
-              inputMode="tel"
-              className="bg-background font-mono text-xs"
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <SectionLabel className="font-medium">
-              Email <span className="normal-case tracking-normal opacity-70">(optional)</span>
-            </SectionLabel>
-            <Input
-              value={email}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)}
-              placeholder="name@company.com"
-              inputMode="email"
-              className="bg-background font-mono text-xs"
-            />
-          </div>
-        </div>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
+        <ContactPointsEditor
+          name={name}
+          onNameChange={setName}
+          namePlaceholder="Name this contact"
+          nameConfirm={
+            showSuggestionConfirm
+              ? {
+                  onConfirm: confirmSuggestion,
+                  label: item.suggestion?.entityId ? "This is them" : "Use this name",
+                }
+              : null
+          }
+          phones={phones}
+          emails={emails}
+          onPhonesChange={setPhones}
+          onEmailsChange={setEmails}
+          findMatch={findContactMatch}
+          onMergeSuggested={(match) => onResolve(`Merged into ${match.name}`)}
+        />
 
         <div className="flex flex-col">
           <SectionLabel className="mb-1.5 font-medium">
@@ -461,21 +505,26 @@ function WhatsAppIdentityBody({
           </SectionLabel>
           <EntryList>
             {item.groups.map((group) => (
-              <li key={group.groupJid} className="px-3 py-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
-                    <WhatsappLogoIcon size={9} weight="fill" />
-                    Group
+              <li key={group.groupJid} className="px-3.5 py-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                    {group.groupName}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.groupName}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                  <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">
                     {group.messageCount} msgs · {formatRelativeTime(group.lastMessageAt)}
                   </span>
                 </div>
-                {group.snippet ? (
-                  <p className="mt-1.5 border-l-2 border-border pl-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-                    {group.snippet}
-                  </p>
+                {group.snippets.length > 0 ? (
+                  <div className="mt-2 flex flex-col gap-1.5 border-l border-border pl-3">
+                    {group.snippets.map((snippet) => (
+                      <p
+                        key={`${group.groupJid}:${snippet}`}
+                        className="text-[12px] leading-relaxed text-muted-foreground"
+                      >
+                        {snippet}
+                      </p>
+                    ))}
+                  </div>
                 ) : null}
               </li>
             ))}

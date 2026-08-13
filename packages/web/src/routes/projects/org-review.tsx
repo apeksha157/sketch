@@ -154,6 +154,9 @@ export function ReviewRowCompact({
  * empty. `null` when the tab has no reviews keeps the entity list flush to the
  * top.
  */
+/** One row in the capped band — a real review row or a WhatsApp identity — carrying the recency key it orders by. */
+type BandEntry = { recent: string; node: ReactNode };
+
 export function ReviewBandCapped({ types, onSeeAll }: { types: string[]; onSeeAll: () => void }) {
   const { data } = useQuery({
     queryKey: ["entity-review", "band-capped", types.join(",")],
@@ -169,40 +172,47 @@ export function ReviewBandCapped({ types, onSeeAll }: { types: string[]; onSeeAl
 
   if (rows.length === 0 && wa.items.length === 0) return null;
 
+  const byRecent = (a: BandEntry, b: BandEntry) => b.recent.localeCompare(a.recent);
+  const realEntries: BandEntry[] = rows
+    .map((row) => ({
+      recent: row.last_seen_at,
+      node: <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} />,
+    }))
+    .sort(byRecent)
+    .slice(0, 3);
+  const waEntries: BandEntry[] = wa.items.map((item) => ({
+    recent: item.lastSeenAt,
+    node: (
+      <WhatsAppIdentityRow
+        key={item.id}
+        item={item}
+        onOpen={() => setWaSelected(item.id)}
+        onResolve={(message) => wa.resolve(item.id, message)}
+      />
+    ),
+  }));
+  const entries = [...realEntries, ...waEntries].sort(byRecent);
+
   return (
     <section className="mb-6 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
-      <div className="flex items-baseline justify-between border-b border-amber-300/50 px-3 py-2 dark:border-amber-700/40">
+      <div className="flex items-center justify-between border-b border-amber-300/50 px-3 py-2 dark:border-amber-700/40">
         <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700 dark:text-amber-400">
           Needs your review · {realTotal + wa.items.length}
         </span>
-        <button
-          type="button"
-          onClick={onSeeAll}
-          className="font-mono text-[10px] uppercase tracking-[0.08em] text-amber-700/80 hover:text-amber-800 dark:text-amber-400/80 dark:hover:text-amber-300"
-        >
-          See all → Review
-        </button>
+        {realTotal > 0 ? (
+          <button
+            type="button"
+            onClick={onSeeAll}
+            className="group flex items-center gap-1 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-amber-700/70 transition-colors hover:text-amber-800 dark:text-amber-400/70 dark:hover:text-amber-300"
+          >
+            Open queue
+            <span aria-hidden="true" className="transition-transform group-hover:translate-x-0.5">
+              →
+            </span>
+          </button>
+        ) : null}
       </div>
-      {rows.slice(0, 3).map((row) => (
-        <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} />
-      ))}
-      {wa.items.map((item) => (
-        <WhatsAppIdentityRow
-          key={item.id}
-          item={item}
-          onOpen={() => setWaSelected(item.id)}
-          onResolve={(message) => wa.resolve(item.id, message)}
-        />
-      ))}
-      {realTotal > 3 ? (
-        <button
-          type="button"
-          onClick={onSeeAll}
-          className="w-full border-t border-amber-300/40 px-3 py-2 text-left font-mono text-[10px] uppercase tracking-[0.08em] text-amber-700/70 hover:text-amber-800 dark:border-amber-700/30 dark:text-amber-400/70"
-        >
-          {realTotal - 3} more in Review →
-        </button>
-      ) : null}
+      {entries.map((entry) => entry.node)}
       {sheets}
       <WhatsAppIdentityDrawer
         item={wa.items.find((item) => item.id === waSelected) ?? null}

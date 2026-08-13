@@ -1,4 +1,4 @@
-import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/entity-drawer/drawer-kit";
+import { EntryList, SectionLabel, SourceTag } from "@/components/entity-drawer/drawer-kit";
 /**
  * Shared entity-review band + reconcile sheet.
  *
@@ -48,7 +48,9 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ContactPointsEditor, type ContactRow, contactRows } from "./contact-points-editor";
 import { birthOrigin, entityEmail, humanSourceType } from "./entity-format";
+import { WHATSAPP_IDENTITY_REVIEW_ENABLED } from "./whatsapp-identity-review";
 
 /**
  * Self-contained review band scoped to a set of entity types. Fetches the
@@ -347,12 +349,22 @@ function BirthInspectBody({
 }) {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [name, setName] = useState(row.proposed_name);
+  const [phones, setPhones] = useState<ContactRow[]>(() => contactRows([""]));
+  const [emails, setEmails] = useState<ContactRow[]>(() => contactRows(row.proposed_email ? [row.proposed_email] : []));
   const mutations = useReviewMutations(row, onResolved);
   const origin = birthOrigin(row);
   const trimmedName = name.trim();
   const nameOverride = trimmedName && trimmedName !== row.proposed_name ? trimmedName : undefined;
   const identity = { id: row.id, name: row.proposed_name, sourceType: row.entity_type };
   const accent = entityAccent(identity);
+  /**
+   * Prototype: a person in review gets the same Name/Phone/Email identity form as
+   * the WhatsApp drawer, gated behind the same OFF flag. Phone/email are captured
+   * in the UI but NOT yet persisted — the confirm mutation only sends the name
+   * override — so Confirm stays name-gated (not phone-gated) until the backend
+   * accepts contact-points. Non-person births keep the name-only header.
+   */
+  const showContactForm = WHATSAPP_IDENTITY_REVIEW_ENABLED && row.entity_type === "person";
 
   return (
     <>
@@ -363,15 +375,24 @@ function BirthInspectBody({
         <div className="flex items-start gap-3">
           <EntityAvatar entity={identity} size="lg" />
           <div className="min-w-0 flex-1">
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={mutations.isPending}
-              aria-label="Name"
-              placeholder="Name"
-              className="w-full rounded-sm bg-transparent font-serif text-[20px] leading-tight outline-none placeholder:text-muted-foreground/40 focus:bg-muted/40"
-              data-testid="birth-name-input"
-            />
+            {showContactForm ? (
+              <h2
+                className="truncate font-serif text-[20px] leading-tight text-foreground"
+                data-testid="birth-display-name"
+              >
+                {trimmedName.length > 0 ? name : "Unnamed person"}
+              </h2>
+            ) : (
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={mutations.isPending}
+                aria-label="Name"
+                placeholder="Name"
+                className="w-full rounded-sm bg-transparent font-serif text-[20px] leading-tight outline-none placeholder:text-muted-foreground/40 focus:bg-muted/40"
+                data-testid="birth-name-input"
+              />
+            )}
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
                 {humanSourceType(row.entity_type)}
@@ -386,15 +407,27 @@ function BirthInspectBody({
       </div>
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
-        <SectionCard accent={accent} label="Summary">
-          <div className="space-y-1 text-sm leading-snug">
+        {showContactForm ? (
+          <ContactPointsEditor
+            name={name}
+            onNameChange={setName}
+            namePlaceholder="Full name"
+            phones={phones}
+            emails={emails}
+            onPhonesChange={setPhones}
+            onEmailsChange={setEmails}
+          />
+        ) : null}
+        <div className="flex flex-col">
+          <SectionLabel className="mb-1.5 font-medium">Summary</SectionLabel>
+          <div className="space-y-1 rounded-md border bg-background px-3.5 py-3 text-sm leading-snug">
             <p>
               New {humanSourceType(row.entity_type).toLowerCase()}
               {origin ? ` from ${origin.label}` : ""}.
             </p>
             <p className="text-muted-foreground">{inspectActivityLine(childTaskCount, evidence.length)}</p>
           </div>
-        </SectionCard>
+        </div>
 
         {childTaskCount > 0 ? (
           <div className="flex flex-col">
@@ -402,9 +435,9 @@ function BirthInspectBody({
             <EntryList>
               {childTasks.map((t) => (
                 <li key={t.indexedFileId}>
-                  <div className="flex w-full items-center gap-2 px-3 py-2">
+                  <div className="flex w-full items-center gap-2 px-3.5 py-3">
                     <SourceTag>{t.source}</SourceTag>
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{t.name}</span>
+                    <span className="min-w-0 flex-1 truncate text-sm font-semibold">{t.name}</span>
                     {t.providerUrl ? (
                       <a
                         href={t.providerUrl}
@@ -419,7 +452,7 @@ function BirthInspectBody({
                 </li>
               ))}
               {childTaskCount > childTasks.length ? (
-                <li className="px-3 py-2 text-[10px] text-muted-foreground">
+                <li className="px-3.5 py-2.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">
                   + {childTaskCount - childTasks.length} more
                 </li>
               ) : null}
@@ -440,14 +473,16 @@ function BirthInspectBody({
               <EntryList>
                 {evidence.map((e) => (
                   <li key={e.id}>
-                    <div className="flex w-full flex-col gap-1 px-3 py-2">
+                    <div className="flex w-full flex-col gap-1 px-3.5 py-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-2">
                           <SourceTag>{e.source}</SourceTag>
-                          <span className="truncate text-sm font-medium">{e.file.name}</span>
+                          <span className="truncate text-sm font-semibold">{e.file.name}</span>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
-                          <span className="text-[10px] text-muted-foreground">{formatRelativeTime(e.seen_at)}</span>
+                          <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground/60">
+                            {formatRelativeTime(e.seen_at)}
+                          </span>
                           {e.file.providerUrl ? (
                             <a
                               href={e.file.providerUrl}
@@ -461,7 +496,9 @@ function BirthInspectBody({
                         </div>
                       </div>
                       {e.file.sourcePath ? (
-                        <p className="line-clamp-2 text-[11px] text-muted-foreground">{e.file.sourcePath}</p>
+                        <p className="mt-1 line-clamp-2 border-l border-border pl-3 text-[12px] leading-relaxed text-muted-foreground">
+                          {e.file.sourcePath}
+                        </p>
                       ) : null}
                     </div>
                   </li>
