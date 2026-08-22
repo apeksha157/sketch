@@ -10,6 +10,7 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import type { Config } from "../config";
 import { createConnectorRepository } from "../db/repositories/connectors";
+import { createContainerRepository } from "../db/repositories/containers";
 import { createEntityRepository } from "../db/repositories/entities";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
@@ -162,6 +163,7 @@ export async function runConnectorSync(
       | "MICROSOFT_CLIENT_SECRET"
       | "MICROSOFT_TENANT"
       | "OPENROUTER_API_KEY"
+      | "CONTAINER_CLASSIFICATION_MODE"
     >
   >,
   options: RunConnectorSyncOptions = {},
@@ -308,6 +310,10 @@ export async function runConnectorSync(
 
     const seenSyncIdentityKeys = new Set<string>();
     const dirtyCrmRollupGroupIds = new Set<string>();
+    const containerRepo =
+      appConfig?.CONTAINER_CLASSIFICATION_MODE && appConfig.CONTAINER_CLASSIFICATION_MODE !== "off"
+        ? createContainerRepository(db)
+        : null;
 
     const existingHashes = await loadExistingContentHashes(db, connectorType, config.id);
     const resolveNameToEmail = await buildSyncNameResolver(db);
@@ -382,6 +388,26 @@ export async function runConnectorSync(
           raw: seed,
         });
       },
+      onContainerObservation: containerRepo
+        ? async (observation) => {
+            await containerRepo.observeContainer({
+              connectorConfigId: config.id,
+              connectorType,
+              externalId: observation.externalId,
+              levelKey: observation.levelKey,
+              name: observation.name,
+              pathIds: observation.pathIds,
+              pathNames: observation.pathNames,
+              parentExternalId: observation.parentExternalId,
+              itemCount: observation.itemCount,
+              firstItemAt: observation.firstItemAt,
+              lastItemAt: observation.lastItemAt,
+              providerArchived: observation.providerArchived,
+              providerTypedKind: observation.providerTypedKind,
+              hasDates: observation.hasDates,
+            });
+          }
+        : undefined,
       onEmailSuppressed: async (record) => {
         await recordSuppressedEmailRecord(db, {
           connectorConfigId: config.id,
@@ -677,6 +703,7 @@ export interface SyncSchedulerDeps {
       | "MICROSOFT_TENANT"
       | "ENCRYPTION_KEY"
       | "OPENROUTER_API_KEY"
+      | "CONTAINER_CLASSIFICATION_MODE"
     >
   >;
 }

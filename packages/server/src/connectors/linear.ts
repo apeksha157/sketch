@@ -16,7 +16,15 @@
 import { createHash } from "node:crypto";
 import pino, { type Logger } from "pino";
 import { qualifyContainerName } from "./container-name";
-import type { Connector, ConnectorCredentials, EntitySeedCallback, OAuthCredentials, SyncedItem } from "./types";
+import type {
+  Connector,
+  ConnectorCredentials,
+  ContainerObservation,
+  ContainerObservationCallback,
+  EntitySeedCallback,
+  OAuthCredentials,
+  SyncedItem,
+} from "./types";
 
 const LINEAR_API = "https://api.linear.app/graphql";
 const TOKEN_ENDPOINT = "https://api.linear.app/oauth/token";
@@ -64,7 +72,7 @@ interface LinearProject {
   lead: { name: string; displayName: string } | null;
   startDate: string | null;
   targetDate: string | null;
-  teams: { nodes: Array<{ name: string; key: string }> };
+  teams: { nodes: Array<{ id?: string; name: string; key: string }> };
   createdAt: string;
   updatedAt: string;
 }
@@ -351,6 +359,36 @@ function teamToSyncedItem(team: LinearTeam): SyncedItem {
   };
 }
 
+export function linearTeamContainerObservation(team: { id: string; name: string }): ContainerObservation {
+  return {
+    externalId: team.id,
+    levelKey: "team",
+    name: team.name,
+    pathIds: [],
+    pathNames: [],
+    parentExternalId: null,
+    providerTypedKind: "team",
+  };
+}
+
+export function linearProjectContainerObservation(project: {
+  id: string;
+  name: string;
+  teams: { nodes: Array<{ id?: string; name: string }> };
+}): ContainerObservation {
+  const teamAncestors = project.teams.nodes.filter((team): team is { id: string; name: string } => !!team.id);
+  const singleParent = teamAncestors.length === 1 ? teamAncestors[0] : null;
+  return {
+    externalId: project.id,
+    levelKey: "project",
+    name: project.name,
+    pathIds: singleParent ? [singleParent.id] : [],
+    pathNames: singleParent ? [singleParent.name] : [],
+    parentExternalId: singleParent?.id ?? null,
+    providerTypedKind: null,
+  };
+}
+
 async function refreshLinearToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
   const response = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
@@ -434,7 +472,7 @@ query Projects($first: Int!, $after: String, $filter: ProjectFilter) {
 			lead { name displayName }
 			startDate
 			targetDate
-			teams { nodes { name key } }
+			teams { nodes { id name key } }
 			createdAt
 			updatedAt
 		}
@@ -522,14 +560,14 @@ export function createLinearConnector(): Connector {
       await linearRequest(query, {}, token, pino({ level: "silent" }));
     },
 
-    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed }) {
+    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed, onContainerObservation }) {
       const token = getAccessToken(credentials);
       const allowedTeams = (scopeConfig.teams as string[] | undefined) ?? [];
       const sinceDate = cursor ?? null;
 
       yield* syncIssues(token, sinceDate, allowedTeams, logger, linearRequest);
-      yield* syncTeams(token, allowedTeams, logger, linearRequest, onEntitySeed);
-      yield* syncProjects(token, sinceDate, logger, linearRequest, onEntitySeed);
+      yield* syncTeams(token, allowedTeams, logger, linearRequest, onEntitySeed, onContainerObservation);
+      yield* syncProjects(token, sinceDate, logger, linearRequest, onEntitySeed, onContainerObservation);
     },
 
     async getCursor({ currentCursor }) {
@@ -594,6 +632,7 @@ async function* syncProjects(
   logger: Logger,
   linearRequest: LinearRequestFn,
   onEntitySeed?: EntitySeedCallback,
+  onContainerObservation?: ContainerObservationCallback,
 ): AsyncGenerator<SyncedItem> {
   let afterCursor: string | null = null;
   let totalProjects = 0;
@@ -615,6 +654,7 @@ async function* syncProjects(
     }>(PROJECTS_QUERY, variables, token, logger);
 
     for (const project of data.projects.nodes) {
+      await onContainerObservation?.(linearProjectContainerObservation(project));
       yield projectToSyncedItem(project);
       if (onEntitySeed) {
         await emitLinearProjectSeed(project, onEntitySeed);
@@ -666,6 +706,7 @@ async function* syncTeams(
   logger: Logger,
   linearRequest: LinearRequestFn,
   onEntitySeed?: EntitySeedCallback,
+  onContainerObservation?: ContainerObservationCallback,
 ): AsyncGenerator<SyncedItem> {
   let afterCursor: string | null = null;
   let totalTeams = 0;
@@ -692,6 +733,7 @@ async function* syncTeams(
         team.members.nodes.push(...remaining);
       }
 
+      await onContainerObservation?.(linearTeamContainerObservation(team));
       if (onEntitySeed) {
         await onEntitySeed({
           name: team.name,
