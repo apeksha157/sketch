@@ -924,8 +924,15 @@ async function groupHasTrackerContainerCoSignal(db: Kysely<DB>, group: Candidate
     .select(["connector_config_id", "container_name", "proposed_target", "status"])
     .where("connector_config_id", "in", connectorIds)
     .execute();
+  const settledContainers = await db
+    .selectFrom("containers")
+    .select(["connector_config_id", "name", "classification"])
+    .where("connector_config_id", "in", connectorIds)
+    .where("classification", "is not", null)
+    .where("classification", "!=", "ignore")
+    .execute();
   const sourcePaths = fileRows.map((row) => row.source_path ?? "");
-  return classifications.some((classification) => {
+  const legacySignal = classifications.some((classification) => {
     if (classification.proposed_target === "ignore") return false;
     if (
       classification.status !== "proposed" &&
@@ -937,6 +944,14 @@ async function groupHasTrackerContainerCoSignal(db: Kysely<DB>, group: Candidate
     if (!groupVocabularyMatchesName(group, classification.container_name)) return false;
     return sourcePaths.some((path) => path.includes(classification.container_name));
   });
+  return (
+    legacySignal ||
+    settledContainers.some(
+      (container) =>
+        groupVocabularyMatchesName(group, container.name) &&
+        sourcePaths.some((path) => path.includes(container.name)),
+    )
+  );
 }
 
 /**

@@ -54,6 +54,7 @@ function serializeVerdict(row: GraphVerdictRow) {
     runId: row.run_id,
     action: row.action,
     subjectEntityId: row.subject_entity_id,
+    subjectContainerId: row.subject_container_id,
     subjectName: row.subject_name,
     subjectEntityType: row.subject_entity_type,
     targetEntityId: row.target_entity_id,

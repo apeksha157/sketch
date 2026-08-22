@@ -19,6 +19,7 @@ import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { inferAffiliationFromEmail } from "../entities/affiliations";
 import { sweepCoMentionContributesTo } from "../entities/co-mention-sweep";
+import { settleContainersFromProviderFacts } from "../entities/container-settlement";
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
@@ -543,6 +544,10 @@ export async function runConnectorSync(
         syncLogger,
         appConfig,
       });
+    }
+
+    if (appConfig?.CONTAINER_CLASSIFICATION_MODE && appConfig.CONTAINER_CLASSIFICATION_MODE !== "off") {
+      await settleContainersFromProviderFacts(db, config.id);
     }
 
     result.newCursor = await connector.getCursor({

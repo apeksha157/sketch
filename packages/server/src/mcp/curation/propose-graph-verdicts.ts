@@ -243,14 +243,17 @@ export async function handleProposeGraphVerdicts(
           return { ...row, runId: run.id };
         });
         const stored = await repo.storeVerdicts(verdictRows);
-        const results: ProposalResult[] = stored.rows.map((row, index) => ({
-          verdictId: stored.ids[index] ?? "",
-          action: row.action as CleanupAction,
-          subjectEntityId: row.subjectEntityId,
-          validationStatus: row.validationStatus,
-          validationReason: row.validationReason,
-          wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
-        }));
+        const results: ProposalResult[] = stored.rows.map((row, index) => {
+          if (!row.subjectEntityId) throw new Error("Entity verdict missing subject entity id.");
+          return {
+            verdictId: stored.ids[index] ?? "",
+            action: row.action as CleanupAction,
+            subjectEntityId: row.subjectEntityId,
+            validationStatus: row.validationStatus,
+            validationReason: row.validationReason,
+            wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
+          };
+        });
         return {
           runId: run.id,
           stored: stored.rows.filter((row) => row.status === "awaiting_human").length,
