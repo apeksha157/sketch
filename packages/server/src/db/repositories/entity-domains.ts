@@ -65,6 +65,15 @@ export interface UpsertWorksAtInput {
   validFrom?: string;
 }
 
+export interface UpsertMemberOfInput {
+  personEntityId: string;
+  teamEntityId: string;
+  confidence: RelationshipConfidence;
+  confidenceScore: number;
+  source: string;
+  validFrom?: string;
+}
+
 export interface UpsertDomainObservationInput {
   domain: string;
   proposedCompanyName: string;
@@ -89,9 +98,19 @@ export interface AddRelationshipEvidenceInput {
   chunkIndex?: number;
   note?: string | null;
   sourceFactId?: string | null;
+  evidenceKey?: string | null;
+}
+
+export interface CloseRelationshipWindowInput {
+  sourceEntityId: string;
+  targetEntityId: string;
+  relationshipType: EntityRelationshipType;
+  validFrom: string;
+  validTo: string;
 }
 
 export function relationshipSourceRank(source: string | null | undefined): number {
+  if (source === "derived_membership") return 3;
   if (source === "structural_assignee") return 3;
   if (source === "llm_extraction") return 2;
   if (source === "co_mention") return 1;
@@ -257,6 +276,7 @@ export function createEntityDomainsRepository(db: Kysely<DB>, opts?: { logger?: 
     const id = randomUUID();
     const incomingRank = relationshipSourceRank(input.source);
     const existingRank = sql<number>`CASE entity_relationships.source
+      WHEN 'derived_membership' THEN 3
       WHEN 'structural_assignee' THEN 3
       WHEN 'llm_extraction' THEN 2
       WHEN 'co_mention' THEN 1
@@ -480,12 +500,39 @@ export function createEntityDomainsRepository(db: Kysely<DB>, opts?: { logger?: 
       return relationshipId;
     },
 
+    async upsertMemberOf(input: UpsertMemberOfInput): Promise<string> {
+      const relationshipId = await upsertRelationship({
+        sourceEntityId: input.personEntityId,
+        targetEntityId: input.teamEntityId,
+        relationshipType: "member_of",
+        confidence: input.confidence,
+        confidenceScore: input.confidenceScore,
+        source: input.source,
+        validFrom: input.validFrom,
+      });
+      if (!relationshipId) throw new Error("member_of relationship unexpectedly skipped");
+      return relationshipId;
+    },
+
+    async closeRelationshipWindow(input: CloseRelationshipWindowInput): Promise<boolean> {
+      const result = await db
+        .updateTable("entity_relationships")
+        .set({ valid_to: input.validTo, updated_at: new Date().toISOString() })
+        .where("source_entity_id", "=", input.sourceEntityId)
+        .where("target_entity_id", "=", input.targetEntityId)
+        .where("relationship_type", "=", input.relationshipType)
+        .where("valid_from", "=", input.validFrom)
+        .where("valid_to", "is", null)
+        .executeTakeFirst();
+      return Number(result.numUpdatedRows ?? 0) > 0;
+    },
+
     async addEvidence(input: AddRelationshipEvidenceInput): Promise<void> {
       const chunkIndex = input.chunkIndex ?? -1;
       const note = input.note ?? null;
       const evidenceKey = input.sourceFactId
         ? `fact:${input.sourceFactId}`
-        : `note:${input.relationshipId}:${input.indexedFileId}:${chunkIndex}:${note ?? ""}`;
+        : (input.evidenceKey ?? `note:${input.relationshipId}:${input.indexedFileId}:${chunkIndex}:${note ?? ""}`);
       await db
         .insertInto("entity_relationship_evidence")
         .values({

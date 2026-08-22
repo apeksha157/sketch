@@ -20,6 +20,7 @@ import type { DB } from "../db/schema";
 import { inferAffiliationFromEmail } from "../entities/affiliations";
 import { sweepCoMentionContributesTo } from "../entities/co-mention-sweep";
 import { judgeUnclassifiedContainers } from "../entities/container-judge";
+import { deriveContainerMembership, proposeContainerMaturityReopens } from "../entities/container-membership";
 import { settleContainersFromProviderFacts } from "../entities/container-settlement";
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
@@ -605,6 +606,24 @@ export async function runConnectorSync(
           { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
           "Container judge failed after settlement",
         );
+      }
+      if (appConfig.CONTAINER_CLASSIFICATION_MODE === "active") {
+        try {
+          await deriveContainerMembership({ db, logger: syncLogger }, config.id);
+        } catch (err) {
+          syncLogger.warn(
+            { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
+            "Container membership derivation failed after judge",
+          );
+        }
+        try {
+          await proposeContainerMaturityReopens({ db, logger: syncLogger }, config.id);
+        } catch (err) {
+          syncLogger.warn(
+            { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
+            "Container maturity validation failed after membership derivation",
+          );
+        }
       }
     }
 
