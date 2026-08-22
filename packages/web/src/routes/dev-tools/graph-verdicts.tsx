@@ -18,6 +18,7 @@ const ACTION_LABELS: Record<string, string> = {
   merge_into: "merge into",
   nest_under: "nest under",
   archive: "archive",
+  classify_container: "classify",
 };
 
 const STATUS_TONES: Record<GraphVerdictStatus, string> = {
@@ -168,8 +169,9 @@ function RunVerdicts({ runId, onOpenVerdict }: { runId: string; onOpenVerdict: (
             {ACTION_LABELS[verdict.action] ?? verdict.action}
           </span>
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
-            {verdict.subjectName ?? verdict.subjectEntityId}
+            {verdict.subjectName ?? verdict.subjectEntityId ?? verdict.subjectContainerId}
             {verdict.targetEntityId ? ` → ${verdict.targetName ?? verdict.targetEntityId}` : ""}
+            {containerClassificationOf(verdict) ? ` → ${containerClassificationOf(verdict)}` : ""}
           </span>
           <span className={`shrink-0 font-mono text-[10px] uppercase ${STATUS_TONES[verdict.status]}`}>
             {verdict.status === "awaiting_human" ? "awaiting" : verdict.status}
@@ -249,7 +251,8 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
   const busy = approve.isPending || reject.isPending || apply.isPending || revert.isPending;
   const previewStale = previewQuery.isError && isStaleError(previewQuery.error);
   const actionStale = isStaleError(actionError);
-  const evidence = parseEvidence(verdict.evidence);
+  const evidence = verdict.action === "classify_container" ? null : parseEvidence(verdict.evidence);
+  const containerEvidence = verdict.action === "classify_container" ? parseContainerEvidence(verdict.evidence) : null;
   const wouldChange = previewQuery.data?.application.wouldChange ?? asCounts(verdict.wouldChange);
 
   return (
@@ -257,9 +260,16 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
       <dl className="space-y-1.5">
         <DetailRow
           label="Subject"
-          value={`${verdict.subjectName ?? verdict.subjectEntityId}`}
+          value={`${verdict.subjectName ?? verdict.subjectEntityId ?? verdict.subjectContainerId}`}
           mono={!verdict.subjectName}
         />
+        {containerEvidence ? (
+          <DetailRow
+            label="Proposed"
+            value={`${containerEvidence.classification}${containerEvidence.entityStatus === "historical" ? " (historical)" : ""}`}
+            mono
+          />
+        ) : null}
         {verdict.targetEntityId ? (
           <DetailRow
             label="Target"
@@ -284,6 +294,17 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
           {evidence.notes.map((note) => (
             <p key={note} className="mt-1 text-[12px] text-muted-foreground">
               {note}
+            </p>
+          ))}
+        </div>
+      ) : null}
+
+      {containerEvidence && containerEvidence.samples.length > 0 ? (
+        <div>
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sample items</h3>
+          {containerEvidence.samples.map((sample) => (
+            <p key={sample} className="mt-0.5 truncate text-[12px] text-muted-foreground">
+              {sample}
             </p>
           ))}
         </div>
@@ -389,4 +410,24 @@ function parseEvidence(raw: unknown): { fileIds: string[]; reviewIds: string[]; 
 function asCounts(raw: unknown): Record<string, number> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   return raw as Record<string, number>;
+}
+
+const CONTAINER_CLASSIFICATIONS = new Set(["team", "project", "time_box", "account", "ignore"]);
+
+function parseContainerEvidence(
+  raw: unknown,
+): { classification: string; entityStatus: string; samples: string[] } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as { classification?: unknown; entityStatus?: unknown; samples?: unknown };
+  if (typeof value.classification !== "string" || !CONTAINER_CLASSIFICATIONS.has(value.classification)) return null;
+  const entityStatus = value.entityStatus === "historical" ? "historical" : "active";
+  const samples = Array.isArray(value.samples)
+    ? value.samples.filter((item): item is string => typeof item === "string").slice(0, 12)
+    : [];
+  return { classification: value.classification, entityStatus, samples };
+}
+
+function containerClassificationOf(verdict: GraphVerdict): string | null {
+  if (verdict.action !== "classify_container") return null;
+  return parseContainerEvidence(verdict.evidence)?.classification ?? null;
 }

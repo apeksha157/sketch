@@ -171,4 +171,86 @@ describe("graph verdicts panel", () => {
     expect(screen.queryByText("entity_merges")).toBeNull();
     expect(screen.getByTestId("graph-verdict-apply")).toBeDisabled();
   });
+
+  it("renders a container classification verdict with samples and applies it after preview", async () => {
+    let status = "awaiting_human";
+    const decisions: string[] = [];
+    const containerVerdict = (currentStatus: string) =>
+      verdictFixture({
+        action: "classify_container",
+        subjectEntityId: null,
+        subjectContainerId: "cont-beetu",
+        subjectName: "Team Beetu",
+        subjectEntityType: "container_classification",
+        targetEntityId: null,
+        resolvedTargetEntityId: null,
+        targetName: null,
+        reason: "Folder holds a stable engineering pod",
+        evidence: {
+          classification: "team",
+          entityStatus: "active",
+          samples: ["Fix onboarding drop-off", "Sprint retro notes"],
+        },
+        wouldChange: { containers: 1, entities: 1 },
+        status: currentStatus,
+      });
+    server.use(
+      http.get("/api/graph-verdicts/runs", () =>
+        HttpResponse.json({ runs: [{ ...runFixture, source: "container-judge" }] }),
+      ),
+      http.get("/api/graph-verdicts/runs/run-1234abcd/verdicts", () =>
+        HttpResponse.json({ verdicts: [containerVerdict(status)] }),
+      ),
+      http.post("/api/graph-verdicts/gv-1/approval", () => {
+        status = "approved";
+        return HttpResponse.json({ verdict: containerVerdict(status) });
+      }),
+      http.post("/api/graph-verdicts/gv-1/application", async ({ request }) => {
+        const body = (await request.json()) as { dryRun?: boolean };
+        decisions.push(body.dryRun ? "dry-run" : "apply");
+        if (body.dryRun) {
+          return HttpResponse.json({
+            application: {
+              verdictId: "gv-1",
+              dryRun: true,
+              status,
+              ledgerRef: null,
+              wouldChange: { containers: 1, entities: 1 },
+              plan: null,
+            },
+          });
+        }
+        status = "applied";
+        return HttpResponse.json({
+          application: {
+            verdictId: "gv-1",
+            dryRun: false,
+            status: "applied",
+            ledgerRef: "entity:ent-new",
+            wouldChange: { containers: 1, entities: 1 },
+            plan: null,
+          },
+        });
+      }),
+    );
+
+    renderWithProviders(<GraphVerdicts />);
+    await userEvent.click(await screen.findByTestId("graph-verdict-run-row"));
+    const row = await screen.findByTestId("graph-verdict-row");
+    expect(row).toHaveTextContent("classify");
+    expect(row).toHaveTextContent("Team Beetu → team");
+    await userEvent.click(row);
+
+    await screen.findByText("Fix onboarding drop-off");
+    expect(screen.getByText("team")).toBeInTheDocument();
+    await userEvent.click(await screen.findByTestId("graph-verdict-approve"));
+
+    await userEvent.click(await screen.findByTestId("graph-verdict-row"));
+    const applyButton = await screen.findByTestId("graph-verdict-apply");
+    await waitFor(() => expect(decisions).toContain("dry-run"));
+    await screen.findByText("containers");
+    await waitFor(() => expect(applyButton).toBeEnabled());
+    await userEvent.click(applyButton);
+    await waitFor(() => expect(decisions).toContain("apply"));
+  });
 });
