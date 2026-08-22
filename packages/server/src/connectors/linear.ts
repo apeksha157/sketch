@@ -21,6 +21,7 @@ import type {
   ConnectorCredentials,
   ContainerObservation,
   ContainerObservationCallback,
+  ContainerTarget,
   EntitySeedCallback,
   OAuthCredentials,
   SyncedItem,
@@ -560,14 +561,30 @@ export function createLinearConnector(): Connector {
       await linearRequest(query, {}, token, pino({ level: "silent" }));
     },
 
-    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed, onContainerObservation }) {
+    async *sync({
+      credentials,
+      scopeConfig,
+      cursor,
+      logger,
+      onEntitySeed,
+      onContainerObservation,
+      containerTargetOverrides,
+    }) {
       const token = getAccessToken(credentials);
       const allowedTeams = (scopeConfig.teams as string[] | undefined) ?? [];
       const sinceDate = cursor ?? null;
 
       yield* syncIssues(token, sinceDate, allowedTeams, logger, linearRequest);
       yield* syncTeams(token, allowedTeams, logger, linearRequest, onEntitySeed, onContainerObservation);
-      yield* syncProjects(token, sinceDate, logger, linearRequest, onEntitySeed, onContainerObservation);
+      yield* syncProjects(
+        token,
+        sinceDate,
+        logger,
+        linearRequest,
+        onEntitySeed,
+        onContainerObservation,
+        containerTargetOverrides,
+      );
     },
 
     async getCursor({ currentCursor }) {
@@ -633,6 +650,7 @@ async function* syncProjects(
   linearRequest: LinearRequestFn,
   onEntitySeed?: EntitySeedCallback,
   onContainerObservation?: ContainerObservationCallback,
+  containerTargetOverrides?: Record<string, ContainerTarget>,
 ): AsyncGenerator<SyncedItem> {
   let afterCursor: string | null = null;
   let totalProjects = 0;
@@ -656,7 +674,7 @@ async function* syncProjects(
     for (const project of data.projects.nodes) {
       await onContainerObservation?.(linearProjectContainerObservation(project));
       yield projectToSyncedItem(project);
-      if (onEntitySeed) {
+      if (onEntitySeed && containerTargetOverrides?.[project.id] !== "ignore") {
         await emitLinearProjectSeed(project, onEntitySeed);
       }
       totalProjects++;

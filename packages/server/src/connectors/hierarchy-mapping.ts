@@ -4,9 +4,17 @@ import type { ContainerTarget, HierarchyLevelDeclaration, HierarchyTarget } from
 export type HierarchyMapping = Record<string, HierarchyTarget>;
 export type ContainerMapping = Record<string, ContainerTarget>;
 
+/**
+ * Classification overrides ride on a symbol key so they can never be introduced through
+ * stored scope JSON: JSON parsing cannot produce symbol keys, so overrides only exist when
+ * in-process code attaches them from the containers table behind the active-mode gate.
+ */
+export const classificationOverridesKey = Symbol("classificationOverrides");
+
 export interface HierarchyMappingConfig {
   levels: HierarchyMapping;
   containers: ContainerMapping;
+  [classificationOverridesKey]?: ContainerMapping;
 }
 
 export interface HierarchyNode {
@@ -43,6 +51,28 @@ const CHAIN_INDEX: Record<Exclude<HierarchyTarget, "ignore">, number> = {
   project: 1,
   sprint: 2,
 };
+
+/**
+ * Translates the applied container taxonomy into hierarchy targets. `account` is intentionally
+ * inert until the engagement/account track gives it a structural graph target.
+ */
+export function classificationToContainerTarget(
+  classification: string | null | undefined,
+): ContainerTarget | undefined {
+  switch (classification) {
+    case "team":
+      return "team";
+    case "project":
+      return "project";
+    case "time_box":
+      return "cycle";
+    case "account":
+    case "ignore":
+      return "ignore";
+    default:
+      return undefined;
+  }
+}
 
 function isHierarchyTarget(value: unknown): value is HierarchyTarget {
   return value === "team" || value === "project" || value === "sprint" || value === "ignore";
@@ -83,6 +113,11 @@ export function hasStoredHierarchyMapping(stored: unknown, levelKeys?: ReadonlyS
   });
 }
 
+/**
+ * Container target precedence: explicit stored `hierarchyMapping.containers` entry, then the
+ * symbol-keyed classification override read off the original mapping object (re-parsing would
+ * drop it), then the normalized level target.
+ */
 export function resolveContainerTarget(
   mapping: HierarchyMappingConfig | unknown,
   _levelKey: string,
@@ -97,6 +132,12 @@ export function resolveContainerTarget(
     const target = (config as HierarchyMappingConfig).containers[containerId];
     if (target) return target;
   }
+  const overrides =
+    mapping && typeof mapping === "object"
+      ? (mapping as HierarchyMappingConfig)[classificationOverridesKey]
+      : undefined;
+  const classificationTarget = overrides?.[containerId];
+  if (classificationTarget) return classificationTarget;
   if (levelTarget === "sprint") return "cycle";
   return levelTarget;
 }

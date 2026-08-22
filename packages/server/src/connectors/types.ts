@@ -568,6 +568,7 @@ export interface Connector {
     onEntitySeed?: EntitySeedCallback;
     onPersonSeed?: PersonEntitySeedCallback;
     onContainerObservation?: ContainerObservationCallback;
+    containerTargetOverrides?: Record<string, ContainerTarget>;
     onEmailSuppressed?: (record: SuppressedEmailRecord) => Promise<void>;
     onSourceItemRemoved?: (record: SourceItemRemovalRecord) => Promise<void>;
   }): AsyncGenerator<SyncedItem>;
