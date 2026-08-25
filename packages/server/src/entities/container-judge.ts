@@ -4,7 +4,7 @@ import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { readHierarchyMappingConfig } from "../connectors/hierarchy-mapping";
 import type { AgenticOptions, AgenticOutcome } from "../connectors/openrouter-generate";
 import { type StoreGraphVerdictInput, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
-import type { ConnectorConfigsTable, ContainersTable, DB, IndexedFilesTable } from "../db/schema";
+import type { ConnectorConfigsTable, ContainersTable, DB, GraphVerdictsTable, IndexedFilesTable } from "../db/schema";
 import {
   filesForContainer,
   parseJsonArray,
@@ -39,6 +39,7 @@ export interface ContainerJudgeResult {
 
 type ContainerRow = Selectable<ContainersTable>;
 type ConnectorConfigRow = Selectable<ConnectorConfigsTable>;
+type GraphVerdictRow = Selectable<GraphVerdictsTable>;
 type IndexedFileRow = Pick<
   Selectable<IndexedFilesTable>,
   | "provider_file_id"
@@ -155,17 +156,49 @@ function levelPriorFor(container: ContainerRow, connector: ConnectorConfigRow): 
   return mapping.levels[container.level_key] ?? null;
 }
 
-async function listActiveContainerVerdictIds(db: Kysely<DB>, containerIds: string[]): Promise<Set<string>> {
-  if (containerIds.length === 0) return new Set();
+/**
+ * Human rejection suppresses repeat judge prompts while the rejected verdict's
+ * evidence still matches the container shape. A rename, provider-kind change,
+ * archived flag change, or date-shape change produces a new fingerprint and
+ * reopens the container for classification.
+ */
+async function listDocketExcludedContainerVerdictIds(db: Kysely<DB>, containers: ContainerRow[]): Promise<Set<string>> {
+  if (containers.length === 0) return new Set();
+  const containersById = new Map(containers.map((container) => [container.id, container]));
   const rows = await db
     .selectFrom("graph_verdicts")
-    .select("subject_container_id")
+    .select(["subject_container_id", "status", "evidence_fingerprint", "created_at", "id"])
     .where("action", "=", "classify_container")
-    .where("status", "in", ["awaiting_human", "approved"])
     .where("superseded_at", "is", null)
-    .where("subject_container_id", "in", containerIds)
+    .where(
+      "subject_container_id",
+      "in",
+      containers.map((container) => container.id),
+    )
+    .orderBy("created_at", "desc")
+    .orderBy("id", "desc")
     .execute();
-  return new Set(rows.map((row) => row.subject_container_id).filter((id): id is string => typeof id === "string"));
+  const excluded = new Set<string>();
+  const latestByContainer = new Map<string, Pick<GraphVerdictRow, "status" | "evidence_fingerprint">>();
+  for (const row of rows) {
+    const containerId = row.subject_container_id;
+    if (!containerId) continue;
+    if (row.status === "awaiting_human" || row.status === "approved") {
+      excluded.add(containerId);
+    }
+    if (!latestByContainer.has(containerId)) {
+      latestByContainer.set(containerId, row);
+    }
+  }
+  for (const [containerId, verdict] of latestByContainer) {
+    if (verdict.status !== "rejected") continue;
+    const container = containersById.get(containerId);
+    if (!container) continue;
+    if (verdict.evidence_fingerprint === containerVerdictFingerprint({ action: "classify_container", container })) {
+      excluded.add(containerId);
+    }
+  }
+  return excluded;
 }
 
 async function loadConnector(db: Kysely<DB>, connectorConfigId: string): Promise<ConnectorConfigRow | null> {
@@ -187,11 +220,8 @@ async function loadUnclassifiedDocket(db: Kysely<DB>, connectorConfigId: string)
     .orderBy("parent_container_id", "asc")
     .orderBy("name", "asc")
     .execute();
-  const active = await listActiveContainerVerdictIds(
-    db,
-    rows.map((row) => row.id),
-  );
-  return rows.filter((row) => !active.has(row.id));
+  const excluded = await listDocketExcludedContainerVerdictIds(db, rows);
+  return rows.filter((row) => !excluded.has(row.id));
 }
 
 async function loadConnectorContainers(db: Kysely<DB>, connectorConfigId: string): Promise<ContainerRow[]> {

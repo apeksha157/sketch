@@ -58,6 +58,10 @@ function clickupTask(input: {
   };
 }
 
+function clickupMs(iso: string): string {
+  return String(Date.parse(iso));
+}
+
 function mockClickUpFetch(fixture: ClickUpFixture): ReturnType<typeof vi.spyOn> {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = new URL(String(input));
@@ -114,6 +118,16 @@ async function seedConnector(db: Kysely<DB>, connectorId: string, scopeConfig: R
 
 async function runClickUpSync(db: Kysely<DB>, connectorId: string) {
   return runConnectorSync(db, connectorId, createTestLogger(), undefined, { postSyncMode: "deferred" });
+}
+
+async function runClickUpSyncInShadowMode(db: Kysely<DB>, connectorId: string) {
+  return runConnectorSync(
+    db,
+    connectorId,
+    createTestLogger(),
+    { CONTAINER_CLASSIFICATION_MODE: "shadow" },
+    { postSyncMode: "deferred" },
+  );
 }
 
 describe("ClickUp container classification sync effects", () => {
@@ -217,6 +231,147 @@ describe("ClickUp container classification sync effects", () => {
       db.selectFrom("indexed_file_facts").select("id").where("fact_type", "=", "structural_task").execute(),
     ).resolves.toHaveLength(0);
     await expect(db.selectFrom("tasks").select("id").execute()).resolves.toHaveLength(0);
+  });
+
+  it("preserves trusted ClickUp list stats across incremental observations", async () => {
+    const providerList = { id: "list-provider-count", name: "Provider Count", task_count: 9 };
+    const countedList = { id: "list-counted", name: "Counted List" };
+    const fullTasksByList = {
+      "list-provider-count": [
+        clickupTask({
+          id: "provider-old",
+          name: "Provider old",
+          list: providerList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-06-01T00:00:00.000Z"),
+        }),
+        clickupTask({
+          id: "provider-middle",
+          name: "Provider middle",
+          list: providerList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-06-05T00:00:00.000Z"),
+        }),
+        clickupTask({
+          id: "provider-new",
+          name: "Provider new",
+          list: providerList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-06-10T00:00:00.000Z"),
+        }),
+      ],
+      "list-counted": [
+        clickupTask({
+          id: "counted-old",
+          name: "Counted old",
+          list: countedList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-07-01T00:00:00.000Z"),
+        }),
+        clickupTask({
+          id: "counted-new",
+          name: "Counted new",
+          list: countedList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-07-04T00:00:00.000Z"),
+        }),
+      ],
+    };
+    const incrementalTasksByList = {
+      "list-provider-count": [
+        clickupTask({
+          id: "provider-new",
+          name: "Provider new",
+          list: providerList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-08-20T00:00:00.000Z"),
+        }),
+      ],
+      "list-counted": [
+        clickupTask({
+          id: "counted-new",
+          name: "Counted new",
+          list: countedList,
+          spaceId: "space-ops",
+          createdAt: clickupMs("2026-08-21T00:00:00.000Z"),
+        }),
+      ],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      const path = url.pathname;
+      if (path === "/api/v2/team") {
+        return jsonResponse({ teams: [{ id: "workspace-habuild", name: "Habuild", members: [] }] });
+      }
+      if (path === "/api/v2/team/workspace-habuild/space") {
+        return jsonResponse({ spaces: [{ id: "space-ops", name: "Operations" }] });
+      }
+      if (path === "/api/v2/space/space-ops/folder") return jsonResponse({ folders: [] });
+      if (path === "/api/v2/space/space-ops/list") return jsonResponse({ lists: [providerList, countedList] });
+      if (path === "/api/v3/workspaces/workspace-habuild/docs") return jsonResponse({ docs: [] });
+      for (const listId of Object.keys(fullTasksByList)) {
+        if (path === `/api/v2/list/${listId}/task`) {
+          const tasks = url.searchParams.has("date_updated_gt")
+            ? incrementalTasksByList[listId as keyof typeof incrementalTasksByList]
+            : fullTasksByList[listId as keyof typeof fullTasksByList];
+          return jsonResponse({ tasks, last_page: true });
+        }
+      }
+      return new Response(JSON.stringify({ error: `unexpected path ${path}` }), { status: 404 });
+    });
+    const connector = await seedConnector(db, "connector-clickup-stats", { spaces: ["space-ops"] });
+
+    await runClickUpSyncInShadowMode(db, connector.id);
+
+    const providerAfterFull = await db
+      .selectFrom("containers")
+      .select(["item_count", "first_item_at", "last_item_at"])
+      .where("connector_config_id", "=", connector.id)
+      .where("external_id", "=", providerList.id)
+      .executeTakeFirstOrThrow();
+    const countedAfterFull = await db
+      .selectFrom("containers")
+      .select(["item_count", "first_item_at", "last_item_at"])
+      .where("connector_config_id", "=", connector.id)
+      .where("external_id", "=", countedList.id)
+      .executeTakeFirstOrThrow();
+    expect(providerAfterFull).toMatchObject({
+      item_count: 9,
+      first_item_at: "2026-06-01T00:00:00.000Z",
+      last_item_at: "2026-06-10T00:00:00.000Z",
+    });
+    expect(countedAfterFull).toMatchObject({
+      item_count: 2,
+      first_item_at: "2026-07-01T00:00:00.000Z",
+      last_item_at: "2026-07-04T00:00:00.000Z",
+    });
+
+    await createConnectorRepository(db).updateConfig(connector.id, {
+      syncCursor: "2026-08-01T00:00:00.000Z",
+    });
+    await runClickUpSyncInShadowMode(db, connector.id);
+
+    const rowsAfterIncremental = await db
+      .selectFrom("containers")
+      .select(["external_id", "item_count", "first_item_at", "last_item_at"])
+      .where("connector_config_id", "=", connector.id)
+      .where("external_id", "in", [providerList.id, countedList.id])
+      .orderBy("external_id", "asc")
+      .execute();
+    expect(rowsAfterIncremental).toEqual([
+      {
+        external_id: countedList.id,
+        item_count: 2,
+        first_item_at: "2026-07-01T00:00:00.000Z",
+        last_item_at: "2026-08-21T00:00:00.000Z",
+      },
+      {
+        external_id: providerList.id,
+        item_count: 9,
+        first_item_at: "2026-06-01T00:00:00.000Z",
+        last_item_at: "2026-08-20T00:00:00.000Z",
+      },
+    ]);
   });
 
   it("applies accepted container mappings on re-sync without a classifier call and keeps legacy levels compatible", async () => {

@@ -297,6 +297,12 @@ interface ObservedContainerStats {
   lastItemAt: string | null;
 }
 
+interface ListObservationTrustedStats {
+  itemCount?: number;
+  firstItemAt?: string | null;
+  lastItemAt?: string | null;
+}
+
 function emptyObservedContainerStats(): ObservedContainerStats {
   return { itemCount: 0, firstItemAt: null, lastItemAt: null };
 }
@@ -311,6 +317,27 @@ function observeItemInContainer(stats: ObservedContainerStats, firstAt: string |
   if (effectiveLastAt && (!stats.lastItemAt || effectiveLastAt > stats.lastItemAt)) {
     stats.lastItemAt = effectiveLastAt;
   }
+}
+
+/**
+ * Provider totals describe the whole list, fetched stats describe only the
+ * task page set from this sync pass. Count and first-item dates can fall back
+ * to fetched stats only on an unfiltered pass; last-item dates are safe to
+ * advance from any non-empty filtered page because incremental pages are newer
+ * than the cursor.
+ */
+function trustedListObservationStats(params: {
+  list: ClickUpList;
+  listStats: ObservedContainerStats;
+  taskFetchWasFiltered: boolean;
+}): ListObservationTrustedStats {
+  const providerItemCount = typeof params.list.task_count === "number" ? params.list.task_count : undefined;
+  const fetchedAnyTasks = params.listStats.itemCount > 0;
+  return {
+    itemCount: providerItemCount ?? (!params.taskFetchWasFiltered ? params.listStats.itemCount : undefined),
+    firstItemAt: !params.taskFetchWasFiltered ? params.listStats.firstItemAt : undefined,
+    lastItemAt: fetchedAnyTasks ? params.listStats.lastItemAt : undefined,
+  };
 }
 
 export function clickUpContainerObservation(params: {
@@ -786,7 +813,8 @@ export function createClickUpConnector(): Connector {
 
       // Incremental: convert cursor to Unix ms for date_updated_gt filter
       const sinceMs = cursor ? new Date(cursor).getTime() : undefined;
-      if (sinceMs) {
+      const taskFetchWasFiltered = !!sinceMs;
+      if (taskFetchWasFiltered) {
         logger.info({ cursor, sinceMs }, "Incremental sync — filtering tasks updated after cursor");
       }
 
@@ -1004,6 +1032,7 @@ export function createClickUpConnector(): Connector {
                 listStats,
               );
               if (onContainerObservation && listStats) {
+                const trustedStats = trustedListObservationStats({ list, listStats, taskFetchWasFiltered });
                 await onContainerObservation(
                   clickUpContainerObservation({
                     levelKey: "list",
@@ -1013,9 +1042,9 @@ export function createClickUpConnector(): Connector {
                       { id: space.id, name: space.name },
                       { id: folder.id, name: folder.name },
                     ],
-                    itemCount: listStats.itemCount,
-                    firstItemAt: listStats.firstItemAt,
-                    lastItemAt: listStats.lastItemAt,
+                    itemCount: trustedStats.itemCount,
+                    firstItemAt: trustedStats.firstItemAt,
+                    lastItemAt: trustedStats.lastItemAt,
                     hasDates: hasListDates(list),
                   }),
                 );
@@ -1076,6 +1105,7 @@ export function createClickUpConnector(): Connector {
               listStats,
             );
             if (onContainerObservation && listStats) {
+              const trustedStats = trustedListObservationStats({ list, listStats, taskFetchWasFiltered });
               await onContainerObservation(
                 clickUpContainerObservation({
                   levelKey: "list",
@@ -1084,9 +1114,9 @@ export function createClickUpConnector(): Connector {
                     { id: team.id, name: workspaceObservationName },
                     { id: space.id, name: space.name },
                   ],
-                  itemCount: listStats.itemCount,
-                  firstItemAt: listStats.firstItemAt,
-                  lastItemAt: listStats.lastItemAt,
+                  itemCount: trustedStats.itemCount,
+                  firstItemAt: trustedStats.firstItemAt,
+                  lastItemAt: trustedStats.lastItemAt,
                   hasDates: hasListDates(list),
                 }),
               );

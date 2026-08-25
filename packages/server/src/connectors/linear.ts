@@ -6,7 +6,8 @@
  *
  * Sync strategy:
  * - Full: paginate all issues, projects, and comments
- * - Incremental: filter by updatedAt >= lastSyncTimestamp
+ * - Incremental: filter issues by updatedAt >= lastSyncTimestamp
+ * - Projects are listed unfiltered so dormant project containers stay observed
  * - Issues stored with title, description, metadata (status, assignee, labels, etc.)
  * - Projects stored as documents with description content
  *
@@ -655,16 +656,15 @@ async function* syncProjects(
   let afterCursor: string | null = null;
   let totalProjects = 0;
 
-  const filter: Record<string, unknown> = {};
-  if (since) {
-    filter.updatedAt = { gte: since };
-  }
-
+  /**
+   * Project observations are intentionally unfiltered: dormant Linear projects
+   * are still live containers even when their document payload does not need
+   * re-indexing on an incremental sync.
+   */
   do {
     const variables: Record<string, unknown> = {
       first: PAGE_SIZE,
       after: afterCursor,
-      filter: Object.keys(filter).length > 0 ? filter : undefined,
     };
 
     const data = await linearRequest<{
@@ -673,9 +673,11 @@ async function* syncProjects(
 
     for (const project of data.projects.nodes) {
       await onContainerObservation?.(linearProjectContainerObservation(project));
-      yield projectToSyncedItem(project);
-      if (onEntitySeed && containerTargetOverrides?.[project.id] !== "ignore") {
-        await emitLinearProjectSeed(project, onEntitySeed);
+      if (!since || project.updatedAt >= since) {
+        yield projectToSyncedItem(project);
+        if (onEntitySeed && containerTargetOverrides?.[project.id] !== "ignore") {
+          await emitLinearProjectSeed(project, onEntitySeed);
+        }
       }
       totalProjects++;
     }
