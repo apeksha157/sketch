@@ -412,6 +412,46 @@ describe("executeAutomation agent steps", () => {
     expect(params.sendMessage).toHaveBeenCalledWith("sketch result");
   });
 
+  it("runs GitHub and Linear automation skills without legacy token environment variables", async () => {
+    const runAgent = vi.fn().mockResolvedValue({
+      pendingUploads: [],
+      trace: { finalText: "integration result" },
+      rawUsage: { toolCalls: [] },
+    });
+    const listAgentEnvForRuntime = vi.fn().mockResolvedValue({});
+    const params = makeParams({
+      runAgent,
+      listAgentEnvForRuntime,
+      loadIntegrationProvider: vi.fn().mockResolvedValue(makeBrokerProvider()),
+      task: makeTask({
+        steps: JSON.stringify([
+          { id: "trigger", type: "trigger", label: "Schedule", icon: "clock", position: { x: 0, y: 0 } },
+          {
+            id: "step1",
+            type: "agent",
+            label: "Review GitHub and Linear",
+            icon: "sketch-ai",
+            position: { x: 0, y: 100 },
+            agentMode: "sketch",
+            agentSkills: ["github", "linear"],
+          },
+        ]),
+      }),
+    });
+
+    const result = await executeAutomation(params as never);
+
+    expect(result.status).toBe("completed");
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSkillIds: ["github", "linear"],
+        currentUserId: "user-1",
+        contextType: "scheduled_task",
+        loadIntegrationProvider: params.loadIntegrationProvider,
+      }),
+    );
+  });
+
   it("executes a due one-time task without rejecting its schedule as stale", async () => {
     const runAgent = vi.fn().mockResolvedValue({
       pendingUploads: [],

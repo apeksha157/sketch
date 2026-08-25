@@ -127,13 +127,13 @@ function isSkillToolName(toolName: string): boolean {
   return toolName === "Skill" || toolName === "mcp__sketch__Skill";
 }
 
-function buildAgentChildEnv(
+export function buildAgentChildEnv(
   integrationEnv: Record<string, string>,
   agentEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...integrationEnv, ...agentEnv };
-  if (!agentEnv?.GH_TOKEN) env.GH_TOKEN = undefined;
-  if (!agentEnv?.LINEAR_API_KEY) env.LINEAR_API_KEY = undefined;
+  env.GH_TOKEN = undefined;
+  env.LINEAR_API_KEY = undefined;
   return env;
 }
 
@@ -918,6 +918,7 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
       params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
+      workspaceUserId: params.currentUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1361,6 +1362,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
       params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
+      workspaceUserId: params.currentUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,

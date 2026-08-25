@@ -23,6 +23,7 @@ import { createAutomationCapabilityRegistry } from "./automation/capabilities";
 import { AutomationLockSweeper } from "./automation/lock-service";
 import { isAutomationWebhookTrigger, parseAutomationTriggerConfig } from "./automation/webhook";
 import type { Config } from "./config";
+import { getCanvasCredentialPrivateKeyPem, hasCanvasCredentialImportConfig } from "./connectors/credential-providers";
 import {
   buildEnrichmentProviderConfig,
   createEnrichmentEmbeddingProvider,
@@ -777,15 +778,33 @@ export async function createServer(config: Config, options?: CreateServerOptions
    * an accidental HTTP call fails loudly rather than silently treating
    * skill-mode rows as unconfigured.
    */
+  let cachedIntegrationProvider: { key: string; provider: IntegrationProvider } | null = null;
   const getIntegrationStatus = async (): Promise<IntegrationStatus> => {
     const row = await mcpServersRepo.findIntegrationProvider();
-    if (!row || row.type == null) return { kind: "absent" };
+    if (!row || row.type == null) {
+      cachedIntegrationProvider = null;
+      return { kind: "absent" };
+    }
     try {
+      const cacheKey = `${row.id}\0${row.type}\0${row.api_url ?? ""}\0${row.credentials}`;
+      if (cachedIntegrationProvider?.key === cacheKey) {
+        return { kind: "ok", provider: cachedIntegrationProvider.provider };
+      }
+      const provider = createProvider(row.type, row.api_url ?? "", row.credentials, row.id, {
+        ...(hasCanvasCredentialImportConfig(config)
+          ? { credentialPrivateKeyPem: getCanvasCredentialPrivateKeyPem(config) }
+          : {}),
+        ...(config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID
+          ? { credentialPublicKeyId: config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID }
+          : {}),
+      });
+      cachedIntegrationProvider = { key: cacheKey, provider };
       return {
         kind: "ok",
-        provider: createProvider(row.type, row.api_url ?? "", row.credentials, row.id),
+        provider,
       };
     } catch (err) {
+      cachedIntegrationProvider = null;
       logger.error(
         { err, serverId: row.id, type: row.type, event: "integration_provider_load_failed" },
         "Failed to instantiate integration provider",

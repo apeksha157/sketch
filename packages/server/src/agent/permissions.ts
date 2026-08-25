@@ -210,7 +210,8 @@ export function createCanUseTool(
     if (toolName === "Skill" || toolName.endsWith("__Skill")) {
       const skillName = typeof input.skill === "string" ? input.skill.trim() : "";
       const requiredEnv = cliSkillRequiredEnv(skillName);
-      const unavailable = requiredEnv.some((name) => !options.agentEnv?.[name]);
+      const managedCanvasSkill = skillName.toLowerCase() === "github" || skillName.toLowerCase() === "linear";
+      const unavailable = !managedCanvasSkill && requiredEnv.some((name) => !options.agentEnv?.[name]);
       if (unavailable) {
         return {
           behavior: "deny",

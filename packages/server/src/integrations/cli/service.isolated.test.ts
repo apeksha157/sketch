@@ -110,7 +110,7 @@ describe("CLI integration service", () => {
       },
       { GH_TOKEN: "ghp_old" },
     );
-    expect(runtimeEnv).toEqual({ GH_TOKEN: "ghp_old" });
+    expect(runtimeEnv).toEqual({});
 
     await service.disconnect("owner", connection.id);
     expect(await db.selectFrom("cli_integration_connections").selectAll().execute()).toEqual([]);
@@ -142,7 +142,7 @@ describe("CLI integration service", () => {
       { currentUserId: "recipient", contextType: "dm", allowOrgSharedEnv: true },
       { LINEAR_API_KEY: "stale" },
     );
-    expect(runtimeEnv).toEqual({ LINEAR_API_KEY: "lin_old" });
+    expect(runtimeEnv).toEqual({});
 
     await service.updateLinearApiKey("owner", connection.id, "lin_new");
     expect(verifyLinearApiKeyMock).toHaveBeenLastCalledWith("lin_new");
@@ -186,7 +186,7 @@ describe("CLI integration service", () => {
         },
         { GH_TOKEN: "stale" },
       ),
-    ).resolves.toEqual({ GH_TOKEN: "ghp_shared" });
+    ).resolves.toEqual({});
     await service.disconnect("owner", connection.id);
   });
 
@@ -198,7 +198,7 @@ describe("CLI integration service", () => {
       { GH_TOKEN: "stale-value" },
     );
 
-    expect(runtimeEnv).toEqual({ GH_TOKEN: "ghp_org" });
+    expect(runtimeEnv).toEqual({});
     expect(await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm" })).toContainEqual({
       appId: "github",
       skillId: "github",

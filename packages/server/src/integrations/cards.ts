@@ -6,7 +6,7 @@ import {
   isCanvasBlockedCliComponentKey,
 } from "@sketch/shared";
 import type { WebChatIntegrationConnectionData } from "@sketch/shared";
-import type { IntegrationApp, IntegrationConnection, IntegrationProvider } from "./types";
+import type { IntegrationApp, IntegrationConnection, IntegrationProvider, IntegrationWorkspaceContext } from "./types";
 
 export interface IntegrationCardCollector {
   collect(card: WebChatIntegrationConnectionData): void;
@@ -742,7 +742,15 @@ export async function collectIntegrationCardsFromProgressEvents(params: {
   const provider =
     needsCanvas && userEmail && params.loadIntegrationProvider ? await params.loadIntegrationProvider() : null;
   const connections =
-    provider && userEmail ? await provider.listConnections(userEmail, params.userName ?? undefined) : [];
+    provider && userEmail
+      ? await provider.listConnections(
+          userEmail,
+          params.userName ?? undefined,
+          provider.providerId && params.currentUserId
+            ? ({ workspaceId: provider.providerId, userId: params.currentUserId } satisfies IntegrationWorkspaceContext)
+            : undefined,
+        )
+      : [];
 
   if (listConnected) {
     cards.push(...connectedIntegrationCards(connections));
@@ -801,7 +809,13 @@ export async function connectedAccountCardsForUser(params: {
   if (params.loadIntegrationProvider && params.userEmail) {
     const provider = await params.loadIntegrationProvider();
     if (provider) {
-      const connections = await provider.listConnections(params.userEmail, params.userName ?? undefined);
+      const connections = await provider.listConnections(
+        params.userEmail,
+        params.userName ?? undefined,
+        provider.providerId && params.currentUserId
+          ? { workspaceId: provider.providerId, userId: params.currentUserId }
+          : undefined,
+      );
       cards.push(...connectedIntegrationCards(connections, params.limit));
     }
   }

@@ -135,6 +135,17 @@ export class QuestionCollector {
   }
 }
 
+export type CanvasAccessTokenRequest = {
+  integration: "github" | "linear";
+  accountId?: string;
+  forceRefresh?: boolean;
+};
+
+export type CanvasAccessToken = {
+  accessToken: string;
+  expiresAt?: string;
+};
+
 export interface SketchMcpDeps {
   uploadCollector: UploadCollector;
   integrationConnectionCollector?: IntegrationConnectionCollector;
@@ -145,6 +156,7 @@ export interface SketchMcpDeps {
   workspaceDir: string;
   db?: Kysely<DB>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+  getCanvasAccessToken?: (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
   validateAgentSkills?: (
     ownerUserId: string,
     skillIds: string[],

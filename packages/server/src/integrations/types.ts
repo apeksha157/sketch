@@ -11,6 +11,11 @@ export type { IntegrationApp, IntegrationConnection, PageInfo };
 
 export type IntegrationUserOrgRole = "admin" | "member";
 
+export interface IntegrationWorkspaceContext {
+  workspaceId: string;
+  userId: string;
+}
+
 export interface BrokerSpec {
   /** Absolute path to the real CLI binary the broker will spawn. */
   cliPath: string;
@@ -26,6 +31,7 @@ export interface IntegrationActionRequest {
   userEmail: string;
   componentKey: string;
   configuredProps: Record<string, unknown>;
+  workspaceContext?: IntegrationWorkspaceContext;
 }
 
 export interface IntegrationProvider {
@@ -40,14 +46,29 @@ export interface IntegrationProvider {
     callbackUrl: string,
     userName?: string,
     userOrgRole?: IntegrationUserOrgRole,
+    workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<{ redirectUrl: string }>;
-  listConnections(userEmail: string, userName?: string): Promise<IntegrationConnection[]>;
-  removeConnection(userEmail: string, connectionId: string, userName?: string): Promise<void>;
+  listConnections(
+    userEmail: string,
+    userName?: string,
+    workspaceContext?: IntegrationWorkspaceContext,
+  ): Promise<IntegrationConnection[]>;
+  removeConnection(
+    userEmail: string,
+    connectionId: string,
+    userName?: string,
+    workspaceContext?: IntegrationWorkspaceContext,
+  ): Promise<void>;
   updateConnectionAccess?(
     userEmail: string,
     connectionId: string,
     accessLevel: "personal" | "organization",
     userName?: string,
+    options?: {
+      visibility?: "private" | "selected_members" | "organization";
+      granteeUserIds?: string[];
+    },
+    workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<IntegrationConnection | null>;
   /**
    * Static capability check: does this provider type expose a brokered CLI?
@@ -59,8 +80,25 @@ export interface IntegrationProvider {
    * Returns a broker spec when this provider exposes a brokered CLI to the agent,
    * or null for HTTP-only providers (no CLI surface).
    */
-  getBrokerSpec(params: { userEmail: string | null; claudeConfigDir: string }): BrokerSpec | null;
+  getBrokerSpec(params: {
+    userEmail: string | null;
+    claudeConfigDir: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+  }): BrokerSpec | null;
   executeAction?(request: IntegrationActionRequest, signal?: AbortSignal): Promise<unknown>;
+  getCanvasAccessToken?(params: {
+    integration: "github" | "linear";
+    userEmail: string;
+    accountId?: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+    forceRefresh?: boolean;
+  }): Promise<{ accessToken: string; expiresAt?: string }>;
+  getGithubAccessToken?(params: {
+    userEmail: string;
+    accountId?: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+    forceRefresh?: boolean;
+  }): Promise<{ accessToken: string; expiresAt?: string }>;
 }
 
 /**

@@ -322,256 +322,29 @@ describe("ConnectionsPage direct connect", () => {
     expect(connectionRequests).toBeGreaterThanOrEqual(3);
   });
 
-  it("connects GitHub through the local PAT wizard instead of Canvas", async () => {
-    const user = userEvent.setup();
-    const connectBodies: unknown[] = [];
-    const verificationBodies: unknown[] = [];
+  it("connects GitHub through Canvas OAuth", async () => {
+    const intentBodies: unknown[] = [];
     setupCommonHandlers();
+    window.history.replaceState({}, "", "/integrations?connect=github");
     server.use(
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "github",
-              name: "GitHub",
-              description: "Use GitHub through Sketch.",
-              icon: "https://github.com/favicon.svg",
-              executionMode: "cli",
-              connected: false,
-              connectionId: null,
-            },
-          ],
-          executionMode: "cli",
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [] })),
-      http.get("/api/mcp-servers/provider-1/apps", () =>
-        HttpResponse.json({ apps: [], pageInfo: { endCursor: null, hasMore: false } }),
-      ),
-      http.post("/api/integration-apps/github/verification", async ({ request }) => {
-        verificationBodies.push(await request.json());
+      http.post("/api/mcp-servers/provider-1/connections/intents", async ({ request }) => {
+        intentBodies.push(await request.json());
         return HttpResponse.json({
-          identity: { externalId: "123", login: "octocat", avatarUrl: null, accountType: "User" },
-        });
-      }),
-      http.post("/api/integration-apps/github/connections", async ({ request }) => {
-        connectBodies.push(await request.json());
-        return HttpResponse.json(
-          {
-            connection: {
-              id: "cli-1",
-              appId: "github",
-              appName: "GitHub",
-              executionMode: "cli",
-              ownerUserId: "owner-1",
-              accountLogin: "octocat",
-              accountExternalId: "123",
-              accountAvatarUrl: null,
-              accountType: "User",
-              status: "active",
-              verifiedAt: "2026-01-01T00:00:00Z",
-              lastVerificationError: null,
-              createdAt: "2026-01-01T00:00:00Z",
-              updatedAt: "2026-01-01T00:00:00Z",
-              shares: [],
-            },
-          },
-          { status: 201 },
-        );
-      }),
-      http.put("/api/integration-apps/github/connections/cli-1/shares", () =>
-        HttpResponse.json({ connection: { status: "active", accountLogin: "octocat", shares: [] } }),
-      ),
-    );
-
-    renderWithProviders(<ConnectionsPage />);
-
-    expect(screen.queryByText("GitHub CLI")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add integration" })).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Add integration" }));
-    await user.click(await screen.findByRole("button", { name: /GitHub/ }));
-    expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Create a GitHub personal access token" })).toBeInTheDocument();
-
-    const tokenInput = await screen.findByLabelText("Personal access token");
-    await user.type(tokenInput, "ghp_test_token");
-    await user.click(screen.getByRole("button", { name: "Verify and continue" }));
-    await waitFor(() => expect(verificationBodies).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: "Save access" }));
-    await waitFor(() => expect(connectBodies).toHaveLength(1));
-
-    expect(await screen.findByText("@octocat")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("ghp_test_token")).not.toBeInTheDocument();
-    expect(verificationBodies).toEqual([{ token: "ghp_test_token" }]);
-    expect(connectBodies).toEqual([{ token: "ghp_test_token", targets: [] }]);
-  });
-
-  it("groups GitHub access targets, filters them, and ignores outside clicks", async () => {
-    const user = userEvent.setup();
-    setupCommonHandlers();
-    server.use(
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "github",
-              name: "GitHub",
-              description: "Use GitHub through Sketch.",
-              icon: "https://github.com/favicon.svg",
-              executionMode: "cli",
-              connected: false,
-              connectionId: null,
-            },
-          ],
-          executionMode: "cli",
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [] })),
-      http.get("/api/mcp-servers/provider-1/apps", () =>
-        HttpResponse.json({ apps: [], pageInfo: { endCursor: null, hasMore: false } }),
-      ),
-      http.get("/api/users", () =>
-        HttpResponse.json({
-          users: [
-            {
-              id: "u1",
-              name: "Alice Smith",
-              email: "alice@example.com",
-              type: "human",
-            },
-            {
-              id: "u2",
-              name: "Bob Jones",
-              email: "bob@example.com",
-              type: "human",
-            },
-          ],
-        }),
-      ),
-      http.get("/api/channels/slack", () =>
-        HttpResponse.json({ channels: [{ id: "c1", name: "release-planning", type: "public", isMember: true }] }),
-      ),
-      http.get("/api/channels/whatsapp/groups", () =>
-        HttpResponse.json({ groups: [{ jid: "g1", name: "Launch team", description: null }] }),
-      ),
-      http.post("/api/integration-apps/github/verification", () =>
-        HttpResponse.json({
-          identity: { externalId: "123", login: "octocat", avatarUrl: null, accountType: "User" },
-        }),
-      ),
-    );
-
-    renderWithProviders(<ConnectionsPage />);
-    await user.click(await screen.findByRole("button", { name: "Add integration" }));
-    await user.click(await screen.findByRole("button", { name: /GitHub/ }));
-    await user.type(await screen.findByLabelText("Personal access token"), "ghp_test_token");
-    await user.click(screen.getByRole("button", { name: "Verify and continue" }));
-
-    expect(await screen.findByText("Organization")).toBeInTheDocument();
-    expect(screen.getByText("Members")).toBeInTheDocument();
-    expect(screen.getByText("Slack channels")).toBeInTheDocument();
-    expect(screen.getByText("WhatsApp groups")).toBeInTheDocument();
-    expect(screen.getByText("0 selected")).toBeInTheDocument();
-
-    const slackGroup = screen.getByRole("button", { name: /Slack channels/ });
-    expect(slackGroup).toHaveAttribute("aria-expanded", "true");
-    await user.click(slackGroup);
-    expect(slackGroup).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: /#release-planning/ })).not.toBeInTheDocument();
-
-    const search = screen.getByRole("textbox", { name: "Search access targets" });
-    await user.type(search, "bob@example.com");
-    expect(screen.getByRole("button", { name: /Bob Jones/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Alice Smith/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Bob Jones/ }));
-    expect(screen.getByText("1 selected")).toBeInTheDocument();
-    expect(screen.getByText("You and 1 shared target can use this connection.")).toBeInTheDocument();
-
-    await user.clear(search);
-    await user.type(search, "release-planning");
-    expect(slackGroup).toHaveAttribute("aria-expanded", "true");
-    await user.click(screen.getByRole("button", { name: /#release-planning/ }));
-    await user.clear(search);
-    await user.type(search, "Launch team");
-    await user.click(screen.getByRole("button", { name: "Launch team" }));
-    expect(screen.getByText("3 selected")).toBeInTheDocument();
-
-    const overlay = document.querySelector('[data-slot="dialog-overlay"]');
-    expect(overlay).toBeInTheDocument();
-    fireEvent.pointerDown(overlay as HTMLElement);
-    fireEvent.pointerUp(overlay as HTMLElement);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.getByText("3 selected")).toBeInTheDocument();
-  });
-
-  it("closes Linear access management after saving a share", async () => {
-    const user = userEvent.setup();
-    const shareBodies: unknown[] = [];
-    const linearConnection = {
-      id: "linear-1",
-      appId: "linear",
-      appName: "Linear",
-      executionMode: "api",
-      ownerUserId: "u1",
-      accountLogin: "Ada Lovelace",
-      accountExternalId: "usr_1",
-      accountAvatarUrl: null,
-      accountType: "User",
-      status: "active",
-      verifiedAt: "2026-01-01T00:00:00Z",
-      lastVerificationError: null,
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
-      isOwnedByViewer: true,
-      canUse: true,
-      canManage: true,
-      shares: [],
-    };
-    setupCommonHandlers();
-    server.use(
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "linear",
-              name: "Linear",
-              description: "Use Linear through Sketch.",
-              icon: "https://linear.app/favicon.svg",
-              executionMode: "api",
-              connected: true,
-              connectionId: "linear-1",
-            },
-          ],
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [linearConnection] })),
-      http.get("/api/users", () =>
-        HttpResponse.json({
-          users: [
-            { id: "u1", name: "Owner", email: "owner@example.com", type: "human" },
-            { id: "u2", name: "Recipient", email: "recipient@example.com", type: "human" },
-          ],
-        }),
-      ),
-      http.get("/api/channels/slack", () => HttpResponse.json({ channels: [] })),
-      http.get("/api/channels/whatsapp/groups", () => HttpResponse.json({ groups: [] })),
-      http.put("/api/integration-apps/linear/connections/linear-1/shares", async ({ request }) => {
-        shareBodies.push(await request.json());
-        return HttpResponse.json({
-          connection: { ...linearConnection, shares: [{ type: "user", id: "u2" }] },
+          app: { id: "github", name: "GitHub", description: "Source control" },
+          redirectUrl: "#github-oauth",
         });
       }),
     );
 
     renderWithProviders(<ConnectionsPage />);
 
-    await user.click(await screen.findByRole("button", { name: "Open settings for Linear" }));
-    expect(await screen.findByRole("dialog", { name: "Manage Linear" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Recipient/ }));
-    await user.click(screen.getByRole("button", { name: "Save access" }));
-
-    await waitFor(() => expect(shareBodies).toEqual([{ targets: [{ type: "user", id: "u2" }] }]));
-    expect(screen.queryByRole("dialog", { name: "Manage Linear" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Opening GitHub")).toBeInTheDocument();
+    await waitFor(() => expect(intentBodies).toHaveLength(1));
+    expect(intentBodies[0]).toMatchObject({
+      appId: "github",
+      callbackUrl: `${window.location.origin}/integrations/callback?app=github`,
+    });
+    await waitFor(() => expect(window.location.hash).toBe("#github-oauth"));
   });
 
   it("shows callback errors without starting a new intent", async () => {

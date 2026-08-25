@@ -84,27 +84,69 @@ describe("CanvasProvider", () => {
     });
   });
 
-  it("rejects managed GitHub and Linear connection mutations before network access", async () => {
-    const fetchMock = vi.fn();
+  it("sends the Sketch workspace identity when listing connections", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accounts: [] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    await provider.listConnections("priya@example.com", "Priya Shah", {
+      workspaceId: "provider-1",
+      userId: "sketch-user-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("https://canvas.example.com/api/pipedream/accounts", {
+      headers: {
+        Authorization: "Bearer sk-test",
+        "Content-Type": "application/json",
+        "X-User-Email": "priya@example.com",
+        "X-User-Name": "Priya Shah",
+        "X-Sketch-Workspace-Id": "provider-1",
+        "X-Sketch-Workspace-User-Id": "sketch-user-1",
+      },
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("places native Canvas apps before Pipedream apps in the catalog", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            data: [
+              { nameSlug: "slack", name: "Slack", description: "Pipedream", imgSrc: "", categories: [] },
+              { nameSlug: "github", name: "GitHub", description: "Canvas", imgSrc: "", categories: [] },
+              { nameSlug: "linear", name: "Linear", description: "Canvas", imgSrc: "", categories: [] },
+            ],
+            pageInfo: { endCursor: null, hasMore: false },
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    const result = await provider.listApps();
+
+    expect(result.apps.map((app) => app.id)).toEqual(["github", "linear", "slack"]);
+  });
+
+  it("allows managed GitHub and Linear connection mutations", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
 
-    await expect(provider.removeConnection("priya@example.com", "secrets:owner-1:github:github")).rejects.toMatchObject(
-      {
-        status: 409,
-        code: "CLI_INTEGRATION",
-      },
-    );
-    await expect(
-      provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:github:github", "organization"),
-    ).rejects.toMatchObject({ status: 409, code: "CLI_INTEGRATION" });
-    await expect(provider.removeConnection("priya@example.com", "secrets:owner-1:linear:linear")).rejects.toMatchObject(
-      { status: 409, code: "CLI_INTEGRATION" },
-    );
-    await expect(
-      provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:linear:linear", "organization"),
-    ).rejects.toMatchObject({ status: 409, code: "CLI_INTEGRATION" });
-    expect(fetchMock).not.toHaveBeenCalled();
+    await provider.removeConnection("priya@example.com", "secrets:owner-1:github:github");
+    await provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:github:github", "organization");
+    await provider.removeConnection("priya@example.com", "secrets:owner-1:linear:linear");
+    await provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:linear:linear", "organization");
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: "PUT" });
   });
 
   it("preserves Canvas error codes when initiating app connections", async () => {
@@ -234,7 +276,7 @@ describe("CanvasProvider", () => {
     expect(connections.map((connection) => connection.appId)).toEqual(["notion"]);
   });
 
-  it("hides legacy Canvas GitHub rows even without app metadata", async () => {
+  it("includes managed Canvas GitHub rows even without app metadata", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -248,10 +290,12 @@ describe("CanvasProvider", () => {
     );
 
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
-    await expect(provider.listConnections("priya@example.com")).resolves.toEqual([]);
+    await expect(provider.listConnections("priya@example.com")).resolves.toMatchObject([
+      { id: "secrets:owner-1:github:github", appName: "GitHub" },
+    ]);
   });
 
-  it("hides legacy Canvas GitHub and Linear rows identified only by their display name", async () => {
+  it("includes managed Canvas GitHub and Linear rows identified only by display name", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -265,7 +309,9 @@ describe("CanvasProvider", () => {
     );
 
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
-    await expect(provider.listConnections("priya@example.com")).resolves.toEqual([]);
+    await expect(provider.listConnections("priya@example.com")).resolves.toMatchObject([
+      { id: "apn_github_1", appName: "GitHub" },
+    ]);
 
     vi.stubGlobal(
       "fetch",
@@ -275,7 +321,9 @@ describe("CanvasProvider", () => {
         }),
       ),
     );
-    await expect(provider.listConnections("priya@example.com")).resolves.toEqual([]);
+    await expect(provider.listConnections("priya@example.com")).resolves.toMatchObject([
+      { id: "apn_linear_1", appName: "Linear" },
+    ]);
   });
 
   it("omits non-owner personal Canvas accounts even when canUse is incorrectly true", async () => {
@@ -371,7 +419,7 @@ describe("CanvasProvider", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://canvas.example.com/api/canvas-accounts/secrets%3Aowner-1%3Anotion%3Anotion/access",
       {
-        method: "PATCH",
+        method: "PUT",
         headers: {
           Authorization: "Bearer sk-test",
           "Content-Type": "application/json",
@@ -502,6 +550,7 @@ describe("CanvasProvider", () => {
       accountId: "secrets:user-1:microsoft:microsoft-teams-oauth",
       userName: "Priya Shah",
       userOrgRole: "admin",
+      forceRefresh: true,
     });
 
     expect(fetchMock).toHaveBeenCalledWith("https://canvas.example.com/api/sketch/credentials/mint", {
@@ -517,6 +566,7 @@ describe("CanvasProvider", () => {
         connectorType: "teams",
         publicKeyId: "key-1",
         accountId: "secrets:user-1:microsoft:microsoft-teams-oauth",
+        forceRefresh: true,
       }),
       signal: expect.any(AbortSignal),
     });

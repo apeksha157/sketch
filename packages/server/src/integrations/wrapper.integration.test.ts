@@ -263,6 +263,22 @@ describe("CanvasProvider.getBrokerSpec", () => {
     expect(spec.credentialEnv.CANVAS_MCP_URL).toBe("https://canvas.example.com/mcp");
   });
 
+  it("passes Sketch workspace identity to the brokered MCP CLI", () => {
+    const provider = new CanvasProvider("https://canvas.example.com", "key-1", "p1");
+    const spec = provider.getBrokerSpec({
+      userEmail: "u@example.com",
+      claudeConfigDir: "/etc/claude",
+      workspaceContext: { workspaceId: "p1", userId: "sketch-user-1" },
+    });
+
+    expect(spec.credentialEnv).toEqual(
+      expect.objectContaining({
+        CANVAS_SKETCH_WORKSPACE_ID: "p1",
+        CANVAS_SKETCH_WORKSPACE_USER_ID: "sketch-user-1",
+      }),
+    );
+  });
+
   it("omits CANVAS_USER_EMAIL when userEmail is null", () => {
     const provider = new CanvasProvider("https://canvas.example.com", "key-1", "p1");
     const spec = provider.getBrokerSpec({ userEmail: null, claudeConfigDir: "/etc/claude" });

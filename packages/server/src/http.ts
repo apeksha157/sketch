@@ -19,7 +19,6 @@ import { agentSessionRoutes } from "./api/agent-sessions";
 import { apiTokenRoutes } from "./api/api-tokens";
 import { type MagicLinkSender, authRoutes } from "./api/auth";
 import { channelRoutes } from "./api/channels";
-import { cliIntegrationRoutes } from "./api/cli-integrations";
 import { connectorRoutes } from "./api/connectors";
 import { devEnrichmentRoutes } from "./api/dev-enrichment";
 import { entityRoutes } from "./api/entities";
@@ -566,20 +565,6 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
         deps?.cliIntegrations?.getManagedVariableApp(id, ownerUserId) ?? Promise.resolve(null),
     }),
   );
-  if (deps?.cliIntegrations) {
-    app.route(
-      "/api/integration-apps",
-      cliIntegrationRoutes({
-        service: deps.cliIntegrations,
-        loadIntegrationProvider: deps.loadIntegrationProvider,
-        users,
-        channels,
-        whatsappGroups,
-        getSlack: deps.getSlack,
-        logger,
-      }),
-    );
-  }
   app.route("/api/agent-sessions", agentSessionRoutes(db, { logger }));
   app.route(
     "/api/workflows",

@@ -114,6 +114,18 @@ describe("createSketchMcpServer", () => {
     expect(server.instance).toBeDefined();
   });
 
+  it("exposes the managed GitHub and Linear tools", () => {
+    const registeredTools = (
+      createSketchMcpServer({
+        uploadCollector: new UploadCollector(),
+        workspaceDir: tmpDir,
+      }).instance as unknown as { _registeredTools: Record<string, unknown> }
+    )._registeredTools;
+
+    expect(registeredTools.github_cli).toBeDefined();
+    expect(registeredTools.linear_api).toBeDefined();
+  });
+
   it("keeps questions available in web chat and exposes them to capable channels only when enabled", () => {
     const questionCollector = new QuestionCollector();
     const capabilities = {
