@@ -98,6 +98,22 @@ function runIdentityIntegrationSuite(label: string, createDb: DbFactory) {
       });
     });
 
+    it("resolves a lid-only roster with no phone values", async () => {
+      const { groupJid } = await seedGroup();
+      await seedUser("lid-only-user");
+      await db
+        .insertInto("user_whatsapp_lids")
+        .values({ user_id: "lid-only-user", lid: "254052281622575@lid" })
+        .execute();
+
+      const resolver = createWhatsAppIdentityResolutionService(db);
+      const resolved = await resolver.resolveRoster(groupJid, [
+        { participantJid: "254052281622575@lid", phoneE164: null, lid: "254052281622575@lid" },
+      ]);
+
+      expect(resolved.get("254052281622575@lid")).toMatchObject({ kind: "teammate", name: "lid-only-user" });
+    });
+
     it("resolves manual member labels after CRUD upserts", async () => {
       const { groupJid, repo } = await seedGroup();
       await seedUser("labeler-integration");
