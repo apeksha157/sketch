@@ -1241,6 +1241,92 @@ describe("handleSearchUsers", () => {
       ],
     });
   });
+
+  it("resolves WhatsApp mention IDs to tenant users by LID", async () => {
+    const bob = makeUser({ id: "user-bob", name: "Bob", slack_user_id: null, whatsapp_number: "+971503932199" });
+    const result = await handleSearchUsers(
+      { queries: ["@254052281622575"] },
+      {
+        userRepo: makeUserRepoMock({
+          findByWhatsappLid: async (lid: string) => (lid === "254052281622575@lid" ? bob : undefined),
+        }),
+        currentUserId: "user-admin",
+      },
+    );
+
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      results: [
+        {
+          query: "@254052281622575",
+          matches: [expect.objectContaining({ id: "user-bob", matchedBy: "whatsapp_lid" })],
+        },
+      ],
+    });
+  });
+
+  it("reports unmapped WhatsApp LIDs with roster phones as unregistered contacts", async () => {
+    const db = await createTestDb();
+    try {
+      await db.insertInto("whatsapp_groups").values({ jid: "group@g.us", name: "Test Group" }).execute();
+      await db
+        .insertInto("whatsapp_group_participants")
+        .values({
+          group_jid: "group@g.us",
+          participant_jid: "254052281622575@lid",
+          lid: "254052281622575@lid",
+          phone_e164: "+971509374319",
+          observation_key: "phone:+971509374319|lid:254052281622575@lid",
+        })
+        .execute();
+
+      const result = await handleSearchUsers(
+        { queries: ["@254052281622575"] },
+        {
+          db,
+          userRepo: makeUserRepoMock({
+            findByWhatsappLid: async () => undefined,
+            findByWhatsappNumber: async () => undefined,
+          }),
+          currentUserId: "user-admin",
+        },
+      );
+
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        results: [
+          {
+            query: "@254052281622575",
+            matches: [],
+            whatsappContacts: [
+              {
+                phoneE164: "+971509374319",
+                lid: "254052281622575@lid",
+                source: "group_participant",
+                registered: false,
+              },
+            ],
+          },
+        ],
+      });
+    } finally {
+      await db.destroy();
+    }
+  });
+
+  it("guards short bare numbers from WhatsApp lookup but resolves explicit phone numbers", async () => {
+    const findByWhatsappLid = vi.fn(async () => undefined);
+    const findByWhatsappNumber = vi.fn(async () => undefined);
+    await handleSearchUsers(
+      { queries: ["12345678", "+971503932199"] },
+      {
+        userRepo: makeUserRepoMock({ findByWhatsappLid, findByWhatsappNumber }),
+        currentUserId: "user-admin",
+      },
+    );
+
+    expect(findByWhatsappLid).not.toHaveBeenCalled();
+    expect(findByWhatsappNumber).toHaveBeenCalledTimes(1);
+    expect(findByWhatsappNumber).toHaveBeenCalledWith("+971503932199");
+  });
 });
 
 describe("handleSendMessageToUsers", () => {

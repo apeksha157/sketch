@@ -348,6 +348,7 @@ export function createWhatsAppIdentityResolutionService(db: Kysely<DB>) {
   }
 
   async function loadTeammatesByPhone(phones: string[]): Promise<Map<string, WhatsAppIdentityResolution>> {
+    if (phones.length === 0) return new Map();
     const phoneSet = new Set(phones);
     const rows = await db
       .selectFrom("users")
@@ -365,6 +366,7 @@ export function createWhatsAppIdentityResolutionService(db: Kysely<DB>) {
   }
 
   async function loadEntitiesByPhone(phones: string[]): Promise<Map<string, WhatsAppIdentityResolution>> {
+    if (phones.length === 0) return new Map();
     const phoneSet = new Set(phones);
     const rows = await db
       .selectFrom("entity_contact_points")
@@ -461,6 +463,7 @@ export function createWhatsAppIdentityResolutionService(db: Kysely<DB>) {
     groupJid: string,
     phones: string[],
   ): Promise<Map<string, WhatsAppIdentityResolution>> {
+    if (phones.length === 0) return new Map();
     const phoneSet = new Set(phones);
     const rows = await db
       .selectFrom("whatsapp_group_member_labels")

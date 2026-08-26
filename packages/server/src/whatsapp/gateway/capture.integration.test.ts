@@ -12,7 +12,10 @@ import {
 import { createWhatsAppSessionLeaseRepository } from "../../db/repositories/whatsapp-session-lease";
 import type { DB } from "../../db/schema";
 import { createTestLogger } from "../../test-utils";
+import type { WhatsAppAdapterHandlers } from "../adapter";
 import type { WhatsAppGroupMessage, WhatsAppHistoryBatchMetadata, WhatsAppMessage } from "../bot";
+import { whatsAppMessageEnvelopeSchema } from "../facade-contract";
+import { WhatsAppInboundConsumer } from "../inbound-consumer";
 import { WhatsAppGatewayCapture } from "./capture";
 
 type CaptureInternals = {
@@ -101,6 +104,57 @@ describe("WhatsApp gateway Baileys absorption capture", () => {
   afterEach(async () => {
     await db.destroy();
     await rm(directory, { recursive: true, force: true });
+  });
+
+  it("round-trips optional mention metadata from capture to consumer reconstruction", async () => {
+    const capture = new WhatsAppGatewayCapture({
+      db,
+      logger: createTestLogger(),
+      stagingDir: join(directory, "staging"),
+      maxFileBytes: 1024,
+      getSocket: () => null,
+      rememberMessage: () => undefined,
+      isInitialSyncGeneration: () => false,
+      wake: async () => undefined,
+      onPersistFailure: () => undefined,
+    });
+    const message = groupMessage("mentioned", "2026-07-17T09:00:00.000Z");
+    message.text = "ask @254052281622575";
+    message.mentions = [{ jid: "254052281622575@lid", lid: "254052281622575@lid", phoneE164: null }];
+    await capture.captureMessage(message, { socketGeneration: 1 });
+
+    const row = await db
+      .selectFrom("whatsapp_inbound_events")
+      .select("envelope")
+      .where("event_key", "=", createWhatsAppEventKey(message.jid, message.messageId, false))
+      .executeTakeFirstOrThrow();
+    const envelope = whatsAppMessageEnvelopeSchema.parse(JSON.parse(row.envelope));
+    expect(envelope.message.mentions).toEqual(message.mentions);
+
+    let reconstructedMentions: unknown;
+    const handlers: WhatsAppAdapterHandlers = {
+      captureQueuedMessage: async (message) => {
+        reconstructedMentions = message.kind === "group" ? message.mentions : undefined;
+        return null;
+      },
+      dispatchCapturedMessage: async () => true,
+      handleHistoryMessages: async () => ({ persisted: 0, skippedOld: 0, skippedDup: 0 }),
+    };
+    const consumer = new WhatsAppInboundConsumer({
+      db,
+      logger: createTestLogger(),
+      stagingDir: join(directory, "staging"),
+      shouldHandleInboundMessage: () => true,
+      handlers,
+    });
+    consumer.start();
+    await consumer.wake();
+    await consumer.stop();
+
+    expect(reconstructedMentions).toEqual(message.mentions);
+    expect(
+      whatsAppMessageEnvelopeSchema.parse({ ...envelope, message: { ...envelope.message, mentions: undefined } }),
+    ).toBeDefined();
   });
 
   it("captures an absorbed reconnect message once through history_message and deduplicates live/history overlap", async () => {

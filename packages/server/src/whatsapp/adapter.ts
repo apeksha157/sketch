@@ -59,6 +59,7 @@ import {
 } from "./backfill-checkpoint";
 import { stableWhatsAppParticipantJidRef } from "./identity-resolution";
 import { handleStealResponse, parseWhatsAppStealCommand, renderStealResponseConfirmation } from "./lock-confirmations";
+import { resolveMentionDisplayNames, resolveWhatsAppMentionTokens } from "./mention-resolution";
 import { createWhatsAppMessageHandler } from "./message-handler";
 import { maskPersonalNumberIdentifier } from "./privacy";
 import {
@@ -291,6 +292,23 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
   const backfillCheckpoints = repos.conversationSlices ?? createConversationSlicesRepository(db);
   const handleFollowupReviewCommand = deps.followupReviewHandler ?? createFollowupReviewCommandHandler(db);
   const queuedCaptures = new WeakMap<WhatsAppInboundMessage, WhatsAppQueuedCapture>();
+
+  const resolveMentionedTextForPrompt = async (
+    text: string,
+    message: Pick<Extract<WhatsAppInboundMessage, { kind: "group" }>, "kind" | "target" | "mentions">,
+  ): Promise<string> => {
+    if (!message.mentions?.length) return text;
+    const displayByJid = await resolveMentionDisplayNames(db, message.target.groupId, message.mentions);
+    logger.debug(
+      {
+        providerConversationId: message.target.groupId,
+        mentionsTotal: message.mentions.length,
+        mentionsResolved: [...displayByJid.values()].filter((display) => Boolean(display)).length,
+      },
+      "Resolved WhatsApp mention display names for agent prompt",
+    );
+    return resolveWhatsAppMentionTokens(text, message.mentions, displayByJid);
+  };
 
   const questionConversationId = (message: WhatsAppInboundMessage) =>
     message.kind === "dm" ? whatsappDeliveryTargetFromTarget(message.target) : message.target.groupId;
@@ -753,11 +771,19 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
     }
 
     if (!quoted.text.trim()) return undefined;
+    const quotedText =
+      message.kind === "group" && quoted.mentions?.length
+        ? await resolveMentionedTextForPrompt(quoted.text, {
+            kind: "group",
+            target: message.target,
+            mentions: quoted.mentions,
+          })
+        : quoted.text;
 
     return {
       providerMessageId: quoted.providerMessageId,
       senderJid: quoted.participantJid,
-      text: quoted.text,
+      text: quotedText,
       attachments: [],
       providerTimestamp: null,
       receivedAt: null,
@@ -1602,10 +1628,11 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
         const agentInstructions = boundAgent?.description ?? null;
         const agentAllowedTools = boundAgent ? parseAllowedTools(boundAgent.allowed_tools) : null;
         const visualAnalysisAllowed = canUseVisualAnalysisTool(visionConfig, agentAllowedTools);
+        const currentMessage = await resolveMentionedTextForPrompt(message.text, message);
         const sketchContext: SketchContextParams = {
           messages: [],
           currentUserName: userName,
-          currentMessage: message.text || "See attached files.",
+          currentMessage: currentMessage || "See attached files.",
           currentUserEmail: user?.email ?? null,
           currentUserPhone: user?.whatsapp_number ?? null,
           workspaceDir,

@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { normalizeWhatsAppIdentityLid, normalizeWhatsAppIdentityPhone } from "../../identity-normalization";
 import { ChatHistoryAccessResolver, type ProviderTargetRef, providerTargetKey } from "./chat-search";
 import { blankToUndefined } from "./optional-params";
 import type { SelectableUser, SketchMcpDeps, ToolResult } from "./types";
@@ -29,7 +30,143 @@ function extractSlackUserId(query: string): string | null {
 }
 
 function looksLikeEmail(query: string): boolean {
-  return query.includes("@");
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(query.trim());
+}
+
+type WhatsAppIdentifier =
+  | { lid: string | null; phoneE164: string | null; lookupLid: true; lookupPhone: true }
+  | { lid: null; phoneE164: string; lookupLid: false; lookupPhone: true };
+
+interface WhatsAppContactResult {
+  name?: string;
+  phoneE164?: string;
+  lid?: string;
+  source: "entity" | "group_participant";
+  registered: false;
+}
+
+function extractWhatsAppIdentifier(query: string): WhatsAppIdentifier | null {
+  const trimmed = query.trim();
+  const mentionMatch = trimmed.match(/^@[\u200B-\u200F\uFEFF]*(\d{6,})$/u);
+  if (mentionMatch) {
+    const digits = mentionMatch[1];
+    return {
+      lid: normalizeWhatsAppIdentityLid(`${digits}@lid`),
+      phoneE164: normalizeWhatsAppIdentityPhone(`+${digits}`),
+      lookupLid: true,
+      lookupPhone: true,
+    };
+  }
+
+  const jidMatch = trimmed.match(/^(\d{6,})(?::\d+)?@(lid|s\.whatsapp\.net)$/iu);
+  if (jidMatch) {
+    const digits = jidMatch[1];
+    return {
+      lid: normalizeWhatsAppIdentityLid(`${digits}@lid`),
+      phoneE164: normalizeWhatsAppIdentityPhone(`+${digits}`),
+      lookupLid: true,
+      lookupPhone: true,
+    };
+  }
+
+  const plusPhone = normalizeWhatsAppIdentityPhone(trimmed);
+  if (trimmed.startsWith("+") && plusPhone) {
+    return { lid: null, phoneE164: plusPhone, lookupLid: false, lookupPhone: true };
+  }
+
+  if (/^\d{10,15}$/u.test(trimmed)) {
+    const phoneE164 = normalizeWhatsAppIdentityPhone(`+${trimmed}`);
+    return phoneE164 ? { lid: null, phoneE164, lookupLid: false, lookupPhone: true } : null;
+  }
+
+  return null;
+}
+
+function isPhoneShapedName(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return normalizeWhatsAppIdentityPhone(value) !== null || /^\+?\d[\d\s().-]{6,}$/u.test(value.trim());
+}
+
+function pushWhatsAppContact(
+  contacts: WhatsAppContactResult[],
+  seen: Set<string>,
+  contact: WhatsAppContactResult,
+): void {
+  const key = `${contact.source}:${contact.lid ?? ""}:${contact.phoneE164 ?? ""}:${contact.name ?? ""}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  contacts.push(contact);
+}
+
+async function findUnregisteredWhatsAppContacts(
+  identifier: WhatsAppIdentifier | null,
+  db: SketchMcpDeps["db"],
+): Promise<WhatsAppContactResult[]> {
+  if (!identifier || !db) return [];
+  const contacts: WhatsAppContactResult[] = [];
+  const seen = new Set<string>();
+  const contactPointFilters: Array<{ kind: "whatsapp_lid" | "whatsapp" | "phone"; value: string }> = [];
+  if (identifier.lookupLid && identifier.lid) contactPointFilters.push({ kind: "whatsapp_lid", value: identifier.lid });
+  if (identifier.lookupPhone && identifier.phoneE164) {
+    contactPointFilters.push({ kind: "whatsapp", value: identifier.phoneE164 });
+    contactPointFilters.push({ kind: "phone", value: identifier.phoneE164 });
+  }
+
+  for (const filter of contactPointFilters) {
+    const rows = await db
+      .selectFrom("entity_contact_points")
+      .innerJoin("entities", "entities.id", "entity_contact_points.entity_id")
+      .select([
+        "entities.name",
+        "entity_contact_points.kind",
+        "entity_contact_points.value",
+        "entity_contact_points.display_value",
+      ])
+      .where("entity_contact_points.kind", "=", filter.kind)
+      .where("entity_contact_points.value", "=", filter.value)
+      .where("entities.source_type", "=", "person")
+      .where("entities.status", "!=", "archived")
+      .where("entities.deleted_at", "is", null)
+      .orderBy("entities.name", "asc")
+      .orderBy("entities.id", "asc")
+      .execute();
+
+    for (const row of rows) {
+      const phoneE164 =
+        row.kind === "phone" || row.kind === "whatsapp"
+          ? normalizeWhatsAppIdentityPhone(row.value)
+          : normalizeWhatsAppIdentityPhone(row.display_value);
+      const lid = row.kind === "whatsapp_lid" ? normalizeWhatsAppIdentityLid(row.value) : undefined;
+      pushWhatsAppContact(contacts, seen, {
+        ...(isPhoneShapedName(row.name) ? {} : { name: row.name }),
+        ...(phoneE164 ? { phoneE164 } : {}),
+        ...(lid ? { lid } : {}),
+        source: "entity",
+        registered: false,
+      });
+    }
+  }
+
+  if (identifier.lookupLid && identifier.lid) {
+    const participantRows = await db
+      .selectFrom("whatsapp_group_participants")
+      .select(["participant_jid", "phone_e164", "lid"])
+      .where((eb) => eb.or([eb("lid", "=", identifier.lid), eb("participant_jid", "=", identifier.lid ?? "")]))
+      .orderBy("last_seen_at", "desc")
+      .execute();
+    for (const row of participantRows) {
+      const phoneE164 = normalizeWhatsAppIdentityPhone(row.phone_e164);
+      const lid = normalizeWhatsAppIdentityLid(row.lid ?? row.participant_jid);
+      pushWhatsAppContact(contacts, seen, {
+        ...(phoneE164 ? { phoneE164 } : {}),
+        ...(lid ? { lid } : {}),
+        source: "group_participant",
+        registered: false,
+      });
+    }
+  }
+
+  return contacts;
 }
 
 async function deliverMessageToUser(
@@ -275,19 +412,25 @@ export type SearchUsersArgs = { queries: string[] };
 
 export async function handleSearchUsers(
   params: SearchUsersArgs,
-  deps: Pick<SketchMcpDeps, "userRepo" | "currentUserId">,
+  deps: Pick<SketchMcpDeps, "userRepo" | "currentUserId" | "db">,
 ): Promise<ToolResult> {
   if (!deps.userRepo) {
     return { content: [{ type: "text" as const, text: "User search is not available in this context." }] };
   }
 
-  const results: Array<{ query: string; matches: Array<Record<string, unknown>> }> = [];
+  const results: Array<{
+    query: string;
+    matches: Array<Record<string, unknown>>;
+    whatsappContacts?: WhatsAppContactResult[];
+  }> = [];
 
   for (const query of params.queries) {
     const matches: Array<Record<string, unknown>> = [];
+    let whatsappContacts: WhatsAppContactResult[] = [];
     const seen = new Set<string>();
     const slackUserId = extractSlackUserId(query);
     const trimmedQuery = query.trim();
+    const whatsappIdentifier = extractWhatsAppIdentifier(trimmedQuery);
 
     const pushMatch = (user: SelectableUser | undefined, matchedBy: string) => {
       if (!user || user.id === deps.currentUserId || seen.has(user.id)) return;
@@ -297,6 +440,18 @@ export async function handleSearchUsers(
 
     if (slackUserId) {
       pushMatch(await deps.userRepo.findBySlackId?.(slackUserId), "slack_user_id");
+    }
+
+    if (whatsappIdentifier?.lookupLid && whatsappIdentifier.lid) {
+      pushMatch(await deps.userRepo.findByWhatsappLid?.(whatsappIdentifier.lid), "whatsapp_lid");
+    }
+
+    if (whatsappIdentifier?.lookupPhone && whatsappIdentifier.phoneE164) {
+      pushMatch(await deps.userRepo.findByWhatsappNumber?.(whatsappIdentifier.phoneE164), "whatsapp_number");
+    }
+
+    if (matches.length === 0) {
+      whatsappContacts = await findUnregisteredWhatsAppContacts(whatsappIdentifier, deps.db);
     }
 
     if (looksLikeEmail(trimmedQuery)) {
@@ -321,7 +476,7 @@ export async function handleSearchUsers(
       }
     }
 
-    results.push({ query, matches });
+    results.push({ query, matches, ...(whatsappContacts.length > 0 ? { whatsappContacts } : {}) });
   }
 
   return { content: [{ type: "text" as const, text: JSON.stringify({ results }) }] };
@@ -382,7 +537,7 @@ export function createMessagingTools(deps: SketchMcpDeps) {
   return [
     tool(
       "SearchUsers",
-      "Resolve names, emails, Slack mentions, and Slack user IDs into tenant users. Returns ranked candidates so you can confirm recipients before sending messages.",
+      "Resolve names, emails, Slack mentions/IDs, WhatsApp phone numbers, and WhatsApp mention IDs (@<digits>) into tenant users; unregistered WhatsApp contacts are reported separately.",
       searchUsersToolSchema,
       async (params) => handleSearchUsers(params, deps),
     ),

@@ -1485,6 +1485,15 @@ describe("stripBotMention", () => {
     expect(stripBotMention("@OtherBot hello", "Sketch")).toBe("hello");
   });
 
+  it("strips a bot numeric mention without eating a human mention first in the text", () => {
+    expect(
+      stripBotMention("@254052281622575 @999999999999 help", "Sketch", {
+        botJids: ["999999999999@lid"],
+        mentionedJids: ["254052281622575@lid", "999999999999@lid"],
+      }),
+    ).toBe("@254052281622575 help");
+  });
+
   it("handles message with only a mention", () => {
     expect(stripBotMention("@Sketch", "Sketch")).toBe("");
   });

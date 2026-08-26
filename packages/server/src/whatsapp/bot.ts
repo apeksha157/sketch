@@ -40,7 +40,7 @@ import { WHATSAPP_TEXT_LIMIT, chunkText } from "./chunking";
 import { collectWhatsAppGroupParticipants, toParticipantInputs } from "./group-participants";
 import { captureWhatsAppLidForPhone } from "./identity-resolution";
 import { safeWhatsAppErrorFields } from "./privacy";
-import type { WhatsAppGroupMetadata as ProviderWhatsAppGroupMetadata } from "./provider";
+import type { WhatsAppGroupMetadata as ProviderWhatsAppGroupMetadata, WhatsAppMentionRef } from "./provider";
 
 const ECHO_TTL_MS = 60_000;
 const INBOUND_DEDUPE_TTL_MS = 60_000;
@@ -121,6 +121,7 @@ export interface WhatsAppQuotedMessage {
   providerMessageId: string;
   participantJid: string | null;
   text: string;
+  mentions?: WhatsAppMentionRef[];
 }
 
 export interface WhatsAppDmMessage extends WhatsAppBaseMessage {
@@ -133,6 +134,7 @@ export interface WhatsAppGroupMessage extends WhatsAppBaseMessage {
   isMentioned: boolean;
   senderJid: string;
   senderPhone: string | null;
+  mentions?: WhatsAppMentionRef[];
 }
 
 export type WhatsAppMessage = WhatsAppDmMessage | WhatsAppGroupMessage;
@@ -1052,10 +1054,14 @@ export class WhatsAppBot {
     if (!msg.message) return null;
     const contextInfo = extractContextInfo(msg.message);
     const isMentioned = this.isBotMentioned(contextInfo);
+    const mentions = this.resolveMentionRefs(contextInfo?.mentionedJid);
 
     let cleanText = text;
     if (cleanText && isMentioned && contextInfo?.mentionedJid?.length) {
-      cleanText = stripBotMention(cleanText, this.sock?.user?.name);
+      cleanText = stripBotMention(cleanText, this.sock?.user?.name, {
+        botJids: [this.sock?.user?.id, this.sock?.user?.lid].filter((jid): jid is string => Boolean(jid)),
+        mentionedJids: contextInfo.mentionedJid,
+      });
     }
 
     const senderPhone = await this.resolveJidToPhone(senderJid);
@@ -1072,8 +1078,17 @@ export class WhatsAppBot {
       isMentioned,
       senderJid,
       senderPhone,
+      ...(mentions.length > 0 ? { mentions } : {}),
       ...(quotedMessage ? { quotedMessage } : {}),
     };
+  }
+
+  private resolveMentionRefs(mentionedJids: string[] | null | undefined): WhatsAppMentionRef[] {
+    if (!mentionedJids?.length) return [];
+    const botJids = [this.sock?.user?.id, this.sock?.user?.lid].filter((jid): jid is string => Boolean(jid));
+    return mentionedJids
+      .filter((jid) => !botJids.some((botJid) => areJidsSameUser(jid, botJid)))
+      .map((jid) => mentionRefFromJid(jid));
   }
 
   private resolveGroupSenderJid(msg: proto.IWebMessageInfo): string | null {
@@ -1366,10 +1381,14 @@ export function extractQuotedMessage(contextInfo: proto.IContextInfo | undefined
   if (!providerMessageId) return undefined;
 
   const quotedMessage = contextInfo?.quotedMessage;
+  const mentions = quotedMessage
+    ? (extractContextInfo(quotedMessage)?.mentionedJid?.map((jid) => mentionRefFromJid(jid)) ?? [])
+    : [];
   return {
     providerMessageId,
     participantJid: contextInfo?.participant ?? null,
     text: quotedMessage ? (extractTextFromMessage(quotedMessage) ?? "") : "",
+    ...(mentions.length > 0 ? { mentions } : {}),
   };
 }
 
@@ -1378,17 +1397,90 @@ export function extractQuotedMessage(contextInfo: proto.IContextInfo | undefined
  * @DisplayName in the text. We remove the first @-prefixed token that looks
  * like a bot mention so the agent sees a clean message.
  */
-export function stripBotMention(text: string, botName?: string | null): string {
+export function stripBotMention(
+  text: string,
+  botName?: string | null,
+  options: { botJids?: string[]; mentionedJids?: string[] } = {},
+): string {
   if (botName) {
-    // Try exact match first: @BotName (possibly with unicode zero-width chars)
     const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const namePattern = new RegExp(`@[\\u200B-\\u200F\\uFEFF]*${escaped}\\b`, "i");
     const stripped = text.replace(namePattern, "").trim();
     if (stripped !== text) return stripped.replace(/\s{2,}/g, " ");
   }
-  // Fallback: strip the first @mention token (WhatsApp inserts mention at the position)
-  return text
-    .replace(/@[\u200B-\u200F\uFEFF]*\S+/, "")
+
+  const botDigits = new Set(options.botJids?.map(mentionDigits).filter((digits): digits is string => Boolean(digits)));
+  if (botDigits.size > 0) {
+    const stripped = stripMentionTokens(
+      text,
+      (token) => {
+        const digits = mentionDigits(token);
+        return digits !== null && botDigits.has(digits);
+      },
+      { firstMatchOnly: false },
+    );
+    if (stripped !== text) return normalizeMentionStrippedText(stripped);
+  }
+
+  const humanDigits = new Set(
+    options.mentionedJids
+      ?.filter((jid) => !options.botJids?.some((botJid) => areJidsSameUser(jid, botJid)))
+      .map(mentionDigits)
+      .filter((digits): digits is string => Boolean(digits)),
+  );
+  return normalizeMentionStrippedText(
+    stripMentionTokens(
+      text,
+      (token) => {
+        const digits = mentionDigits(token);
+        return digits === null || !humanDigits.has(digits);
+      },
+      { firstMatchOnly: true },
+    ),
+  );
+}
+
+function mentionRefFromJid(jid: string): WhatsAppMentionRef {
+  const normalizedJid = jidNormalizedUser(jid);
+  return {
+    jid: normalizedJid,
+    lid: normalizedJid.endsWith("@lid") ? normalizeWhatsAppIdentityLid(normalizedJid) : null,
+    phoneE164: normalizedJid.endsWith("@s.whatsapp.net")
+      ? normalizeWhatsAppIdentityPhone(jidToPhoneNumber(normalizedJid))
+      : null,
+  };
+}
+
+/**
+ * Scans every @-token, not just the first, so a bot mention that appears after
+ * a human mention is still stripped. firstMatchOnly preserves the legacy
+ * rescue behavior of removing only one unidentified token.
+ */
+function stripMentionTokens(
+  text: string,
+  predicate: (token: string) => boolean,
+  { firstMatchOnly }: { firstMatchOnly: boolean },
+): string {
+  let result = text;
+  for (const match of text.matchAll(/@[\u200B-\u200F\uFEFF]*\S+/gu)) {
+    if (!predicate(match[0])) continue;
+    result = result.replace(match[0], "");
+    if (firstMatchOnly) break;
+  }
+  return result;
+}
+
+function normalizeMentionStrippedText(text: string): string {
+  return text.trim().replace(/\s{2,}/g, " ");
+}
+
+function mentionDigits(value: string): string | null {
+  const token = value
     .trim()
-    .replace(/\s{2,}/g, " ");
+    .replace(/[\u200B-\u200F\uFEFF]/gu, "")
+    .replace(/^@/u, "")
+    .split("@")[0]
+    ?.split(":")[0]
+    ?.replace(/\D/gu, "");
+  return token || null;
 }
