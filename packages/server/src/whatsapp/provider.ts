@@ -29,6 +29,13 @@ export interface WhatsAppQuotedMessage {
   providerMessageId: string;
   participantJid: string | null;
   text: string;
+  mentions?: WhatsAppMentionRef[];
+}
+
+export interface WhatsAppMentionRef {
+  jid: string;
+  lid: string | null;
+  phoneE164: string | null;
 }
 
 interface WhatsAppInboundBase {
@@ -57,6 +64,7 @@ export interface WhatsAppGroupInboundMessage extends WhatsAppInboundBase {
   target: Extract<WhatsAppTarget, { kind: "group" }>;
   senderPhoneE164: string | null;
   isMentioned: boolean;
+  mentions?: WhatsAppMentionRef[];
 }
 
 export type WhatsAppInboundMessage = WhatsAppDmInboundMessage | WhatsAppGroupInboundMessage;

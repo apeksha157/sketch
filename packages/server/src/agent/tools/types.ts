@@ -52,6 +52,8 @@ export interface SearchableUserRepo {
   getVerifiedEmailsForUser?: (id: string) => Promise<string[]>;
   findByEmail?: (email: string) => Promise<SelectableUser | undefined>;
   findBySlackId?: (slackUserId: string) => Promise<SelectableUser | undefined>;
+  findByWhatsappNumber?: (whatsappNumber: string) => Promise<SelectableUser | undefined>;
+  findByWhatsappLid?: (lid: string) => Promise<SelectableUser | undefined>;
   findByExactName?: (name: string, excludeUserId?: string) => Promise<SelectableUser | undefined>;
   searchByNamePrefix?: (query: string, limit?: number, excludeUserId?: string) => Promise<SelectableUser[]>;
   searchByNameSubstring?: (query: string, limit?: number, excludeUserId?: string) => Promise<SelectableUser[]>;

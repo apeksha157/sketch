@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { type Kysely, type Selectable, type Transaction, sql } from "kysely";
-import { storedWhatsAppNumber, whatsappNumberLookupValues } from "../../identity-normalization";
+import {
+  normalizeWhatsAppIdentityLid,
+  storedWhatsAppNumber,
+  whatsappNumberLookupValues,
+} from "../../identity-normalization";
 import type { DB, UsersTable } from "../schema";
 import { invalidateSettingsCache } from "./settings";
 import { ensureEntityForUser } from "./user-entity-linking";
@@ -16,6 +20,7 @@ export interface UserRepository {
   listExternal(): Promise<UserRow[]>;
   findBySlackId(slackUserId: string): Promise<UserRow | undefined>;
   findByWhatsappNumber(whatsappNumber: string): Promise<UserRow | undefined>;
+  findByWhatsappLid(lid: string): Promise<UserRow | undefined>;
   findByEmail(email: string): Promise<UserRow | undefined>;
   findById(id: string): Promise<UserRow | undefined>;
   findFirstAdmin(): Promise<UserRow | undefined>;
@@ -138,6 +143,19 @@ function createUserRepositoryWithContext(
       const fallbacks = whatsappNumberLookupValues(whatsappNumber).filter((value) => value !== asGiven);
       if (fallbacks.length === 0) return undefined;
       return db.selectFrom("users").selectAll().where("whatsapp_number", "in", fallbacks).executeTakeFirst();
+    },
+
+    async findByWhatsappLid(lid: string) {
+      const normalized = normalizeWhatsAppIdentityLid(lid);
+      if (!normalized) return undefined;
+      const alias = await db
+        .selectFrom("user_whatsapp_lids")
+        .innerJoin("users", "users.id", "user_whatsapp_lids.user_id")
+        .selectAll("users")
+        .where("user_whatsapp_lids.lid", "=", normalized)
+        .executeTakeFirst();
+      if (alias) return alias;
+      return db.selectFrom("users").selectAll().where("whatsapp_lid", "=", normalized).executeTakeFirst();
     },
 
     async findByEmail(email: string) {

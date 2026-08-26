@@ -11,7 +11,9 @@ import {
 import { createTestDb, createTestLogger } from "../test-utils";
 import type { WhatsAppAdapterHandlers } from "./adapter";
 import { WhatsAppBackfillWorker } from "./backfill-worker";
+import type { WhatsAppGroupMessage } from "./bot";
 import { whatsAppHistoryBatchEnvelopeSchema, whatsAppMessageEnvelopeSchema } from "./facade-contract";
+import { WhatsAppGatewayCapture } from "./gateway/capture";
 import { WhatsAppInboundConsumer, moveWhatsAppStagedMedia } from "./inbound-consumer";
 import { createWhatsAppRuntime } from "./runtime";
 
@@ -151,6 +153,56 @@ describe("WhatsAppInboundConsumer", () => {
         .where("id", "=", inserted.row.id)
         .executeTakeFirstOrThrow(),
     ).resolves.toMatchObject({ status: "consumed", consumed_at: expect.any(String) });
+  });
+
+  it("preserves optional mentions through gateway envelope parsing and consumer reconstruction", async () => {
+    expect(groupEnvelope("old-message").message.mentions).toBeUndefined();
+    const message: WhatsAppGroupMessage = {
+      type: "group",
+      text: "ask @254052281622575",
+      jid: "group@g.us",
+      messageId: "mentioned-message",
+      pushName: "Sender",
+      rawMessage: {
+        key: { remoteJid: "group@g.us", id: "mentioned-message", fromMe: false },
+        messageTimestamp: 1_784_448_000,
+        message: { conversation: "ask @254052281622575" },
+      },
+      isMentioned: true,
+      senderJid: "15551234567@s.whatsapp.net",
+      senderPhone: "+15551234567",
+      mentions: [{ jid: "254052281622575@lid", lid: "254052281622575@lid", phoneE164: null }],
+    };
+    const capture = new WhatsAppGatewayCapture({
+      db,
+      logger: createTestLogger(),
+      stagingDir,
+      maxFileBytes: 1024,
+      getSocket: () => null,
+      rememberMessage: () => undefined,
+      isInitialSyncGeneration: () => false,
+      wake: async () => undefined,
+      onPersistFailure: () => undefined,
+    });
+    await capture.captureMessage(message, { socketGeneration: 1 });
+    let reconstructedMentions: unknown;
+    const consumer = new WhatsAppInboundConsumer({
+      db,
+      logger: createTestLogger(),
+      stagingDir,
+      shouldHandleInboundMessage: () => true,
+      handlers: handlers({
+        captureQueuedMessage: async (message) => {
+          reconstructedMentions = message.kind === "group" ? message.mentions : undefined;
+          return null;
+        },
+      }),
+    });
+    consumer.start();
+    await consumer.wake();
+    await consumer.stop();
+
+    expect(reconstructedMentions).toEqual(message.mentions);
   });
 
   it("resets a dispatched row on boot and reclaims and redispatches it", async () => {

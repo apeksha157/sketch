@@ -171,6 +171,12 @@ export const whatsAppInboundEnvelopeVersionSchema = z.string().regex(/^1\.\d+$/u
 export const whatsAppIsoUtcTimestampSchema = z.string().datetime({ offset: true });
 export const whatsAppConnectionKeySchema = z.string().regex(/^\d{12}:\d{12}$/u);
 
+export const whatsAppMentionRefSchema = z.object({
+  jid: z.string().min(1),
+  lid: z.string().nullable(),
+  phoneE164: z.string().nullable(),
+});
+
 export const whatsAppInboundMessageSchema = z.object({
   type: z.enum(["dm", "group"]),
   text: z.string(),
@@ -183,8 +189,10 @@ export const whatsAppInboundMessageSchema = z.object({
       providerMessageId: z.string(),
       participantJid: z.string().nullable(),
       text: z.string(),
+      mentions: z.array(whatsAppMentionRefSchema).optional(),
     })
     .optional(),
+  mentions: z.array(whatsAppMentionRefSchema).optional(),
   phoneNumber: z.string().optional(),
   isMentioned: z.boolean().optional(),
   senderJid: z.string().optional(),
