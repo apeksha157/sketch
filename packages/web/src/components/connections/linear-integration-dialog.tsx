@@ -383,23 +383,6 @@ function LinearConnectionManageDialog({
               onTargetsChange={setTargets}
               disabled={saving}
             />
-            <Button
-              className="mt-4"
-              variant="outline"
-              size="sm"
-              disabled={saving || !accessChanged}
-              onClick={() =>
-                void run(async () => {
-                  const result = await api.cliIntegrations.replaceShares("linear", connection.id, targets);
-                  setTargets(result.connection.shares);
-                  setSavedTargets(result.connection.shares);
-                  toast.success("Linear access updated");
-                  onOpenChange(false);
-                })
-              }
-            >
-              Save access
-            </Button>
           </section>
           <section className="rounded-lg border border-border bg-muted/10 p-4">
             <div className="flex items-start gap-3">
@@ -482,8 +465,25 @@ function LinearConnectionManageDialog({
           >
             Disconnect
           </Button>
-          <Button variant="outline" onClick={close} disabled={saving}>
-            Done
+          <Button
+            variant={accessChanged ? "default" : "outline"}
+            onClick={() => {
+              if (!accessChanged) {
+                close();
+                return;
+              }
+              void run(async () => {
+                const result = await api.cliIntegrations.replaceShares("linear", connection.id, targets);
+                setTargets(result.connection.shares);
+                setSavedTargets(result.connection.shares);
+                toast.success("Linear access updated");
+                onOpenChange(false);
+              });
+            }}
+            disabled={saving}
+          >
+            {saving && accessChanged ? <SpinnerGapIcon size={14} className="animate-spin" /> : null}
+            {accessChanged ? (saving ? "Saving…" : "Save access") : "Done"}
           </Button>
         </DialogFooter>
       </DialogContent>

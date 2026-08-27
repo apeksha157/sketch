@@ -125,7 +125,7 @@ describe("ConnectionsPage direct connect", () => {
     expect(screen.getByRole("button", { name: "Set up provider" })).toBeInTheDocument();
   });
 
-  it("updates an existing GitHub connection without a Canvas provider", async () => {
+  it("shows saved GitHub access first and updates without a Canvas provider", async () => {
     const user = userEvent.setup();
     const credentialBodies: unknown[] = [];
     const shareBodies: unknown[] = [];
@@ -147,7 +147,7 @@ describe("ConnectionsPage direct connect", () => {
       isOwnedByViewer: true,
       canUse: true,
       canManage: true,
-      shares: [],
+      shares: [{ type: "user", id: "u3" }],
     };
     server.use(
       http.get("/api/setup/status", () =>
@@ -174,6 +174,7 @@ describe("ConnectionsPage direct connect", () => {
           users: [
             { id: "u1", name: "Owner", email: "owner@example.com", type: "human" },
             { id: "u2", name: "Recipient", email: "recipient@example.com", type: "human" },
+            { id: "u3", name: "Existing recipient", email: "existing@example.com", type: "human" },
           ],
         }),
       ),
@@ -191,23 +192,30 @@ describe("ConnectionsPage direct connect", () => {
     renderWithProviders(<ConnectionsPage />);
 
     await user.click(await screen.findByRole("button", { name: "Open settings for GitHub" }));
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
+    const existingRecipient = screen.getByRole("button", { name: /Existing recipient/ });
+    const recipient = screen.getByRole("button", { name: /Recipient recipient@example.com/ });
+    expect(existingRecipient.compareDocumentPosition(recipient) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await user.type(screen.getByLabelText("Replacement GitHub token"), "ghp_updated");
     await user.click(screen.getByRole("button", { name: "Replace token" }));
     await waitFor(() => expect(credentialBodies).toEqual([{ token: "ghp_updated" }]));
 
     await user.click(screen.getByRole("button", { name: /Recipient/ }));
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Everyone in the organization/ }));
     await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() =>
       expect(shareBodies).toEqual([
         {
           targets: [
+            { type: "user", id: "u3" },
             { type: "user", id: "u2" },
             { type: "org", id: "default" },
           ],
         },
       ]),
     );
+    expect(screen.queryByRole("dialog", { name: "Manage GitHub" })).not.toBeInTheDocument();
   });
 
   it("does not start a new intent for an already connected app", async () => {
@@ -639,7 +647,9 @@ describe("ConnectionsPage direct connect", () => {
 
     await user.click(await screen.findByRole("button", { name: "Open settings for Linear" }));
     expect(await screen.findByRole("dialog", { name: "Manage Linear" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Recipient/ }));
+    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Everyone in the organization/ }));
     await user.click(screen.getByRole("button", { name: "Save access" }));
 

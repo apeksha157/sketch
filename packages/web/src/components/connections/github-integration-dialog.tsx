@@ -464,6 +464,7 @@ function GithubConnectionManageDialog({
   const close = () => {
     if (!saving) onOpenChange(false);
   };
+  const accessChanged = !sameTargets(targets, savedTargets);
 
   return (
     <>
@@ -502,22 +503,6 @@ function GithubConnectionManageDialog({
                 disabled={saving}
                 className="mt-4"
               />
-              <Button
-                className="mt-4"
-                variant="outline"
-                size="sm"
-                disabled={saving || sameTargets(targets, savedTargets)}
-                onClick={() =>
-                  void run(async () => {
-                    const result = await api.cliIntegrations.replaceShares(connection.appId, connection.id, targets);
-                    setTargets(result.connection.shares);
-                    setSavedTargets(result.connection.shares);
-                    toast.success("GitHub access updated");
-                  })
-                }
-              >
-                Save access
-              </Button>
             </section>
 
             <section className="rounded-lg border border-border bg-muted/10 p-4">
@@ -604,8 +589,25 @@ function GithubConnectionManageDialog({
             >
               Disconnect
             </Button>
-            <Button variant="outline" onClick={close} disabled={saving}>
-              Done
+            <Button
+              variant={accessChanged ? "default" : "outline"}
+              onClick={() => {
+                if (!accessChanged) {
+                  close();
+                  return;
+                }
+                void run(async () => {
+                  const result = await api.cliIntegrations.replaceShares(connection.appId, connection.id, targets);
+                  setTargets(result.connection.shares);
+                  setSavedTargets(result.connection.shares);
+                  toast.success("GitHub access updated");
+                  onOpenChange(false);
+                });
+              }}
+              disabled={saving}
+            >
+              {saving && accessChanged ? <SpinnerGapIcon size={14} className="animate-spin" /> : null}
+              {accessChanged ? (saving ? "Saving…" : "Save access") : "Done"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -643,7 +645,9 @@ export function AccessPicker({
     onTargetsChange(selectedKeys.has(key) ? targets.filter((item) => targetKey(item) !== key) : [...targets, target]);
   };
   const matches = (value: string) => !query || value.toLowerCase().includes(query);
-  const filteredUsers = teammates.filter((user) => matches(`${user.name} ${user.email ?? ""}`));
+  const filteredUsers = teammates
+    .filter((user) => matches(`${user.name} ${user.email ?? ""}`))
+    .sort((left, right) => Number(selectedKeys.has(`user:${right.id}`)) - Number(selectedKeys.has(`user:${left.id}`)));
   const totalAvailable = (isAdmin ? 1 : 0) + teammates.length;
   const visibleCount = (isAdmin && matches("organization") ? 1 : 0) + filteredUsers.length;
 
