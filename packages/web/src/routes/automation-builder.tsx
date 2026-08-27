@@ -301,6 +301,10 @@ const canvasCompactIconButtonClass =
   "size-7 shrink-0 rounded-[6px] text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand-accent/50";
 const canvasPrimaryButtonClass =
   "h-8 rounded-[7px] bg-brand-accent px-2.5 text-[12px] font-medium text-[#161300] shadow-none transition-colors hover:bg-brand-accent/90 focus-visible:ring-2 focus-visible:ring-brand-accent/50";
+const builderSidebarFrameClass =
+  "absolute inset-y-0 z-40 flex h-full w-full max-w-none shrink-0 flex-col overflow-hidden bg-background text-foreground transition-[width,min-width,max-width,transform,border-color] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:static lg:z-auto lg:h-auto lg:translate-x-0";
+const builderSidebarContentClass =
+  "flex h-full w-full min-w-0 flex-col overflow-hidden transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
 const builderInputClass =
   "h-10 rounded-[8px] border-input bg-background text-[13px] text-foreground shadow-none placeholder:text-muted-foreground focus-visible:border-brand-accent/55 focus-visible:ring-brand-accent/20";
 const builderTextareaClass =
@@ -2116,7 +2120,8 @@ function BuilderChatSidecar({
       inert={!open}
       data-state={open ? "open" : "closed"}
       className={cn(
-        "absolute inset-y-0 left-0 z-40 flex h-full w-full max-w-none shrink-0 flex-col overflow-hidden border-r bg-background text-foreground transition-[width,min-width,max-width,transform,border-color] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:static lg:z-auto lg:h-auto lg:translate-x-0",
+        builderSidebarFrameClass,
+        "left-0 border-r",
         open
           ? "translate-x-0 border-border/80 lg:w-[345px] lg:min-w-[300px] lg:max-w-[420px]"
           : "pointer-events-none -translate-x-full border-transparent lg:w-0 lg:min-w-0 lg:max-w-0",
@@ -2125,7 +2130,8 @@ function BuilderChatSidecar({
     >
       <div
         className={cn(
-          "flex h-full w-full min-w-0 flex-col overflow-hidden transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:w-[345px] lg:min-w-[300px]",
+          builderSidebarContentClass,
+          "lg:w-[345px] lg:min-w-[300px]",
           open ? "lg:translate-x-0" : "lg:-translate-x-full",
         )}
       >
@@ -3895,126 +3901,138 @@ function RunInspector({
       inert={!open}
       data-state={open ? "open" : "closed"}
       className={cn(
-        "absolute inset-y-0 right-0 z-30 flex h-full max-h-full w-full max-w-[420px] min-w-0 origin-right transform-gpu flex-col overflow-hidden border-l border-border/80 bg-background text-foreground shadow-xl will-change-transform transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none sm:w-[392px]",
-        open ? "translate-x-0 opacity-100" : "pointer-events-none translate-x-[calc(100%+1rem)] opacity-0",
+        builderSidebarFrameClass,
+        "right-0 border-l",
+        open
+          ? "translate-x-0 border-border/80 lg:w-[392px] lg:min-w-[360px] lg:max-w-[420px]"
+          : "pointer-events-none translate-x-full border-transparent lg:w-0 lg:min-w-0 lg:max-w-0",
       )}
     >
-      <div className="shrink-0 border-b border-border/80 px-4 pt-4 pb-3">
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-semibold leading-5 text-foreground">All runs</h2>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">{resultSummary}</p>
-          </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
-            data-testid="automation-runs-collapse"
-            aria-label="Collapse all runs"
-            title="Collapse all runs"
-            onClick={onClose}
-          >
-            <SidebarSimpleIcon size={16} className="-scale-x-100" />
-          </Button>
-        </div>
-        <div data-testid="automation-run-filters" className="mt-3 grid grid-cols-2 gap-1.5">
-          <Select value={originFilter} onValueChange={(value) => setOriginFilter(value as RunOriginFilter)}>
-            <SelectTrigger
-              data-testid="automation-run-origin-filter"
-              aria-label="Filter runs by trigger"
-              className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(runOriginFilterLabels) as RunOriginFilter[]).map((value) => (
-                <SelectItem key={value} value={value} className="text-[12px]">
-                  {runOriginFilterLabels[value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as RunStatusFilter)}>
-            <SelectTrigger
-              data-testid="automation-run-status-filter"
-              aria-label="Filter runs by status"
-              className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(runStatusFilterLabels) as RunStatusFilter[]).map((value) => (
-                <SelectItem key={value} value={value} className="text-[12px]">
-                  {runStatusFilterLabels[value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={dateFilter} onValueChange={(value) => setDateFilter(value as RunDateFilter)}>
-            <SelectTrigger
-              data-testid="automation-run-date-filter"
-              aria-label="Filter runs by date"
-              className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(runDateFilterLabels) as RunDateFilter[]).map((value) => (
-                <SelectItem key={value} value={value} className="text-[12px]">
-                  {runDateFilterLabels[value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={sort} onValueChange={(value) => setSort(value as RunSort)}>
-            <SelectTrigger
-              data-testid="automation-run-sort"
-              aria-label="Sort runs by date"
-              className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(runSortLabels) as RunSort[]).map((value) => (
-                <SelectItem key={value} value={value} className="text-[12px]">
-                  {runSortLabels[value]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {filtersActive ? (
-          <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-            <span>Filters applied together</span>
+      <div
+        data-testid="automation-builder-runs-panel-content"
+        className={cn(
+          builderSidebarContentClass,
+          "lg:w-[392px] lg:min-w-[360px]",
+          open ? "lg:translate-x-0" : "lg:translate-x-full",
+        )}
+      >
+        <div className="shrink-0 border-b border-border/80 px-4 pt-4 pb-3">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <h2 className="text-[15px] font-semibold leading-5 text-foreground">All runs</h2>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">{resultSummary}</p>
+            </div>
             <Button
               type="button"
               variant="ghost"
-              size="sm"
-              data-testid="automation-run-filters-clear"
-              className={cn(canvasGhostButtonClass, "h-6 shrink-0 rounded-[5px] px-1.5 text-[10px]")}
-              onClick={clearFilters}
+              size="icon"
+              className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
+              data-testid="automation-runs-collapse"
+              aria-label="Collapse all runs"
+              title="Collapse all runs"
+              onClick={onClose}
             >
-              Clear filters
+              <SidebarSimpleIcon size={16} className="-scale-x-100" />
             </Button>
           </div>
-        ) : null}
-      </div>
+          <div data-testid="automation-run-filters" className="mt-3 grid grid-cols-2 gap-1.5">
+            <Select value={originFilter} onValueChange={(value) => setOriginFilter(value as RunOriginFilter)}>
+              <SelectTrigger
+                data-testid="automation-run-origin-filter"
+                aria-label="Filter runs by trigger"
+                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(runOriginFilterLabels) as RunOriginFilter[]).map((value) => (
+                  <SelectItem key={value} value={value} className="text-[12px]">
+                    {runOriginFilterLabels[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as RunStatusFilter)}>
+              <SelectTrigger
+                data-testid="automation-run-status-filter"
+                aria-label="Filter runs by status"
+                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(runStatusFilterLabels) as RunStatusFilter[]).map((value) => (
+                  <SelectItem key={value} value={value} className="text-[12px]">
+                    {runStatusFilterLabels[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={dateFilter} onValueChange={(value) => setDateFilter(value as RunDateFilter)}>
+              <SelectTrigger
+                data-testid="automation-run-date-filter"
+                aria-label="Filter runs by date"
+                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(runDateFilterLabels) as RunDateFilter[]).map((value) => (
+                  <SelectItem key={value} value={value} className="text-[12px]">
+                    {runDateFilterLabels[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={sort} onValueChange={(value) => setSort(value as RunSort)}>
+              <SelectTrigger
+                data-testid="automation-run-sort"
+                aria-label="Sort runs by date"
+                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(runSortLabels) as RunSort[]).map((value) => (
+                  <SelectItem key={value} value={value} className="text-[12px]">
+                    {runSortLabels[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {filtersActive ? (
+            <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+              <span>Filters applied together</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                data-testid="automation-run-filters-clear"
+                className={cn(canvasGhostButtonClass, "h-6 shrink-0 rounded-[5px] px-1.5 text-[10px]")}
+                onClick={clearFilters}
+              >
+                Clear filters
+              </Button>
+            </div>
+          ) : null}
+        </div>
 
-      <div className="chat-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-        <RunHistoryList
-          draft={draft}
-          runs={filteredHistory}
-          memberNameById={memberNameById}
-          activeRunId={activeRunId}
-          activeRun={activeRun}
-          loading={loading}
-          unavailable={unavailable}
-          onSelectRun={onSelectRun}
-          includeMissingActiveRun={!filtersActive}
-          filtersActive={filtersActive}
-          onClearFilters={clearFilters}
-        />
+        <div className="chat-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+          <RunHistoryList
+            draft={draft}
+            runs={filteredHistory}
+            memberNameById={memberNameById}
+            activeRunId={activeRunId}
+            activeRun={activeRun}
+            loading={loading}
+            unavailable={unavailable}
+            onSelectRun={onSelectRun}
+            includeMissingActiveRun={!filtersActive}
+            filtersActive={filtersActive}
+            onClearFilters={clearFilters}
+          />
+        </div>
       </div>
     </aside>
   );
@@ -4367,8 +4385,7 @@ function RunOriginIndicator({ run }: { run: AutomationRunRecord }) {
   const className = cn(
     "flex size-5 shrink-0 items-center justify-center",
     origin === "automatic" && "text-brand-accent",
-    origin === "manual" && "text-info",
-    origin === "test" && "text-warning",
+    origin !== "automatic" && "text-muted-foreground",
   );
   return (
     <span

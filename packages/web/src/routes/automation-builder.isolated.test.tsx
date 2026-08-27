@@ -866,11 +866,35 @@ describe("AutomationBuilderPage", () => {
     const initialPanel = await screen.findByTestId("automation-builder-runs-panel");
     expect(initialPanel).toHaveAttribute("aria-hidden", "true");
     expect(initialPanel).toHaveAttribute("data-state", "closed");
-    expect(initialPanel).toHaveClass("translate-x-[calc(100%+1rem)]", "opacity-0");
+    expect(initialPanel).toHaveClass(
+      "translate-x-full",
+      "lg:static",
+      "lg:w-0",
+      "lg:min-w-0",
+      "lg:max-w-0",
+      "transition-[width,min-width,max-width,transform,border-color]",
+    );
     await user.click(screen.getByTestId("automation-see-past-runs"));
     expect(initialPanel).toHaveAttribute("aria-hidden", "false");
     expect(initialPanel).toHaveAttribute("data-state", "open");
-    expect(initialPanel).toHaveClass("translate-x-0", "opacity-100", "duration-300");
+    expect(initialPanel).toHaveClass(
+      "translate-x-0",
+      "lg:w-[392px]",
+      "lg:min-w-[360px]",
+      "lg:max-w-[420px]",
+      "duration-300",
+    );
+    const canvas = screen.getByTestId("automation-builder-canvas");
+    expect(initialPanel.parentElement).toBe(canvas.parentElement);
+    expect(canvas.nextElementSibling).toBe(initialPanel);
+    const panelContent = within(initialPanel).getByTestId("automation-builder-runs-panel-content");
+    expect(panelContent).toHaveClass(
+      "lg:w-[392px]",
+      "lg:min-w-[360px]",
+      "lg:translate-x-0",
+      "transition-transform",
+      "duration-300",
+    );
     const initialRunButton = within(initialPanel).getByRole("button", { name: /Open run from/ });
     expect(initialRunButton).toHaveAttribute("aria-expanded", "false");
     expect(within(initialPanel).queryByTestId("automation-run-step-check")).not.toBeInTheDocument();
@@ -998,6 +1022,11 @@ describe("AutomationBuilderPage", () => {
     expect(within(panel).getByRole("img", { name: "Automatic run" })).toBeInTheDocument();
     expect(within(panel).getByRole("img", { name: "Manual run" })).toBeInTheDocument();
     expect(within(panel).getByRole("img", { name: "Test run" })).toBeInTheDocument();
+    expect(within(panel).getByTestId("automation-run-origin-run-automatic")).toHaveClass("text-brand-accent");
+    expect(within(panel).getByTestId("automation-run-origin-run-manual")).toHaveClass("text-muted-foreground");
+    expect(within(panel).getByTestId("automation-run-origin-run-test")).toHaveClass("text-muted-foreground");
+    expect(within(panel).getByTestId("automation-run-origin-run-manual")).not.toHaveClass("text-info");
+    expect(within(panel).getByTestId("automation-run-origin-run-test")).not.toHaveClass("text-warning");
 
     await user.click(screen.getByTestId("automation-run-origin-filter"));
     await user.click(screen.getByRole("option", { name: "Manual" }));
