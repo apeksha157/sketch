@@ -385,14 +385,14 @@ export function ConnectionsPage() {
   const slackChannelsQuery = useQuery({
     queryKey: ["slack-channels"],
     queryFn: () => api.channels.listSlack(),
-    enabled: activeTab === "environment" || activeTab === "applications",
+    enabled: activeTab === "environment",
     retry: false,
   });
 
   const whatsappGroupsQuery = useQuery({
     queryKey: ["whatsapp-groups"],
     queryFn: () => api.channels.listWhatsAppGroups(),
-    enabled: activeTab === "environment" || activeTab === "applications",
+    enabled: activeTab === "environment",
   });
 
   const [showAddMcpDialog, setShowAddMcpDialog] = useState(false);
@@ -693,53 +693,46 @@ export function ConnectionsPage() {
               onSetupProvider={() => setShowProviderSelector(true)}
               onDismiss={() => setDirectConnectState({ kind: "idle" })}
             />
-            {!provider ? (
-              <ConnectionsBanner onConnect={() => setShowProviderSelector(true)} />
-            ) : (
-              <>
-                {(connections.length > 0 || githubConnection || linearConnection) && (
-                  <div className="flex items-center justify-between">
+            {!provider && <ConnectionsBanner onConnect={() => setShowProviderSelector(true)} />}
+            <>
+              {(connections.length > 0 || githubConnection || linearConnection) && (
+                <div className="flex items-center justify-between">
+                  {provider && (
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-[#FEED01]/10 px-2.5 py-1 text-xs text-muted-foreground">
                       <span className="inline-block size-1.5 rounded-full bg-[#FEED01]" />
                       via {provider.type === "canvas" ? "Canvas" : (provider.type ?? "Provider")}
                     </span>
-                    <QuietAddButton
-                      onClick={() => {
-                        setRequestedAppConnect(null);
-                        setRequestedAppSearch(null);
-                        setShowAddIntegrationDialog(true);
-                      }}
-                    >
-                      Add app
-                    </QuietAddButton>
-                  </div>
-                )}
-                <IntegrationsSection
-                  connections={connections}
-                  isLoadingConnections={connectionsQuery.isLoading || cliConnectionsQuery.isLoading}
-                  githubConnection={githubConnection}
-                  githubUsers={usersQuery.data?.users ?? []}
-                  linearConnection={linearConnection}
-                  linearUsers={usersQuery.data?.users ?? []}
-                  linearSlackChannels={slackChannelsQuery.data?.channels ?? []}
-                  linearWhatsappGroups={whatsappGroupsQuery.data?.groups ?? []}
-                  linearCurrentUserId={auth.userId ?? ""}
-                  linearIsAdmin={auth.role === "admin"}
-                  githubSlackChannels={slackChannelsQuery.data?.channels ?? []}
-                  githubWhatsappGroups={whatsappGroupsQuery.data?.groups ?? []}
-                  githubCurrentUserId={auth.userId ?? ""}
-                  githubIsAdmin={auth.role === "admin"}
-                  onAdd={() => {
-                    setRequestedAppConnect(null);
-                    setRequestedAppSearch(null);
-                    setShowAddIntegrationDialog(true);
-                  }}
-                  providerId={provider.id}
-                  orgName={setupStatusQuery.data?.orgName ?? undefined}
-                  onDisconnect={invalidateAll}
-                />
-              </>
-            )}
+                  )}
+                  <QuietAddButton
+                    className={provider ? undefined : "ml-auto"}
+                    onClick={() => {
+                      setRequestedAppConnect(null);
+                      setRequestedAppSearch(null);
+                      setShowAddIntegrationDialog(true);
+                    }}
+                  >
+                    Add app
+                  </QuietAddButton>
+                </div>
+              )}
+              <IntegrationsSection
+                connections={connections}
+                isLoadingConnections={connectionsQuery.isLoading || cliConnectionsQuery.isLoading}
+                githubConnection={githubConnection}
+                linearConnection={linearConnection}
+                integrationUsers={usersQuery.data?.users ?? []}
+                integrationCurrentUserId={auth.userId ?? ""}
+                integrationIsAdmin={auth.role === "admin"}
+                onAdd={() => {
+                  setRequestedAppConnect(null);
+                  setRequestedAppSearch(null);
+                  setShowAddIntegrationDialog(true);
+                }}
+                providerId={provider?.id}
+                orgName={setupStatusQuery.data?.orgName ?? undefined}
+                onDisconnect={invalidateAll}
+              />
+            </>
           </>
         ) : activeTab === "mcps" ? (
           <McpServersSection
@@ -840,47 +833,43 @@ export function ConnectionsPage() {
         onSuccess={invalidateAll}
       />
 
-      {provider && (
-        <AddIntegrationDialog
-          open={showAddIntegrationDialog}
-          onOpenChange={(open) => {
-            setShowAddIntegrationDialog(open);
-            if (!open) {
-              setRequestedAppConnect(null);
-              setRequestedAppSearch(null);
-            }
-          }}
-          providerId={provider.id}
-          connectedAppIds={getPersonallyConnectedAppIds(connections)}
-          initialAppId={null}
-          initialSearch={requestedAppSearch}
-          cliCatalog={cliCatalog}
-          cliConnections={cliConnections}
-          onOpenGithubSetup={() => {
-            setShowAddIntegrationDialog(false);
+      <AddIntegrationDialog
+        open={showAddIntegrationDialog}
+        onOpenChange={(open) => {
+          setShowAddIntegrationDialog(open);
+          if (!open) {
             setRequestedAppConnect(null);
             setRequestedAppSearch(null);
-            setShowGithubSetup(true);
-          }}
-          onOpenLinearSetup={() => {
-            setShowAddIntegrationDialog(false);
-            setRequestedAppConnect(null);
-            setRequestedAppSearch(null);
-            setShowLinearSetup(true);
-          }}
-          onSuccess={(_app, connection) => {
-            invalidateAll();
-            if (connection) void maybeShowConnectorNudge(connection);
-          }}
-        />
-      )}
+          }
+        }}
+        providerId={provider?.id}
+        connectedAppIds={getPersonallyConnectedAppIds(connections)}
+        initialAppId={null}
+        initialSearch={requestedAppSearch}
+        cliCatalog={cliCatalog}
+        cliConnections={cliConnections}
+        onOpenGithubSetup={() => {
+          setShowAddIntegrationDialog(false);
+          setRequestedAppConnect(null);
+          setRequestedAppSearch(null);
+          setShowGithubSetup(true);
+        }}
+        onOpenLinearSetup={() => {
+          setShowAddIntegrationDialog(false);
+          setRequestedAppConnect(null);
+          setRequestedAppSearch(null);
+          setShowLinearSetup(true);
+        }}
+        onSuccess={(_app, connection) => {
+          invalidateAll();
+          if (connection) void maybeShowConnectorNudge(connection);
+        }}
+      />
 
       <GithubIntegrationDialog
         open={showGithubSetup}
         onOpenChange={setShowGithubSetup}
         users={usersQuery.data?.users ?? []}
-        slackChannels={slackChannelsQuery.data?.channels ?? []}
-        whatsappGroups={whatsappGroupsQuery.data?.groups ?? []}
         currentUserId={auth.userId ?? ""}
         isAdmin={auth.role === "admin"}
         onSuccess={invalidateAll}
@@ -890,8 +879,6 @@ export function ConnectionsPage() {
         open={showLinearSetup}
         onOpenChange={setShowLinearSetup}
         users={usersQuery.data?.users ?? []}
-        slackChannels={slackChannelsQuery.data?.channels ?? []}
-        whatsappGroups={whatsappGroupsQuery.data?.groups ?? []}
         currentUserId={auth.userId ?? ""}
         isAdmin={auth.role === "admin"}
         onSuccess={invalidateAll}

@@ -1109,9 +1109,6 @@ export function ChatPage() {
   const hasCanvasIntegrationConnectionCards = integrationConnectionCards.some(
     (connection) => connection.executionMode !== "cli" && connection.executionMode !== "api",
   );
-  const hasCliIntegrationConnectionCards = integrationConnectionCards.some(
-    (connection) => connection.executionMode === "cli" || connection.executionMode === "api",
-  );
   const serversQuery = useQuery({
     queryKey: ["mcp-servers"],
     queryFn: () => api.mcpServers.list(),
@@ -1139,18 +1136,7 @@ export function ChatPage() {
   const cliUsersQuery = useQuery({
     queryKey: ["users", "chat-github"],
     queryFn: () => api.users.list(),
-    enabled: githubSetupOpen || linearSetupOpen || hasCliIntegrationConnectionCards,
-  });
-  const cliSlackChannelsQuery = useQuery({
-    queryKey: ["slack-channels", "chat-github"],
-    queryFn: () => api.channels.listSlack(),
-    enabled: githubSetupOpen || linearSetupOpen || hasCliIntegrationConnectionCards,
-    retry: false,
-  });
-  const cliWhatsappGroupsQuery = useQuery({
-    queryKey: ["whatsapp-groups", "chat-github"],
-    queryFn: () => api.channels.listWhatsAppGroups(),
-    enabled: githubSetupOpen || linearSetupOpen || hasCliIntegrationConnectionCards,
+    enabled: githubSetupOpen || linearSetupOpen,
   });
   const providerLoading = hasCanvasIntegrationConnectionCards && serversQuery.isLoading;
   const connectedAppIds = useMemo(
@@ -1607,8 +1593,6 @@ export function ChatPage() {
         open={githubSetupOpen}
         onOpenChange={setGithubSetupOpen}
         users={cliUsersQuery.data?.users ?? []}
-        slackChannels={cliSlackChannelsQuery.data?.channels ?? []}
-        whatsappGroups={cliWhatsappGroupsQuery.data?.groups ?? []}
         currentUserId={dashboardAuth.userId ?? ""}
         isAdmin={dashboardAuth.role === "admin"}
         onSuccess={handleGithubIntegrationSuccess}
@@ -1618,8 +1602,6 @@ export function ChatPage() {
         open={linearSetupOpen}
         onOpenChange={setLinearSetupOpen}
         users={cliUsersQuery.data?.users ?? []}
-        slackChannels={cliSlackChannelsQuery.data?.channels ?? []}
-        whatsappGroups={cliWhatsappGroupsQuery.data?.groups ?? []}
         currentUserId={dashboardAuth.userId ?? ""}
         isAdmin={dashboardAuth.role === "admin"}
         onSuccess={handleLinearIntegrationSuccess}
