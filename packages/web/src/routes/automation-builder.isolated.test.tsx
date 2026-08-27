@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   removeAutomation: vi.fn(),
   pauseAutomation: vi.fn(),
   resumeAutomation: vi.fn(),
+  setResponseMuted: vi.fn(),
   testStep: vi.fn(),
   sendMessage: vi.fn(),
   setMessages: vi.fn(),
@@ -77,6 +78,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
         remove: mocks.removeAutomation,
         pause: mocks.pauseAutomation,
         resume: mocks.resumeAutomation,
+        setResponseMuted: mocks.setResponseMuted,
         testStep: mocks.testStep,
       },
       webChat: {
@@ -527,6 +529,11 @@ describe("AutomationBuilderPage", () => {
     mocks.pauseAutomation.mockResolvedValue({ id: "task-123", status: "paused" });
     mocks.resumeAutomation.mockClear();
     mocks.resumeAutomation.mockResolvedValue({ id: "task-123", status: "active" });
+    mocks.setResponseMuted.mockClear();
+    mocks.setResponseMuted.mockImplementation(async (_taskId: string, muted: boolean) => ({
+      id: "task-123",
+      outputMode: muted ? "silent" : "deliver",
+    }));
     mocks.testStep.mockResolvedValue({ run: null });
     mocks.sendMessage.mockClear();
     mocks.setMessages.mockClear();
@@ -678,6 +685,34 @@ describe("AutomationBuilderPage", () => {
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/scheduled-tasks" }));
   });
 
+  it("uses the persisted delivery mode as the mute toggle source of truth", async () => {
+    let deliveryMode: AutomationDefinition["delivery"]["mode"] = "deliver";
+    mocks.getAutomation.mockImplementation(async () => ({
+      ...automation,
+      delivery: { ...automation.delivery, mode: deliveryMode },
+    }));
+    mocks.setResponseMuted.mockImplementation(async (_taskId: string, muted: boolean) => {
+      deliveryMode = muted ? "silent" : "deliver";
+      return { id: "task-123", outputMode: deliveryMode };
+    });
+
+    const user = userEvent.setup();
+    renderBuilder();
+
+    const mute = await screen.findByRole("button", { name: "Mute automation responses" });
+    await waitFor(() => expect(mute).toBeEnabled());
+    expect(mute).toHaveTextContent("Mute");
+    await user.click(mute);
+
+    await waitFor(() => expect(mocks.setResponseMuted).toHaveBeenLastCalledWith("task-123", true));
+    const unmute = await screen.findByRole("button", { name: "Unmute automation responses" });
+    expect(unmute).toHaveTextContent("Unmute");
+    await user.click(unmute);
+
+    await waitFor(() => expect(mocks.setResponseMuted).toHaveBeenLastCalledWith("task-123", false));
+    expect(await screen.findByRole("button", { name: "Mute automation responses" })).toHaveTextContent("Mute");
+  });
+
   it("uses the automation-list nav only from the automation thread list", async () => {
     mocks.search = {};
     renderBuilder();
@@ -782,8 +817,6 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    expect(panel).toHaveAttribute("aria-hidden", "true");
-    await user.click(screen.getByTestId("automation-see-past-runs"));
     expect(panel).toHaveAttribute("aria-hidden", "false");
     expect(within(panel).getByTestId("automation-run-step-trigger")).toBeInTheDocument();
     expect(within(panel).getByTestId("automation-run-step-check")).toBeInTheDocument();
@@ -943,9 +976,6 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    expect(panel).toHaveAttribute("aria-hidden", "true");
-    const seePastRuns = await screen.findByTestId("automation-see-past-runs");
-    await user.click(seePastRuns);
     expect(panel).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByTestId("automation-run-history")).toBeInTheDocument();
     const runButtons = screen.getAllByRole("button", { name: /Open run from/ });
@@ -980,25 +1010,15 @@ describe("AutomationBuilderPage", () => {
     const initialRender = renderBuilder();
 
     const initialPanel = await screen.findByTestId("automation-builder-runs-panel");
-    expect(initialPanel).toHaveAttribute("aria-hidden", "true");
-    expect(initialPanel).toHaveAttribute("data-state", "closed");
-    expect(initialPanel).toHaveClass(
-      "translate-x-full",
-      "lg:static",
-      "lg:w-0",
-      "lg:min-w-0",
-      "lg:max-w-0",
-      "transition-[width,min-width,max-width,transform,border-color]",
-    );
-    await user.click(screen.getByTestId("automation-see-past-runs"));
     expect(initialPanel).toHaveAttribute("aria-hidden", "false");
     expect(initialPanel).toHaveAttribute("data-state", "open");
     expect(initialPanel).toHaveClass(
       "translate-x-0",
+      "lg:static",
       "lg:w-[392px]",
       "lg:min-w-[360px]",
       "lg:max-w-[420px]",
-      "duration-300",
+      "transition-[width,min-width,max-width,transform,border-color]",
     );
     const canvas = screen.getByTestId("automation-builder-canvas");
     expect(initialPanel.parentElement).toBe(canvas.parentElement);
@@ -1022,8 +1042,7 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const selectedPanel = await screen.findByTestId("automation-builder-runs-panel");
-    expect(selectedPanel).toHaveAttribute("aria-hidden", "true");
-    await user.click(screen.getByTestId("automation-see-past-runs"));
+    expect(selectedPanel).toHaveAttribute("aria-hidden", "false");
     const selectedRunButton = within(selectedPanel).getByRole("button", { name: /Open run from/ });
     expect(selectedRunButton).toHaveAttribute("aria-expanded", "true");
     expect(within(selectedPanel).getByTestId("automation-run-details-run-selected")).toHaveClass(
@@ -1088,7 +1107,6 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    await user.click(screen.getByTestId("automation-see-past-runs"));
     const triggerStep = within(panel).getByTestId("automation-run-step-trigger");
     const failedStep = within(panel).getByTestId("automation-run-step-check");
     expect(triggerStep).toHaveAttribute("data-status", "success");
@@ -1128,7 +1146,6 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    await user.click(screen.getByTestId("automation-see-past-runs"));
     expect(within(panel).getByTestId("automation-run-origin-run-automatic")).toHaveAttribute(
       "data-origin",
       "automatic",
@@ -1205,7 +1222,6 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    await user.click(screen.getByTestId("automation-see-past-runs"));
     expect(within(panel).getByText("4 recent runs")).toBeInTheDocument();
     await user.click(screen.getByTestId("automation-run-status-filter"));
     await user.click(screen.getByRole("option", { name: "Failed" }));
@@ -1362,8 +1378,13 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
+    const runsPanel = screen.getByTestId("automation-builder-runs-panel");
     expect(sidecar).toHaveAttribute("data-state", "open");
     expect(sidecar).toHaveAttribute("aria-hidden", "false");
+    expect(runsPanel).toHaveAttribute("data-state", "open");
+    expect(runsPanel).toHaveAttribute("aria-hidden", "false");
+    expect(screen.getByTestId("automation-builder-canvas")).toHaveAttribute("data-chat-sidecar-open", "true");
+    expect(screen.getByTestId("automation-builder-canvas")).toHaveAttribute("data-run-inspector-open", "true");
     expect(sidecar).toHaveClass(
       "translate-x-0",
       "lg:w-[345px]",
@@ -1382,12 +1403,60 @@ describe("AutomationBuilderPage", () => {
     expect(screen.getByTestId("automation-builder-toolbar")).toContainElement(expandChat);
     expect(screen.getByTestId("automation-builder-header-actions")).not.toContainElement(expandChat);
     expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Past runs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Past runs" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Expand automation chat" }));
     expect(sidecar).toHaveAttribute("data-state", "open");
     expect(sidecar).toHaveAttribute("aria-hidden", "false");
     expect(sidecar).toHaveClass("translate-x-0", "lg:w-[345px]", "lg:min-w-[300px]");
+  });
+
+  it("uses deliberate left, center, and right header zones when both sidebars are closed", async () => {
+    const user = userEvent.setup();
+    mocks.getAutomation.mockResolvedValue(automationWithStepOutput("latest step output"));
+    renderBuilder();
+
+    const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
+    await user.click(within(sidecar).getByRole("button", { name: "Collapse automation chat" }));
+    await user.click(screen.getByRole("button", { name: "Collapse all runs" }));
+
+    const canvas = screen.getByTestId("automation-builder-canvas");
+    const left = screen.getByTestId("automation-builder-toolbar");
+    const leftStatus = screen.getByTestId("automation-builder-header-status");
+    const center = screen.getByTestId("automation-builder-header-meta");
+    const right = screen.getByTestId("automation-builder-header-actions");
+    const latest = screen.getByTestId("automation-latest-run-chip");
+    const editing = screen.getByText("You're editing").parentElement;
+    const chat = screen.getByRole("button", { name: "Expand automation chat" });
+
+    expect(canvas).not.toHaveClass("automation-builder-canvas-enter");
+    expect(canvas).toHaveAttribute("data-chat-sidecar-open", "false");
+    expect(canvas).toHaveAttribute("data-run-inspector-open", "false");
+    expect(left).toContainElement(chat);
+    expect(leftStatus).toContainElement(latest);
+    expect(leftStatus).toContainElement(editing);
+    expect(right).not.toContainElement(latest);
+    expect(center).toContainElement(screen.getByLabelText(/Owner Owner Member/));
+    expect(right).not.toContainElement(screen.getByLabelText(/Owner Owner Member/));
+    expect(right).toContainElement(screen.getByRole("button", { name: "Run" }));
+    expect(right).toContainElement(screen.getByRole("button", { name: "Past runs" }));
+    expect(screen.getByTestId("automation-builder-header-meta")).toBeInTheDocument();
+    expect(screen.getByTestId("automation-builder-header-management-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("automation-builder-header-lifecycle-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("automation-builder-header-execution-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("automation-builder-header-panel-actions")).toBeInTheDocument();
+    expect(screen.getByTestId("automation-builder-header-management-row")).toContainElement(
+      screen.getByTestId("automation-builder-header-management-actions"),
+    );
+    expect(screen.getByTestId("automation-builder-header-management-row")).toContainElement(
+      screen.getByTestId("automation-builder-header-panel-actions"),
+    );
+    expect(screen.getByTestId("automation-builder-header-run-row")).toContainElement(
+      screen.getByTestId("automation-builder-header-lifecycle-actions"),
+    );
+    expect(screen.getByTestId("automation-builder-header-run-row")).toContainElement(
+      screen.getByTestId("automation-builder-header-execution-actions"),
+    );
   });
 
   it("renders a Slack channel message trigger and its channel", async () => {
@@ -1836,8 +1905,14 @@ describe("AutomationBuilderPage", () => {
     expect(toolbar).not.toHaveClass("border-border/70", "bg-card/90", "p-1.5", "shadow-md");
     expect(screen.getByTestId("automation-latest-run-chip")).toHaveClass("border-success/35", "bg-success/10");
     expect(toolbar).toHaveClass("justify-start");
-    expect(headerActions).toHaveClass("justify-end");
-    expect(headerActions).toContainElement(screen.getByTestId("automation-latest-run-chip"));
+    expect(headerActions).toHaveClass("automation-builder-header-actions");
+    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-management-actions"));
+    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-lifecycle-actions"));
+    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-execution-actions"));
+    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-panel-actions"));
+    expect(screen.getByTestId("automation-builder-header-status")).toContainElement(
+      screen.getByTestId("automation-latest-run-chip"),
+    );
     expect(toolbar).not.toContainElement(screen.getByTestId("automation-latest-run-chip"));
     expect(sidecar).toHaveClass("border-border/80", "bg-background", "text-foreground");
     expect(screen.getByTestId("automation-background")).toHaveAttribute("data-color", "var(--automation-builder-grid)");

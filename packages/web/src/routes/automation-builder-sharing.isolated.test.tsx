@@ -380,8 +380,10 @@ describe("AutomationBuilderPage sharing", () => {
 
     renderBuilder();
 
-    expect(await screen.findByTestId("automation-shared-hint")).toBeInTheDocument();
-    expect(screen.getByText("Shared with you · runs execute with the owner's integrations")).toBeInTheDocument();
+    const sharedHint = await screen.findByTestId("automation-shared-hint");
+    expect(sharedHint).toHaveClass("automation-builder-shared-hint", "w-full", "text-right");
+    expect(screen.getByTestId("automation-builder-ownership-stack")).toContainElement(sharedHint);
+    expect(screen.getByText("Runs use the owner's integrations")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Share/i })).not.toBeInTheDocument();
   });
 
@@ -441,10 +443,8 @@ describe("AutomationBuilderPage sharing", () => {
       ],
     });
 
-    const user = userEvent.setup();
     renderBuilder();
 
-    await user.click(await screen.findByTestId("automation-see-past-runs"));
     expect(await screen.findByText(/by Grantee Member/)).toBeInTheDocument();
   });
 

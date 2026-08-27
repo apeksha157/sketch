@@ -57,6 +57,8 @@ import {
   ArchiveIcon,
   ArrowClockwiseIcon,
   ArrowLeftIcon,
+  BellIcon,
+  BellSlashIcon,
   BracketsCurlyIcon,
   BrainIcon,
   CalendarDotsIcon,
@@ -68,7 +70,6 @@ import {
   CodeIcon,
   CopySimpleIcon,
   EnvelopeSimpleIcon,
-  FlaskIcon,
   GitBranchIcon,
   GlobeHemisphereWestIcon,
   GoogleLogoIcon,
@@ -625,7 +626,7 @@ export function AutomationBuilderPage() {
   const queryKey = useMemo(() => automationDefinitionQueryKey(taskId), [taskId]);
   const [draft, setDraft] = useState<DraftAutomation | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [runInspectorOpen, setRunInspectorOpen] = useState(false);
+  const [runInspectorOpen, setRunInspectorOpen] = useState(true);
   const [chatSidecarOpen, setChatSidecarOpen] = useState(true);
   const [triggeredRunId, setTriggeredRunId] = useState<string | null>(null);
   const [runRequestError, setRunRequestError] = useState<unknown | null>(null);
@@ -889,6 +890,27 @@ export function AutomationBuilderPage() {
     onError: (error) => {
       if (isLeaseStaleError(error)) setAuthoringLease(null);
       toast.error(error instanceof Error ? error.message : "Could not change the automation status");
+    },
+  });
+
+  const responseDeliveryMutation = useMutation({
+    mutationFn: (muted: boolean) => api.scheduledTasks.setResponseMuted(taskId, muted),
+    onSuccess: async (task) => {
+      const mode = task.outputMode;
+      queryClient.setQueryData<AutomationDefinition>(queryKey, (current) =>
+        current ? { ...current, delivery: { ...current.delivery, mode } } : current,
+      );
+      setDraft((current) => {
+        if (!current) return current;
+        const next = { ...current, delivery: { ...current.delivery, mode } };
+        latestDraftRef.current = next;
+        return next;
+      });
+      await invalidateAutomationQueries(queryClient, [taskId]);
+      toast.success(mode === "silent" ? "Automation responses muted" : "Automation responses unmuted");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not change automation response delivery");
     },
   });
 
@@ -1224,16 +1246,18 @@ export function AutomationBuilderPage() {
 
       <div
         data-testid="automation-builder-canvas"
-        className="automation-builder-canvas-container automation-builder-canvas-enter relative min-h-0 min-w-0 flex-1 bg-background text-foreground"
+        data-chat-sidecar-open={chatSidecarOpen}
+        data-run-inspector-open={runInspectorOpen}
+        className="automation-builder-canvas-container relative min-h-0 min-w-0 flex-1 bg-background text-foreground"
         aria-busy={runMutation.isPending || selectedRun?.status === "running"}
       >
         <div
           data-testid="automation-builder-header"
-          className="automation-builder-header pointer-events-none absolute top-4 left-4 right-4 z-10 flex min-w-0 flex-col gap-2.5"
+          className="automation-builder-header pointer-events-none absolute top-4 left-4 right-4 z-10 min-w-0"
         >
           <div
             data-testid="automation-builder-toolbar"
-            className="automation-builder-header-primary automation-builder-toolbar-enter pointer-events-auto flex w-full min-w-0 max-w-full flex-wrap items-center justify-start gap-2"
+            className="automation-builder-header-primary automation-builder-toolbar-enter pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center justify-start gap-2"
           >
             {!chatSidecarOpen ? (
               <Button
@@ -1252,8 +1276,8 @@ export function AutomationBuilderPage() {
           </div>
 
           <div
-            data-testid="automation-builder-header-actions"
-            className="automation-builder-header-actions pointer-events-auto flex w-full min-w-0 max-w-full flex-wrap items-center justify-end gap-2"
+            data-testid="automation-builder-header-status"
+            className="automation-builder-header-status pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center gap-2"
           >
             <output
               data-testid="automation-latest-run-chip"
@@ -1287,28 +1311,6 @@ export function AutomationBuilderPage() {
               onRequestTakeover={() => setStealDialogOpen(true)}
               onReviewStealRequest={() => setHolderResponseDialogOpen(true)}
             />
-            <BuilderOwnership automation={automation} />
-            {canShareAutomation ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className={cn(canvasToolbarButtonClass, "gap-1.5")}
-                onClick={() => setShareDialogOpen(true)}
-                disabled={builderReadOnly}
-              >
-                <ShareNetworkIcon size={14} />
-                Share{automation.shares && automation.shares.length > 0 ? ` · ${automation.shares.length}` : ""}
-              </Button>
-            ) : null}
-            {automation.isOwner === false ? (
-              <span
-                data-testid="automation-shared-hint"
-                className="inline-flex min-h-8 items-center rounded-[7px] border border-border/70 bg-card/90 px-2.5 text-[11px] font-medium text-muted-foreground"
-              >
-                Shared with you · runs execute with the owner's integrations
-              </span>
-            ) : null}
-            <span aria-hidden className="automation-builder-header-break" />
             {showRunStatusNotice ? (
               <AutomationRunStatusNotice
                 state={runRequestError ? "failure" : selectedRunLifecycle}
@@ -1318,120 +1320,220 @@ export function AutomationBuilderPage() {
                 requestFailed={Boolean(runRequestError)}
               />
             ) : null}
-            {!placeholderSetup ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className={cn(
-                  canvasToolbarButtonClass,
-                  "gap-1.5 border-destructive/35 text-destructive hover:bg-destructive/10 hover:text-destructive",
-                )}
-                aria-label="Delete automation"
-                onClick={() => setDeleteDialogOpen(true)}
-                disabled={deleteMutation.isPending || builderReadOnly}
+          </div>
+
+          <div
+            data-testid="automation-builder-header-meta"
+            className="automation-builder-header-meta pointer-events-auto flex min-w-0 max-w-full flex-col items-end justify-end gap-1"
+          >
+            <div
+              data-testid="automation-builder-ownership-stack"
+              className="flex w-fit min-w-0 max-w-full flex-col items-center gap-1"
+            >
+              <BuilderOwnership automation={automation} />
+              {automation.isOwner === false ? (
+                <span
+                  data-testid="automation-shared-hint"
+                  className="automation-builder-shared-hint w-full px-1 text-right text-[11px] leading-4 text-muted-foreground"
+                >
+                  Runs use the owner's integrations
+                </span>
+              ) : null}
+            </div>
+          </div>
+
+          <div
+            data-testid="automation-builder-header-actions"
+            className="automation-builder-header-actions pointer-events-auto min-w-0 max-w-full"
+          >
+            <div className="automation-builder-header-action-layout">
+              <div
+                data-testid="automation-builder-header-management-row"
+                className="automation-builder-header-action-row"
               >
-                <TrashIcon size={14} />
-                <span>Delete</span>
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              variant="outline"
-              className={canvasToolbarButtonClass}
-              onClick={closeBuilder}
-              disabled={discardingSetup}
-            >
-              {discardingSetup ? "Discarding…" : placeholderSetup ? "Discard setup" : "Close"}
-            </Button>
-            {!placeholderSetup && canControlAutomationStatus && automation.status !== "completed" ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className={canvasToolbarButtonClass}
-                aria-label={automation.status === "active" ? "Pause automation" : "Resume automation"}
-                onClick={() => statusMutation.mutate(automation.status === "active" ? "pause" : "resume")}
-                disabled={statusMutation.isPending || runIsBusy || builderReadOnly}
-              >
-                {statusMutation.isPending ? (
-                  <SpinnerGapIcon size={14} className="animate-spin" />
-                ) : automation.status === "active" ? (
-                  <PauseIcon size={14} weight="fill" />
-                ) : (
-                  <PlayIcon size={14} weight="fill" />
-                )}
-                {statusMutation.isPending
-                  ? automation.status === "active"
-                    ? "Pausing…"
-                    : "Resuming…"
-                  : automation.status === "active"
-                    ? "Pause"
-                    : "Resume"}
-              </Button>
-            ) : null}
-            <Button
-              size="sm"
-              variant="outline"
-              className={canvasToolbarButtonClass}
-              aria-label="Test automation"
-              onClick={() => runMutation.mutate("test")}
-              disabled={runIsBusy || !canRunAutomation || builderReadOnly}
-              title={
-                placeholderSetup
-                  ? "Finish setup before testing this automation"
-                  : canRunAutomation
-                    ? "Run without sending output to configured channels"
-                    : "Only active automations can be tested"
-              }
-            >
-              {runMutation.isPending && runMutation.variables === "test" ? (
-                <SpinnerGapIcon size={14} className="animate-spin" />
-              ) : (
-                <PlayIcon size={14} weight="fill" />
-              )}
-              {runMutation.isPending && runMutation.variables === "test"
-                ? "Testing…"
-                : placeholderSetup
-                  ? "Setting up"
-                  : canRunAutomation
-                    ? "Test"
-                    : "Paused"}
-            </Button>
-            <Button
-              size="sm"
-              className={cn(canvasPrimaryButtonClass, "gap-1.5")}
-              onClick={() => runMutation.mutate("manual")}
-              disabled={runIsBusy || !canRunAutomation || builderReadOnly}
-              title={
-                placeholderSetup
-                  ? "Finish setup before running this automation"
-                  : canRunAutomation
-                    ? undefined
-                    : "Only active automations can be triggered"
-              }
-            >
-              {runMutation.isPending && runMutation.variables === "manual" ? (
-                <SpinnerGapIcon size={14} className="animate-spin" />
-              ) : (
-                <PlayIcon size={14} weight="fill" />
-              )}
-              {runMutation.isPending && runMutation.variables === "manual"
-                ? "Starting…"
-                : runIsBusy
-                  ? "Running"
-                  : placeholderSetup
-                    ? "Setting up"
-                    : canRunAutomation
-                      ? "Run"
-                      : "Paused"}
-            </Button>
-            {!runInspectorOpen ? (
-              <PastRunsButton
-                onClick={() => {
-                  setSelectedStepId(null);
-                  setRunInspectorOpen(true);
-                }}
-              />
-            ) : null}
+                <div
+                  data-testid="automation-builder-header-management-actions"
+                  className="automation-builder-header-action-group automation-builder-header-management-actions flex items-center justify-end gap-2"
+                >
+                  {canShareAutomation ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={cn(canvasToolbarButtonClass, "gap-1.5")}
+                      onClick={() => setShareDialogOpen(true)}
+                      disabled={builderReadOnly}
+                    >
+                      <ShareNetworkIcon size={14} />
+                      Share{automation.shares && automation.shares.length > 0 ? ` · ${automation.shares.length}` : ""}
+                    </Button>
+                  ) : null}
+                  {!placeholderSetup ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={cn(
+                        canvasToolbarButtonClass,
+                        "gap-1.5 border-destructive/35 text-destructive hover:bg-destructive/10 hover:text-destructive",
+                      )}
+                      aria-label="Delete automation"
+                      onClick={() => setDeleteDialogOpen(true)}
+                      disabled={deleteMutation.isPending || builderReadOnly}
+                    >
+                      <TrashIcon size={14} />
+                      <span>Delete</span>
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={canvasToolbarButtonClass}
+                    onClick={closeBuilder}
+                    disabled={discardingSetup}
+                  >
+                    {discardingSetup ? "Discarding…" : placeholderSetup ? "Discard setup" : "Close"}
+                  </Button>
+                </div>
+
+                <div
+                  data-testid="automation-builder-header-panel-actions"
+                  className="automation-builder-header-action-group automation-builder-header-panel-actions flex items-center gap-2"
+                >
+                  {!runInspectorOpen ? (
+                    <PastRunsButton
+                      onClick={() => {
+                        setSelectedStepId(null);
+                        setRunInspectorOpen(true);
+                      }}
+                    />
+                  ) : null}
+                </div>
+              </div>
+
+              <div data-testid="automation-builder-header-run-row" className="automation-builder-header-action-row">
+                <div
+                  data-testid="automation-builder-header-lifecycle-actions"
+                  className="automation-builder-header-action-group automation-builder-header-lifecycle-actions flex items-center gap-2"
+                >
+                  {!placeholderSetup && canControlAutomationStatus ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={canvasToolbarButtonClass}
+                      aria-label={
+                        automation.delivery.mode === "silent"
+                          ? "Unmute automation responses"
+                          : "Mute automation responses"
+                      }
+                      aria-pressed={automation.delivery.mode === "silent"}
+                      onClick={() => responseDeliveryMutation.mutate(automation.delivery.mode === "deliver")}
+                      disabled={responseDeliveryMutation.isPending || builderReadOnly}
+                    >
+                      {responseDeliveryMutation.isPending ? (
+                        <SpinnerGapIcon size={14} className="animate-spin" />
+                      ) : automation.delivery.mode === "silent" ? (
+                        <BellIcon size={14} weight="fill" />
+                      ) : (
+                        <BellSlashIcon size={14} />
+                      )}
+                      {responseDeliveryMutation.isPending
+                        ? automation.delivery.mode === "silent"
+                          ? "Unmuting…"
+                          : "Muting…"
+                        : automation.delivery.mode === "silent"
+                          ? "Unmute"
+                          : "Mute"}
+                    </Button>
+                  ) : null}
+                  {!placeholderSetup && canControlAutomationStatus && automation.status !== "completed" ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={canvasToolbarButtonClass}
+                      aria-label={automation.status === "active" ? "Pause automation" : "Resume automation"}
+                      onClick={() => statusMutation.mutate(automation.status === "active" ? "pause" : "resume")}
+                      disabled={statusMutation.isPending || runIsBusy || builderReadOnly}
+                    >
+                      {statusMutation.isPending ? (
+                        <SpinnerGapIcon size={14} className="animate-spin" />
+                      ) : automation.status === "active" ? (
+                        <PauseIcon size={14} weight="fill" />
+                      ) : (
+                        <PlayIcon size={14} weight="fill" />
+                      )}
+                      {statusMutation.isPending
+                        ? automation.status === "active"
+                          ? "Pausing…"
+                          : "Resuming…"
+                        : automation.status === "active"
+                          ? "Pause"
+                          : "Resume"}
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div
+                  data-testid="automation-builder-header-execution-actions"
+                  className="automation-builder-header-action-group automation-builder-header-execution-actions flex items-center gap-2"
+                >
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className={canvasToolbarButtonClass}
+                    aria-label="Test automation"
+                    onClick={() => runMutation.mutate("test")}
+                    disabled={runIsBusy || !canRunAutomation || builderReadOnly}
+                    title={
+                      placeholderSetup
+                        ? "Finish setup before testing this automation"
+                        : canRunAutomation
+                          ? "Run without sending output to configured channels"
+                          : "Only active automations can be tested"
+                    }
+                  >
+                    {runMutation.isPending && runMutation.variables === "test" ? (
+                      <SpinnerGapIcon size={14} className="animate-spin" />
+                    ) : (
+                      <PlayIcon size={15} />
+                    )}
+                    {runMutation.isPending && runMutation.variables === "test"
+                      ? "Testing…"
+                      : placeholderSetup
+                        ? "Setting up"
+                        : canRunAutomation
+                          ? "Test"
+                          : "Paused"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    className={cn(canvasPrimaryButtonClass, "gap-1.5")}
+                    onClick={() => runMutation.mutate("manual")}
+                    disabled={runIsBusy || !canRunAutomation || builderReadOnly}
+                    title={
+                      placeholderSetup
+                        ? "Finish setup before running this automation"
+                        : canRunAutomation
+                          ? undefined
+                          : "Only active automations can be triggered"
+                    }
+                  >
+                    {runMutation.isPending && runMutation.variables === "manual" ? (
+                      <SpinnerGapIcon size={14} className="animate-spin" />
+                    ) : (
+                      <PlayIcon size={14} weight="fill" />
+                    )}
+                    {runMutation.isPending && runMutation.variables === "manual"
+                      ? "Starting…"
+                      : runIsBusy
+                        ? "Running"
+                        : placeholderSetup
+                          ? "Setting up"
+                          : canRunAutomation
+                            ? "Run"
+                            : "Paused"}
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -4404,7 +4506,7 @@ function RunOriginIndicator({ run }: { run: AutomationRunRecord }) {
       ) : origin === "manual" ? (
         <PlayIcon size={14} weight="fill" aria-hidden />
       ) : (
-        <FlaskIcon size={15} weight="fill" aria-hidden />
+        <PlayIcon size={15} aria-hidden />
       )}
     </span>
   );
