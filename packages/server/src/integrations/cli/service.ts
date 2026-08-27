@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
-  type AgentEnvironmentShareTargetInput,
   type CliIntegrationAppId,
   type CliIntegrationCatalogApp,
   type CliIntegrationConnection,
+  type CliIntegrationShareTarget,
   cliIntegrationAppDefinition,
   cliIntegrationAppDefinitions,
   cliSkillRequiredEnv,
 } from "@sketch/shared";
-import { type Kysely, sql } from "kysely";
+import type { Kysely } from "kysely";
 import { decrypt, encrypt } from "../../auth/encryption";
 import type {
   AgentEnvironmentRuntimeContext,
@@ -92,12 +92,8 @@ function isUniqueConstraintError(error: unknown): boolean {
   return isUniqueConstraintError(candidate.cause);
 }
 
-function targetKey(target: AgentEnvironmentShareTargetInput): string {
-  return `${target.type}:${target.id}`;
-}
-
-function normalizeTargets(targets: AgentEnvironmentShareTargetInput[]): AgentEnvironmentShareTargetInput[] {
-  return [...new Map(targets.map((target) => [targetKey(target), target])).values()];
+function normalizeTargets(targets: CliIntegrationShareTarget[]): CliIntegrationShareTarget[] {
+  return [...new Map(targets.map((target) => [`${target.type}:${target.id}`, target])).values()];
 }
 
 function safeErrorMessage(error: unknown, appId: CliIntegrationAppId): string {
@@ -120,18 +116,16 @@ export function createCliIntegrationService(params: {
 }) {
   const connections = createCliIntegrationConnectionsRepository(params.db);
 
-  async function getShares(variableId: string): Promise<AgentEnvironmentShareTargetInput[]> {
+  async function getShares(variableId: string): Promise<CliIntegrationShareTarget[]> {
     const rows = await params.db
       .selectFrom("agent_environment_variable_shares")
       .select(["target_type", "target_id"])
       .where("variable_id", "=", variableId)
+      .where("target_type", "in", ["user", "org"])
       .orderBy("target_type", "asc")
       .orderBy("target_id", "asc")
       .execute();
-    return rows.map((row) => ({
-      type: row.target_type as AgentEnvironmentShareTargetInput["type"],
-      id: row.target_id,
-    }));
+    return rows.map((row) => ({ type: row.target_type as "user" | "org", id: row.target_id }));
   }
 
   async function serialize(row: CliIntegrationConnectionRow, viewerUserId: string): Promise<CliIntegrationConnection> {
@@ -139,10 +133,9 @@ export function createCliIntegrationService(params: {
     if (!definition) throw new Error(`Unknown CLI integration app: ${row.app_id}`);
     const owner = await params.db
       .selectFrom("users")
-      .select(["id", "name"])
+      .select("name")
       .where("id", "=", row.owner_user_id)
       .executeTakeFirst();
-    const shares = await getShares(row.credential_variable_id);
     const isOwned = row.owner_user_id === viewerUserId;
     return {
       id: row.id,
@@ -163,7 +156,7 @@ export function createCliIntegrationService(params: {
       isOwnedByViewer: isOwned,
       canUse: row.status === "active",
       canManage: isOwned,
-      shares: isOwned ? shares : [],
+      shares: isOwned ? await getShares(row.credential_variable_id) : [],
     };
   }
 
@@ -215,12 +208,19 @@ export function createCliIntegrationService(params: {
     }
   }
 
+  async function runtimeUserId(context: AgentEnvironmentRuntimeContext): Promise<string | null> {
+    const userId = context.taskContext?.createdBy ?? context.currentUserId ?? null;
+    if (!userId || userId === "unknown") return null;
+    const user = await params.db.selectFrom("users").select("type").where("id", "=", userId).executeTakeFirst();
+    return user && user.type !== "external" ? userId : null;
+  }
+
   async function insertShares(
     executor: Kysely<DB>,
     variableId: string,
     createdBy: string,
     appId: CliIntegrationAppId,
-    targets: AgentEnvironmentShareTargetInput[],
+    targets: CliIntegrationShareTarget[],
   ): Promise<void> {
     for (const target of normalizeTargets(targets)) {
       await executor
@@ -237,51 +237,11 @@ export function createCliIntegrationService(params: {
     }
   }
 
-  async function isExternalRuntimeUser(context: AgentEnvironmentRuntimeContext): Promise<boolean> {
-    const userId = context.taskContext?.createdBy ?? context.currentUserId ?? null;
-    if (!userId || userId === "unknown") return true;
-    const user = await params.db.selectFrom("users").select("type").where("id", "=", userId).executeTakeFirst();
-    return user?.type === "external";
-  }
-
   async function runtimeConnectionRows(
     context: AgentEnvironmentRuntimeContext,
   ): Promise<CliIntegrationConnectionRow[]> {
-    if (await isExternalRuntimeUser(context)) return [];
-    const task = context.taskContext;
-    const isDmContext = context.contextType === "dm" || task?.contextType === "dm";
-    const isScheduledTask = context.contextType === "scheduled_task";
-    const ownerUserId = isDmContext || isScheduledTask ? (task?.createdBy ?? context.currentUserId ?? null) : null;
-    const targets: AgentEnvironmentShareTargetInput[] = [];
-    if (task?.contextType === "channel" && task.platform === "slack") {
-      targets.push({ type: "slack_channel", id: task.deliveryTarget });
-    } else if (task?.contextType === "group" && task.platform === "whatsapp") {
-      targets.push({ type: "whatsapp_group", id: task.deliveryTarget });
-    } else if (isDmContext && ownerUserId) {
-      targets.push({ type: "user", id: ownerUserId });
-    }
-    if (context.allowOrgSharedEnv !== false) {
-      targets.push({ type: "org", id: "default" });
-    }
-
-    const shareConditions = targets.map(
-      (target) =>
-        sql<boolean>`EXISTS (
-        SELECT 1
-        FROM agent_environment_variable_shares AS s
-        WHERE s.variable_id = c.credential_variable_id
-          AND s.target_type = ${target.type}
-          AND s.target_id = ${target.id}
-      )`,
-    );
-    return params.db
-      .selectFrom("cli_integration_connections as c")
-      .selectAll("c")
-      .where((eb) =>
-        eb.or(Object.values(cliIntegrationAppDefinitions).map((definition) => eb("c.app_id", "=", definition.id))),
-      )
-      .where((eb) => eb.or([...(ownerUserId ? [eb("c.owner_user_id", "=", ownerUserId)] : []), ...shareConditions]))
-      .execute();
+    const userId = await runtimeUserId(context);
+    return userId ? connections.listForViewer(userId, context.allowOrgSharedEnv !== false) : [];
   }
 
   async function updateVariableValue(
@@ -327,19 +287,13 @@ export function createCliIntegrationService(params: {
         allowOrgSharedEnv: true,
         ...(taskContext ? { taskContext } : {}),
       };
-      const env = await params.environmentVariables.listForRuntimeContext(context);
       const rows = await runtimeConnectionRows(context);
       const unavailable = requested.filter((skill) => {
         const definition = Object.values(cliIntegrationAppDefinitions).find(
           (candidate) => candidate.skillId === skill || candidate.id === skill,
         );
         if (!definition) return false;
-        const active = rows.some(
-          (row) =>
-            row.app_id === definition.id &&
-            row.status === "active" &&
-            definition.credentialFields.every((field) => Boolean(env[field.envName])),
-        );
+        const active = rows.some((row) => row.app_id === definition.id && row.status === "active");
         return !active;
       });
       return unavailable;
@@ -366,15 +320,6 @@ export function createCliIntegrationService(params: {
       return Boolean(row);
     },
 
-    async canManage(ownerUserId: string, connectionId: string, requestedAppId?: CliIntegrationAppId): Promise<boolean> {
-      const row = await connections.findByIdAndOwner(connectionId, ownerUserId);
-      return Boolean(
-        row &&
-          cliIntegrationAppDefinition(row.app_id)?.id === row.app_id &&
-          (requestedAppId === undefined || row.app_id === requestedAppId),
-      );
-    },
-
     async getManagedVariableApp(variableId: string, ownerUserId: string): Promise<string | null> {
       const row = await params.db
         .selectFrom("cli_integration_connections")
@@ -386,27 +331,19 @@ export function createCliIntegrationService(params: {
       return name ? `${name} integration` : null;
     },
 
-    async listConnections(
-      viewerUserId: string,
-      context?: { platform?: "slack" | "whatsapp"; deliveryTarget?: string },
-    ): Promise<CliIntegrationConnection[]> {
-      const targetContext = context
-        ? {
-            ...(context.platform === "slack" && context.deliveryTarget
-              ? { slackChannelId: context.deliveryTarget }
-              : {}),
-            ...(context.platform === "whatsapp" && context.deliveryTarget
-              ? { whatsappGroupJid: context.deliveryTarget }
-              : {}),
-          }
-        : undefined;
+    async canManage(ownerUserId: string, connectionId: string, requestedAppId?: CliIntegrationAppId): Promise<boolean> {
+      const row = await connections.findByIdAndOwner(connectionId, ownerUserId);
+      return Boolean(row && (requestedAppId === undefined || row.app_id === requestedAppId));
+    },
+
+    async listConnections(viewerUserId: string): Promise<CliIntegrationConnection[]> {
       const viewer = await params.db
         .selectFrom("users")
         .select("type")
         .where("id", "=", viewerUserId)
         .executeTakeFirst();
-      if (viewer?.type === "external") return [];
-      const rows = await connections.listForViewer(viewerUserId, targetContext);
+      if (!viewer || viewer.type === "external") return [];
+      const rows = await connections.listForViewer(viewerUserId, true);
       const result = await Promise.all(rows.map((row) => serialize(row, viewerUserId)));
       return result.sort((left, right) => Number(right.isOwnedByViewer) - Number(left.isOwnedByViewer));
     },
@@ -422,7 +359,7 @@ export function createCliIntegrationService(params: {
     async connectGitHub(
       ownerUserId: string,
       token: string,
-      targets: AgentEnvironmentShareTargetInput[] = [],
+      targets: CliIntegrationShareTarget[] = [],
     ): Promise<CliIntegrationConnection> {
       assertEncryptionAvailable();
       const identity = (await verifyCredential(GITHUB_APP_ID, token)) as GithubIdentity;
@@ -480,7 +417,7 @@ export function createCliIntegrationService(params: {
     async connectLinear(
       ownerUserId: string,
       apiKey: string,
-      targets: AgentEnvironmentShareTargetInput[] = [],
+      targets: CliIntegrationShareTarget[] = [],
     ): Promise<CliIntegrationConnection> {
       assertEncryptionAvailable();
       const identity = (await verifyCredential(LINEAR_APP_ID, apiKey)) as LinearIdentity;
@@ -650,17 +587,12 @@ export function createCliIntegrationService(params: {
     async replaceShares(
       ownerUserId: string,
       connectionId: string,
-      targets: AgentEnvironmentShareTargetInput[],
+      targets: CliIntegrationShareTarget[],
       requestedAppId?: CliIntegrationAppId,
     ): Promise<CliIntegrationConnection> {
       const existing = await connections.findByIdAndOwner(connectionId, ownerUserId);
       const appId = existing?.app_id as CliIntegrationAppId | undefined;
-      if (
-        !existing ||
-        !appId ||
-        !cliIntegrationAppDefinition(appId) ||
-        (requestedAppId !== undefined && appId !== requestedAppId)
-      ) {
+      if (!existing || !appId || (requestedAppId !== undefined && appId !== requestedAppId)) {
         throw new CliIntegrationServiceError("NOT_FOUND", "Managed integration connection not found.", 404);
       }
       const variable = await params.environmentVariables.replaceShares(
@@ -697,14 +629,10 @@ export function createCliIntegrationService(params: {
     },
 
     async resolveAvailability(context: AgentEnvironmentRuntimeContext): Promise<CliIntegrationRuntimeAvailability[]> {
-      const env = await params.environmentVariables.listForRuntimeContext(context);
       const relevantRows = await runtimeConnectionRows(context);
       return Object.values(cliIntegrationAppDefinitions).map((definition) => {
-        const requiredEnv = definition.credentialFields.map((field) => field.envName);
         const matching = relevantRows.filter((row) => row.app_id === definition.id);
-        const active = matching.some(
-          (row) => row.status === "active" && requiredEnv.every((name) => typeof env[name] === "string" && env[name]),
-        );
+        const active = matching.some((row) => row.status === "active");
         const invalid = matching.some((row) => row.status === "invalid");
         return {
           appId: definition.id,
@@ -727,6 +655,7 @@ export function createCliIntegrationService(params: {
       const filtered = { ...environment };
       const availability = await this.resolveAvailability(context);
       const matching = await runtimeConnectionRows(context);
+      const userId = await runtimeUserId(context);
       for (const item of availability) {
         const definition = cliIntegrationAppDefinition(item.appId);
         if (!definition) continue;
@@ -734,11 +663,7 @@ export function createCliIntegrationService(params: {
         if (!item.available) continue;
         const row = matching
           .filter((candidate) => candidate.app_id === item.appId && candidate.status === "active")
-          .sort(
-            (left, right) =>
-              Number(left.owner_user_id !== context.currentUserId) -
-              Number(right.owner_user_id !== context.currentUserId),
-          )[0];
+          .sort((left, right) => Number(left.owner_user_id !== userId) - Number(right.owner_user_id !== userId))[0];
         if (!row) continue;
         const credential = await params.db
           .selectFrom("agent_environment_variables")

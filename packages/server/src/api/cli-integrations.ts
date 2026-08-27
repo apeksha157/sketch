@@ -1,16 +1,16 @@
 import {
-  type AgentEnvironmentShareTargetInput,
+  type CliIntegrationShareTarget,
   type IntegrationApp,
   cliIntegrationAppIdSchema,
   cliIntegrationShareTargetSchema,
 } from "@sketch/shared";
 import { Hono } from "hono";
 import { z } from "zod";
+import type { UserRepository } from "../db/repositories/users";
 import { checkGithubCli } from "../integrations/cli/github";
 import { isCanvasBlockedAppId } from "../integrations/cli/policy";
 import type { CliIntegrationServiceError, createCliIntegrationService } from "../integrations/cli/service";
 import type { IntegrationProvider } from "../integrations/types";
-import { type AgentEnvironmentRouteDeps, validateShareTargets } from "./agent-environment";
 
 const tokenSchema = z.object({
   token: z.string(),
@@ -23,10 +23,8 @@ const sharesSchema = z.object({
 
 type CliIntegrationService = ReturnType<typeof createCliIntegrationService>;
 
-type CliIntegrationRouteDeps = Pick<
-  AgentEnvironmentRouteDeps,
-  "users" | "channels" | "whatsappGroups" | "getSlack" | "logger"
-> & {
+type CliIntegrationRouteDeps = {
+  users: UserRepository;
   service: CliIntegrationService;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
 };
@@ -39,7 +37,7 @@ function errorResponse(c: import("hono").Context, error: CliIntegrationServiceEr
   throw error;
 }
 
-function isUniqueTargets(targets: AgentEnvironmentShareTargetInput[]): AgentEnvironmentShareTargetInput[] {
+function isUniqueTargets(targets: CliIntegrationShareTarget[]): CliIntegrationShareTarget[] {
   return [...new Map(targets.map((target) => [`${target.type}:${target.id}`, target])).values()];
 }
 
@@ -53,12 +51,28 @@ async function validateOwner(c: import("hono").Context, deps: CliIntegrationRout
 
 async function validateTargets(
   c: import("hono").Context,
-  targets: AgentEnvironmentShareTargetInput[],
+  targets: CliIntegrationShareTarget[],
   deps: CliIntegrationRouteDeps,
 ): Promise<Response | null> {
-  const validation = await validateShareTargets(targets, deps, c.get("role"));
-  if (!validation) return null;
-  return c.json({ error: { code: "VALIDATION_ERROR", message: validation.message } }, validation.status);
+  for (const target of targets) {
+    if (target.type === "org") {
+      if (target.id !== "default") {
+        return c.json({ error: { code: "VALIDATION_ERROR", message: "Org share target must use id 'default'." } }, 400);
+      }
+      if (c.get("role") !== "admin") {
+        return c.json(
+          { error: { code: "VALIDATION_ERROR", message: "Admin access is required to share with the entire org." } },
+          403,
+        );
+      }
+    } else {
+      const user = await deps.users.findById(target.id);
+      if (!user || user.type === "external") {
+        return c.json({ error: { code: "VALIDATION_ERROR", message: "Share target user was not found." } }, 400);
+      }
+    }
+  }
+  return null;
 }
 
 export function cliIntegrationRoutes(deps: CliIntegrationRouteDeps) {

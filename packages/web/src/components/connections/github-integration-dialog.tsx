@@ -1,23 +1,20 @@
 import { GithubAppIcon } from "@/components/connections/app-icon";
-import { type SlackChannelInfo, type User, type WhatsAppGroupInfo, api } from "@/lib/api";
+import { type User, api } from "@/lib/api";
 import {
   CaretDownIcon,
   CheckCircleIcon,
   GearSixIcon,
   GlobeIcon,
-  HashIcon,
   KeyIcon,
   MagnifyingGlassIcon,
   ShareNetworkIcon,
-  SlackLogoIcon,
   SpinnerGapIcon,
   TrashIcon,
   UserCircleIcon,
   UserIcon,
   UsersThreeIcon,
-  WhatsappLogoIcon,
 } from "@phosphor-icons/react";
-import type { AgentEnvironmentShareTargetInput, CliIntegrationConnection } from "@sketch/shared";
+import type { CliIntegrationConnection, CliIntegrationShareTarget } from "@sketch/shared";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
 import {
@@ -53,8 +50,6 @@ function formatDate(value: string): string {
 export function GithubIntegrationCard({
   connection,
   users,
-  slackChannels,
-  whatsappGroups,
   currentUserId,
   isAdmin,
   onChanged,
@@ -63,8 +58,6 @@ export function GithubIntegrationCard({
 }: {
   connection: CliIntegrationConnection | null;
   users: User[];
-  slackChannels: SlackChannelInfo[];
-  whatsappGroups: WhatsAppGroupInfo[];
   currentUserId: string;
   isAdmin: boolean;
   onChanged: () => void;
@@ -113,8 +106,6 @@ export function GithubIntegrationCard({
         open={setupOpen}
         onOpenChange={setSetupOpen}
         users={users}
-        slackChannels={slackChannels}
-        whatsappGroups={whatsappGroups}
         currentUserId={currentUserId}
         isAdmin={isAdmin}
         onSuccess={() => onChanged()}
@@ -125,8 +116,6 @@ export function GithubIntegrationCard({
           open={manageOpen}
           onOpenChange={setManageOpen}
           users={users}
-          slackChannels={slackChannels}
-          whatsappGroups={whatsappGroups}
           currentUserId={currentUserId}
           isAdmin={isAdmin}
           onChanged={onChanged}
@@ -140,8 +129,6 @@ export function GithubIntegrationRow({
   connection,
   isLast,
   users,
-  slackChannels,
-  whatsappGroups,
   currentUserId,
   isAdmin,
   onChanged,
@@ -149,8 +136,6 @@ export function GithubIntegrationRow({
   connection: CliIntegrationConnection;
   isLast: boolean;
   users: User[];
-  slackChannels: SlackChannelInfo[];
-  whatsappGroups: WhatsAppGroupInfo[];
   currentUserId: string;
   isAdmin: boolean;
   onChanged: () => void;
@@ -225,8 +210,6 @@ export function GithubIntegrationRow({
         open={manageOpen}
         onOpenChange={setManageOpen}
         users={users}
-        slackChannels={slackChannels}
-        whatsappGroups={whatsappGroups}
         currentUserId={currentUserId}
         isAdmin={isAdmin}
         onChanged={onChanged}
@@ -239,8 +222,6 @@ export function GithubIntegrationDialog({
   open,
   onOpenChange,
   users,
-  slackChannels,
-  whatsappGroups,
   currentUserId,
   isAdmin,
   onSuccess,
@@ -248,8 +229,6 @@ export function GithubIntegrationDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   users: User[];
-  slackChannels: SlackChannelInfo[];
-  whatsappGroups: WhatsAppGroupInfo[];
   currentUserId: string;
   isAdmin: boolean;
   onSuccess: (connection: CliIntegrationConnection) => void;
@@ -258,7 +237,7 @@ export function GithubIntegrationDialog({
   const [token, setToken] = useState("");
   const [connection, setConnection] = useState<CliIntegrationConnection | null>(null);
   const [verifiedIdentity, setVerifiedIdentity] = useState<GithubVerificationIdentity | null>(null);
-  const [targets, setTargets] = useState<AgentEnvironmentShareTargetInput[]>([]);
+  const [targets, setTargets] = useState<CliIntegrationShareTarget[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -378,8 +357,6 @@ export function GithubIntegrationDialog({
                 </div>
                 <AccessPicker
                   users={users}
-                  slackChannels={slackChannels}
-                  whatsappGroups={whatsappGroups}
                   currentUserId={currentUserId}
                   isAdmin={isAdmin}
                   targets={targets}
@@ -443,8 +420,6 @@ function GithubConnectionManageDialog({
   open,
   onOpenChange,
   users,
-  slackChannels,
-  whatsappGroups,
   currentUserId,
   isAdmin,
   onChanged,
@@ -453,15 +428,13 @@ function GithubConnectionManageDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   users: User[];
-  slackChannels: SlackChannelInfo[];
-  whatsappGroups: WhatsAppGroupInfo[];
   currentUserId: string;
   isAdmin: boolean;
   onChanged: () => void;
 }) {
   const [token, setToken] = useState("");
-  const [targets, setTargets] = useState<AgentEnvironmentShareTargetInput[]>(connection.shares);
-  const [savedTargets, setSavedTargets] = useState<AgentEnvironmentShareTargetInput[]>(connection.shares);
+  const [targets, setTargets] = useState<CliIntegrationShareTarget[]>(connection.shares);
+  const [savedTargets, setSavedTargets] = useState<CliIntegrationShareTarget[]>(connection.shares);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -491,6 +464,7 @@ function GithubConnectionManageDialog({
   const close = () => {
     if (!saving) onOpenChange(false);
   };
+  const accessChanged = !sameTargets(targets, savedTargets);
 
   return (
     <>
@@ -516,14 +490,12 @@ function GithubConnectionManageDialog({
                 <div>
                   <h3 className="text-sm font-semibold">Access management</h3>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Choose the people and conversation spaces that can use this connection.
+                    Choose specific people or share this connection with the organization.
                   </p>
                 </div>
               </div>
               <AccessPicker
                 users={users}
-                slackChannels={slackChannels}
-                whatsappGroups={whatsappGroups}
                 currentUserId={currentUserId}
                 isAdmin={isAdmin}
                 targets={targets}
@@ -531,21 +503,6 @@ function GithubConnectionManageDialog({
                 disabled={saving}
                 className="mt-4"
               />
-              <Button
-                className="mt-4"
-                variant="outline"
-                size="sm"
-                disabled={saving || sameTargets(targets, savedTargets)}
-                onClick={() =>
-                  void run(async () => {
-                    await api.cliIntegrations.replaceShares(connection.appId, connection.id, targets);
-                    setSavedTargets(targets);
-                    toast.success("GitHub access updated");
-                  })
-                }
-              >
-                Save access
-              </Button>
             </section>
 
             <section className="rounded-lg border border-border bg-muted/10 p-4">
@@ -632,8 +589,25 @@ function GithubConnectionManageDialog({
             >
               Disconnect
             </Button>
-            <Button variant="outline" onClick={close} disabled={saving}>
-              Done
+            <Button
+              variant={accessChanged ? "default" : "outline"}
+              onClick={() => {
+                if (!accessChanged) {
+                  close();
+                  return;
+                }
+                void run(async () => {
+                  const result = await api.cliIntegrations.replaceShares(connection.appId, connection.id, targets);
+                  setTargets(result.connection.shares);
+                  setSavedTargets(result.connection.shares);
+                  toast.success("GitHub access updated");
+                  onOpenChange(false);
+                });
+              }}
+              disabled={saving}
+            >
+              {saving && accessChanged ? <SpinnerGapIcon size={14} className="animate-spin" /> : null}
+              {accessChanged ? (saving ? "Saving…" : "Save access") : "Done"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -644,20 +618,16 @@ function GithubConnectionManageDialog({
 
 export type AccessPickerProps = {
   users: User[];
-  slackChannels: SlackChannelInfo[];
-  whatsappGroups: WhatsAppGroupInfo[];
   currentUserId: string;
   isAdmin: boolean;
-  targets: AgentEnvironmentShareTargetInput[];
-  onTargetsChange: (targets: AgentEnvironmentShareTargetInput[]) => void;
+  targets: CliIntegrationShareTarget[];
+  onTargetsChange: (targets: CliIntegrationShareTarget[]) => void;
   disabled?: boolean;
   className?: string;
 };
 
 export function AccessPicker({
   users,
-  slackChannels,
-  whatsappGroups,
   currentUserId,
   isAdmin,
   targets,
@@ -670,20 +640,16 @@ export function AccessPicker({
   const query = search.trim().toLowerCase();
   const teammates = users.filter((user) => user.id !== currentUserId && user.type !== "external");
   const selectedKeys = new Set(targets.map(targetKey));
-  const toggle = (target: AgentEnvironmentShareTargetInput) => {
+  const toggle = (target: CliIntegrationShareTarget) => {
     const key = targetKey(target);
     onTargetsChange(selectedKeys.has(key) ? targets.filter((item) => targetKey(item) !== key) : [...targets, target]);
   };
   const matches = (value: string) => !query || value.toLowerCase().includes(query);
-  const filteredUsers = teammates.filter((user) => matches(`${user.name} ${user.email ?? ""}`));
-  const filteredSlack = slackChannels.filter((channel) => matches(channel.name));
-  const filteredWhatsapp = whatsappGroups.filter((group) => matches(group.name));
-  const totalAvailable = (isAdmin ? 1 : 0) + teammates.length + slackChannels.length + whatsappGroups.length;
-  const visibleCount =
-    (isAdmin && matches("organization") ? 1 : 0) +
-    filteredUsers.length +
-    filteredSlack.length +
-    filteredWhatsapp.length;
+  const filteredUsers = teammates
+    .filter((user) => matches(`${user.name} ${user.email ?? ""}`))
+    .sort((left, right) => Number(selectedKeys.has(`user:${right.id}`)) - Number(selectedKeys.has(`user:${left.id}`)));
+  const totalAvailable = (isAdmin ? 1 : 0) + teammates.length;
+  const visibleCount = (isAdmin && matches("organization") ? 1 : 0) + filteredUsers.length;
 
   return (
     <div className={`space-y-3 ${className ?? ""}`}>
@@ -706,7 +672,7 @@ export function AccessPicker({
           aria-label="Search access targets"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search people, channels, or groups"
+          placeholder="Search people"
           className="pl-9"
           disabled={disabled}
         />
@@ -763,63 +729,9 @@ export function AccessPicker({
             />
           ))}
         </TargetGroup>
-        <TargetGroup
-          contentId={`${pickerId}-slack-channels`}
-          title="Slack channels"
-          count={slackChannels.length}
-          selectedCount={targets.filter((target) => target.type === "slack_channel").length}
-          icon={<SlackLogoIcon size={15} aria-hidden />}
-          forceOpen={Boolean(query && filteredSlack.length > 0)}
-          empty={
-            slackChannels.length === 0
-              ? "No Slack channels are available."
-              : filteredSlack.length === 0
-                ? "No Slack channels match your search."
-                : undefined
-          }
-        >
-          {filteredSlack.map((channel) => (
-            <TargetOption
-              key={channel.id}
-              target={{ type: "slack_channel", id: channel.id }}
-              checked={selectedKeys.has(`slack_channel:${channel.id}`)}
-              disabled={disabled}
-              icon={<HashIcon size={15} aria-hidden />}
-              label={`#${channel.name}`}
-              onToggle={toggle}
-            />
-          ))}
-        </TargetGroup>
-        <TargetGroup
-          contentId={`${pickerId}-whatsapp-groups`}
-          title="WhatsApp groups"
-          count={whatsappGroups.length}
-          selectedCount={targets.filter((target) => target.type === "whatsapp_group").length}
-          icon={<WhatsappLogoIcon size={15} aria-hidden />}
-          forceOpen={Boolean(query && filteredWhatsapp.length > 0)}
-          empty={
-            whatsappGroups.length === 0
-              ? "No WhatsApp groups are available."
-              : filteredWhatsapp.length === 0
-                ? "No WhatsApp groups match your search."
-                : undefined
-          }
-        >
-          {filteredWhatsapp.map((group) => (
-            <TargetOption
-              key={group.jid}
-              target={{ type: "whatsapp_group", id: group.jid }}
-              checked={selectedKeys.has(`whatsapp_group:${group.jid}`)}
-              disabled={disabled}
-              icon={<UsersThreeIcon size={15} aria-hidden />}
-              label={group.name}
-              onToggle={toggle}
-            />
-          ))}
-        </TargetGroup>
         {totalAvailable > 0 && visibleCount === 0 ? (
           <p className="rounded-md border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
-            No access targets match “{search}”. Try another search.
+            No people match “{search}”. Try another search.
           </p>
         ) : null}
       </div>
@@ -913,13 +825,13 @@ function TargetOption({
   description,
   onToggle,
 }: {
-  target: AgentEnvironmentShareTargetInput;
+  target: CliIntegrationShareTarget;
   checked: boolean;
   disabled: boolean;
   icon: ReactNode;
   label: string;
   description?: string;
-  onToggle: (target: AgentEnvironmentShareTargetInput) => void;
+  onToggle: (target: CliIntegrationShareTarget) => void;
 }) {
   return (
     <button
@@ -949,11 +861,11 @@ function TargetOption({
   );
 }
 
-function targetKey(target: AgentEnvironmentShareTargetInput): string {
+function targetKey(target: CliIntegrationShareTarget): string {
   return `${target.type}:${target.id}`;
 }
 
-function sameTargets(first: AgentEnvironmentShareTargetInput[], second: AgentEnvironmentShareTargetInput[]): boolean {
+function sameTargets(first: CliIntegrationShareTarget[], second: CliIntegrationShareTarget[]): boolean {
   if (first.length !== second.length) return false;
   const secondKeys = new Set(second.map(targetKey));
   return first.every((target) => secondKeys.has(targetKey(target)));
