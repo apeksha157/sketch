@@ -787,11 +787,17 @@ describe("AutomationBuilderPage", () => {
 
     await user.click(screen.getByRole("button", { name: "Check rating" }));
     expect(screen.getByTestId("automation-builder-drawer")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Input" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Output" })).toHaveAttribute("aria-selected", "false");
+    const inputTab = screen.getByRole("tab", { name: "Input" });
+    const outputTab = screen.getByRole("tab", { name: "Output" });
+    expect(inputTab).toHaveAttribute("aria-selected", "true");
+    expect(outputTab).toHaveAttribute("aria-selected", "false");
+    expect(inputTab).not.toHaveClass("border", "border-foreground/70");
+    expect(outputTab).not.toHaveClass("border");
     expect(screen.queryByText("post-only payload")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Output" }));
+    await user.click(outputTab);
+    expect(outputTab).toHaveAttribute("aria-selected", "true");
+    expect(outputTab).not.toHaveClass("border", "border-foreground/70");
     expect(screen.getByPlaceholderText("Search variables")).toBeInTheDocument();
     expect(screen.getAllByTestId("automation-builder-output-variable")).toHaveLength(2);
     expect(screen.queryByText("post-only payload")).not.toBeInTheDocument();

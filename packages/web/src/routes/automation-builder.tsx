@@ -4533,7 +4533,7 @@ function NodeDrawer({
             <TabButton active={tab === "input"} onClick={() => setTab("input")}>
               Input
             </TabButton>
-            <TabButton active={tab === "output"} activeStyle="plain" onClick={() => setTab("output")}>
+            <TabButton active={tab === "output"} onClick={() => setTab("output")}>
               Output
             </TabButton>
           </div>
@@ -4575,12 +4575,7 @@ function NodeDrawer({
   );
 }
 
-function TabButton({
-  active,
-  activeStyle = "outlined",
-  onClick,
-  children,
-}: { active: boolean; activeStyle?: "outlined" | "plain"; onClick: () => void; children: ReactNode }) {
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
@@ -4588,12 +4583,8 @@ function TabButton({
       role="tab"
       aria-selected={active}
       className={cn(
-        "rounded-[6px] border px-2.5 py-1.5 font-mono text-[12px] font-semibold uppercase tracking-[0.1em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55",
-        active
-          ? activeStyle === "plain"
-            ? "border-transparent bg-transparent text-foreground"
-            : "border-foreground/70 bg-muted/60 text-foreground"
-          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+        "rounded-[6px] px-2.5 py-1.5 font-mono text-[12px] font-semibold uppercase tracking-[0.1em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55",
+        active ? "bg-muted/60 text-foreground" : "text-muted-foreground hover:bg-muted/35 hover:text-foreground",
       )}
     >
       {children}
