@@ -286,6 +286,7 @@ export interface AutomationRunRecord {
   errorMessage: string | null;
   startedAt: string;
   completedAt: string | null;
+  triggeredByUserId?: string | null;
   type?: string;
   runType?: string;
 }
@@ -338,6 +339,12 @@ export function normalizeAutomationRun(value: unknown, fallbackTaskId = ""): Aut
         ? raw.completedAt
         : typeof raw.completed_at === "string"
           ? raw.completed_at
+          : null,
+    triggeredByUserId:
+      typeof raw.triggeredByUserId === "string"
+        ? raw.triggeredByUserId
+        : typeof raw.triggered_by_user_id === "string"
+          ? raw.triggered_by_user_id
           : null,
     ...(typeof raw.type === "string" ? { type: raw.type } : {}),
     ...(typeof raw.runType === "string" ? { runType: raw.runType } : {}),

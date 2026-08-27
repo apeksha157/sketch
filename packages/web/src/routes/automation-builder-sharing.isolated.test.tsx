@@ -444,11 +444,8 @@ describe("AutomationBuilderPage sharing", () => {
     const user = userEvent.setup();
     renderBuilder();
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Viewing/ })).toBeInTheDocument();
-    });
-    await user.click(screen.getByRole("button", { name: /Viewing/ }));
-    expect(screen.getByRole("menuitem", { name: /by Grantee Member/ })).toBeInTheDocument();
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
+    expect(await screen.findByText(/by Grantee Member/)).toBeInTheDocument();
   });
 
   it("loads another member's transcript through the task-scoped endpoint in owner/admin views", async () => {
