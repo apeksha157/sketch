@@ -119,11 +119,20 @@ describe("createSketchMcpServer", () => {
       createSketchMcpServer({
         uploadCollector: new UploadCollector(),
         workspaceDir: tmpDir,
+        availableManagedIntegrations: new Set(["github", "linear"]),
       }).instance as unknown as { _registeredTools: Record<string, unknown> }
     )._registeredTools;
 
     expect(registeredTools.github_cli).toBeDefined();
     expect(registeredTools.linear_api).toBeDefined();
+
+    const disconnectedTools = (
+      createSketchMcpServer({ uploadCollector: new UploadCollector(), workspaceDir: tmpDir }).instance as unknown as {
+        _registeredTools: Record<string, unknown>;
+      }
+    )._registeredTools;
+    expect(disconnectedTools.github_cli).toBeUndefined();
+    expect(disconnectedTools.linear_api).toBeUndefined();
   });
 
   it("keeps questions available in web chat and exposes them to capable channels only when enabled", () => {

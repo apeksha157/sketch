@@ -13,6 +13,7 @@ import { AGENT_BUILT_IN_TOOL_NAMES, VISUAL_ANALYSIS_AGENT_TOOL_NAME } from "@ske
 import type {
   AutomationArtifact,
   AutomationRunMode,
+  CliIntegrationAppId,
   WebChatIntegrationConnectionData,
   WebChatQuestion,
   WebChatQuestionInteraction,
@@ -355,6 +356,7 @@ export interface RunAgentParams {
   botName?: string | null;
   integrationMcpServers?: Record<string, McpServerConfig>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+  availableManagedIntegrations?: ReadonlySet<CliIntegrationAppId>;
   model?: string;
   maxTurns?: number;
   maxPersistedTextBytes?: number;
@@ -852,6 +854,7 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
     agentInstructions: params.agentInstructions,
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   });
   const claudeMdContext = await loadAgentRuntimeClaudeMdContext({
     orgClaudeDir: params.claudeConfigDir,
@@ -862,7 +865,7 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
   const systemAppend = `${prependClaudeMdContext({
     claudeMdContext: claudeMdContext.appendedSystemContext,
     systemContext: baseSystemAppend,
-  })}\n\n${buildRuntimeCapabilitiesContext(params.agentEnv)}`;
+  })}\n\n${buildRuntimeCapabilitiesContext(params.agentEnv, params.availableManagedIntegrations)}`;
 
   const promptContent =
     images.length > 0 && visionConfig
@@ -1223,7 +1226,8 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
     agentInstructions: params.agentInstructions,
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
-  })}\n\n${buildRuntimeCapabilitiesContext(params.agentEnv)}`;
+    availableManagedIntegrations: params.availableManagedIntegrations,
+  })}\n\n${buildRuntimeCapabilitiesContext(params.agentEnv, params.availableManagedIntegrations)}`;
 
   const sdkBuiltInTools = resolveSdkBuiltInTools(params.agentAllowedTools);
 
@@ -1289,6 +1293,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
     db: params.db,
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,
+    availableManagedIntegrations: params.availableManagedIntegrations,
     validateAgentSkills: params.validateAgentSkills,
     taskContext: params.taskContext,
     currentAutomation: params.currentAutomation ?? params.taskContext?.currentAutomation,
@@ -1343,6 +1348,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
   const baseCanUseTool = createCanUseTool(absWorkspace, logger, params.claudeConfigDir, {
     agentAllowedTools: params.agentAllowedTools,
     agentEnv: params.agentEnv,
+    availableManagedIntegrations: params.availableManagedIntegrations,
     blockedReadPaths: blockedReadPaths.size > 0 ? Array.from(blockedReadPaths) : undefined,
     blockImageReads: visualAnalysisAllowed,
   });

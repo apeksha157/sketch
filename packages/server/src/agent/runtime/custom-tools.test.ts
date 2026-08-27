@@ -89,7 +89,7 @@ describe("AI SDK custom Sketch tool provider", () => {
       visionConfig: null,
     });
 
-    const tools = await provider.createTools(params());
+    const tools = await provider.createTools(params({ availableManagedIntegrations: new Set(["github"]) }));
 
     expect(tools.mcp__sketch__github_cli).toBeDefined();
   });
@@ -226,7 +226,7 @@ describe("AI SDK custom Sketch tool provider", () => {
       visionAnalysisEnabled: true,
       visionConfig: { apiKey: "sk-or-vision", model: "vision-model", source: "env", providerMode: "env" },
     });
-    const tools = await provider.createTools(params());
+    const tools = await provider.createTools(params({ availableManagedIntegrations: new Set(["github", "linear"]) }));
     const smokeInputs = {
       mcp__sketch__SendFileToChat: { file_path: filePath },
       mcp__sketch__github_cli: { argv: ["repo", "view", "owner/repo"] },

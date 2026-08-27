@@ -148,7 +148,7 @@ describe("CLI integration service", () => {
     expect(verifyLinearApiKeyMock).toHaveBeenLastCalledWith("lin_new");
     expect(
       await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm", allowOrgSharedEnv: true }),
-    ).toContainEqual({ appId: "linear", skillId: "linear", available: true, status: "active", reason: null });
+    ).toEqual([]);
     await service.disconnect("owner", connection.id);
   });
 
@@ -190,7 +190,7 @@ describe("CLI integration service", () => {
     await service.disconnect("owner", connection.id);
   });
 
-  it("keeps an org-shared GitHub token available to internal recipients", async () => {
+  it("does not report an org-shared legacy GitHub token as runtime availability", async () => {
     const connection = await service.connectGitHub("owner", "ghp_org", [{ type: "org", id: "default" }]);
 
     const runtimeEnv = await service.filterRuntimeEnvironment(
@@ -199,13 +199,7 @@ describe("CLI integration service", () => {
     );
 
     expect(runtimeEnv).toEqual({});
-    expect(await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm" })).toContainEqual({
-      appId: "github",
-      skillId: "github",
-      available: true,
-      status: "active",
-      reason: null,
-    });
+    expect(await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm" })).toEqual([]);
     await service.disconnect("owner", connection.id);
   });
 
@@ -218,13 +212,7 @@ describe("CLI integration service", () => {
     );
 
     expect(runtimeEnv).toEqual({});
-    expect(await service.resolveAvailability({ currentUserId: "external", contextType: "dm" })).toContainEqual({
-      appId: "github",
-      skillId: "github",
-      available: false,
-      status: "missing",
-      reason: "Connect GitHub to use this skill.",
-    });
+    expect(await service.resolveAvailability({ currentUserId: "external", contextType: "dm" })).toEqual([]);
     await service.disconnect("owner", connection.id);
   });
 

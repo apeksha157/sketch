@@ -2,6 +2,10 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 
 import { runGithubCli } from "../../integrations/cli/github-runner";
+import {
+  isManagedIntegrationDisconnectedError,
+  managedIntegrationReconnectMessage,
+} from "./managed-integration-errors";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
 const schema = {
@@ -54,6 +58,9 @@ export function createGithubCliTool(deps: SketchMcpDeps) {
         });
         return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
       } catch (error) {
+        if (isManagedIntegrationDisconnectedError(error)) {
+          return { content: [{ type: "text", text: managedIntegrationReconnectMessage("github") }] };
+        }
         return {
           content: [
             { type: "text", text: `GitHub CLI failed: ${error instanceof Error ? error.message : "unknown error"}` },

@@ -1,5 +1,6 @@
 import type {
   AutomationArtifact,
+  CliIntegrationAppId,
   WebChatIntegrationConnectionData,
   WebChatQuestion,
   WebChatQuestionBatch,
@@ -156,6 +157,7 @@ export interface SketchMcpDeps {
   workspaceDir: string;
   db?: Kysely<DB>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+  availableManagedIntegrations?: ReadonlySet<CliIntegrationAppId>;
   getCanvasAccessToken?: (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
   validateAgentSkills?: (
     ownerUserId: string,

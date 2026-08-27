@@ -117,6 +117,10 @@ export function createCliIntegrationService(params: {
   db: Kysely<DB>;
   encryptionKey?: string;
   environmentVariables: ReturnType<typeof createAgentEnvironmentVariableRepository>;
+  getAvailableManagedIntegrations?: (
+    ownerUserId: string,
+    taskContext?: AgentEnvironmentRuntimeContext["taskContext"],
+  ) => Promise<ReadonlySet<CliIntegrationAppId>>;
 }) {
   const connections = createCliIntegrationConnectionsRepository(params.db);
 
@@ -320,10 +324,37 @@ export function createCliIntegrationService(params: {
       taskContext?: AgentEnvironmentRuntimeContext["taskContext"],
     ): Promise<string[]> {
       const requested = [...new Set(skillIds.map((skill) => skill.trim().toLowerCase()).filter(Boolean))];
-      const legacyCredentialSkills = requested.filter(
-        (skill) => skill !== GITHUB_APP_ID && skill !== LINEAR_APP_ID && cliSkillRequiredEnv(skill).length > 0,
+      const definitionBySkill = new Map(
+        requested.map((skill) => [
+          skill,
+          Object.values(cliIntegrationAppDefinitions).find((candidate) =>
+            [candidate.id, candidate.skillId, candidate.name]
+              .map((value) => value.toLowerCase())
+              .includes(skill.replace(/\s+cli$/, "")),
+          ),
+        ]),
       );
-      if (legacyCredentialSkills.length === 0) return [];
+      const managedSkills = requested.filter((skill) => {
+        const definition = definitionBySkill.get(skill);
+        return definition?.id === GITHUB_APP_ID || definition?.id === LINEAR_APP_ID;
+      });
+      const legacyCredentialSkills = requested.filter((skill) => {
+        const definition = definitionBySkill.get(skill);
+        return (
+          definition?.id !== GITHUB_APP_ID && definition?.id !== LINEAR_APP_ID && cliSkillRequiredEnv(skill).length > 0
+        );
+      });
+      const unavailable = new Set<string>();
+      if (managedSkills.length > 0) {
+        const availableManagedIntegrations = params.getAvailableManagedIntegrations
+          ? await params.getAvailableManagedIntegrations(ownerUserId, taskContext)
+          : new Set<CliIntegrationAppId>();
+        for (const skill of managedSkills) {
+          const definition = definitionBySkill.get(skill);
+          if (definition && !availableManagedIntegrations.has(definition.id)) unavailable.add(skill);
+        }
+      }
+      if (legacyCredentialSkills.length === 0) return requested.filter((skill) => unavailable.has(skill));
       const context: AgentEnvironmentRuntimeContext = {
         currentUserId: ownerUserId,
         contextType: "scheduled_task",
@@ -332,20 +363,18 @@ export function createCliIntegrationService(params: {
       };
       const env = await params.environmentVariables.listForRuntimeContext(context);
       const rows = await runtimeConnectionRows(context);
-      const unavailable = legacyCredentialSkills.filter((skill) => {
-        const definition = Object.values(cliIntegrationAppDefinitions).find(
-          (candidate) => candidate.skillId === skill || candidate.id === skill,
-        );
-        if (!definition) return false;
+      for (const skill of legacyCredentialSkills) {
+        const definition = definitionBySkill.get(skill);
+        if (!definition) continue;
         const active = rows.some(
           (row) =>
             row.app_id === definition.id &&
             row.status === "active" &&
             definition.credentialFields.every((field) => Boolean(env[field.envName])),
         );
-        return !active;
-      });
-      return unavailable;
+        if (!active) unavailable.add(skill);
+      }
+      return requested.filter((skill) => unavailable.has(skill));
     },
 
     async findManagedVariable(id: string, ownerUserId: string): Promise<boolean> {
@@ -700,9 +729,13 @@ export function createCliIntegrationService(params: {
     },
 
     async resolveAvailability(context: AgentEnvironmentRuntimeContext): Promise<CliIntegrationRuntimeAvailability[]> {
+      const localDefinitions = Object.values(cliIntegrationAppDefinitions).filter(
+        (definition) => definition.id !== GITHUB_APP_ID && definition.id !== LINEAR_APP_ID,
+      );
+      if (localDefinitions.length === 0) return [];
       const env = await params.environmentVariables.listForRuntimeContext(context);
       const relevantRows = await runtimeConnectionRows(context);
-      return Object.values(cliIntegrationAppDefinitions).map((definition) => {
+      return localDefinitions.map((definition) => {
         const requiredEnv = definition.credentialFields.map((field) => field.envName);
         const matching = relevantRows.filter((row) => row.app_id === definition.id);
         const active = matching.some(
@@ -728,13 +761,14 @@ export function createCliIntegrationService(params: {
       environment: Record<string, string>,
     ): Promise<Record<string, string>> {
       const filtered = { ...environment };
+      for (const definition of Object.values(cliIntegrationAppDefinitions)) {
+        for (const field of definition.credentialFields) delete filtered[field.envName];
+      }
       const availability = await this.resolveAvailability(context);
       const matching = await runtimeConnectionRows(context);
       for (const item of availability) {
         const definition = cliIntegrationAppDefinition(item.appId);
         if (!definition) continue;
-        for (const field of definition.credentialFields) delete filtered[field.envName];
-        if (item.appId === GITHUB_APP_ID || item.appId === LINEAR_APP_ID) continue;
         if (!item.available) continue;
         const row = matching
           .filter((candidate) => candidate.app_id === item.appId && candidate.status === "active")

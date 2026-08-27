@@ -513,8 +513,6 @@ describe("runAgent AI SDK runtime path", () => {
       "mcp__sketch__UpdateInboxWorkflow",
       "mcp__sketch__WriteAgentOutput",
       "mcp__sketch__getProviderConfig",
-      "mcp__sketch__github_cli",
-      "mcp__sketch__linear_api",
       "mcp__sketch__local_claude_session",
       "mcp__sketch__local_run_command",
     ]);

@@ -74,6 +74,7 @@ import { isPersonalOrSharedDomain } from "./entities/personal-domains";
 import type { ProposeEntityType } from "./entities/propose";
 import { startQueueDrainSequence } from "./entities/queue-run";
 import { createApp } from "./http";
+import { listAvailableManagedIntegrations } from "./integrations/availability";
 import { createCliIntegrationService } from "./integrations/cli/service";
 import { buildMcpConfig, createProvider } from "./integrations/factory";
 import type { IntegrationProvider, IntegrationStatus } from "./integrations/types";
@@ -280,10 +281,21 @@ export async function createServer(config: Config, options?: CreateServerOptions
   const operationalAlertsRepo = createOperationalAlertsRepository(db);
   const operationalAlertService = createOperationalAlertService({ alerts: operationalAlertsRepo, logger });
   const agentEnvironmentVariables = createAgentEnvironmentVariableRepository(db, config.ENCRYPTION_KEY);
+  let managedIntegrationProviderLoader: () => Promise<IntegrationProvider | null> = async () => null;
   const cliIntegrations = createCliIntegrationService({
     db,
     encryptionKey: config.ENCRYPTION_KEY,
     environmentVariables: agentEnvironmentVariables,
+    getAvailableManagedIntegrations: async (ownerUserId) => {
+      const owner = await users.findById(ownerUserId);
+      if (!owner?.email) return new Set();
+      return listAvailableManagedIntegrations({
+        loadIntegrationProvider: managedIntegrationProviderLoader,
+        userEmail: owner.email,
+        currentUserId: ownerUserId,
+        logger,
+      });
+    },
   });
   await backfillFilesConnectorCredentialEncryption(db, config.ENCRYPTION_KEY, logger);
   await runManagedSeed(config, settingsRepo, users);
@@ -391,7 +403,19 @@ export async function createServer(config: Config, options?: CreateServerOptions
         pricing,
         providerCtx,
         enrichedParams,
-        () => runAgent(enrichedParams),
+        async () => {
+          const availableManagedIntegrations =
+            enrichedParams.availableManagedIntegrations ??
+            (enrichedParams.userEmail && enrichedParams.currentUserId
+              ? await listAvailableManagedIntegrations({
+                  loadIntegrationProvider: managedIntegrationProviderLoader,
+                  userEmail: enrichedParams.userEmail,
+                  currentUserId: enrichedParams.currentUserId,
+                  logger,
+                })
+              : new Set());
+          return runAgent({ ...enrichedParams, availableManagedIntegrations });
+        },
         config.AGENT_RUN_WATCHDOG_MS,
       ),
     );
@@ -829,6 +853,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     const status = await getIntegrationStatus();
     return status.kind === "ok" ? status.provider : null;
   };
+  managedIntegrationProviderLoader = loadIntegrationProvider;
 
   const webhookEndpoints = createWebhookEndpointRepository(db);
   const batchSize = 500;

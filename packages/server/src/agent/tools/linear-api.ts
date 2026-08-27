@@ -1,5 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import {
+  isManagedIntegrationDisconnectedError,
+  managedIntegrationReconnectMessage,
+} from "./managed-integration-errors";
 import type { CanvasAccessToken, CanvasAccessTokenRequest, SketchMcpDeps, ToolResult } from "./types";
 
 export const LINEAR_API_URL = "https://api.linear.app/graphql";
@@ -184,6 +188,9 @@ export async function handleLinearApi(args: LinearApiArgs, deps: SketchMcpDeps):
     }
     return { content: [{ type: "text", text: serialized }] };
   } catch (error) {
+    if (isManagedIntegrationDisconnectedError(error)) {
+      return { content: [{ type: "text", text: managedIntegrationReconnectMessage("linear") }] };
+    }
     return { content: [{ type: "text", text: `Linear API failed: ${safeErrorMessage(error)}` }] };
   }
 }
