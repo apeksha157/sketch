@@ -674,9 +674,20 @@ describe("AutomationBuilderPage", () => {
 
     const user = userEvent.setup();
     const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
-    await within(sidecar).findByText("Chats");
+    const automationTitle = automation.title;
+    if (!automationTitle) throw new Error("Expected an automation title");
+    const header = within(sidecar).getByTestId("automation-builder-chat-header");
+    const listHeading = await within(sidecar).findByTestId("automation-builder-chat-list-heading");
+    expect(within(header).queryByText("Chats")).not.toBeInTheDocument();
+    expect(within(header).queryByText(automationTitle)).not.toBeInTheDocument();
+    expect(within(listHeading).getByRole("heading", { name: "Chats" })).toBeInTheDocument();
+    expect(within(listHeading).getByText(automationTitle)).toBeInTheDocument();
     expect(within(sidecar).getByRole("button", { name: "Back to automations" })).toBeInTheDocument();
     expect(within(sidecar).queryByRole("button", { name: "Back to chats" })).not.toBeInTheDocument();
+    const newChat = within(header).getByRole("button", { name: "New chat" });
+    const collapseChat = within(header).getByRole("button", { name: "Collapse automation chat" });
+    const headerButtons = within(header).getAllByRole("button");
+    expect(headerButtons.indexOf(newChat)).toBeLessThan(headerButtons.indexOf(collapseChat));
     expect(
       within(screen.getByTestId("automation-builder-canvas")).queryByRole("button", { name: "Back to automations" }),
     ).not.toBeInTheDocument();
@@ -908,6 +919,99 @@ describe("AutomationBuilderPage", () => {
     });
   });
 
+  it("marks only the workflow step that actually failed", async () => {
+    const failedRunFixture = automationWithStepOutput("failed output").latestRun;
+    if (!failedRunFixture) throw new Error("Expected a failed run fixture");
+    const failedRun = {
+      ...failedRunFixture,
+      id: "run-failed-action",
+      status: "failed" as const,
+      stepOutputs: {
+        check: {
+          output: null,
+          status: "failed" as const,
+          duration_ms: 105_300,
+          error: { message: "Agent runtime provider failed" },
+        },
+      },
+      errorMessage: 'Step "Check rating" failed: Agent runtime provider failed',
+    };
+    mocks.search = { conversationId: "chat-alpha", runId: failedRun.id };
+    mocks.getAutomation.mockResolvedValue({
+      ...automation,
+      latestRun: failedRun,
+      recentRuns: [failedRun],
+    });
+    mocks.getRun.mockResolvedValue({ run: failedRun });
+
+    const user = userEvent.setup();
+    renderBuilder();
+
+    const panel = await screen.findByTestId("automation-builder-runs-panel");
+    await user.click(screen.getByTestId("automation-see-past-runs"));
+    const triggerStep = within(panel).getByTestId("automation-run-step-trigger");
+    const failedStep = within(panel).getByTestId("automation-run-step-check");
+    expect(triggerStep).toHaveAttribute("data-status", "success");
+    expect(failedStep).toHaveAttribute("data-status", "failed");
+  });
+
+  it("identifies and filters automatic, manual, and test runs", async () => {
+    const completedRun = automationWithStepOutput("completed").latestRun;
+    if (!completedRun) throw new Error("Expected a completed fixture run");
+    const automaticRun = {
+      ...completedRun,
+      id: "run-automatic",
+      triggerData: { scheduledAt: "2026-06-01T09:00:00.000Z" },
+      startedAt: "2026-06-01T09:00:00.000Z",
+    };
+    const manualRun = {
+      ...completedRun,
+      id: "run-manual",
+      triggerData: { type: "manual" },
+      triggeredByUserId: "user-1",
+      startedAt: "2026-06-01T10:00:00.000Z",
+    };
+    const testRun = {
+      ...completedRun,
+      id: "run-test",
+      triggerData: { type: "test" },
+      triggeredByUserId: "user-1",
+      startedAt: "2026-06-01T11:00:00.000Z",
+    };
+    mocks.getAutomation.mockResolvedValue({
+      ...automation,
+      latestRun: testRun,
+      recentRuns: [testRun, manualRun, automaticRun],
+    });
+
+    const user = userEvent.setup();
+    renderBuilder();
+
+    const panel = await screen.findByTestId("automation-builder-runs-panel");
+    await user.click(screen.getByTestId("automation-see-past-runs"));
+    expect(within(panel).getByTestId("automation-run-origin-run-automatic")).toHaveAttribute(
+      "data-origin",
+      "automatic",
+    );
+    expect(within(panel).getByTestId("automation-run-origin-run-manual")).toHaveAttribute("data-origin", "manual");
+    expect(within(panel).getByTestId("automation-run-origin-run-test")).toHaveAttribute("data-origin", "test");
+    expect(within(panel).getByRole("img", { name: "Automatic run" })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: "Manual run" })).toBeInTheDocument();
+    expect(within(panel).getByRole("img", { name: "Test run" })).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("automation-run-origin-filter"));
+    await user.click(screen.getByRole("option", { name: "Manual" }));
+    expect(within(panel).getByText("1 of 3 runs")).toBeInTheDocument();
+    expect(within(panel).getByTestId("automation-run-origin-run-manual")).toBeInTheDocument();
+    expect(within(panel).queryByTestId("automation-run-origin-run-automatic")).not.toBeInTheDocument();
+    expect(within(panel).queryByTestId("automation-run-origin-run-test")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("automation-run-origin-filter"));
+    await user.click(screen.getByRole("option", { name: "Test" }));
+    expect(within(panel).getByTestId("automation-run-origin-run-test")).toBeInTheDocument();
+    expect(within(panel).queryByTestId("automation-run-origin-run-manual")).not.toBeInTheDocument();
+  });
+
   it("composes status and date filters before sorting the run history", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-02T12:00:00.000Z"));
@@ -1115,21 +1219,30 @@ describe("AutomationBuilderPage", () => {
     const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
     expect(sidecar).toHaveAttribute("data-state", "open");
     expect(sidecar).toHaveAttribute("aria-hidden", "false");
-    expect(sidecar).toHaveClass("translate-x-0", "lg:w-[460px]", "lg:min-w-[400px]", "duration-300");
+    expect(sidecar).toHaveClass(
+      "translate-x-0",
+      "lg:w-[345px]",
+      "lg:min-w-[300px]",
+      "lg:max-w-[420px]",
+      "duration-300",
+    );
     expect(within(sidecar).queryByTestId("automation-chat-sidecar-toggle")).not.toBeInTheDocument();
 
     await user.click(within(sidecar).getByRole("button", { name: "Collapse automation chat" }));
     expect(sidecar).toHaveAttribute("data-state", "closed");
     expect(sidecar).toHaveAttribute("aria-hidden", "true");
     expect(sidecar).toHaveClass("-translate-x-full", "lg:w-0", "lg:min-w-0", "duration-300");
-    expect(screen.getByRole("button", { name: "Expand automation chat" })).toBeInTheDocument();
+    const expandChat = screen.getByRole("button", { name: "Expand automation chat" });
+    expect(expandChat).toBeInTheDocument();
+    expect(screen.getByTestId("automation-builder-toolbar")).toContainElement(expandChat);
+    expect(screen.getByTestId("automation-builder-header-actions")).not.toContainElement(expandChat);
     expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "See past runs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Past runs" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Expand automation chat" }));
     expect(sidecar).toHaveAttribute("data-state", "open");
     expect(sidecar).toHaveAttribute("aria-hidden", "false");
-    expect(sidecar).toHaveClass("translate-x-0", "lg:w-[460px]", "lg:min-w-[400px]");
+    expect(sidecar).toHaveClass("translate-x-0", "lg:w-[345px]", "lg:min-w-[300px]");
   });
 
   it("renders a Slack channel message trigger and its channel", async () => {
@@ -1573,8 +1686,10 @@ describe("AutomationBuilderPage", () => {
     expect(canvas).toHaveClass("bg-background", "text-foreground");
     expect(toolbar).not.toHaveClass("border-border/70", "bg-card/90", "p-1.5", "shadow-md");
     expect(screen.getByTestId("automation-latest-run-chip")).toHaveClass("border-success/35", "bg-success/10");
-    expect(toolbar).toHaveClass("justify-end");
+    expect(toolbar).toHaveClass("justify-start");
     expect(headerActions).toHaveClass("justify-end");
+    expect(headerActions).toContainElement(screen.getByTestId("automation-latest-run-chip"));
+    expect(toolbar).not.toContainElement(screen.getByTestId("automation-latest-run-chip"));
     expect(sidecar).toHaveClass("border-border/80", "bg-background", "text-foreground");
     expect(screen.getByTestId("automation-background")).toHaveAttribute("data-color", "var(--automation-builder-grid)");
     expect(screen.getByTestId("automation-controls")).toHaveClass("automation-builder-controls");
@@ -1673,7 +1788,11 @@ describe("AutomationBuilderPage", () => {
     expect(latestChip).toHaveClass("border-destructive/40", "bg-destructive/10");
     const failedNode = await screen.findByTestId("automation-node-check");
     expect(failedNode).toHaveAttribute("data-state", "failed");
-    expect(failedNode.querySelector('[data-testid="automation-node-shell"]')).toHaveClass("automation-node-failed");
+    expect(failedNode.querySelector('[data-testid="automation-node-shell"]')).toHaveClass(
+      "automation-node-failed",
+      "shadow-none",
+    );
+    expect(failedNode.querySelector('[data-testid="automation-node-shell"]')).not.toHaveClass("shadow-lg");
     expect(failedNode.querySelector('[data-testid="automation-node-status-marker"]')).toHaveClass(
       "bg-transparent",
       "text-destructive",

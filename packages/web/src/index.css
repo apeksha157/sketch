@@ -427,8 +427,7 @@
 
 .automation-node-shell.automation-node-failed {
   border-color: color-mix(in oklch, var(--destructive) 68%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in oklch, var(--destructive) 22%, transparent), 0 14px 28px
-    var(--automation-builder-flow-shadow);
+  box-shadow: none;
 }
 
 .automation-builder-handle.react-flow__handle {
@@ -712,6 +711,10 @@
   max-width: 100%;
 }
 
+.automation-builder-header-primary:empty {
+  display: none;
+}
+
 .automation-builder-header-actions > * {
   min-width: 0;
 }
@@ -751,6 +754,7 @@
   }
 
   .automation-builder-header-actions {
+    flex: 1 1 0;
     width: auto;
     margin-left: auto;
     justify-content: flex-end;

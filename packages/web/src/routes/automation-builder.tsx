@@ -60,7 +60,6 @@ import {
   BracketsCurlyIcon,
   CalendarDotsIcon,
   CaretDownIcon,
-  CaretLeftIcon,
   CaretRightIcon,
   ChatCircleIcon,
   CheckCircleIcon,
@@ -68,6 +67,7 @@ import {
   CodeIcon,
   CopySimpleIcon,
   EnvelopeSimpleIcon,
+  FlaskIcon,
   GitBranchIcon,
   GlobeHemisphereWestIcon,
   GoogleLogoIcon,
@@ -79,6 +79,7 @@ import {
   PlusIcon,
   RobotIcon,
   ShareNetworkIcon,
+  SidebarSimpleIcon,
   SlackLogoIcon,
   SpinnerGapIcon,
   TableIcon,
@@ -1225,7 +1226,27 @@ export function AutomationBuilderPage() {
         >
           <div
             data-testid="automation-builder-toolbar"
-            className="automation-builder-header-primary automation-builder-toolbar-enter pointer-events-auto flex w-full min-w-0 max-w-full flex-wrap items-center justify-end gap-2"
+            className="automation-builder-header-primary automation-builder-toolbar-enter pointer-events-auto flex w-full min-w-0 max-w-full flex-wrap items-center justify-start gap-2"
+          >
+            {!chatSidecarOpen ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className={cn(canvasToolbarButtonClass, "gap-1.5")}
+                aria-label="Expand automation chat"
+                aria-expanded={false}
+                aria-controls="automation-builder-chat-sidecar"
+                onClick={() => setChatSidecarOpen(true)}
+              >
+                <ChatCircleIcon size={14} weight="fill" />
+                Chat
+              </Button>
+            ) : null}
+          </div>
+
+          <div
+            data-testid="automation-builder-header-actions"
+            className="automation-builder-header-actions pointer-events-auto flex w-full min-w-0 max-w-full flex-wrap items-center justify-end gap-2"
           >
             <output
               data-testid="automation-latest-run-chip"
@@ -1259,26 +1280,6 @@ export function AutomationBuilderPage() {
               onRequestTakeover={() => setStealDialogOpen(true)}
               onReviewStealRequest={() => setHolderResponseDialogOpen(true)}
             />
-          </div>
-
-          <div
-            data-testid="automation-builder-header-actions"
-            className="automation-builder-header-actions pointer-events-auto flex w-full min-w-0 max-w-full flex-wrap items-center justify-end gap-2"
-          >
-            {!chatSidecarOpen ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className={cn(canvasToolbarButtonClass, "gap-1.5")}
-                aria-label="Expand automation chat"
-                aria-expanded={false}
-                aria-controls="automation-builder-chat-sidecar"
-                onClick={() => setChatSidecarOpen(true)}
-              >
-                <ChatCircleIcon size={14} weight="fill" />
-                Chat
-              </Button>
-            ) : null}
             <BuilderOwnership automation={automation} />
             {canShareAutomation ? (
               <Button
@@ -1417,7 +1418,7 @@ export function AutomationBuilderPage() {
                       : "Paused"}
             </Button>
             {!runInspectorOpen ? (
-              <SeePastRunsButton
+              <PastRunsButton
                 onClick={() => {
                   setSelectedStepId(null);
                   setRunInspectorOpen(true);
@@ -2117,14 +2118,14 @@ function BuilderChatSidecar({
       className={cn(
         "absolute inset-y-0 left-0 z-40 flex h-full w-full max-w-none shrink-0 flex-col overflow-hidden border-r bg-background text-foreground transition-[width,min-width,max-width,transform,border-color] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:static lg:z-auto lg:h-auto lg:translate-x-0",
         open
-          ? "translate-x-0 border-border/80 lg:w-[460px] lg:min-w-[400px] lg:max-w-[560px]"
+          ? "translate-x-0 border-border/80 lg:w-[345px] lg:min-w-[300px] lg:max-w-[420px]"
           : "pointer-events-none -translate-x-full border-transparent lg:w-0 lg:min-w-0 lg:max-w-0",
         className,
       )}
     >
       <div
         className={cn(
-          "flex h-full w-full min-w-0 flex-col overflow-hidden transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:w-[460px] lg:min-w-[400px]",
+          "flex h-full w-full min-w-0 flex-col overflow-hidden transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:w-[345px] lg:min-w-[300px]",
           open ? "lg:translate-x-0" : "lg:-translate-x-full",
         )}
       >
@@ -2152,6 +2153,7 @@ function BuilderChatSidecar({
             <BuilderChatLoadingState />
           ) : !requestedConversationId ? (
             <BuilderChatListView
+              title={title}
               conversations={visibleConversations}
               builderLock={conversationsQuery.data.builderLock}
               summaryById={webChatSummaryById}
@@ -2227,7 +2229,10 @@ function BuilderChatHeader({
 }) {
   const conversationTitle = conversation ? conversationDisplayTitle(conversation, summary) : null;
   return (
-    <div className="shrink-0 border-b border-border/80 bg-background/95 p-3 backdrop-blur">
+    <div
+      data-testid="automation-builder-chat-header"
+      className="shrink-0 border-b border-border/80 bg-background/95 p-3 backdrop-blur"
+    >
       <div className="flex min-w-0 items-center gap-2.5">
         {conversation && onBack ? (
           <Button
@@ -2254,49 +2259,31 @@ function BuilderChatHeader({
         ) : (
           <span className="size-8 shrink-0" aria-hidden />
         )}
-        <div className="min-w-0 flex-1">
-          {conversation ? (
-            <>
-              <div className="flex min-w-0 items-center gap-2">
-                <p
-                  title={conversationTitle ?? undefined}
-                  className="truncate text-[13px] font-semibold leading-5 text-foreground"
-                >
-                  {conversationTitle}
-                </p>
-                <Badge className="shrink-0 rounded-[5px] border border-border/80 bg-muted/60 px-1.5 py-0 font-mono text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                  {conversationSourceLabel(conversation)}
-                </Badge>
-              </div>
-              <p title={title} className="truncate text-[11px] leading-4 text-muted-foreground">
-                {title} · {conversationDateLabel(conversationDisplayUpdatedAt(conversation, summary))}
+        {conversation ? (
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <p
+                title={conversationTitle ?? undefined}
+                className="truncate text-[13px] font-semibold leading-5 text-foreground"
+              >
+                {conversationTitle}
               </p>
-              {!summary ? (
-                <p className="truncate font-mono text-[10px] leading-4 text-muted-foreground/60">
-                  Chat {conversation.conversationId}
-                </p>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <p className="text-[13px] font-semibold leading-5 text-foreground">Chats</p>
-              <p title={title} className="truncate text-[11px] leading-4 text-muted-foreground">
-                {title}
+              <Badge className="shrink-0 rounded-[5px] border border-border/80 bg-muted/60 px-1.5 py-0 font-mono text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {conversationSourceLabel(conversation)}
+              </Badge>
+            </div>
+            <p title={title} className="truncate text-[11px] leading-4 text-muted-foreground">
+              {title} · {conversationDateLabel(conversationDisplayUpdatedAt(conversation, summary))}
+            </p>
+            {!summary ? (
+              <p className="truncate font-mono text-[10px] leading-4 text-muted-foreground/60">
+                Chat {conversation.conversationId}
               </p>
-            </>
-          )}
-        </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
-          aria-label="Collapse automation chat"
-          aria-controls="automation-builder-chat-sidecar"
-          title="Collapse automation chat"
-          onClick={onClose}
-        >
-          <CaretLeftIcon size={14} />
-        </Button>
+            ) : null}
+          </div>
+        ) : (
+          <span className="min-w-0 flex-1" aria-hidden />
+        )}
         {conversation ? (
           <Button
             size="icon"
@@ -2320,18 +2307,31 @@ function BuilderChatHeader({
             New chat
           </Button>
         )}
+        <Button
+          size="icon"
+          variant="ghost"
+          className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
+          aria-label="Collapse automation chat"
+          aria-controls="automation-builder-chat-sidecar"
+          title="Collapse automation chat"
+          onClick={onClose}
+        >
+          <SidebarSimpleIcon size={16} />
+        </Button>
       </div>
     </div>
   );
 }
 
 function BuilderChatListView({
+  title,
   conversations,
   builderLock,
   summaryById,
   onSelect,
   selectingConversationId,
 }: {
+  title: string;
   conversations: ScheduledTaskConversationSummary[];
   builderLock?: ScheduledTaskConversationLock;
   summaryById: ReadonlyMap<string, WebChatConversationSummary>;
@@ -2391,6 +2391,12 @@ function BuilderChatListView({
   return (
     <div className="chat-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-3">
       <div className="flex min-h-full flex-col gap-5">
+        <div data-testid="automation-builder-chat-list-heading" className="px-2.5">
+          <h2 className="text-[16px] font-semibold leading-6 text-foreground">Chats</h2>
+          <p title={title} className="mt-0.5 break-words text-[12px] leading-5 text-muted-foreground">
+            {title}
+          </p>
+        </div>
         {builderLock?.state === "held" && builderLock.owner !== "self" ? (
           <BuilderChatLockNotice lock={builderLock} />
         ) : null}
@@ -3656,15 +3662,17 @@ function StepShape({ visual, selected, status }: { visual: StepVisual; selected:
       <div
         data-testid="automation-node-shell"
         className={cn(
-          "automation-node-shell relative flex size-full items-center justify-center overflow-hidden border text-foreground/75 shadow-lg transition-[border-color,background-color,box-shadow,transform]",
+          "automation-node-shell relative flex size-full items-center justify-center overflow-hidden border text-foreground/75 transition-[border-color,background-color,box-shadow,transform]",
           "before:absolute before:inset-0 before:bg-linear-to-br before:from-foreground/[0.045] before:to-transparent before:content-['']",
           visual.toneClass,
           nodeAccentClasses[status],
+          status === "failed" ? "automation-node-failed shadow-none" : "shadow-lg",
           status === "running" && "automation-node-running",
-          status === "failed" && "automation-node-failed",
           visual.shape === "notched" ? "rounded-[9px]" : visual.shape === "circle" ? "rounded-full" : "rounded-[11px]",
           selected
-            ? "border-brand-accent/70 bg-accent text-foreground shadow-md ring-2 ring-brand-accent/20"
+            ? status === "failed"
+              ? "border-destructive/70 bg-destructive/[0.08] text-foreground shadow-none"
+              : "border-brand-accent/70 bg-accent text-foreground shadow-md ring-2 ring-brand-accent/20"
             : "hover:border-foreground/30 hover:bg-muted/80 hover:text-foreground",
         )}
         style={triggerShape}
@@ -3725,6 +3733,8 @@ const nodeTypes = {
 };
 
 type RunStatusFilter = "all" | "completed" | "failed";
+type AutomationRunOrigin = "automatic" | "manual" | "test";
+type RunOriginFilter = "all" | AutomationRunOrigin;
 type RunDateFilter = "all" | "today" | "7d" | "30d";
 type RunSort = "newest" | "oldest";
 
@@ -3732,6 +3742,13 @@ const runStatusFilterLabels: Record<RunStatusFilter, string> = {
   all: "Any status",
   completed: "Completed",
   failed: "Failed",
+};
+
+const runOriginFilterLabels: Record<RunOriginFilter, string> = {
+  all: "Any trigger",
+  automatic: "Automatic",
+  manual: "Manual",
+  test: "Test",
 };
 
 const runDateFilterLabels: Record<RunDateFilter, string> = {
@@ -3755,6 +3772,24 @@ function runMatchesStatusFilter(run: AutomationRunRecord, filter: RunStatusFilte
   if (filter === "all") return true;
   const lifecycle = automationRunLifecycleState(run);
   return filter === "completed" ? lifecycle === "success" : lifecycle === "failure" || lifecycle === "aborted";
+}
+
+function automationRunOrigin(run: AutomationRunRecord): AutomationRunOrigin {
+  const triggerType =
+    typeof run.triggerData === "object" &&
+    run.triggerData !== null &&
+    "type" in run.triggerData &&
+    typeof run.triggerData.type === "string"
+      ? run.triggerData.type
+      : "";
+  const persistedTypes = [triggerType, run.type ?? "", run.runType ?? ""].join(" ").trim().toLowerCase();
+  if (/(?:^|[\s_-])test(?:$|[\s_-])/.test(persistedTypes)) return "test";
+  if (/(?:^|[\s_-])manual(?:$|[\s_-])/.test(persistedTypes)) return "manual";
+  return "automatic";
+}
+
+function runMatchesOriginFilter(run: AutomationRunRecord, filter: RunOriginFilter): boolean {
+  return filter === "all" || automationRunOrigin(run) === filter;
 }
 
 function runMatchesDateFilter(run: AutomationRunRecord, filter: RunDateFilter, now = Date.now()): boolean {
@@ -3781,7 +3816,7 @@ function runDateSort(left: AutomationRunRecord, right: AutomationRunRecord, sort
     : left.startedAt.localeCompare(right.startedAt);
 }
 
-function SeePastRunsButton({ onClick }: { onClick: () => void }) {
+function PastRunsButton({ onClick }: { onClick: () => void }) {
   return (
     <Button
       type="button"
@@ -3793,8 +3828,8 @@ function SeePastRunsButton({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       className={cn(canvasToolbarButtonClass, "min-w-0 max-w-full gap-1.5 text-foreground/75")}
     >
-      <CaretLeftIcon size={13} />
-      <span>See past runs</span>
+      <SidebarSimpleIcon size={15} className="-scale-x-100" />
+      <span>Past runs</span>
     </Button>
   );
 }
@@ -3822,6 +3857,7 @@ function RunInspector({
   open: boolean;
   onClose: () => void;
 }) {
+  const [originFilter, setOriginFilter] = useState<RunOriginFilter>("all");
   const [statusFilter, setStatusFilter] = useState<RunStatusFilter>("all");
   const [dateFilter, setDateFilter] = useState<RunDateFilter>("all");
   const [sort, setSort] = useState<RunSort>("newest");
@@ -3833,17 +3869,19 @@ function RunInspector({
   const filteredHistory = useMemo(
     () =>
       history
+        .filter((run) => runMatchesOriginFilter(run, originFilter))
         .filter((run) => runMatchesStatusFilter(run, statusFilter))
         .filter((run) => runMatchesDateFilter(run, dateFilter))
         .sort((left, right) => runDateSort(left, right, sort)),
-    [dateFilter, history, sort, statusFilter],
+    [dateFilter, history, originFilter, sort, statusFilter],
   );
-  const filtersActive = statusFilter !== "all" || dateFilter !== "all";
+  const filtersActive = originFilter !== "all" || statusFilter !== "all" || dateFilter !== "all";
   const resultSummary =
     filteredHistory.length === history.length
       ? `${history.length} recent ${history.length === 1 ? "run" : "runs"}`
       : `${filteredHistory.length} of ${history.length} runs`;
   const clearFilters = () => {
+    setOriginFilter("all");
     setStatusFilter("all");
     setDateFilter("all");
   };
@@ -3877,10 +3915,26 @@ function RunInspector({
             title="Collapse all runs"
             onClick={onClose}
           >
-            <CaretRightIcon size={14} />
+            <SidebarSimpleIcon size={16} className="-scale-x-100" />
           </Button>
         </div>
         <div data-testid="automation-run-filters" className="mt-3 grid grid-cols-2 gap-1.5">
+          <Select value={originFilter} onValueChange={(value) => setOriginFilter(value as RunOriginFilter)}>
+            <SelectTrigger
+              data-testid="automation-run-origin-filter"
+              aria-label="Filter runs by trigger"
+              className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(Object.keys(runOriginFilterLabels) as RunOriginFilter[]).map((value) => (
+                <SelectItem key={value} value={value} className="text-[12px]">
+                  {runOriginFilterLabels[value]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as RunStatusFilter)}>
             <SelectTrigger
               data-testid="automation-run-status-filter"
@@ -3917,7 +3971,7 @@ function RunInspector({
             <SelectTrigger
               data-testid="automation-run-sort"
               aria-label="Sort runs by date"
-              className="col-span-2 h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
+              className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
             >
               <SelectValue />
             </SelectTrigger>
@@ -4090,6 +4144,7 @@ function RunStepRow({
       <button
         type="button"
         data-testid={`automation-run-step-${step.id}`}
+        data-status={status}
         aria-label={`Inspect ${step.label}`}
         aria-expanded={expanded}
         onClick={toggleExpanded}
@@ -4232,6 +4287,7 @@ function RunHistoryItem({
 }) {
   const [renderDetails, setRenderDetails] = useState(active);
   const lifecycle = automationRunLifecycleState(run);
+  const origin = automationRunOrigin(run);
   const completedSteps = completedRunStepCount(draft, run);
 
   useEffect(() => {
@@ -4247,7 +4303,7 @@ function RunHistoryItem({
     >
       <button
         type="button"
-        aria-label={`Open run from ${formatRunDate(run.startedAt)}`}
+        aria-label={`Open run from ${formatRunDate(run.startedAt)}, ${runOriginFilterLabels[origin].toLowerCase()} run`}
         aria-expanded={active}
         aria-pressed={active}
         onClick={() => {
@@ -4265,7 +4321,7 @@ function RunHistoryItem({
           </span>
         </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{runDuration(run) ?? "—"}</span>
-        <LightningIcon size={15} weight="fill" className="shrink-0 text-brand-accent" aria-hidden />
+        <RunOriginIndicator run={run} />
         {active ? (
           <CaretDownIcon size={14} className="shrink-0 text-muted-foreground" aria-hidden />
         ) : (
@@ -4305,6 +4361,35 @@ function RunHistoryItem({
   );
 }
 
+function RunOriginIndicator({ run }: { run: AutomationRunRecord }) {
+  const origin = automationRunOrigin(run);
+  const label = runOriginFilterLabels[origin];
+  const className = cn(
+    "flex size-5 shrink-0 items-center justify-center",
+    origin === "automatic" && "text-brand-accent",
+    origin === "manual" && "text-info",
+    origin === "test" && "text-warning",
+  );
+  return (
+    <span
+      data-testid={`automation-run-origin-${run.id}`}
+      data-origin={origin}
+      className={className}
+      role="img"
+      aria-label={`${label} run`}
+      title={`${label} run`}
+    >
+      {origin === "automatic" ? (
+        <LightningIcon size={15} weight="fill" aria-hidden />
+      ) : origin === "manual" ? (
+        <PlayIcon size={14} weight="fill" aria-hidden />
+      ) : (
+        <FlaskIcon size={15} weight="fill" aria-hidden />
+      )}
+    </span>
+  );
+}
+
 function completedRunStepCount(draft: DraftAutomation, run: AutomationRunRecord): number {
   const executingStepId = inferredRunningStepId(draft.steps, draft.edges, run.stepOutputs, run.status);
   return draft.steps.filter((step) => {
@@ -4327,8 +4412,7 @@ function runStepStatus(step: WorkflowStep, run: AutomationRunRecord, executingSt
   if (output) return outputStatus(output, false);
   if (step.type !== "trigger") return "idle";
   const lifecycle = automationRunLifecycleState(run);
-  if (lifecycle === "success") return "success";
-  if (lifecycle === "failure" || lifecycle === "aborted") return "failed";
+  if (lifecycle === "success" || lifecycle === "failure" || lifecycle === "aborted") return "success";
   if (lifecycle === "pending" || lifecycle === "running") return "running";
   return "idle";
 }
