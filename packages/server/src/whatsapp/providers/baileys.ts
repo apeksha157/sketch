@@ -306,6 +306,7 @@ export function normalizeBaileysInboundMessage(
     connectionKey,
     ...(message.mediaType ? { mediaType: message.mediaType } : {}),
     ...(message.quotedMessage ? { quotedMessage: message.quotedMessage } : {}),
+    ...(message.mentions?.length ? { mentions: message.mentions } : {}),
   };
 }
 

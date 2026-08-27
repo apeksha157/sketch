@@ -183,6 +183,9 @@ function normalizeInboundTestMessage(message: unknown): WhatsAppInboundMessage {
     rawProviderPayload: input.rawMessage,
     ...(typeof input.mediaType === "string" ? { mediaType: input.mediaType } : {}),
     ...(input.quotedMessage ? { quotedMessage: input.quotedMessage as WhatsAppInboundMessage["quotedMessage"] } : {}),
+    ...(Array.isArray(input.mentions)
+      ? { mentions: input.mentions as Extract<WhatsAppInboundMessage, { kind: "group" }>["mentions"] }
+      : {}),
   };
 }
 
@@ -2050,6 +2053,41 @@ describe("whatsapp/adapter", () => {
       expect(agentCall.userMessage).toContain("<group>");
       expect(agentCall.userMessage).toContain("name: Test Group");
       expect(agentCall.userMessage).toContain("description: A test group");
+    });
+
+    it("resolves inbound mention IDs for the agent while storing raw provider text", async () => {
+      const db = await createTestDb();
+      try {
+        await db.insertInto("users").values({ id: "u1", name: "Alice", whatsapp_number: "+1234567890" }).execute();
+        await db.insertInto("users").values({ id: "u2", name: "Ranjith", whatsapp_number: "+971509374319" }).execute();
+        await db.insertInto("user_whatsapp_lids").values({ user_id: "u2", lid: "254052281622575@lid" }).execute();
+
+        const deps = makeDeps({ db });
+        const { mock, getHandler } = createMockWhatsApp();
+        wireWhatsAppHandlers(mock as never, deps);
+        const handler = getHandler();
+        const rawText = "ask @254052281622575 and @DisplayName";
+
+        await handler({
+          type: "group",
+          text: rawText,
+          jid: "group@g.us",
+          messageId: "m1",
+          pushName: "Alice",
+          rawMessage: {},
+          isMentioned: true,
+          senderJid: "1234567890@s.whatsapp.net",
+          senderPhone: "+1234567890",
+          mentions: [{ jid: "254052281622575:3@lid", lid: "254052281622575@lid", phoneE164: null }],
+        });
+        await flush();
+
+        const agentCall = vi.mocked(deps.runAgent).mock.calls[0][0];
+        expect(agentCall.userMessage).toContain("ask @Ranjith and @DisplayName");
+        expect(deps.repos.conversations.insertMessage).toHaveBeenCalledWith(expect.objectContaining({ text: rawText }));
+      } finally {
+        await db.destroy();
+      }
     });
 
     it("does not send builder links for automations created by unknown group senders", async () => {

@@ -53,6 +53,8 @@ export interface SearchableUserRepo {
   getVerifiedEmailsForUser?: (id: string) => Promise<string[]>;
   findByEmail?: (email: string) => Promise<SelectableUser | undefined>;
   findBySlackId?: (slackUserId: string) => Promise<SelectableUser | undefined>;
+  findByWhatsappNumber?: (whatsappNumber: string) => Promise<SelectableUser | undefined>;
+  findByWhatsappLid?: (lid: string) => Promise<SelectableUser | undefined>;
   findByExactName?: (name: string, excludeUserId?: string) => Promise<SelectableUser | undefined>;
   searchByNamePrefix?: (query: string, limit?: number, excludeUserId?: string) => Promise<SelectableUser[]>;
   searchByNameSubstring?: (query: string, limit?: number, excludeUserId?: string) => Promise<SelectableUser[]>;
@@ -183,6 +185,7 @@ export interface SketchMcpDeps {
   currentUserEmail?: string | null;
   currentUserName?: string | null;
   slackEntitySyncEnabled?: boolean;
+  adminReadAllEnabled?: boolean;
   /** Mirrors DEV_TOOLS_ENABLED. Gates dev-tools search-trace capture; off means no capture at all. */
   devToolsEnabled?: boolean;
   /** Pre-assigned trace id, set only by the dev-tools search runner so it can read the

@@ -2,7 +2,7 @@ import { GithubAppIcon, LinearAppIcon } from "@/components/connections/app-icon"
 import { GithubIntegrationRow } from "@/components/connections/github-integration-dialog";
 import { LinearIntegrationRow } from "@/components/connections/linear-integration-dialog";
 import { QuietAddButton } from "@/components/quiet-add-button";
-import { type SlackChannelInfo, type User, type WhatsAppGroupInfo, api } from "@/lib/api";
+import { type User, api } from "@/lib/api";
 import { GearSixIcon, PlugIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
 import type { CliIntegrationConnection, IntegrationConnection } from "@sketch/shared";
 import { Badge } from "@sketch/ui/components/badge";
@@ -29,41 +29,28 @@ export function IntegrationsSection({
   onAdd,
   onDisconnect,
   githubConnection,
-  githubUsers = [],
-  githubSlackChannels = [],
-  githubWhatsappGroups = [],
-  githubCurrentUserId = "",
-  githubIsAdmin = false,
   linearConnection,
-  linearUsers = [],
-  linearSlackChannels = [],
-  linearWhatsappGroups = [],
-  linearCurrentUserId = "",
-  linearIsAdmin = false,
+  integrationUsers = [],
+  integrationCurrentUserId = "",
+  integrationIsAdmin = false,
 }: {
   connections: IntegrationConnection[];
   isLoadingConnections: boolean;
-  providerId: string;
+  providerId?: string;
   orgName?: string;
   onAdd: () => void;
   onDisconnect: () => void;
   githubConnection?: CliIntegrationConnection | null;
-  githubUsers?: User[];
-  githubSlackChannels?: SlackChannelInfo[];
-  githubWhatsappGroups?: WhatsAppGroupInfo[];
-  githubCurrentUserId?: string;
-  githubIsAdmin?: boolean;
   linearConnection?: CliIntegrationConnection | null;
-  linearUsers?: User[];
-  linearSlackChannels?: SlackChannelInfo[];
-  linearWhatsappGroups?: WhatsAppGroupInfo[];
-  linearCurrentUserId?: string;
-  linearIsAdmin?: boolean;
+  integrationUsers?: User[];
+  integrationCurrentUserId?: string;
+  integrationIsAdmin?: boolean;
 }) {
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [settingsConnection, setSettingsConnection] = useState<IntegrationConnection | null>(null);
 
   const handleDisconnect = async (connectionId: string) => {
+    if (!providerId) return;
     setDisconnectingId(connectionId);
     try {
       await api.mcpServers.removeConnection(providerId, connectionId);
@@ -108,11 +95,9 @@ export function IntegrationsSection({
             <GithubIntegrationRow
               connection={githubConnection}
               isLast={connections.length === 0 && !linearConnection}
-              users={githubUsers}
-              slackChannels={githubSlackChannels}
-              whatsappGroups={githubWhatsappGroups}
-              currentUserId={githubCurrentUserId}
-              isAdmin={githubIsAdmin}
+              users={integrationUsers}
+              currentUserId={integrationCurrentUserId}
+              isAdmin={integrationIsAdmin}
               onChanged={onDisconnect}
             />
           )}
@@ -120,11 +105,9 @@ export function IntegrationsSection({
             <LinearIntegrationRow
               connection={linearConnection}
               isLast={connections.length === 0}
-              users={linearUsers}
-              slackChannels={linearSlackChannels}
-              whatsappGroups={linearWhatsappGroups}
-              currentUserId={linearCurrentUserId}
-              isAdmin={linearIsAdmin}
+              users={integrationUsers}
+              currentUserId={integrationCurrentUserId}
+              isAdmin={integrationIsAdmin}
               onChanged={onDisconnect}
             />
           )}
@@ -140,13 +123,15 @@ export function IntegrationsSection({
           ))}
         </div>
       )}
-      <AccessSettingsDialog
-        connection={settingsConnection}
-        providerId={providerId}
-        orgName={orgName}
-        onOpenChange={(open) => !open && setSettingsConnection(null)}
-        onSaved={onDisconnect}
-      />
+      {providerId && (
+        <AccessSettingsDialog
+          connection={settingsConnection}
+          providerId={providerId}
+          orgName={orgName}
+          onOpenChange={(open) => !open && setSettingsConnection(null)}
+          onSaved={onDisconnect}
+        />
+      )}
     </div>
   );
 }

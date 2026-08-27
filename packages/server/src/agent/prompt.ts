@@ -339,6 +339,14 @@ const SOURCE_LABELS: Record<string, { label: string; noun: string }> = {
   linear: { label: "Linear", noun: "issues" },
   fireflies: { label: "Fireflies", noun: "meeting transcripts" },
   otter: { label: "Otter", noun: "meeting transcripts" },
+  teams: { label: "Microsoft Teams", noun: "meeting transcripts" },
+  outlook: { label: "Outlook", noun: "emails" },
+  zoho_crm: { label: "Zoho CRM", noun: "records" },
+  whatsapp: { label: "WhatsApp", noun: "messages" },
+  slack: { label: "Slack", noun: "messages" },
+  gmail: { label: "Gmail", noun: "emails" },
+  google_calendar: { label: "Google Calendar", noun: "calendar events" },
+  outlook_calendar: { label: "Outlook Calendar", noun: "calendar events" },
   conversation: { label: "Conversations", noun: "messages" },
   local: { label: "Workspace Files", noun: "files" },
 };
@@ -354,7 +362,8 @@ export function buildRuntimeCapabilitiesContext(
   const available = Object.values(cliIntegrationAppDefinitions)
     .filter((definition) => definition.id !== "github" && definition.id !== "linear")
     .filter((definition) => definition.credentialFields.every((field) => Boolean(agentEnv?.[field.envName])))
-    .map((definition) => definition.id);
+    .map((definition) => definition.name);
+  if (agentEnv?.CANVAS_CLI) available.unshift("Canvas");
   const sketchManaged = [
     ...(availableManagedIntegrations.has("github") ? ["GitHub (Sketch github_cli)"] : []),
     ...(availableManagedIntegrations.has("linear") ? ["Linear (Sketch linear_api)"] : []),
@@ -364,8 +373,9 @@ export function buildRuntimeCapabilitiesContext(
     "## Runtime Capabilities",
     "",
     capabilityNames.length > 0
-      ? `Available managed integrations for this run: ${capabilityNames.join(", ")}. Load the matching managed skill and follow its provider-specific instructions.`
-      : "No managed integrations are available for this run. If a task requires one, ask the user to connect or request access in Sketch Integrations.",
+      ? `Available managed skill integrations for this run: ${capabilityNames.join(", ")}. Load the matching skill and follow its provider-specific API or CLI instructions.`
+      : "No managed skill integrations are available for this run. If a task requires one, check the provider configuration before asking the user to connect or request access in Sketch Integrations.",
+    "Never claim that an integration is unavailable or recommend reconnecting unless a provider, configuration, or connection check in the current turn supports that conclusion.",
   ].join("\n");
 }
 
@@ -621,11 +631,18 @@ export function buildSystemContext(params: {
       'Recency questions ("latest", "most recent", "last X"):',
       '- Always pass `sortBy: "recency"`. Default `limit` becomes 3 (small disambiguation set).',
       '- For "with <person/company>": call `SearchEntities` first, then pass the resolved IDs as `entityIds`. Default `entityIdsMode` is `"and"` (intersection — "with X **and** Y"); use `"or"` for permissive sweeps ("anything from X or Y", listed names without "and"). If `"and"` returns no results, retry once with `"or"` before telling the user there are no matches.',
-      '- For "my X" with no other filter (e.g. "fetch my latest meeting"): use `kind` + `sortBy: "recency"` and a small `limit`. RBAC already scopes to what the user can see — for Fireflies, attendance is what makes a meeting visible, so this returns *the user\'s* meetings without needing an explicit ownership filter.',
+      '- For "my X" with no other filter (e.g. "fetch my latest meeting"): use `kind` + ' +
+        '`sortBy: "recency"` and a small `limit`. RBAC already scopes to what the user can see; ' +
+        "meeting sources apply their own visibility data, so this returns *the user's* visible meetings " +
+        "without needing an explicit ownership filter.",
       "- Empty `query` is allowed when at least one structural filter (`kind`, `source`, `entityIds`, `after`/`before`) is present.",
       "",
       "Search → integration handoff:",
-      "Search results carry the IDs your integration tools need. After Search surfaces a relevant item, you can act on it directly via the matching integration action (e.g. reply to a ClickUp task, read a full Fireflies transcript, comment on a Notion page, update a Linear issue). Prefer `url` when the integration action accepts a URL; fall back to `providerId` when it needs the raw external ID. Some sources prefix subtypes in `providerId` (e.g. `doc:`, `db-`, `project-`) — pass the value as-is.",
+      "Search results carry the IDs your integration tools need. After Search surfaces a relevant item, " +
+        "you can act on it directly via the matching integration action (e.g. reply to a ClickUp task, " +
+        "read a full meeting transcript, comment on a Notion page, update a Linear issue). Prefer `url` " +
+        "when the integration action accepts a URL; fall back to `providerId` when it needs the raw external ID. " +
+        "Some sources prefix subtypes in `providerId` (e.g. `doc:`, `db-`, `project-`) — pass the value as-is.",
       "",
       "Integration-lookup nudge (DMs only, at most once per conversation):",
       "When you call an integration to *look up* existing org info (read a doc, list tasks, fetch a transcript, search past messages) and that source is **not** in the indexed list above, close your reply with one short line noting that indexing that source via Sketch would turn the multi-call integration chain into a single Search — saves tokens and improves match quality. Skip this nudge for write actions (create task, send message, update record) and never raise it in shared channels or groups.",

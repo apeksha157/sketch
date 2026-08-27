@@ -340,6 +340,8 @@ export async function createServer(config: Config, options?: CreateServerOptions
   });
   const limitAgentExecution = <T>(work: () => Promise<T>): Promise<T> => interactiveAgentRunLimiter.run(work);
   const limitScheduledAgentExecution = <T>(work: () => Promise<T>): Promise<T> => scheduledAgentRunLimiter.run(work);
+  const isAdminReadAllEnabled = async (): Promise<boolean> =>
+    (await settingsRepo.get())?.admin_can_read_all_files === 1;
   const whatsappRuntimeRef: { current: ReturnType<typeof createWhatsAppRuntime> | null } = { current: null };
 
   /**
@@ -1074,6 +1076,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     questionInteractions,
     slack: { userCache },
     runAgent: trackedRunAgent,
+    isAdminReadAllEnabled,
     buildMcpServers,
     loadIntegrationProvider,
     cliIntegrations,
@@ -1172,6 +1175,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     queue: queueManager,
     questionInteractions,
     runAgent: trackedRunAgent,
+    isAdminReadAllEnabled,
     buildMcpServers,
     loadIntegrationProvider,
     cliIntegrations,
@@ -1290,6 +1294,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     getSlack: () => slack,
     scheduler,
     runAgent: trackedRunAgent,
+    isAdminReadAllEnabled,
     buildMcpServers,
     loadIntegrationProvider,
     listAgentEnvForRuntime: async (context: AgentEnvironmentRuntimeContext) =>

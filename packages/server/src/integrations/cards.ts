@@ -19,10 +19,7 @@ export interface IntegrationLookup {
 
 export interface CliIntegrationCardResolver {
   listCatalog(query?: string): CliIntegrationCatalogApp[];
-  listConnections(
-    viewerUserId: string,
-    context?: { platform?: "slack" | "whatsapp"; deliveryTarget?: string },
-  ): Promise<CliIntegrationConnection[]>;
+  listConnections(viewerUserId: string): Promise<CliIntegrationConnection[]>;
 }
 
 export interface IntegrationLookupResult {
@@ -688,7 +685,6 @@ export async function collectIntegrationCardsFromProgressEvents(params: {
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
   cliIntegrations?: CliIntegrationCardResolver;
   currentUserId?: string | null;
-  runtimeContext?: { platform?: "slack" | "whatsapp"; deliveryTarget?: string };
   collector?: IntegrationCardCollector;
   userEmail?: string | null;
   userName?: string | null;
@@ -709,7 +705,7 @@ export async function collectIntegrationCardsFromProgressEvents(params: {
 
   const cliConnections =
     params.cliIntegrations && params.currentUserId
-      ? await params.cliIntegrations.listConnections(params.currentUserId, params.runtimeContext)
+      ? await params.cliIntegrations.listConnections(params.currentUserId)
       : [];
   const cards: WebChatIntegrationConnectionData[] = [];
   const canvasQueries = new Set<string>();

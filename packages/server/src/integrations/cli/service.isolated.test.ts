@@ -73,15 +73,15 @@ describe("CLI integration service", () => {
     await db.destroy();
   });
 
-  it("creates an encrypted connection, resolves shares, and disconnects atomically", async () => {
-    const connection = await service.connectGitHub("owner", "  ghp_old  ", [{ type: "user", id: "recipient" }]);
+  it("creates an encrypted connection, updates access, and disconnects atomically", async () => {
+    const connection = await service.connectGitHub("owner", "  ghp_old  ");
 
     expect(connection).toMatchObject({
       appId: "github",
       executionMode: "cli",
       accountLogin: "octocat",
       status: "active",
-      shares: [{ type: "user", id: "recipient" }],
+      shares: [],
     });
     expect(JSON.stringify(connection)).not.toContain("ghp_old");
 
@@ -99,14 +99,29 @@ describe("CLI integration service", () => {
     expect(variable).toBeUndefined();
     expect(linkedVariable.value.startsWith("enc:")).toBe(true);
 
+    const updated = await service.replaceShares("owner", connection.id, [
+      { type: "user", id: "recipient" },
+      { type: "org", id: "default" },
+    ]);
+    expect(updated.shares).toEqual([
+      { type: "org", id: "default" },
+      { type: "user", id: "recipient" },
+    ]);
+
     const recipientConnections = await service.listConnections("recipient");
     expect(recipientConnections[0]).toMatchObject({ isOwnedByViewer: false, canUse: true, canManage: false });
 
     const runtimeEnv = await service.filterRuntimeEnvironment(
       {
         currentUserId: "recipient",
-        contextType: "dm",
+        contextType: "channel_mention",
         allowOrgSharedEnv: true,
+        taskContext: {
+          platform: "slack",
+          contextType: "channel",
+          deliveryTarget: "C123",
+          createdBy: "recipient",
+        },
       },
       { GH_TOKEN: "ghp_old" },
     );
@@ -138,6 +153,9 @@ describe("CLI integration service", () => {
       .executeTakeFirstOrThrow();
     expect(variable.value.startsWith("enc:")).toBe(true);
 
+    const updated = await service.replaceShares("owner", connection.id, [{ type: "org", id: "default" }]);
+    expect(updated.shares).toEqual([{ type: "org", id: "default" }]);
+
     const runtimeEnv = await service.filterRuntimeEnvironment(
       { currentUserId: "recipient", contextType: "dm", allowOrgSharedEnv: true },
       { LINEAR_API_KEY: "stale" },
@@ -159,18 +177,36 @@ describe("CLI integration service", () => {
     await service.disconnect("owner", connection.id);
   });
 
-  it("resolves channel and group shares in their runtime contexts", async () => {
-    const connection = await service.connectGitHub("owner", "ghp_shared", [
-      { type: "slack_channel", id: "C123" },
-      { type: "whatsapp_group", id: "group@g.us" },
-    ]);
+  it("ignores legacy conversation shares and uses the invoking user's access", async () => {
+    const connection = await service.connectGitHub("owner", "ghp_shared");
+    const variable = await db
+      .selectFrom("agent_environment_variables")
+      .select("id")
+      .where("name", "=", "GH_TOKEN")
+      .where("user_id", "=", "owner")
+      .executeTakeFirstOrThrow();
+    await db
+      .insertInto("agent_environment_variable_shares")
+      .values([
+        {
+          id: "legacy-slack",
+          variable_id: variable.id,
+          variable_name: "GH_TOKEN",
+          target_type: "slack_channel",
+          target_id: "C123",
+          created_by: "owner",
+        },
+        {
+          id: "legacy-whatsapp",
+          variable_id: variable.id,
+          variable_name: "GH_TOKEN",
+          target_type: "whatsapp_group",
+          target_id: "group@g.us",
+          created_by: "owner",
+        },
+      ])
+      .execute();
 
-    await expect(
-      service.listConnections("recipient", { platform: "slack", deliveryTarget: "C123" }),
-    ).resolves.toHaveLength(1);
-    await expect(
-      service.listConnections("recipient", { platform: "whatsapp", deliveryTarget: "group@g.us" }),
-    ).resolves.toHaveLength(1);
     await expect(
       service.filterRuntimeEnvironment(
         {

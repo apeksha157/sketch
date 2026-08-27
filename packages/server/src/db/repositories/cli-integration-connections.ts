@@ -20,12 +20,6 @@ export interface CreateCliIntegrationConnectionInput {
 
 export function createCliIntegrationConnectionsRepository(db: Kysely<DB>) {
   return {
-    async findById(id: string) {
-      return (
-        (await db.selectFrom("cli_integration_connections").selectAll().where("id", "=", id).executeTakeFirst()) ?? null
-      );
-    },
-
     async findByIdAndOwner(id: string, ownerUserId: string) {
       return (
         (await db
@@ -48,48 +42,33 @@ export function createCliIntegrationConnectionsRepository(db: Kysely<DB>) {
       );
     },
 
-    async findByCredentialVariableId(credentialVariableId: string) {
-      return (
-        (await db
-          .selectFrom("cli_integration_connections")
-          .selectAll()
-          .where("credential_variable_id", "=", credentialVariableId)
-          .executeTakeFirst()) ?? null
-      );
-    },
-
-    async listForOwner(ownerUserId: string) {
-      return db
-        .selectFrom("cli_integration_connections")
-        .selectAll()
-        .where("owner_user_id", "=", ownerUserId)
-        .orderBy("created_at", "asc")
-        .execute();
-    },
-
-    async listForViewer(viewerUserId: string, targetContext?: { slackChannelId?: string; whatsappGroupJid?: string }) {
-      const targetTypes = [
-        ...(targetContext ? [] : [{ type: "user", id: viewerUserId }]),
-        { type: "org", id: "default" },
-        ...(targetContext?.slackChannelId ? [{ type: "slack_channel", id: targetContext.slackChannelId }] : []),
-        ...(targetContext?.whatsappGroupJid ? [{ type: "whatsapp_group", id: targetContext.whatsappGroupJid }] : []),
-      ];
+    async listForViewer(viewerUserId: string, includeOrg: boolean) {
       return db
         .selectFrom("cli_integration_connections as c")
         .selectAll("c")
         .where((eb) =>
           eb.or([
-            ...(targetContext ? [] : [eb("c.owner_user_id", "=", viewerUserId)]),
-            ...targetTypes.map((target) =>
-              eb.exists(
-                eb
-                  .selectFrom("agent_environment_variable_shares as s")
-                  .select("s.id")
-                  .whereRef("s.variable_id", "=", "c.credential_variable_id")
-                  .where("s.target_type", "=", target.type)
-                  .where("s.target_id", "=", target.id),
-              ),
+            eb("c.owner_user_id", "=", viewerUserId),
+            eb.exists(
+              eb
+                .selectFrom("agent_environment_variable_shares as s")
+                .select("s.id")
+                .whereRef("s.variable_id", "=", "c.credential_variable_id")
+                .where("s.target_type", "=", "user")
+                .where("s.target_id", "=", viewerUserId),
             ),
+            ...(includeOrg
+              ? [
+                  eb.exists(
+                    eb
+                      .selectFrom("agent_environment_variable_shares as s")
+                      .select("s.id")
+                      .whereRef("s.variable_id", "=", "c.credential_variable_id")
+                      .where("s.target_type", "=", "org")
+                      .where("s.target_id", "=", "default"),
+                  ),
+                ]
+              : []),
           ]),
         )
         .orderBy("c.created_at", "asc")

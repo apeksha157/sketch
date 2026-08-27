@@ -332,6 +332,7 @@ export interface RunAgentParams {
   integrationUserName?: string | null;
   integrationUserEmail?: string | null;
   slackEntitySyncEnabled?: boolean;
+  isAdminReadAllEnabled?: () => Promise<boolean>;
   devToolsEnabled?: boolean;
   userPhone?: string | null;
   logger: Logger;
@@ -786,7 +787,7 @@ export function replaySdkStreamMessages(messages: readonly unknown[]): SdkStream
   };
 }
 
-async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult> {
+async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: boolean): Promise<RunAgentResult> {
   const { userMessage, workspaceDir, userName, logger } = params;
   const startHeapMb = heapUsedMb();
   const isFresh = params.sessionMode === "fresh";
@@ -862,11 +863,6 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
     order: ["org", "workspace"],
     logger: params.logger,
   });
-  const systemAppend = `${prependClaudeMdContext({
-    claudeMdContext: claudeMdContext.appendedSystemContext,
-    systemContext: baseSystemAppend,
-  })}\n\n${buildRuntimeCapabilitiesContext(params.agentEnv, params.availableManagedIntegrations)}`;
-
   const promptContent =
     images.length > 0 && visionConfig
       ? userMessage + formatAttachmentsForPrompt(attachments, { visionAnalysisEnabled: visualAnalysisAllowed })
@@ -936,11 +932,17 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
     );
     logger.debug({ userEmail: integrationUserEmail }, "Integration access resolved (user context)");
   }
+  const effectiveAgentEnv = { ...params.agentEnv, ...integrationAccess.envVars };
+  const effectiveParams = { ...params, agentEnv: effectiveAgentEnv };
+  const systemAppend = `${prependClaudeMdContext({
+    claudeMdContext: claudeMdContext.appendedSystemContext,
+    systemContext: baseSystemAppend,
+  })}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv, params.availableManagedIntegrations)}`;
 
   try {
     const workspaceTools = createAgentRuntimeWorkspaceTools({
       scope,
-      env: buildAgentChildEnv(integrationAccess.envVars, params.agentEnv),
+      env: buildAgentChildEnv({}, effectiveAgentEnv),
       toolNames: resolveAgentRuntimeWorkspaceToolNames(params.agentAllowedTools),
       logger,
     });
@@ -952,6 +954,7 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
         transcriptionEnabled: Boolean(transcriptionConfig),
         visionAnalysisEnabled: visualAnalysisAllowed,
         visionConfig,
+        adminReadAllEnabled,
       });
     const customTools = await customToolsProvider.createTools(params);
     const questionToolNames = [
@@ -961,7 +964,7 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
     const mcpToolsProvider = params.agentRuntimeExtensions?.mcpTools ?? createDefaultAgentRuntimeMcpToolProvider();
     const mcpTools = await mcpToolsProvider.createTools(params);
     const skillsProvider = params.agentRuntimeExtensions?.skills ?? createDefaultAgentRuntimeSkillsProvider();
-    const skillTools = await skillsProvider.createSkillTool(params);
+    const skillTools = await skillsProvider.createSkillTool(effectiveParams);
     const tools = { ...workspaceTools, ...customTools, ...mcpTools, ...skillTools };
     const shouldStopAfterCreateAutomationSkill =
       params.stopAfterCreateAutomationSkill ??
@@ -1177,14 +1180,25 @@ async function runAgentWithAiSdk(params: RunAgentParams): Promise<RunAgentResult
 }
 
 export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> {
+  const adminReadAllEnabled = await resolveAdminReadAllEnabled(params);
   if (params.agentRuntime === "aisdk") {
-    return runAgentWithAiSdk(params);
+    return runAgentWithAiSdk(params, adminReadAllEnabled);
   }
 
-  return runAgentWithClaudeSdk(params);
+  return runAgentWithClaudeSdk(params, adminReadAllEnabled);
 }
 
-async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentResult> {
+async function resolveAdminReadAllEnabled(params: RunAgentParams): Promise<boolean> {
+  if (!params.isAdminReadAllEnabled) return false;
+  try {
+    return (await params.isAdminReadAllEnabled()) === true;
+  } catch (err) {
+    params.logger.warn({ err }, "Admin read-all setting resolution failed closed for agent run");
+    return false;
+  }
+}
+
+async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled: boolean): Promise<RunAgentResult> {
   const { userMessage, workspaceDir, userName, logger } = params;
   const startHeapMb = heapUsedMb();
   const isFresh = params.sessionMode === "fresh";
@@ -1216,7 +1230,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
   const visionConfig = params.visionConfig ?? resolveVisionConfig(process.env, transcriptionSettings);
   const visualAnalysisAllowed = canUseVisualAnalysisTool(visionConfig, params.agentAllowedTools);
 
-  const systemAppend = `${buildSystemContext({
+  const baseSystemAppend = buildSystemContext({
     platform: params.responseSurface ?? params.platform,
     deliveryPlatform: params.responseSurface === "web" && params.taskContext ? params.platform : undefined,
     orgName: params.orgName,
@@ -1227,7 +1241,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
     availableManagedIntegrations: params.availableManagedIntegrations,
-  })}\n\n${buildRuntimeCapabilitiesContext(params.agentEnv, params.availableManagedIntegrations)}`;
+  });
 
   const sdkBuiltInTools = resolveSdkBuiltInTools(params.agentAllowedTools);
 
@@ -1312,6 +1326,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
     currentUserEmail: params.userEmail ?? null,
     currentUserName: params.userName,
     slackEntitySyncEnabled: params.slackEntitySyncEnabled,
+    adminReadAllEnabled,
     devToolsEnabled: params.devToolsEnabled,
     localDeviceInvoker: params.localDeviceInvoker,
     localClaudeSessionService: params.localClaudeSessionService,
@@ -1345,18 +1360,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
     }
   }
 
-  const baseCanUseTool = createCanUseTool(absWorkspace, logger, params.claudeConfigDir, {
-    agentAllowedTools: params.agentAllowedTools,
-    agentEnv: params.agentEnv,
-    availableManagedIntegrations: params.availableManagedIntegrations,
-    blockedReadPaths: blockedReadPaths.size > 0 ? Array.from(blockedReadPaths) : undefined,
-    blockImageReads: visualAnalysisAllowed,
-  });
   const canUseToolTimings: CanUseToolTiming[] = [];
-  const timedCanUseTool = async (toolName: string, input: Record<string, unknown>) => {
-    canUseToolTimings.push({ toolName, calledAt: Date.now() });
-    return baseCanUseTool(toolName, input);
-  };
 
   // Start per-run brokered access for skill-mode integrations.
   // The agent sees only harmless launcher paths and broker metadata; the
@@ -1383,6 +1387,22 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
     );
     logger.debug({ userEmail: integrationUserEmail }, "Integration access resolved (user context)");
   }
+  const effectiveAgentEnv = { ...params.agentEnv, ...integrationAccess.envVars };
+  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(
+    effectiveAgentEnv,
+    params.availableManagedIntegrations,
+  )}`;
+  const baseCanUseTool = createCanUseTool(absWorkspace, logger, params.claudeConfigDir, {
+    agentAllowedTools: params.agentAllowedTools,
+    agentEnv: effectiveAgentEnv,
+    availableManagedIntegrations: params.availableManagedIntegrations,
+    blockedReadPaths: blockedReadPaths.size > 0 ? Array.from(blockedReadPaths) : undefined,
+    blockImageReads: visualAnalysisAllowed,
+  });
+  const timedCanUseTool = async (toolName: string, input: Record<string, unknown>) => {
+    canUseToolTimings.push({ toolName, calledAt: Date.now() });
+    return baseCanUseTool(toolName, input);
+  };
 
   /**
    * Runs a single SDK query() pass and processes its message stream. When the
@@ -1411,7 +1431,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
         env: {
           ...process.env,
           ...(params.claudeConfigDir === undefined ? { CLAUDE_CONFIG_DIR: workspaceDir } : {}),
-          ...buildAgentChildEnv(integrationAccess.envVars, params.agentEnv),
+          ...buildAgentChildEnv({}, effectiveAgentEnv),
         },
         systemPrompt: systemAppend,
         abortController: params.abortController,
@@ -1527,12 +1547,6 @@ async function runAgentWithClaudeSdk(params: RunAgentParams): Promise<RunAgentRe
         loadIntegrationProvider: params.loadIntegrationProvider,
         cliIntegrations: params.cliIntegrations,
         currentUserId: params.integrationUserId === undefined ? params.currentUserId : params.integrationUserId,
-        runtimeContext:
-          params.taskContext?.contextType === "channel" && params.platform === "slack"
-            ? { platform: "slack", deliveryTarget: params.taskContext.deliveryTarget }
-            : params.taskContext?.contextType === "group" && params.platform === "whatsapp"
-              ? { platform: "whatsapp", deliveryTarget: params.taskContext.deliveryTarget }
-              : undefined,
         collector: integrationConnectionCollector,
         userEmail: params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail,
         userName: params.integrationUserName === undefined ? params.userName : params.integrationUserName,

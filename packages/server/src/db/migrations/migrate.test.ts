@@ -30,7 +30,7 @@ import * as outlookCalendarProviderFileScopeMigration from "./164-outlook-calend
 import * as entityMergeGroupsMigration from "./186-entity-merge-groups";
 import * as entityNameProposalsMigration from "./187-entity-name-proposals";
 
-const EXPECTED_MIGRATION_COUNT = 207;
+const EXPECTED_MIGRATION_COUNT = 208;
 
 function createBlankDb(): Kysely<DB> {
   return new Kysely<DB>({
@@ -51,6 +51,93 @@ describe("runMigrations — full sequence", () => {
 
   it("runs all migrations on a fresh database without error", async () => {
     await expect(runMigrations(db, { quiet: true })).resolves.not.toThrow();
+  });
+
+  it("removes conversation shares only from managed integrations", async () => {
+    const migrator = createMigrator(db);
+    await migrator.migrateTo("211-graph-verdicts-approved-active");
+    await db.insertInto("users").values({ id: "owner", name: "Owner" }).execute();
+    await db
+      .insertInto("agent_environment_variables")
+      .values([
+        { id: "managed-token", user_id: "owner", name: "GH_TOKEN", value: "secret" },
+        { id: "regular-token", user_id: "owner", name: "OTHER_TOKEN", value: "secret" },
+      ])
+      .execute();
+    await db
+      .insertInto("cli_integration_connections")
+      .values({
+        id: "github-connection",
+        app_id: "github",
+        owner_user_id: "owner",
+        credential_variable_id: "managed-token",
+        account_external_id: "123",
+        account_login: "octocat",
+        account_avatar_url: null,
+        account_type: "User",
+        status: "active",
+        verified_at: "2026-08-27T00:00:00.000Z",
+        last_verification_error: null,
+      })
+      .execute();
+    await db
+      .insertInto("agent_environment_variable_shares")
+      .values([
+        {
+          id: "managed-user",
+          variable_id: "managed-token",
+          variable_name: "GH_TOKEN",
+          target_type: "user",
+          target_id: "member",
+          created_by: "owner",
+        },
+        {
+          id: "managed-org",
+          variable_id: "managed-token",
+          variable_name: "GH_TOKEN",
+          target_type: "org",
+          target_id: "default",
+          created_by: "owner",
+        },
+        {
+          id: "managed-slack",
+          variable_id: "managed-token",
+          variable_name: "GH_TOKEN",
+          target_type: "slack_channel",
+          target_id: "C123",
+          created_by: "owner",
+        },
+        {
+          id: "managed-whatsapp",
+          variable_id: "managed-token",
+          variable_name: "GH_TOKEN",
+          target_type: "whatsapp_group",
+          target_id: "group@g.us",
+          created_by: "owner",
+        },
+        {
+          id: "regular-slack",
+          variable_id: "regular-token",
+          variable_name: "OTHER_TOKEN",
+          target_type: "slack_channel",
+          target_id: "C123",
+          created_by: "owner",
+        },
+      ])
+      .execute();
+
+    await migrator.migrateToLatest();
+
+    const shares = await db
+      .selectFrom("agent_environment_variable_shares")
+      .select(["variable_id", "target_type"])
+      .orderBy("id")
+      .execute();
+    expect(shares).toEqual([
+      { variable_id: "managed-token", target_type: "org" },
+      { variable_id: "managed-token", target_type: "user" },
+      { variable_id: "regular-token", target_type: "slack_channel" },
+    ]);
   });
 
   it("backfills placeholder status only for WhatsApp identity names", async () => {
@@ -324,6 +411,7 @@ describe("runMigrations — full sequence", () => {
     expect(names[204]).toBe("209-weekly-mint-retirement");
     expect(names[205]).toBe("210-graph-verdicts");
     expect(names[206]).toBe("211-graph-verdicts-approved-active");
+    expect(names[207]).toBe("212-cli-integration-user-org-access");
   });
 
   it("adds portable session fencing columns with safe legacy defaults", async () => {

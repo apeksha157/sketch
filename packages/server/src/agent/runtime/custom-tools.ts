@@ -57,6 +57,7 @@ export interface AgentRuntimeCustomToolProviderDeps {
   transcriptionEnabled: boolean;
   visionAnalysisEnabled: boolean;
   visionConfig: SketchMcpDeps["visionConfig"];
+  adminReadAllEnabled?: boolean;
 }
 
 function namespacedMcpToolName(serverName: string, toolName: string): string {
@@ -147,12 +148,6 @@ export function createAgentRuntimeCustomToolEffects(): AgentRuntimeCustomToolEff
         loadIntegrationProvider: params.loadIntegrationProvider,
         cliIntegrations: params.cliIntegrations,
         currentUserId: params.integrationUserId === undefined ? params.currentUserId : params.integrationUserId,
-        runtimeContext:
-          params.taskContext?.contextType === "channel" && params.platform === "slack"
-            ? { platform: "slack", deliveryTarget: params.taskContext.deliveryTarget }
-            : params.taskContext?.contextType === "group" && params.platform === "whatsapp"
-              ? { platform: "whatsapp", deliveryTarget: params.taskContext.deliveryTarget }
-              : undefined,
         collector: integrationConnectionCollector,
         userEmail: params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail,
         userName: params.integrationUserName === undefined ? params.userName : params.integrationUserName,
@@ -216,6 +211,7 @@ function buildSketchMcpDeps(params: RunAgentParams, deps: AgentRuntimeCustomTool
     currentUserEmail: params.userEmail ?? null,
     currentUserName: params.userName,
     slackEntitySyncEnabled: params.slackEntitySyncEnabled,
+    adminReadAllEnabled: deps.adminReadAllEnabled === true,
     devToolsEnabled: params.devToolsEnabled,
     localDeviceInvoker: params.localDeviceInvoker,
     localClaudeSessionService: params.localClaudeSessionService,

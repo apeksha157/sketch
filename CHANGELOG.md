@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [1.4.4] -- 2026-08-26
+
+- Fixes search to make Teams meetings reachable through `kind: "meeting"` and `source: "teams"` filters.
+- Enables the agent to honor the `admin_can_read_all_files` setting in live conversations for content tools.
+- Exposes brokered Canvas as an available managed skill integration in fresh agent runs.
+- Resolves WhatsApp @-mentions to names and adds WhatsApp identifiers to `SearchUsers`.
+
+## [1.4.3] -- 2026-08-26
+
+- Adds a confirmed delete action for individual summarizers, preserving generated summaries.
+- Fixes org-member and team-member deletion by clearing conversation message sender references before removal.
+- Enables team member deletion even when retained messages still reference the user.
+- Fixes Teams meeting discovery to include ad-hoc chat meetings by listing chat-based meetings, deduplicating with calendar events, and guarding against false tombstoning.
+
 ## [1.4.2] -- 2026-08-25
 
 - Unifies chat history into `ReadChatHistory` with cross-chat scope, time bounds, and platform filters; retires `SearchChatHistory`.

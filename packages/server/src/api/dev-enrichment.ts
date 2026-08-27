@@ -27,6 +27,7 @@ import {
 } from "../connectors/enrichment-providers";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { createOpenRouterGenerator } from "../connectors/openrouter-generate";
+import { SEARCHABLE_SOURCES } from "../connectors/search";
 import { mintTasksFromFile } from "../connectors/task-minting";
 import { createDevSearchTraceRepository } from "../db/repositories/dev-search-traces";
 import { createSettingsRepository } from "../db/repositories/settings";
@@ -50,9 +51,7 @@ const searchRunSchema = z.object({
   entityIds: z.array(z.string()).optional(),
   entityIdsMode: z.enum(["and", "or"]).optional(),
   kind: z.enum(["meeting", "doc", "task", "message"]).optional(),
-  source: z
-    .enum(["google_drive", "clickup", "linear", "notion", "fireflies", "conversation", "whatsapp", "slack", "local"])
-    .optional(),
+  source: z.enum(SEARCHABLE_SOURCES).optional(),
   sortBy: z.enum(["relevance", "recency"]).optional(),
   after: z.string().optional(),
   before: z.string().optional(),
@@ -233,8 +232,9 @@ export function devEnrichmentRoutes(
    * agent's own search is the `dev_tools` origin, which is what lets the feed tell a test
    * run apart from live traffic.
    *
-   * Principals are the calling admin's own, so the trace answers "what would I see". To
-   * ask what another user would see, open that user's own search from the feed.
+   * Visibility matches the calling admin's content-read route, including the read-all
+   * setting when enabled. To ask what another user would see, open that user's own
+   * search from the feed.
    */
   routes.post("/search-runs", async (c) => {
     const forbidden = requireAdmin(c);
@@ -252,6 +252,7 @@ export function devEnrichmentRoutes(
       currentUserId: c.get("sub") as string,
       userRepo: createUserRepository(db, { slackEntitySyncEnabled: appConfig?.SLACK_ENTITY_SYNC }),
       slackEntitySyncEnabled: appConfig?.SLACK_ENTITY_SYNC,
+      adminReadAllEnabled: c.get("adminCanReadAllFiles") === true,
       devToolsEnabled: true,
       devSearchTraceId: traceId,
       geminiConfig: { maxRpm: appConfig?.GEMINI_MAX_RPM, maxRetries: appConfig?.GEMINI_MAX_RETRIES },

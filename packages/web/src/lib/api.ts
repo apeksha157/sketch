@@ -17,6 +17,7 @@ import type {
   CanvasWebhookEndpoint,
   CliIntegrationCatalogApp,
   CliIntegrationConnection,
+  CliIntegrationShareTarget,
   FileMetadata,
   IntegrationApp,
   IntegrationConnection,
@@ -3267,7 +3268,7 @@ export const api = {
         body: JSON.stringify({ token }),
       });
     },
-    connectGitHub(token: string, targets: AgentEnvironmentShareTargetInput[] = []) {
+    connectGitHub(token: string, targets: CliIntegrationShareTarget[] = []) {
       return request<{ connection: CliIntegrationConnection }>("/api/integration-apps/github/connections", {
         method: "POST",
         body: JSON.stringify({ token, targets }),
@@ -3285,7 +3286,7 @@ export const api = {
         { method: "POST" },
       );
     },
-    connectLinear(apiKey: string, targets: AgentEnvironmentShareTargetInput[] = []) {
+    connectLinear(apiKey: string, targets: CliIntegrationShareTarget[] = []) {
       return request<{ connection: CliIntegrationConnection }>("/api/integration-apps/linear/connections", {
         method: "POST",
         body: JSON.stringify({ token: apiKey, targets }),
@@ -3326,7 +3327,7 @@ export const api = {
         body: JSON.stringify({ token }),
       });
     },
-    connect(appId: string, token: string, targets: AgentEnvironmentShareTargetInput[] = []) {
+    connect(appId: string, token: string, targets: CliIntegrationShareTarget[] = []) {
       return request<{ connection: CliIntegrationConnection }>(
         `/api/integration-apps/${encodeURIComponent(appId)}/connections`,
         { method: "POST", body: JSON.stringify({ token, targets }) },
@@ -3344,7 +3345,7 @@ export const api = {
         { method: "POST" },
       );
     },
-    replaceShares(appId: string, connectionId: string, targets: AgentEnvironmentShareTargetInput[]) {
+    replaceShares(appId: string, connectionId: string, targets: CliIntegrationShareTarget[]) {
       return request<{ connection: CliIntegrationConnection }>(
         `/api/integration-apps/${encodeURIComponent(appId)}/connections/${encodeURIComponent(connectionId)}/shares`,
         { method: "PUT", body: JSON.stringify({ targets }) },

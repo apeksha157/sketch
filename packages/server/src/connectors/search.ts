@@ -28,7 +28,7 @@ import { parseEmailAddrJson, parseEmailAddrListJson } from "./email/envelope-met
 import type { EmailAddr } from "./email/normalized-email";
 import { createEnrichmentQueryEmbedder, resolveOpenRouterEnrichmentConfig } from "./enrichment-providers";
 import type { SearchCandidate, StageKey, StageReporter, VectorChunkHit } from "./enrichment-stage-report";
-import { type AccessPrincipalInput, normalizeAccessPrincipals } from "./types";
+import { type AccessPrincipalInput, CONNECTOR_TYPES, type ConnectorType, normalizeAccessPrincipals } from "./types";
 import {
   type ScoredVector,
   VECTOR_HIT_DISPLAY_CAP,
@@ -51,6 +51,14 @@ export interface SearchResult {
   relevance: number;
 }
 
+export type SearchableSource = ConnectorType | "conversation" | "local";
+
+function buildSearchableSources(connectorTypes: readonly ConnectorType[]): [SearchableSource, ...SearchableSource[]] {
+  return ["conversation", "local", ...connectorTypes];
+}
+
+export const SEARCHABLE_SOURCES = buildSearchableSources(CONNECTOR_TYPES);
+
 export interface SearchOptions {
   /** Filter by source provider. */
   source?: string;
@@ -65,6 +73,7 @@ export interface SearchOptions {
    * When omitted, no user-level filtering is applied.
    */
   userPrincipals?: AccessPrincipalInput[];
+  accessBypassReason?: "admin";
   slackEntitySyncEnabled?: boolean;
 }
 
@@ -168,8 +177,9 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
  * and by the frontend file detail sheet.
  *
  * Access control:
- *   - `userPrincipals === undefined` → trusted bypass (server/agent boot paths,
- *     admin bypass when the org setting is on). Returns the file unfiltered.
+ *   - `userPrincipals === undefined` → trusted bypass (server boot paths and
+ *     interactive admin agent/web content reads when the org setting is on).
+ *     Returns the file unfiltered.
  *   - `userPrincipals === []`        → caller has no resolvable principal → fail closed.
  *     Returns null regardless of the file's access shape. Prevents an unauth'd
  *     user from inheriting visibility through the empty-array path.
@@ -384,7 +394,7 @@ export type KindRule = { sources?: string[]; fileTypes?: string[] };
  * sweeps in tasks under `kind: "doc"` — so we discriminate on file_type too.
  */
 export const KIND_TO_RULES: Record<string, KindRule[]> = {
-  meeting: [{ sources: ["fireflies", "otter"] }],
+  meeting: [{ sources: ["fireflies", "otter"] }, { sources: ["teams"], fileTypes: ["meeting_transcript"] }],
   doc: [
     { sources: ["google_drive"], fileTypes: ["document", "presentation"] },
     { sources: ["notion"], fileTypes: ["page"] },
@@ -1074,15 +1084,17 @@ export async function hybridSearch(
     label: "Access filter",
     kind: "code",
     status: principalList.length > 0 ? "done" : "skipped",
-    ...(principalList.length > 0
-      ? {
-          summary: {
-            principals: principalList.length,
-            allowed: accessFiltered.length,
-            denied: filteredFiles.length - accessFiltered.length,
-          },
-        }
-      : { error: "No principals supplied — access filter not applied" }),
+    ...(opts?.accessBypassReason === "admin"
+      ? { error: "skipped — admin bypass" }
+      : principalList.length > 0
+        ? {
+            summary: {
+              principals: principalList.length,
+              allowed: accessFiltered.length,
+              denied: filteredFiles.length - accessFiltered.length,
+            },
+          }
+        : { error: "No principals supplied — access filter not applied" }),
   });
 
   // ── 7. Build final results ─────────────────────────────────
@@ -1839,6 +1851,7 @@ export async function search(
     after?: string;
     before?: string;
     userPrincipals?: AccessPrincipalInput[];
+    accessBypassReason?: "admin";
     slackEntitySyncEnabled?: boolean;
     entityId?: string;
     entityIds?: string[];
@@ -2033,6 +2046,7 @@ export async function search(
     limit: fetchLimit,
     queryEmbedding,
     userPrincipals: opts?.userPrincipals,
+    ...(opts?.accessBypassReason ? { accessBypassReason: opts.accessBypassReason } : {}),
     slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
     fileIds,
     entityFileIds,
