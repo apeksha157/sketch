@@ -211,6 +211,7 @@ import * as m208 from "./migrations/208-weekly-mint-observability";
 import * as m209 from "./migrations/209-weekly-mint-retirement";
 import * as m210 from "./migrations/210-graph-verdicts";
 import * as m211 from "./migrations/211-graph-verdicts-approved-active";
+import * as m212 from "./migrations/212-cli-integration-user-org-access";
 import type { DB } from "./schema";
 
 /**
@@ -431,6 +432,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "209-weekly-mint-retirement": m209,
           "210-graph-verdicts": m210,
           "211-graph-verdicts-approved-active": m211,
+          "212-cli-integration-user-org-access": m212,
         };
       },
     },

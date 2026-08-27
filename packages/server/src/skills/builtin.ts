@@ -13,7 +13,7 @@ requires-env:
 
 # Linear API
 
-Use Linear's GraphQL API at \`https://api.linear.app/graphql\` for Linear work. The runtime supplies \`LINEAR_API_KEY\` only when the current user or conversation is authorized to use the managed Linear integration.
+Use Linear's GraphQL API at \`https://api.linear.app/graphql\` for Linear work. The runtime supplies \`LINEAR_API_KEY\` only when the current user owns the connection, has a user share, or has organization-wide access.
 
 Authenticate with the raw API key in the \`Authorization\` header. Do not add \`Bearer\`, print the key, put it in a URL or command argument, or expose the process environment.
 
@@ -39,7 +39,7 @@ requires-env:
 
 # GitHub CLI
 
-Use the GitHub CLI executable \`gh\` for GitHub work. The Sketch runtime supplies authentication only when the current user or conversation is authorized to use GitHub.
+Use the GitHub CLI executable \`gh\` for GitHub work. The Sketch runtime supplies authentication only when the current user owns the connection, has a user share, or has organization-wide access.
 
 ## Safe workflow
 

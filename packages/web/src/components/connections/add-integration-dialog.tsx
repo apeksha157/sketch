@@ -61,7 +61,7 @@ export function AddIntegrationDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  providerId: string;
+  providerId?: string;
   connectedAppIds: Set<string>;
   initialAppId?: string | null;
   initialSearch?: string | null;
@@ -101,6 +101,19 @@ export function AddIntegrationDialog({
   const loadApps = useCallback(
     async (query: string, cursor: string | null, append: boolean) => {
       setIsLoadingApps(true);
+      const matchingCliApps = query.trim()
+        ? cliApps.filter((app) =>
+            `${app.name} ${app.id} ${app.description}`.toLowerCase().includes(query.trim().toLowerCase()),
+          )
+        : cliApps;
+      if (!providerId) {
+        appsRef.current = append ? appsRef.current : matchingCliApps;
+        setApps(appsRef.current);
+        setHasMore(false);
+        setEndCursor(null);
+        setIsLoadingApps(false);
+        return;
+      }
       try {
         const result = await api.mcpServers.listApps(providerId, query || undefined, 20, cursor ?? undefined);
         const cliAppIds = new Set(cliApps.map((app) => app.id.trim().toLowerCase()));
@@ -110,11 +123,6 @@ export function AddIntegrationDialog({
             !isCanvasBlockedCliAppId(app.id) &&
             !isCanvasBlockedCliAppId(app.name),
         );
-        const matchingCliApps = query.trim()
-          ? cliApps.filter((app) =>
-              `${app.name} ${app.id} ${app.description}`.toLowerCase().includes(query.trim().toLowerCase()),
-            )
-          : cliApps;
         const mergedApps = append ? [...appsRef.current, ...canvasApps] : [...matchingCliApps, ...canvasApps];
         if (append) {
           appsRef.current = [...appsRef.current, ...canvasApps];
@@ -160,6 +168,10 @@ export function AddIntegrationDialog({
     setEndCursor(null);
 
     async function loadDirectApp() {
+      if (!providerId) {
+        setStep({ kind: "direct_not_found", appId });
+        return;
+      }
       try {
         const callbackUrl = `${window.location.origin}/integrations/callback`;
         const result = await api.mcpServers.createConnectionIntent(providerId, appId, callbackUrl);
@@ -244,6 +256,11 @@ export function AddIntegrationDialog({
     preopenedPopup?: Window | null,
     attemptId = oauthAttemptRef.current + 1,
   ) => {
+    if (!providerId) {
+      setStep({ kind: "direct_not_found", appId: app.id });
+      return;
+    }
+    const activeProviderId = providerId;
     if (attemptId > oauthAttemptRef.current) oauthAttemptRef.current = attemptId;
     if (oauthAttemptRef.current !== attemptId) {
       if (preopenedPopup && !preopenedPopup.closed) preopenedPopup.close();
@@ -289,7 +306,7 @@ export function AddIntegrationDialog({
       const shouldFinalizeIfMissing = finalIfMissing || finalizeAfterVerify;
       finalizeAfterVerify = false;
       try {
-        const connections = await api.mcpServers.listConnections(providerId);
+        const connections = await api.mcpServers.listConnections(activeProviderId);
         const matchingConnections = connections.filter((c) => c.appId === app.id && isOwnedOrPersonalAppConnection(c));
         const connected = matchingConnections.find(isNativeCanvasAppConnection) ?? matchingConnections[0];
         if (cancelledRef.current || oauthAttemptRef.current !== attemptId) return;
@@ -332,7 +349,8 @@ export function AddIntegrationDialog({
   };
 
   const handleStartOAuth = async (app: IntegrationApp) => {
-    if (connectedAppIds.has(app.id)) return;
+    if (!providerId || connectedAppIds.has(app.id)) return;
+    const activeProviderId = providerId;
     const attemptId = oauthAttemptRef.current + 1;
     oauthAttemptRef.current = attemptId;
     if (pollIntervalRef.current) {
@@ -349,7 +367,7 @@ export function AddIntegrationDialog({
 
     try {
       const callbackUrl = `${window.location.origin}/integrations/callback`;
-      const result = await api.mcpServers.createConnectionIntent(providerId, app.id, callbackUrl, app);
+      const result = await api.mcpServers.createConnectionIntent(activeProviderId, app.id, callbackUrl, app);
       startOAuthWindow(result.app, result.redirectUrl, popup, attemptId);
     } catch (err) {
       if (!popup.closed) popup.close();
@@ -372,7 +390,11 @@ export function AddIntegrationDialog({
           <>
             <DialogHeader>
               <DialogTitle>Add integration</DialogTitle>
-              <DialogDescription>Search from apps available via your integration provider.</DialogDescription>
+              <DialogDescription>
+                {providerId
+                  ? "Search from apps available via your integration provider."
+                  : "Connect a managed integration."}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="py-2">

@@ -574,10 +574,6 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
         service: deps.cliIntegrations,
         loadIntegrationProvider: deps.loadIntegrationProvider,
         users,
-        channels,
-        whatsappGroups,
-        getSlack: deps.getSlack,
-        logger,
       }),
     );
   }

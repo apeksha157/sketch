@@ -1,8 +1,8 @@
 import { LinearAppIcon } from "@/components/connections/app-icon";
 import { AccessPicker } from "@/components/connections/github-integration-dialog";
-import { type SlackChannelInfo, type User, type WhatsAppGroupInfo, api } from "@/lib/api";
+import { type User, api } from "@/lib/api";
 import { GearSixIcon, KeyIcon, ShareNetworkIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
-import type { AgentEnvironmentShareTargetInput, CliIntegrationConnection } from "@sketch/shared";
+import type { CliIntegrationConnection, CliIntegrationShareTarget } from "@sketch/shared";
 import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
@@ -29,8 +29,6 @@ type LinearVerificationIdentity = {
 
 type LinearAccessProps = {
   users: User[];
-  slackChannels: SlackChannelInfo[];
-  whatsappGroups: WhatsAppGroupInfo[];
   currentUserId: string;
   isAdmin: boolean;
 };
@@ -141,7 +139,7 @@ export function LinearIntegrationDialog({
   const [apiKey, setApiKey] = useState("");
   const [identity, setIdentity] = useState<LinearVerificationIdentity | null>(null);
   const [connection, setConnection] = useState<CliIntegrationConnection | null>(null);
-  const [targets, setTargets] = useState<AgentEnvironmentShareTargetInput[]>([]);
+  const [targets, setTargets] = useState<CliIntegrationShareTarget[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -264,7 +262,7 @@ export function LinearIntegrationDialog({
                 Linear is connected as <span className="font-medium">{connection.accountLogin}</span>.
               </p>
               <p className="text-muted-foreground">
-                The managed Linear skill can now use this connection where shared.
+                The managed Linear skill can now use this connection for its owner and anyone it is shared with.
               </p>
             </div>
           )}
@@ -320,8 +318,8 @@ function LinearConnectionManageDialog({
   onChanged: () => void;
 }) {
   const [apiKey, setApiKey] = useState("");
-  const [targets, setTargets] = useState<AgentEnvironmentShareTargetInput[]>(connection.shares);
-  const [savedTargets, setSavedTargets] = useState<AgentEnvironmentShareTargetInput[]>(connection.shares);
+  const [targets, setTargets] = useState<CliIntegrationShareTarget[]>(connection.shares);
+  const [savedTargets, setSavedTargets] = useState<CliIntegrationShareTarget[]>(connection.shares);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -374,7 +372,7 @@ function LinearConnectionManageDialog({
               <div>
                 <h3 className="text-sm font-semibold">Access management</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Choose people and conversation spaces that can use Linear.
+                  Choose specific people or share this connection with the organization.
                 </p>
               </div>
             </div>
@@ -385,22 +383,6 @@ function LinearConnectionManageDialog({
               onTargetsChange={setTargets}
               disabled={saving}
             />
-            <Button
-              className="mt-4"
-              variant="outline"
-              size="sm"
-              disabled={saving || !accessChanged}
-              onClick={() =>
-                void run(async () => {
-                  await api.cliIntegrations.replaceShares("linear", connection.id, targets);
-                  setSavedTargets(targets);
-                  toast.success("Linear access updated");
-                  onOpenChange(false);
-                })
-              }
-            >
-              Save access
-            </Button>
           </section>
           <section className="rounded-lg border border-border bg-muted/10 p-4">
             <div className="flex items-start gap-3">
@@ -483,8 +465,25 @@ function LinearConnectionManageDialog({
           >
             Disconnect
           </Button>
-          <Button variant="outline" onClick={close} disabled={saving}>
-            Done
+          <Button
+            variant={accessChanged ? "default" : "outline"}
+            onClick={() => {
+              if (!accessChanged) {
+                close();
+                return;
+              }
+              void run(async () => {
+                const result = await api.cliIntegrations.replaceShares("linear", connection.id, targets);
+                setTargets(result.connection.shares);
+                setSavedTargets(result.connection.shares);
+                toast.success("Linear access updated");
+                onOpenChange(false);
+              });
+            }}
+            disabled={saving}
+          >
+            {saving && accessChanged ? <SpinnerGapIcon size={14} className="animate-spin" /> : null}
+            {accessChanged ? (saving ? "Saving…" : "Save access") : "Done"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -492,7 +491,7 @@ function LinearConnectionManageDialog({
   );
 }
 
-function sameTargets(first: AgentEnvironmentShareTargetInput[], second: AgentEnvironmentShareTargetInput[]): boolean {
+function sameTargets(first: CliIntegrationShareTarget[], second: CliIntegrationShareTarget[]): boolean {
   if (first.length !== second.length) return false;
   const secondKeys = new Set(second.map((target) => `${target.type}:${target.id}`));
   return first.every((target) => secondKeys.has(`${target.type}:${target.id}`));

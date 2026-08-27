@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { AgentEnvironmentShareTargetInput } from "./agent-environment";
 
 export const cliIntegrationAppIdSchema = z.enum(["github", "linear"]);
 export type CliIntegrationAppId = z.infer<typeof cliIntegrationAppIdSchema>;
@@ -48,7 +47,7 @@ export interface CliIntegrationConnection {
   isOwnedByViewer?: boolean;
   canUse?: boolean;
   canManage?: boolean;
-  shares: AgentEnvironmentShareTargetInput[];
+  shares: CliIntegrationShareTarget[];
 }
 
 export interface CliIntegrationCatalogApp {
@@ -91,7 +90,7 @@ export function parseCliSkillFrontmatter(value: {
 }
 
 export const cliIntegrationShareTargetSchema = z.object({
-  type: z.enum(["user", "slack_channel", "whatsapp_group", "org"]),
+  type: z.enum(["user", "org"]),
   id: z.string().trim().min(1),
 });
 
