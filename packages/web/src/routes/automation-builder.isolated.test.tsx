@@ -788,12 +788,19 @@ describe("AutomationBuilderPage", () => {
     await user.click(screen.getByRole("button", { name: "Check rating" }));
     expect(screen.getByTestId("automation-builder-drawer")).toBeInTheDocument();
     const inputTab = screen.getByRole("tab", { name: "Input" });
+    const reasoningTab = screen.getByRole("tab", { name: "Reasoning" });
     const outputTab = screen.getByRole("tab", { name: "Output" });
     expect(inputTab).toHaveAttribute("aria-selected", "true");
+    expect(reasoningTab).toHaveAttribute("aria-selected", "false");
     expect(outputTab).toHaveAttribute("aria-selected", "false");
     expect(inputTab).not.toHaveClass("border", "border-foreground/70");
     expect(outputTab).not.toHaveClass("border");
     expect(screen.queryByText("post-only payload")).not.toBeInTheDocument();
+
+    await user.click(reasoningTab);
+    expect(screen.getByTestId("automation-builder-reasoning-empty")).toHaveTextContent(
+      "No reasoning timeline was captured for this run",
+    );
 
     await user.click(outputTab);
     expect(outputTab).toHaveAttribute("aria-selected", "true");
@@ -811,6 +818,93 @@ describe("AutomationBuilderPage", () => {
     expect(screen.getByRole("tab", { name: "Input" })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: "Output" }));
     expect(screen.getByTestId("automation-builder-output")).toHaveTextContent("scheduled");
+  });
+
+  it("shows an agent reasoning timeline with expandable tool inputs and results", async () => {
+    const run: NonNullable<AutomationDefinition["latestRun"]> = {
+      id: "run-with-reasoning",
+      taskId: automation.id,
+      triggerData: { event: "scheduled" },
+      status: "completed",
+      stepOutputs: {
+        check: {
+          output: "Quarterly numbers are up.",
+          status: "completed",
+          duration_ms: 1_500,
+          agentTrace: {
+            version: 1,
+            runtime: "sketch",
+            model: "claude-sonnet-4-6",
+            startedAt: 1_000,
+            completedAt: 2_500,
+            stopReason: "end_turn",
+            turns: 2,
+            usage: {
+              inputTokens: 120,
+              outputTokens: 30,
+              cacheReadTokens: 10,
+              cacheCreationTokens: 0,
+              costUsd: 0.0042,
+            },
+            events: [
+              {
+                id: "reasoning-1",
+                type: "reasoning",
+                text: "I’ll inspect the source notes first.",
+                source: "assistant",
+                at: 1_100,
+              },
+              {
+                id: "tool-2",
+                type: "tool_call",
+                toolName: "Read",
+                skillName: null,
+                input: { file_path: "notes.md" },
+                output: { text: "Quarterly numbers are up." },
+                status: "completed",
+                startedAt: 1_200,
+                endedAt: 1_500,
+                durationMs: 300,
+                outputCaptured: true,
+              },
+            ],
+            truncated: false,
+          },
+        },
+      },
+      errorMessage: null,
+      startedAt: "2026-06-01T00:00:00.000Z",
+      completedAt: "2026-06-01T00:00:02.000Z",
+    };
+    mocks.getAutomation.mockResolvedValue({
+      ...automation,
+      latestRun: run,
+      recentRuns: [run],
+    });
+
+    const user = userEvent.setup();
+    renderBuilder();
+
+    await user.click(await screen.findByRole("button", { name: "Check rating" }));
+    const reasoningTab = screen.getByRole("tab", { name: "Reasoning" });
+    expect(reasoningTab).toHaveAttribute("aria-selected", "false");
+
+    await user.click(reasoningTab);
+    const reasoning = screen.getByTestId("automation-builder-reasoning");
+    expect(reasoningTab).toHaveAttribute("aria-selected", "true");
+    expect(within(reasoning).getByText("Full Sketch agent")).toBeInTheDocument();
+    expect(within(reasoning).getByText("claude-sonnet-4-6")).toBeInTheDocument();
+    expect(within(reasoning).getByText("Stop: end turn")).toBeInTheDocument();
+    expect(within(reasoning).getByText("I’ll inspect the source notes first.")).toBeInTheDocument();
+    expect(within(reasoning).getByText("Read")).toBeInTheDocument();
+
+    await user.click(within(reasoning).getByText("Read"));
+    expect(within(reasoning).getByText(/notes\.md/)).toBeInTheDocument();
+    expect(within(reasoning).getByText(/Quarterly numbers are up\./)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+    expect(screen.queryByRole("tab", { name: "Reasoning" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Input" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("opens the full run history from the runs section and keeps run selection URL-backed", async () => {

@@ -67,6 +67,7 @@ export interface AgentRuntimeToolEnd {
 export interface AgentRuntimeEvents {
   onSessionId?: (sessionId: string) => void | Promise<void>;
   onTextDelta?: (text: string) => void | Promise<void>;
+  onReasoningDelta?: (text: string) => void | Promise<void>;
   onToolStart?: (event: AgentRuntimeToolStart) => void | Promise<void>;
   onToolEnd?: (event: AgentRuntimeToolEnd) => void | Promise<void>;
 }

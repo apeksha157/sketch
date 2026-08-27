@@ -58,6 +58,7 @@ import {
   ArrowClockwiseIcon,
   ArrowLeftIcon,
   BracketsCurlyIcon,
+  BrainIcon,
   CalendarDotsIcon,
   CaretDownIcon,
   CaretRightIcon,
@@ -83,9 +84,11 @@ import {
   SlackLogoIcon,
   SpinnerGapIcon,
   TableIcon,
+  TerminalWindowIcon,
   TrashIcon,
   WebhooksLogoIcon,
   WhatsappLogoIcon,
+  WrenchIcon,
   XCircleIcon,
   XIcon,
 } from "@phosphor-icons/react";
@@ -4494,7 +4497,7 @@ function NodeDrawer({
   onUpdateAgentPrompt: (stepId: string, content: string) => void;
   savingPromptStepId: string | null;
 }) {
-  const [tab, setTab] = useState<"input" | "output">("input");
+  const [tab, setTab] = useState<"input" | "reasoning" | "output">("input");
 
   if (!step) return null;
   const content = draft.stepContent[step.id];
@@ -4533,6 +4536,11 @@ function NodeDrawer({
             <TabButton active={tab === "input"} onClick={() => setTab("input")}>
               Input
             </TabButton>
+            {step.type === "agent" ? (
+              <TabButton active={tab === "reasoning"} onClick={() => setTab("reasoning")}>
+                Reasoning
+              </TabButton>
+            ) : null}
             <TabButton active={tab === "output"} onClick={() => setTab("output")}>
               Output
             </TabButton>
@@ -4561,6 +4569,13 @@ function NodeDrawer({
             readOnly={readOnly}
             onUpdateAgentPrompt={onUpdateAgentPrompt}
             savingPrompt={savingPromptStepId === step.id}
+          />
+        ) : tab === "reasoning" && step.type === "agent" ? (
+          <ReasoningPanel
+            key={`${run?.id ?? "latest"}:${step.id}`}
+            trace={output?.agentTrace}
+            status={status}
+            executionActivity={executionActivity}
           />
         ) : (
           <OutputPanel
@@ -4666,6 +4681,191 @@ function NodeRunSummary({
 
 function formatDuration(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+function traceRuntimeLabel(runtime: NonNullable<StepOutput["agentTrace"]>["runtime"]): string {
+  if (runtime === "sketch") return "Full Sketch agent";
+  if (runtime === "aisdk-light") return "AI SDK light agent";
+  return "Claude SDK light agent";
+}
+
+function traceRelativeTime(at: number, startedAt: number): string {
+  const elapsed = Math.max(0, at - startedAt);
+  return elapsed < 1000 ? `+${elapsed}ms` : `+${(elapsed / 1000).toFixed(1)}s`;
+}
+
+function traceValueText(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function TracePayload({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</p>
+      <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-[8px] bg-muted/40 px-3 py-2.5 font-mono text-[11px] leading-5 text-foreground/85 [overflow-wrap:anywhere]">
+        {traceValueText(value)}
+      </pre>
+    </div>
+  );
+}
+
+function TraceToolStatusIcon({ status }: { status: "running" | "completed" | "failed" }) {
+  if (status === "running") return <SpinnerGapIcon size={14} className="animate-spin text-muted-foreground" />;
+  if (status === "failed") return <XCircleIcon size={14} weight="fill" className="text-destructive" />;
+  return <CheckCircleIcon size={14} weight="fill" className="text-success" />;
+}
+
+function ReasoningPanel({
+  trace,
+  status,
+  executionActivity,
+}: {
+  trace: StepOutput["agentTrace"];
+  status: UiStatus;
+  executionActivity: ExecutionActivity;
+}) {
+  if (!trace) {
+    const message =
+      status === "running"
+        ? executionActivity === "test"
+          ? "Testing this agent step. Its reasoning timeline will appear after the test finishes."
+          : "This agent step is running. Its reasoning timeline will appear when the step finishes."
+        : "No reasoning timeline was captured for this run. New agent runs will include reasoning summaries and tool activity here.";
+    return (
+      <output
+        data-testid="automation-builder-reasoning-empty"
+        aria-live={status === "running" ? "polite" : undefined}
+        className="block rounded-[8px] border border-dashed border-border bg-muted/20 p-4 text-sm leading-6 text-muted-foreground"
+      >
+        {message}
+      </output>
+    );
+  }
+
+  const duration = trace.completedAt === null ? null : Math.max(0, trace.completedAt - trace.startedAt);
+  const toolCount = trace.events.filter((event) => event.type === "tool_call").length;
+  const usage = trace.usage;
+
+  return (
+    <div data-testid="automation-builder-reasoning" className="space-y-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-y border-border/80 py-3 text-[11px] text-muted-foreground">
+        <span className="font-medium text-foreground">{traceRuntimeLabel(trace.runtime)}</span>
+        {trace.model ? (
+          <span className="max-w-full truncate font-mono" title={trace.model}>
+            {trace.model}
+          </span>
+        ) : null}
+        {trace.turns !== null ? (
+          <span>
+            {trace.turns} {trace.turns === 1 ? "turn" : "turns"}
+          </span>
+        ) : null}
+        {trace.stopReason ? <span>Stop: {trace.stopReason.replaceAll("_", " ")}</span> : null}
+        <span>
+          {toolCount} {toolCount === 1 ? "tool call" : "tool calls"}
+        </span>
+        {duration !== null ? <span>{formatDuration(duration)}</span> : null}
+      </div>
+
+      {usage ? (
+        <p className="text-[11px] leading-5 text-muted-foreground">
+          {usage.inputTokens.toLocaleString()} input · {usage.outputTokens.toLocaleString()} output
+          {usage.cacheReadTokens > 0 ? ` · ${usage.cacheReadTokens.toLocaleString()} cache read` : ""}
+          {usage.costUsd !== null ? ` · $${usage.costUsd.toFixed(4)}` : ""}
+        </p>
+      ) : null}
+
+      {trace.truncated ? (
+        <p className="rounded-[8px] bg-warning/10 px-3 py-2 text-[11px] leading-5 text-warning">
+          This trace reached the observability storage limit. The timeline below contains the activity captured before
+          that limit.
+        </p>
+      ) : null}
+
+      {trace.events.length === 0 ? (
+        <div className="rounded-[8px] border border-dashed border-border bg-muted/20 p-4 text-sm leading-6 text-muted-foreground">
+          This run returned a final answer without exposing a reasoning summary or calling a tool.
+        </div>
+      ) : (
+        <ol className="relative space-y-0 before:absolute before:top-4 before:bottom-4 before:left-[15px] before:w-px before:bg-border">
+          {trace.events.map((event) => {
+            if (event.type === "reasoning") {
+              return (
+                <li key={event.id} className="relative flex gap-3 pb-5 last:pb-0">
+                  <span className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                    <BrainIcon size={15} />
+                  </span>
+                  <div className="min-w-0 flex-1 pt-1">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <p className="text-[12px] font-medium text-foreground">
+                        {event.source === "provider" ? "Reasoning summary" : "Agent update"}
+                      </p>
+                      <time className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {traceRelativeTime(event.at, trace.startedAt)}
+                      </time>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-foreground/80">{event.text}</p>
+                  </div>
+                </li>
+              );
+            }
+
+            const ToolIcon = /(?:bash|shell|terminal|command|exec)/i.test(event.toolName)
+              ? TerminalWindowIcon
+              : WrenchIcon;
+            return (
+              <li key={event.id} className="relative flex gap-3 pb-5 last:pb-0">
+                <span className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <ToolIcon size={15} />
+                </span>
+                <details data-testid="automation-builder-trace-tool-call" className="group min-w-0 flex-1 pt-1">
+                  <summary className="flex cursor-pointer list-none items-center gap-2 rounded-[6px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55 [&::-webkit-details-marker]:hidden">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-foreground">
+                      {event.toolName}
+                    </span>
+                    <TraceToolStatusIcon status={event.status} />
+                    {event.durationMs !== null ? (
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        {formatDuration(event.durationMs)}
+                      </span>
+                    ) : null}
+                    <CaretDownIcon
+                      size={12}
+                      className="shrink-0 text-muted-foreground transition-transform duration-200 group-open:rotate-180 motion-reduce:transition-none"
+                    />
+                  </summary>
+                  <div className="mt-3 space-y-3 pb-1">
+                    <p className="font-mono text-[10px] text-muted-foreground">
+                      {event.skillName ? `Skill: ${event.skillName} · ` : ""}
+                      {traceRelativeTime(event.startedAt, trace.startedAt)}
+                    </p>
+                    {event.input !== undefined ? <TracePayload label="Input" value={event.input} /> : null}
+                    {event.outputCaptured ? (
+                      <TracePayload label="Result" value={event.output} />
+                    ) : (
+                      <p className="text-[11px] leading-5 text-muted-foreground">
+                        This runtime recorded the call and its status, but not the tool result payload.
+                      </p>
+                    )}
+                    {event.errorMessage ? (
+                      <p className="rounded-[8px] bg-destructive/10 px-3 py-2 text-[11px] leading-5 text-destructive">
+                        {event.errorMessage}
+                      </p>
+                    ) : null}
+                  </div>
+                </details>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
 }
 
 function NodeInputPanel({

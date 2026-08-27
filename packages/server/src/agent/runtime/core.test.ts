@@ -46,6 +46,9 @@ describe("agent runtime core", () => {
         {
           stream: simulateReadableStream({
             chunks: [
+              { type: "reasoning-start", id: "reasoning-1" },
+              { type: "reasoning-delta", id: "reasoning-1", delta: "inspect first" },
+              { type: "reasoning-end", id: "reasoning-1" },
               { type: "text-start", id: "text-1" },
               { type: "text-delta", id: "text-1", delta: "before " },
               { type: "text-end", id: "text-1" },
@@ -89,6 +92,9 @@ describe("agent runtime core", () => {
         }),
       },
       events: {
+        onReasoningDelta: (text) => {
+          events.push(`reasoning:${text}`);
+        },
         onTextDelta: (text) => {
           events.push(`text:${text}`);
         },
@@ -111,7 +117,13 @@ describe("agent runtime core", () => {
       totalCacheWriteTokens: 4,
     });
     expect(result.cost.totalUsd).toBeGreaterThan(0);
-    expect(events).toEqual(["text:before ", "tool-start:Echo:hi", 'tool-end:Echo:{"echoed":"hi"}', "text:after"]);
+    expect(events).toEqual([
+      "reasoning:inspect first",
+      "text:before ",
+      "tool-start:Echo:hi",
+      'tool-end:Echo:{"echoed":"hi"}',
+      "text:after",
+    ]);
   });
 
   it("returns partial text with stopReason aborted when the abort signal fires mid-stream", async () => {
