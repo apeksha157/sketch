@@ -355,6 +355,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     const banner = await screen.findByTestId("automation-lock-banner");
     expect(banner).toHaveAttribute("data-lock-state", "held-by-me");
+    expect(banner).toHaveClass("border-brand-accent/40", "bg-brand-accent/10");
     expect(screen.getByText("You're editing")).toBeInTheDocument();
     expect(screen.queryByTestId("automation-lock-lease")).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.acquireLock).toHaveBeenCalledWith("task-123", expect.any(String), undefined));

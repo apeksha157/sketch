@@ -300,6 +300,20 @@ describe("workflow light-step agent call on the AI SDK runtime", () => {
 
     expect(result.status).toBe("completed");
     expect(result.finalOutput).toBe("Notes say quarterly numbers are up.");
+    expect(result.stepOutputs.step1?.agentTrace).toMatchObject({
+      runtime: "aisdk-light",
+      model: "claude-sonnet-4-6",
+      stopReason: "end_turn",
+      turns: 2,
+    });
+    expect(result.stepOutputs.step1?.agentTrace?.events).toEqual([
+      expect.objectContaining({
+        type: "tool_call",
+        toolName: "Read",
+        status: "completed",
+        outputCaptured: true,
+      }),
+    ]);
 
     // Two model turns ran: tool-call turn, then the text turn. The second turn's prompt
     // must contain the real file contents produced by the actual Read tool handler.
@@ -322,6 +336,11 @@ describe("workflow light-step agent call on the AI SDK runtime", () => {
     expect(result.status).toBe("failed");
     expect(result.stepOutputs.step1?.status).toBe("failed");
     expect(result.stepOutputs.step1?.error?.message).toContain("Agent runtime provider failed");
+    expect(result.stepOutputs.step1?.agentTrace).toMatchObject({
+      runtime: "aisdk-light",
+      completedAt: expect.any(Number),
+      stopReason: "error",
+    });
 
     const failureUpdate = (params._runsRepo.update as ReturnType<typeof vi.fn>).mock.calls.find(
       (c) => c[1]?.status === "failed",
