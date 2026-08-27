@@ -318,6 +318,16 @@ function automationWithStepOutput(output: string): AutomationDefinition {
   return { ...automation, latestRun: run, recentRuns: [run] };
 }
 
+function expectedRunDate(value: string | null | undefined): string {
+  if (!value) throw new Error("Expected a run timestamp");
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 const stepTestFailures = [
   ["ordinary failure", () => new Error("Node test failed")],
   ["timeout", () => Object.assign(new Error("Node test timed out"), { name: "TimeoutError" })],
@@ -818,6 +828,12 @@ describe("AutomationBuilderPage", () => {
     expect(screen.getByRole("tab", { name: "Input" })).toHaveAttribute("aria-selected", "true");
     await user.click(screen.getByRole("tab", { name: "Output" }));
     expect(screen.getByTestId("automation-builder-output")).toHaveTextContent("scheduled");
+
+    await user.click(screen.getByRole("button", { name: "Post summary" }));
+    await user.click(screen.getByRole("tab", { name: "Output" }));
+    expect(screen.getByTestId("automation-builder-output")).toHaveTextContent("post-only payload");
+    expect(screen.queryByTestId("automation-builder-output-table")).not.toBeInTheDocument();
+    expect(screen.queryByText("$value")).not.toBeInTheDocument();
   });
 
   it("shows an agent reasoning timeline with expandable tool inputs and results", async () => {
@@ -1203,8 +1219,8 @@ describe("AutomationBuilderPage", () => {
     await user.click(screen.getByTestId("automation-run-sort"));
     await user.click(screen.getByRole("option", { name: "Oldest first" }));
     const visibleRuns = screen.getAllByRole("button", { name: /Open run from/ });
-    expect(visibleRuns[0]).toHaveTextContent("May 31");
-    expect(visibleRuns[1]).toHaveTextContent("Jun 1");
+    expect(visibleRuns[0]).toHaveTextContent(expectedRunDate(failedEarlierRun.startedAt));
+    expect(visibleRuns[1]).toHaveTextContent(expectedRunDate(failedRecentRun.startedAt));
   });
 
   it("shows a prominent unavailable state for a stale run without breaking the builder", async () => {
@@ -1676,7 +1692,9 @@ describe("AutomationBuilderPage", () => {
 
     expect(screen.getByRole("button", { name: "Notify Slack" })).toBeInTheDocument();
     expect(screen.getByTestId("automation-latest-run-chip")).toHaveTextContent("Latest");
-    expect(screen.getByTestId("automation-latest-run-chip")).toHaveTextContent("Jun 1, 5:30 AM");
+    expect(screen.getByTestId("automation-latest-run-chip")).toHaveTextContent(
+      expectedRunDate(refreshedAutomation.latestRun?.startedAt),
+    );
     expect(mocks.getAutomation).toHaveBeenCalledTimes(2);
   });
 
@@ -1687,7 +1705,9 @@ describe("AutomationBuilderPage", () => {
 
     const latestChip = await screen.findByTestId("automation-latest-run-chip");
     expect(latestChip).toHaveTextContent("Latest");
-    expect(latestChip).toHaveTextContent("Jun 1, 5:30 AM · 1.0s");
+    expect(latestChip).toHaveTextContent(
+      `${expectedRunDate(automationWithStepOutput("latest step output").latestRun?.startedAt)} · 1.0s`,
+    );
     expect(latestChip).toHaveClass("max-w-full", "min-w-0");
     expect(latestChip.querySelector("span:last-child")).toHaveClass("min-w-0", "break-words");
     expect(latestChip).toHaveAttribute("data-status", "success");

@@ -5308,7 +5308,7 @@ function isOutputRecord(value: unknown): value is Record<string, unknown> {
 function outputVariableRows(value: unknown): Array<[string, unknown]> {
   const parsed = parseOutputValue(value);
   if (isOutputRecord(parsed)) return Object.entries(parsed);
-  return [["$value", parsed]];
+  return [];
 }
 
 function outputVariablePreview(value: unknown): string {
@@ -5352,6 +5352,7 @@ function OutputPanel({
       </output>
     );
   }
+  const variableRows = outputVariableRows(output.output);
   return (
     <div className="space-y-3">
       {activeNotice ? (
@@ -5375,7 +5376,7 @@ function OutputPanel({
         </div>
       ) : (
         <>
-          {showVariables ? (
+          {showVariables && variableRows.length > 0 ? (
             <div data-testid="automation-builder-output-table" className="space-y-3">
               <div className="relative">
                 <MagnifyingGlassIcon
@@ -5396,7 +5397,7 @@ function OutputPanel({
                 <span>Output Table</span>
                 <span className="ml-auto text-[11px] font-normal text-muted-foreground">Latest</span>
               </div>
-              <OutputVariableList value={output.output} search={search} />
+              <OutputVariableList rows={variableRows} search={search} />
             </div>
           ) : null}
           <JsonOutput value={output.output} />
@@ -5406,9 +5407,9 @@ function OutputPanel({
   );
 }
 
-function OutputVariableList({ value, search }: { value: unknown; search: string }) {
+function OutputVariableList({ rows: outputRows, search }: { rows: Array<[string, unknown]>; search: string }) {
   const normalizedSearch = search.trim().toLowerCase();
-  const rows = outputVariableRows(value).filter(([key, rowValue]) => {
+  const rows = outputRows.filter(([key]) => {
     if (!normalizedSearch) return true;
     return key.toLowerCase().includes(normalizedSearch);
   });
