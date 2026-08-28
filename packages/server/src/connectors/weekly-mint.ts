@@ -948,8 +948,7 @@ async function groupHasTrackerContainerCoSignal(db: Kysely<DB>, group: Candidate
     legacySignal ||
     settledContainers.some(
       (container) =>
-        groupVocabularyMatchesName(group, container.name) &&
-        sourcePaths.some((path) => path.includes(container.name)),
+        groupVocabularyMatchesName(group, container.name) && sourcePaths.some((path) => path.includes(container.name)),
     )
   );
 }
