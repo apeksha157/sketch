@@ -29,6 +29,8 @@ import {
 import type {
   Connector,
   ConnectorCredentials,
+  ContainerObservation,
+  ContainerObservationCallback,
   ContainerTarget,
   EntitySeed,
   EntitySeedCallback,
@@ -70,6 +72,7 @@ interface ClickUpMember {
 export interface ClickUpSpace {
   id: string;
   name: string;
+  archived?: boolean;
   private?: boolean;
   members?: ClickUpMember[];
   features?: { sprints?: { enabled?: boolean } };
@@ -78,11 +81,13 @@ export interface ClickUpSpace {
 interface ClickUpFolder {
   id: string;
   name: string;
+  archived?: boolean;
 }
 
 export interface ClickUpList {
   id: string;
   name: string;
+  archived?: boolean;
   task_count?: number;
   start_date?: string | null;
   due_date?: string | null;
@@ -91,6 +96,7 @@ export interface ClickUpList {
 interface ClickUpDoc {
   id: string;
   name: string;
+  archived?: boolean;
   date_created?: string;
   date_updated?: string;
   parent?: { id: string; type: number };
@@ -282,6 +288,56 @@ function isPositiveDigitString(value: string | null | undefined): value is strin
 
 function hasListDates(list: ClickUpList): boolean {
   return isPositiveDigitString(list.start_date) && isPositiveDigitString(list.due_date);
+}
+
+interface ObservedContainerStats {
+  itemCount: number;
+  firstItemAt: string | null;
+  lastItemAt: string | null;
+}
+
+function emptyObservedContainerStats(): ObservedContainerStats {
+  return { itemCount: 0, firstItemAt: null, lastItemAt: null };
+}
+
+function observeItemInContainer(stats: ObservedContainerStats, firstAt: string | null, lastAt: string | null): void {
+  stats.itemCount++;
+  const effectiveFirstAt = firstAt ?? lastAt;
+  const effectiveLastAt = lastAt ?? firstAt;
+  if (effectiveFirstAt && (!stats.firstItemAt || effectiveFirstAt < stats.firstItemAt)) {
+    stats.firstItemAt = effectiveFirstAt;
+  }
+  if (effectiveLastAt && (!stats.lastItemAt || effectiveLastAt > stats.lastItemAt)) {
+    stats.lastItemAt = effectiveLastAt;
+  }
+}
+
+export function clickUpContainerObservation(params: {
+  levelKey: "workspace" | "space" | "folder" | "list" | "doc";
+  node: { id: string; name: string; archived?: boolean };
+  ancestors: Array<{ id: string; name: string }>;
+  itemCount?: number;
+  firstItemAt?: string | null;
+  lastItemAt?: string | null;
+  providerTypedKind?: string | null;
+  hasDates?: boolean;
+}): ContainerObservation {
+  const parent = params.ancestors[params.ancestors.length - 1];
+  /** Item stats stay undefined when this pass did not count items, so re-observation preserves earlier counts. */
+  return {
+    externalId: params.node.id,
+    levelKey: params.levelKey,
+    name: params.node.name,
+    pathIds: params.ancestors.map((ancestor) => ancestor.id),
+    pathNames: params.ancestors.map((ancestor) => ancestor.name),
+    parentExternalId: parent?.id ?? null,
+    itemCount: params.itemCount,
+    firstItemAt: params.firstItemAt,
+    lastItemAt: params.lastItemAt,
+    providerArchived: params.node.archived ?? false,
+    providerTypedKind: params.providerTypedKind ?? null,
+    hasDates: params.hasDates ?? false,
+  };
 }
 
 function effectiveTargetForNode(
@@ -695,7 +751,7 @@ export function createClickUpConnector(): Connector {
       await clickupRequest("/user", token, pino({ level: "silent" }));
     },
 
-    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed, onPersonSeed }) {
+    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed, onPersonSeed, onContainerObservation }) {
       const token = getAccessToken(credentials);
       const allowedWorkspaces = (scopeConfig.workspaces as string[] | undefined) ?? [];
       const allowedSpaces = (scopeConfig.spaces as string[] | undefined) ?? [];
@@ -732,6 +788,7 @@ export function createClickUpConnector(): Connector {
         }
 
         const workspaceName = team.name.trim();
+        const workspaceObservationName = team.name;
         const workspaceEmails = extractMemberEmails(team.members);
         logger.info(
           { teamId: team.id, workspaceName, memberCount: workspaceEmails.length },
@@ -756,6 +813,13 @@ export function createClickUpConnector(): Connector {
             parentPath: [],
           });
         }
+        await onContainerObservation?.(
+          clickUpContainerObservation({
+            levelKey: "workspace",
+            node: { id: team.id, name: workspaceObservationName },
+            ancestors: [],
+          }),
+        );
 
         const workspaceScope: SyncedItem["accessScope"] = {
           scopeType: "workspace",
@@ -825,6 +889,13 @@ export function createClickUpConnector(): Connector {
               parentPath: [workspaceName],
             });
           }
+          await onContainerObservation?.(
+            clickUpContainerObservation({
+              levelKey: "space",
+              node: space,
+              ancestors: [{ id: team.id, name: workspaceObservationName }],
+            }),
+          );
 
           for (const folder of foldersRes.folders) {
             const listsRes = (await clickupRequest(`/folder/${folder.id}/list`, token, logger)) as {
@@ -845,6 +916,16 @@ export function createClickUpConnector(): Connector {
                 parentPath: [workspaceName, space.name],
               });
             }
+            await onContainerObservation?.(
+              clickUpContainerObservation({
+                levelKey: "folder",
+                node: folder,
+                ancestors: [
+                  { id: team.id, name: workspaceObservationName },
+                  { id: space.id, name: space.name },
+                ],
+              }),
+            );
             for (const list of lists) {
               if (hierarchyMapping) {
                 await maybeSeedMappedClickUpNode({
@@ -875,6 +956,7 @@ export function createClickUpConnector(): Connector {
                 list.id,
                 hierarchyMapping.list ?? "ignore",
               );
+              const listStats = onContainerObservation ? emptyObservedContainerStats() : undefined;
               yield* fetchTasksFromList(
                 list.id,
                 workspaceName,
@@ -893,7 +975,25 @@ export function createClickUpConnector(): Connector {
                 hierarchyMapping,
                 hierarchyMappingConfig,
                 !STRUCTURAL_TASK_GATED_TARGETS.has(effectiveListTarget),
+                listStats,
               );
+              if (onContainerObservation && listStats) {
+                await onContainerObservation(
+                  clickUpContainerObservation({
+                    levelKey: "list",
+                    node: list,
+                    ancestors: [
+                      { id: team.id, name: workspaceObservationName },
+                      { id: space.id, name: space.name },
+                      { id: folder.id, name: folder.name },
+                    ],
+                    itemCount: listStats.itemCount,
+                    firstItemAt: listStats.firstItemAt,
+                    lastItemAt: listStats.lastItemAt,
+                    hasDates: hasListDates(list),
+                  }),
+                );
+              }
             }
           }
 
@@ -926,6 +1026,7 @@ export function createClickUpConnector(): Connector {
               list.id,
               hierarchyMapping.list ?? "ignore",
             );
+            const listStats = onContainerObservation ? emptyObservedContainerStats() : undefined;
             yield* fetchTasksFromList(
               list.id,
               workspaceName,
@@ -944,7 +1045,24 @@ export function createClickUpConnector(): Connector {
               hierarchyMapping,
               hierarchyMappingConfig,
               !STRUCTURAL_TASK_GATED_TARGETS.has(effectiveListTarget),
+              listStats,
             );
+            if (onContainerObservation && listStats) {
+              await onContainerObservation(
+                clickUpContainerObservation({
+                  levelKey: "list",
+                  node: list,
+                  ancestors: [
+                    { id: team.id, name: workspaceObservationName },
+                    { id: space.id, name: space.name },
+                  ],
+                  itemCount: listStats.itemCount,
+                  firstItemAt: listStats.firstItemAt,
+                  lastItemAt: listStats.lastItemAt,
+                  hasDates: hasListDates(list),
+                }),
+              );
+            }
           }
         }
 
@@ -952,7 +1070,15 @@ export function createClickUpConnector(): Connector {
           allowedWorkspaces.includes(team.id) ||
           (allowedWorkspaces.length === 0 && (allowedSpaces.length === 0 || syncedAnyAllowedSpace));
         if (workspaceInDocScope) {
-          yield* fetchDocsFromWorkspace(team.id, token, logger, workspaceScope, cursor ?? undefined);
+          yield* fetchDocsFromWorkspace(
+            team.id,
+            token,
+            logger,
+            workspaceScope,
+            cursor ?? undefined,
+            onContainerObservation,
+            workspaceObservationName,
+          );
         }
       }
 
@@ -1015,6 +1141,7 @@ async function* fetchTasksFromList(
   hierarchyMapping?: HierarchyMapping,
   hierarchyMappingConfig?: HierarchyMappingConfig,
   emitStructuralTask = true,
+  stats?: ObservedContainerStats,
 ): AsyncGenerator<SyncedItem> {
   try {
     for (let page = 0; page < MAX_TASK_PAGES; page++) {
@@ -1026,6 +1153,13 @@ async function* fetchTasksFromList(
       const tasksRes = (await clickupRequest(url, token, logger)) as { tasks: ClickUpTask[]; last_page?: boolean };
 
       for (const task of tasksRes.tasks) {
+        if (stats) {
+          observeItemInContainer(
+            stats,
+            parseClickUpTimestamp(task.date_created ?? null),
+            parseClickUpTimestamp(task.date_updated ?? null),
+          );
+        }
         if (seenAssignees) {
           for (const assignee of task.assignees) {
             if (assignee.username && !seenAssignees.has(assignee.username)) {
@@ -1063,6 +1197,8 @@ async function* fetchDocsFromWorkspace(
   logger: Logger,
   accessScope?: SyncedItem["accessScope"],
   since?: string,
+  onContainerObservation?: ContainerObservationCallback,
+  workspaceName?: string,
 ): AsyncGenerator<SyncedItem> {
   try {
     // Paginate through all docs using cursor.
@@ -1098,6 +1234,14 @@ async function* fetchDocsFromWorkspace(
         }
       }
 
+      await onContainerObservation?.(
+        clickUpContainerObservation({
+          levelKey: "doc",
+          node: doc,
+          ancestors: workspaceName ? [{ id: workspaceId, name: workspaceName }] : [],
+          providerTypedKind: "doc",
+        }),
+      );
       try {
         // v3 pages endpoint returns a flat array, not { pages: [...] }
         const pages = (await clickupRequestV3(

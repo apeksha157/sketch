@@ -99,6 +99,7 @@ export const configSchema = z.object({
     .enum(["true", "false", "1", "0"])
     .default("false")
     .transform((v) => v === "true" || v === "1"),
+  CONTAINER_CLASSIFICATION_MODE: z.enum(["off", "shadow", "active"]).default("off"),
 
   // Entity materialization
   LLM_PROMOTION_THRESHOLD: z.coerce.number().int().min(1).default(2),

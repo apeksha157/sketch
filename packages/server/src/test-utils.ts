@@ -200,6 +200,7 @@ export function createTestConfig(overrides: Partial<Config> = {}): Config {
     BIRTH_GATE_DRY_RUN: true,
     DEV_TOOLS_ENABLED: false,
     GRAPH_CURATION_TOOLS_ENABLED: false,
+    CONTAINER_CLASSIFICATION_MODE: "off",
     LLM_PROMOTION_THRESHOLD: 2,
     LLM_TASK_CORROBORATION_THRESHOLD: 2,
     CO_MENTION_CONTRIBUTES_TO_THRESHOLD: 3,

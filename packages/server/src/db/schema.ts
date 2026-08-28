@@ -1228,6 +1228,33 @@ export interface ContainerClassificationsTable {
   updated_at: Generated<string>;
 }
 
+export interface ContainersTable {
+  id: string;
+  connector_config_id: string;
+  connector_type: string;
+  external_id: string;
+  level_key: string;
+  name: string;
+  path_ids: string;
+  path_names: string;
+  parent_container_id: string | null;
+  item_count: Generated<number>;
+  first_item_at: string | null;
+  last_item_at: string | null;
+  provider_archived: Generated<number>;
+  provider_typed_kind: string | null;
+  has_dates: Generated<number>;
+  discovered_at: Generated<string>;
+  last_seen_at: Generated<string>;
+  classification: string | null;
+  classification_status: string | null;
+  classified_entity_id: string | null;
+  verdict_id: string | null;
+  last_reviewed_fingerprint: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
 export interface EntitySourceRefsTable {
   id: string;
   entity_id: string;
@@ -1970,6 +1997,7 @@ export interface DB {
   email_thread_summaries: EmailThreadSummariesTable;
   crm_object_summaries: CrmObjectSummariesTable;
   container_classifications: ContainerClassificationsTable;
+  containers: ContainersTable;
   access_scopes: AccessScopesTable;
   access_scope_members: AccessScopeMembersTable;
   connector_files: ConnectorFilesTable;
