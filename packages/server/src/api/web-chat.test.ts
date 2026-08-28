@@ -1643,6 +1643,50 @@ describe("web chat API", () => {
     expect(runAgent.mock.calls[0]?.[0].userMessage).toContain("This turn is plan-only");
   });
 
+  it("turns an elapsed builder deadline into a resumable interruption", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-builder-timeout",
+      conversationId: "builder-timeout",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      const signal = params.abortController?.signal;
+      if (!signal) throw new Error("Missing builder abort signal");
+      if (!signal.aborted) {
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+      }
+      const result = makeAgentResult("This result arrived after the builder deadline.");
+      return { ...result, rawUsage: { ...result.rawUsage, stopReason: "aborted" } };
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir, AUTOMATION_BUILDER_MAX_ELAPSED_MS: 10 }), {
+      logger: createTestLogger(),
+      runAgent,
+      buildMcpServers: vi.fn().mockResolvedValue({}),
+      scheduler: makeBuilderScheduler("task-builder-timeout", admin.id),
+    });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/web-chat?conversationId=builder-timeout", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Continue configuring this automation",
+        automationTaskId: "task-builder-timeout",
+        clientSessionId: "builder-timeout-session",
+        generation: 1,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const streamText = await res.text();
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(runAgent.mock.calls[0]?.[0].abortController?.signal.aborted).toBe(true);
+    expect(streamText).toContain("I paused this turn before it could continue.");
+    expect(webChatStreamChunks(streamText)).toContainEqual(expect.objectContaining({ type: "data-interruption" }));
+  });
+
   it("stops repeated builder tool calls with a resumable terminal response", async () => {
     const admin = await seedAdmin(db);
     await createScheduledTaskConversationRepository(db).upsert({

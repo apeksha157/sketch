@@ -1016,7 +1016,6 @@ const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGE_LENGTH = 1200;
 const AUTOMATION_BUILDER_MAX_TURNS = 24;
 const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 20;
 const AUTOMATION_BUILDER_MAX_REPEATED_TOOL_CALLS = 3;
-const AUTOMATION_BUILDER_MAX_ELAPSED_MS = 2 * 60_000;
 const AUTOMATION_BUILDER_MAX_PERSISTED_TEXT_BYTES = 24 * 1024;
 
 function isAutomationBuilderPlanOnlyMessage(message: string): boolean {
@@ -3063,7 +3062,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
         if (activeBuilderTaskId) {
           builderBudgetTimer = setTimeout(
             () => abortBuilderRun("elapsed_time_limit"),
-            AUTOMATION_BUILDER_MAX_ELAPSED_MS,
+            deps.config.AUTOMATION_BUILDER_MAX_ELAPSED_MS,
           );
           leaseRenewalTimer = setInterval(() => {
             void createAutomationTaskConversationService(deps.db)
@@ -3090,6 +3089,11 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
         } finally {
           if (leaseRenewalTimer) clearInterval(leaseRenewalTimer);
           if (builderBudgetTimer) clearTimeout(builderBudgetTimer);
+        }
+
+        if (automationBuilderContext && (abortController.signal.aborted || result.rawUsage.stopReason === "aborted")) {
+          if (!abortController.signal.aborted) abortBuilderRun("agent_aborted");
+          throw new Error("Automation builder run aborted");
         }
 
         const fileParts: Array<{ id: string; data: WebChatFile }> = [];
