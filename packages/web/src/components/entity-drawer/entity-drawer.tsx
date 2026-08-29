@@ -450,6 +450,73 @@ interface IdentityForm {
 }
 
 /**
+ * The row-shaped identity editor, rendered in place of the row being edited
+ * (or appended when adding) so the journey never jumps away from the value
+ * it concerns. Enter saves, Escape cancels.
+ */
+function IdentityRowForm({
+  form,
+  def,
+  pending,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  form: IdentityForm;
+  def: (typeof IDENTITY_KINDS)[number];
+  pending: boolean;
+  onChange: (form: IdentityForm) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 rounded-md border bg-background p-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <span className="w-11 text-[10px] font-semibold uppercase text-muted-foreground">
+        {form.kind === "name" ? "name" : form.kind}
+      </span>
+      <Input
+        autoFocus
+        value={form.value}
+        onChange={(event) => onChange({ ...form, value: event.target.value })}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onCancel();
+        }}
+        className={cn("h-8 min-w-48 flex-1 text-xs", form.kind !== "name" && "font-mono")}
+        placeholder={def.placeholder}
+        aria-label={
+          form.originalAlias || form.originalPoint
+            ? `New value for ${form.originalAlias ?? form.originalPoint?.value}`
+            : `New ${def.label.toLowerCase()}`
+        }
+        required
+      />
+      {def.hasPrimary ? (
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={form.isPrimary}
+            onChange={(event) => onChange({ ...form, isPrimary: event.target.checked })}
+          />
+          Primary
+        </label>
+      ) : null}
+      <Button type="submit" size="sm" className="h-8" disabled={pending}>
+        Save
+      </Button>
+      <Button type="button" size="sm" variant="ghost" className="h-8" onClick={onCancel}>
+        Cancel
+      </Button>
+    </form>
+  );
+}
+
+/**
  * The one card for every way this entity is identified — contact points
  * (email/phone) and name aliases together. Reading stays quiet: mono value
  * lines plus a single "aka" line, no edit chrome. All CRUD sits behind the
@@ -579,126 +646,141 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
         </div>
       ) : (
         <div className="mt-2 space-y-2">
-          {sortedPoints.map((point) => (
-            <div key={point.id} className="flex items-center gap-2 rounded-md bg-background px-3 py-1.5">
-              <span className="w-11 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">
-                {point.kind}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs">{point.value}</span>
-              <span className="text-[9px] uppercase tracking-wide text-muted-foreground">{point.provenance}</span>
-              {point.isPrimary ? (
-                <Badge variant="secondary" className="text-[9px]">
-                  Primary
-                </Badge>
-              ) : null}
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
-                aria-label={`Edit ${point.value}`}
-                onClick={() =>
-                  setForm({
-                    kind: point.kind as IdentityKind,
-                    value: point.value,
-                    isPrimary: point.isPrimary,
-                    originalPoint: point,
-                  })
-                }
-              >
-                <PencilSimpleIcon size={13} />
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 text-destructive hover:text-destructive"
-                aria-label={`Delete ${point.value}`}
-                disabled={deleteMutation.isPending}
-                onClick={() => deleteMutation.mutate({ pointId: point.id })}
-              >
-                <TrashIcon size={13} />
-              </Button>
-            </div>
-          ))}
+          {sortedPoints.map((point) =>
+            form?.originalPoint?.id === point.id && formKindDef ? (
+              <IdentityRowForm
+                key={point.id}
+                form={form}
+                def={formKindDef}
+                pending={saveMutation.isPending}
+                onChange={setForm}
+                onSave={() => saveMutation.mutate()}
+                onCancel={() => setForm(null)}
+              />
+            ) : (
+              <div key={point.id} className="flex items-center gap-2 rounded-md bg-background px-3 py-1.5">
+                <span className="w-11 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">
+                  {point.kind}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{point.value}</span>
+                <span className="text-[9px] uppercase tracking-wide text-muted-foreground">{point.provenance}</span>
+                {point.isPrimary ? (
+                  <Badge variant="secondary" className="text-[9px]">
+                    Primary
+                  </Badge>
+                ) : null}
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7"
+                  aria-label={`Edit ${point.value}`}
+                  onClick={() =>
+                    setForm({
+                      kind: point.kind as IdentityKind,
+                      value: point.value,
+                      isPrimary: point.isPrimary,
+                      originalPoint: point,
+                    })
+                  }
+                >
+                  <PencilSimpleIcon size={13} />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 text-destructive hover:text-destructive"
+                  aria-label={`Delete ${point.value}`}
+                  disabled={deleteMutation.isPending}
+                  onClick={() => deleteMutation.mutate({ pointId: point.id })}
+                >
+                  <TrashIcon size={13} />
+                </Button>
+              </div>
+            ),
+          )}
           {aliases.length > 0 ? (
             <div className="flex items-start gap-2 rounded-md bg-background px-3 py-2">
               <span className="w-11 shrink-0 pt-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
                 name
               </span>
-              <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-                {aliases.map((alias) => (
-                  <span
-                    key={alias}
-                    className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px]"
-                    data-testid={`alias-row-${alias}`}
-                  >
-                    <span className="max-w-56 truncate">{alias}</span>
-                    <button
-                      type="button"
-                      aria-label={`Edit alias ${alias}`}
-                      className="text-muted-foreground hover:text-foreground"
-                      onClick={() => setForm({ kind: "name", value: alias, isPrimary: false, originalAlias: alias })}
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                {aliases.map((alias) =>
+                  form?.originalAlias === alias ? (
+                    <form
+                      key={alias}
+                      className="inline-flex items-center gap-1"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        saveMutation.mutate();
+                      }}
                     >
-                      <PencilSimpleIcon size={11} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Delete alias ${alias}`}
-                      className="text-muted-foreground hover:text-destructive"
-                      disabled={deleteMutation.isPending}
-                      onClick={() => deleteMutation.mutate({ alias })}
+                      <Input
+                        autoFocus
+                        value={form.value}
+                        onChange={(event) => setForm({ ...form, value: event.target.value })}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") setForm(null);
+                        }}
+                        className="h-7 w-44 rounded-full px-2.5 text-[11px]"
+                        aria-label={`New value for ${alias}`}
+                        required
+                      />
+                      <Button type="submit" size="sm" className="h-7 text-[11px]" disabled={saveMutation.isPending}>
+                        Save
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-[11px]"
+                        onClick={() => setForm(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </form>
+                  ) : (
+                    <span
+                      key={alias}
+                      className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px]"
+                      data-testid={`alias-row-${alias}`}
                     >
-                      <XIcon size={11} />
-                    </button>
-                  </span>
-                ))}
+                      <span className="max-w-56 truncate">{alias}</span>
+                      <button
+                        type="button"
+                        aria-label={`Edit alias ${alias}`}
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => setForm({ kind: "name", value: alias, isPrimary: false, originalAlias: alias })}
+                      >
+                        <PencilSimpleIcon size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete alias ${alias}`}
+                        className="text-muted-foreground hover:text-destructive"
+                        disabled={deleteMutation.isPending}
+                        onClick={() => deleteMutation.mutate({ alias })}
+                      >
+                        <XIcon size={11} />
+                      </button>
+                    </span>
+                  ),
+                )}
               </div>
             </div>
           ) : null}
 
-          {form && formKindDef ? (
-            <form
-              className="flex flex-wrap items-center gap-2 rounded-md border bg-background p-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                saveMutation.mutate();
-              }}
-            >
-              <span className="w-11 text-[10px] font-semibold uppercase text-muted-foreground">
-                {form.kind === "name" ? "name" : form.kind}
-              </span>
-              <Input
-                autoFocus
-                value={form.value}
-                onChange={(event) => setForm({ ...form, value: event.target.value })}
-                className={cn("h-8 min-w-48 flex-1 text-xs", form.kind !== "name" && "font-mono")}
-                placeholder={formKindDef.placeholder}
-                aria-label={
-                  form.originalAlias || form.originalPoint
-                    ? `New value for ${form.originalAlias ?? form.originalPoint?.value}`
-                    : `New ${formKindDef.label.toLowerCase()}`
-                }
-                required
-              />
-              {formKindDef.hasPrimary ? (
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={form.isPrimary}
-                    onChange={(event) => setForm({ ...form, isPrimary: event.target.checked })}
-                  />
-                  Primary
-                </label>
-              ) : null}
-              <Button type="submit" size="sm" className="h-8" disabled={saveMutation.isPending}>
-                Save
-              </Button>
-              <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => setForm(null)}>
-                Cancel
-              </Button>
-            </form>
-          ) : kinds.length === 1 ? (
+          {form && formKindDef && !form.originalPoint && !form.originalAlias ? (
+            <IdentityRowForm
+              form={form}
+              def={formKindDef}
+              pending={saveMutation.isPending}
+              onChange={setForm}
+              onSave={() => saveMutation.mutate()}
+              onCancel={() => setForm(null)}
+            />
+          ) : form ? null : kinds.length === 1 ? (
             <Button
               type="button"
               size="sm"
