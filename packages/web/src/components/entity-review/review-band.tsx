@@ -18,6 +18,7 @@ import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/en
  * mode.
  */
 import { EntityPicker } from "@/components/entity-picker";
+import { EvidenceList } from "@/components/evidence-list";
 import { detailKey, useReviewMutations } from "@/components/review-actions";
 import type {
   ChildTask,
@@ -49,6 +50,17 @@ import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { birthOrigin, entityEmail, humanSourceType, isWeeklyPassProjectRow } from "./entity-format";
+
+function reviewEvidenceItem(e: EntityReviewEvidenceRow) {
+  return {
+    key: e.id,
+    snippet: e.contextSnippet ?? null,
+    fileName: e.file.name,
+    source: e.source,
+    occurredAt: e.seen_at,
+    href: e.file.providerUrl,
+  };
+}
 
 /**
  * Self-contained review band scoped to a set of entity types. Fetches the
@@ -441,36 +453,7 @@ function BirthInspectBody({
                   : "No linked files."}
               </p>
             ) : (
-              <EntryList>
-                {evidence.map((e) => (
-                  <li key={e.id}>
-                    <div className="flex w-full flex-col gap-1 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <SourceTag>{e.source}</SourceTag>
-                          <span className="truncate text-sm font-medium">{e.file.name}</span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="text-[10px] text-muted-foreground">{formatRelativeTime(e.seen_at)}</span>
-                          {e.file.providerUrl ? (
-                            <a
-                              href={e.file.providerUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-muted-foreground hover:text-foreground"
-                            >
-                              <ArrowSquareOutIcon size={12} />
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                      {e.file.sourcePath ? (
-                        <p className="line-clamp-2 text-[11px] text-muted-foreground">{e.file.sourcePath}</p>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </EntryList>
+              <EvidenceList items={evidence.map(reviewEvidenceItem)} />
             )}
           </div>
         ) : null}
@@ -785,36 +768,9 @@ function ReconcileColumn({
         {evidence.length === 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">No evidence rows.</p>
         ) : (
-          <ul className="mt-1 flex-1 space-y-1 overflow-y-auto">
-            {evidence.map((e) => (
-              <li key={e.id} className="rounded-md border border-border bg-background p-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Badge variant="outline" className="shrink-0 text-[9px]">
-                      {e.source}
-                    </Badge>
-                    <span className="truncate font-medium">{e.file.name}</span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">{formatRelativeTime(e.seen_at)}</span>
-                    {e.file.providerUrl ? (
-                      <a
-                        href={e.file.providerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <ArrowSquareOutIcon size={12} />
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
-                {e.file.sourcePath ? (
-                  <p className="mt-1 text-[10px] text-muted-foreground/60">{e.file.sourcePath}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <div className="mt-1 flex-1 overflow-y-auto">
+            <EvidenceList items={evidence.map(reviewEvidenceItem)} />
+          </div>
         )}
       </div>
     </div>
@@ -913,36 +869,18 @@ function CandidateView({
         {candidateMentions.length === 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
         ) : (
-          <ul className="mt-1 flex-1 space-y-1 overflow-y-auto">
-            {candidateMentions.map((m) => (
-              <li key={m.id} className="rounded-md border border-border bg-background p-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Badge variant="outline" className="shrink-0 text-[9px]">
-                      {m.file.source}
-                    </Badge>
-                    <span className="truncate font-medium">{m.file.fileName}</span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">{formatRelativeTime(m.sourceDate)}</span>
-                    {m.file.providerUrl ? (
-                      <a
-                        href={m.file.providerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <ArrowSquareOutIcon size={12} />
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
-                {m.file.sourcePath ? (
-                  <p className="mt-1 text-[10px] text-muted-foreground/60">{m.file.sourcePath}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <div className="mt-1 flex-1 overflow-y-auto">
+            <EvidenceList
+              items={candidateMentions.map((m) => ({
+                key: m.id,
+                snippet: m.contextSnippet,
+                fileName: m.file.fileName,
+                source: m.file.source,
+                occurredAt: m.sourceDate,
+                href: m.file.providerUrl,
+              }))}
+            />
+          </div>
         )}
       </div>
     </div>

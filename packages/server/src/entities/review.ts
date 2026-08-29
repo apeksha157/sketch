@@ -37,6 +37,7 @@ import { createEntityReviewRepo, readReviewFreezeMs } from "../db/repositories/e
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import { createTaskRepository } from "../db/repositories/tasks";
 import type { DB } from "../db/schema";
+import { snippetsForFiles } from "./evidence-snippets";
 import { ResolveError, confirmReview, dismissReview, reclassifyReview, rejectReview } from "./resolve";
 import { reconcileStructuralAssigneeContributesTo } from "./structural-assignee";
 
@@ -447,8 +448,14 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
     const enrichedRow = { ...baseRow, evidenceCount: evidence.length, sourceBreakdown, candidate, candidates };
 
     // Evidence with file names for the review-mode drawer — capped so a
-    // 1000-evidence proposal doesn't drag the modal to its knees.
+    // 1000-evidence proposal doesn't drag the modal to its knees. Snippets are
+    // cut read-time from document_chunks (evidence rows store no quote text).
     const evidenceWithFiles = await repo.listEvidenceWithFiles(id, 50);
+    const snippets = await snippetsForFiles(
+      db,
+      evidenceWithFiles.map((e) => e.indexed_file_id),
+      baseRow.proposed_name,
+    );
     const enrichedEvidence = evidenceWithFiles.map((e) => ({
       id: e.id,
       review_id: e.review_id,
@@ -456,6 +463,7 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
       source: e.source,
       note: e.note,
       seen_at: e.seen_at,
+      contextSnippet: snippets.get(e.indexed_file_id) ?? null,
       file: {
         name: e.file_name,
         providerUrl: e.provider_url,

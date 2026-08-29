@@ -6,6 +6,7 @@
  * open on the refreshed verdict so Apply is one click away; every other
  * decision closes it.
  */
+import { EvidenceList } from "@/components/evidence-list";
 import { ApiRequestError, type GraphVerdict, type GraphVerdictStatus, api } from "@/lib/api";
 import { Button } from "@sketch/ui/components/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
@@ -115,6 +116,12 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
   const containerEvidence = current.action === "classify_container" ? parseContainerEvidence(current.evidence) : null;
   const wouldChange = previewQuery.data?.application.wouldChange ?? asCounts(current.wouldChange);
 
+  const evidenceQuery = useQuery({
+    queryKey: ["graph-verdicts", "evidence", current.id],
+    queryFn: () => api.graphVerdicts.evidence(current.id),
+    enabled: (evidence?.fileIds.length ?? 0) > 0,
+  });
+
   return (
     <div className="mt-3 flex flex-1 flex-col gap-4 text-[13px]">
       <dl className="space-y-1.5">
@@ -154,6 +161,24 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             review
             {evidence.reviewIds.length === 1 ? "" : "s"}
           </p>
+          {evidence.fileIds.length > 0 ? (
+            evidenceQuery.isLoading ? (
+              <Skeleton className="mt-1.5 h-14 rounded-md" />
+            ) : (evidenceQuery.data?.rows.length ?? 0) > 0 ? (
+              <div className="mt-1.5">
+                <EvidenceList
+                  testId="graph-verdict-evidence"
+                  items={(evidenceQuery.data?.rows ?? []).map((row) => ({
+                    key: row.fileId,
+                    snippet: row.contextSnippet,
+                    fileName: row.fileName,
+                    source: row.source,
+                    occurredAt: row.occurredAt,
+                  }))}
+                />
+              </div>
+            ) : null
+          ) : null}
           {evidence.notes.map((note) => (
             <p key={note} className="mt-1 text-[12px] text-muted-foreground">
               {note}

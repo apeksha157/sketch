@@ -146,3 +146,127 @@ describe("graph-verdicts open listing", () => {
     }
   });
 });
+
+describe("graph-verdict evidence resolution", () => {
+  let db: Kysely<DB>;
+  let app: ReturnType<typeof createApp>;
+  let adminCookie: string;
+  let memberCookie: string;
+  let adminId: string;
+
+  beforeEach(async () => {
+    db = await createTestDb();
+    const seeded = await seedUsers(db);
+    adminId = seeded.adminId;
+    app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
+    adminCookie = await login(app, ADMIN_EMAIL);
+    memberCookie = await login(app, MEMBER_EMAIL);
+  });
+
+  afterEach(async () => {
+    await db.destroy();
+  });
+
+  async function seedVerdictWithFiles(evidenceJson: string): Promise<string> {
+    await db
+      .insertInto("entities")
+      .values({
+        id: "ent-subject",
+        name: "Subject",
+        source_type: "company",
+        subtype: null,
+        aliases: null,
+        metadata: null,
+        source_ref_id: null,
+        status: "confirmed",
+        hotness: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .execute();
+    await db
+      .insertInto("connector_configs")
+      .values({ id: "cfg-ev", connector_type: "fireflies", auth_type: "oauth", credentials: "{}", created_by: adminId })
+      .execute();
+    const now = new Date().toISOString();
+    for (const [id, updatedAt] of [
+      ["file-old", "2026-08-01T00:00:00.000Z"],
+      ["file-new", "2026-08-20T00:00:00.000Z"],
+    ] as const) {
+      await db
+        .insertInto("indexed_files")
+        .values({
+          id,
+          connector_config_id: "cfg-ev",
+          provider_file_id: id,
+          file_name: `${id}.txt`,
+          file_type: "meeting",
+          content_category: "meeting",
+          source: "fireflies",
+          content_hash: `hash-${id}`,
+          is_archived: 0,
+          synced_at: now,
+          source_updated_at: updatedAt,
+        })
+        .execute();
+    }
+    await db
+      .insertInto("entity_mentions")
+      .values({
+        id: "mention-ev",
+        entity_id: "ent-subject",
+        indexed_file_id: "file-new",
+        chunk_index: 0,
+        context_snippet: "Subject confirmed the rollout in this call",
+        confidence: "EXTRACTED",
+        source: "llm_extraction",
+        relation: "mentioned",
+        mentioned_at: now,
+      })
+      .execute();
+
+    const verdicts = createGraphVerdictRepository(db);
+    const run = await verdicts.createRun({
+      source: "test",
+      proposedByUserId: adminId,
+      tokenId: null,
+      note: null,
+      verdictsProposed: 1,
+    });
+    const stored = await verdicts.storeVerdicts([verdictInput({ runId: run.id, evidenceJson })]);
+    const id = stored.ids[0];
+    if (!id) throw new Error("verdict id missing");
+    return id;
+  }
+
+  it("resolves evidence file ids to names and subject snippets, newest first, null snippet when none", async () => {
+    const id = await seedVerdictWithFiles(JSON.stringify({ fileIds: ["file-old", "file-new"], notes: [] }));
+
+    const res = await app.request(`/api/graph-verdicts/${id}/evidence`, { headers: { Cookie: adminCookie } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      rows: { fileId: string; fileName: string; contextSnippet: string | null }[];
+    };
+    expect(body.rows.map((r) => r.fileId)).toEqual(["file-new", "file-old"]);
+    expect(body.rows[0]?.fileName).toBe("file-new.txt");
+    expect(body.rows[0]?.contextSnippet).toBe("Subject confirmed the rollout in this call");
+    expect(body.rows[1]?.contextSnippet).toBeNull();
+  });
+
+  it("returns empty rows for evidence without file ids and 404 for unknown verdicts", async () => {
+    const id = await seedVerdictWithFiles(JSON.stringify({ samples: ["a task title"] }));
+
+    const res = await app.request(`/api/graph-verdicts/${id}/evidence`, { headers: { Cookie: adminCookie } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { rows: unknown[] }).rows).toEqual([]);
+
+    const missing = await app.request("/api/graph-verdicts/nope/evidence", { headers: { Cookie: adminCookie } });
+    expect(missing.status).toBe(404);
+  });
+
+  it("stays admin-only", async () => {
+    const id = await seedVerdictWithFiles(JSON.stringify({ fileIds: ["file-new"] }));
+    const res = await app.request(`/api/graph-verdicts/${id}/evidence`, { headers: { Cookie: memberCookie } });
+    expect(res.status).toBe(403);
+  });
+});

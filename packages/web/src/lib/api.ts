@@ -596,6 +596,14 @@ export interface GraphVerdictRun {
   rollups: Record<GraphVerdictStatus, number>;
 }
 
+export interface GraphVerdictEvidenceRow {
+  fileId: string;
+  fileName: string;
+  source: string;
+  occurredAt: string | null;
+  contextSnippet: string | null;
+}
+
 export interface GraphVerdict {
   id: string;
   runId: string;
@@ -687,6 +695,8 @@ export interface EntityReviewEvidenceRow {
   source: string;
   note: string | null;
   seen_at: string;
+  /** Read-time quote around the proposed name in this file, when found. */
+  contextSnippet?: string | null;
   file: {
     name: string;
     providerUrl: string | null;
@@ -3873,6 +3883,9 @@ export const api = {
     },
     listRunVerdicts(runId: string) {
       return request<{ verdicts: GraphVerdict[] }>(`/api/graph-verdicts/runs/${runId}/verdicts`);
+    },
+    evidence(id: string) {
+      return request<{ rows: GraphVerdictEvidenceRow[] }>(`/api/graph-verdicts/${id}/evidence`);
     },
     approve(id: string) {
       return request<{ verdict: GraphVerdict }>(`/api/graph-verdicts/${id}/approval`, { method: "POST" });
