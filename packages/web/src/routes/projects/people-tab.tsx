@@ -1,3 +1,4 @@
+import { AiBadge, OrgListHeader, OrgRow } from "@/components/org-row";
 /**
  * People tab — the directory, grouped by company with the Unaffiliated tail
  * collapsed by default (315 of 501 people in dev have no `works_at`, so the
@@ -17,7 +18,7 @@ import type { EntityListItem } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
 import { formatRelativeTime } from "@/routes/files/file-list";
-import { CaretDownIcon, SparkleIcon } from "@phosphor-icons/react";
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { cn } from "@sketch/ui/lib/utils";
@@ -25,7 +26,6 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { ContactLine } from "./contact-line";
 import { ReviewBandCapped } from "./org-review";
-import { OrgRow } from "./org-row";
 
 const PAGE = 200;
 
@@ -156,12 +156,14 @@ export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border" data-testid="org-people-table">
-          <div className="flex items-center gap-2.5 border-b border-border bg-muted/30 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            <span className="min-w-0 flex-1">Name</span>
-            <span className="hidden w-56 sm:block">Contact</span>
-            <span className="w-14 text-center">Mentions</span>
-            <span className="w-16 text-right">Active</span>
-          </div>
+          <OrgListHeader
+            columns={[
+              { label: "Name", className: "min-w-0 flex-1" },
+              { label: "Contact", className: "hidden w-56 sm:block" },
+              { label: "Mentions", className: "w-14 text-center" },
+              { label: "Active", className: "w-16 text-right" },
+            ]}
+          />
 
           {!needsPlacementOnly &&
             companyGroups.map((group) => (
@@ -247,17 +249,7 @@ function PersonRow({ person }: { person: EntityListItem }) {
       onOpen={() => openEntity(person.id)}
       avatar={<EntityAvatar entity={{ id: person.id, name: person.name, sourceType: "person" }} size="sm" />}
       primary={entityDisplayLabel(person)}
-      primaryChips={
-        isAi ? (
-          <Badge
-            variant="secondary"
-            className="gap-0.5 bg-violet-100 px-1 py-0 text-[9px] text-violet-700 dark:bg-violet-900 dark:text-violet-300"
-          >
-            <SparkleIcon size={8} weight="fill" />
-            AI
-          </Badge>
-        ) : null
-      }
+      primaryChips={isAi ? <AiBadge /> : null}
       secondary={subtitle}
       middle={
         <div className="hidden w-56 flex-col gap-0.5 sm:flex">

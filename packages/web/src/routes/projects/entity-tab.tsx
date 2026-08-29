@@ -5,9 +5,9 @@ import { EntityTable } from "@/components/entity-table";
  * a type-scoped capped review band. Companies / Teams / Projects use the
  * generic {@link OrgEntityTab}; Products has its own two-section split.
  */
+import { OrgRow } from "@/components/org-row";
 import { type CuratedProduct, type EntityListItem, api } from "@/lib/api";
-import { useEntityUi } from "@/lib/entity-ui";
-import { CaretRightIcon, CubeIcon } from "@phosphor-icons/react";
+import { EntityAvatar, useEntityUi } from "@/lib/entity-ui";
 import { Badge } from "@sketch/ui/components/badge";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
@@ -121,25 +121,14 @@ export function ProductsTab({ onDeclare, isAdmin = false }: { onDeclare: () => v
 function ProductRow({ product, onSelect }: { product: CuratedProduct; onSelect: (id: string) => void }) {
   const cold = product.hotness <= 0;
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(product.id)}
-      className="group flex w-full items-center gap-3 border-b border-border px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/30"
-    >
-      <CubeIcon size={14} aria-hidden className="shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{product.name}</span>
-          <TierBadge tier={product.provenance_tier} />
-        </div>
-        {cold ? <p className="text-[11px] text-muted-foreground">Not seen in any source yet</p> : null}
-      </div>
-      <CaretRightIcon
-        size={12}
-        aria-hidden
-        className="shrink-0 text-muted-foreground/30 group-hover:text-muted-foreground"
-      />
-    </button>
+    <OrgRow
+      onOpen={() => onSelect(product.id)}
+      avatar={<EntityAvatar entity={{ id: product.id, name: product.name, sourceType: "product" }} size="sm" />}
+      primary={product.name}
+      primaryChips={<TierBadge tier={product.provenance_tier} />}
+      secondary={cold ? "Not seen in any source yet" : null}
+      caret
+    />
   );
 }
 
