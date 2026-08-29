@@ -8,11 +8,11 @@ import {
 } from "../../db/repositories/graph-verdicts";
 import type { DB, EntitiesTable } from "../../db/schema";
 import type { CleanupAction, CleanupVerdict } from "../../entities/cleanup-adjudication";
-import { planProjectCleanup } from "../../entities/cleanup-apply";
+import { planCleanup } from "../../entities/cleanup-apply";
 import { fingerprintFor } from "../../entities/verdict-fingerprint";
 import { jsonResult } from "./queries";
 
-const actions = ["keep", "merge_into", "nest_under", "archive"] as const;
+const actions = ["keep", "merge_into", "nest_under", "archive", "remove_alias"] as const;
 
 const evidenceSchema = z.object({
   fileIds: z.array(z.string()).optional(),
@@ -28,6 +28,7 @@ export const proposeGraphVerdictsSchema = {
         action: z.enum(actions),
         subjectEntityId: z.string().min(1),
         targetEntityId: z.string().min(1).optional(),
+        targetName: z.string().min(1).optional(),
         reason: z.string().min(1),
         evidence: evidenceSchema.optional(),
       }),
@@ -82,6 +83,7 @@ function preparedFingerprint(prepared: PreparedProposal): string {
     action: prepared.proposal.action,
     subject: prepared.subject,
     target: prepared.target,
+    ...(prepared.proposal.action === "remove_alias" ? { targetName: prepared.proposal.targetName ?? null } : {}),
     evidence: prepared.evidence,
   });
 }
@@ -94,7 +96,10 @@ function bouncedVerdict(prepared: PreparedProposal, validationReason: string): S
     subjectName: prepared.subject?.name ?? null,
     subjectEntityType: prepared.subject?.source_type ?? null,
     targetEntityId: prepared.proposal.targetEntityId ?? null,
-    targetName: prepared.target?.name ?? null,
+    targetName:
+      prepared.proposal.action === "remove_alias"
+        ? (prepared.proposal.targetName ?? null)
+        : (prepared.target?.name ?? null),
     reason: prepared.proposal.reason,
     evidenceJson: JSON.stringify(prepared.evidence),
     evidenceFingerprint: preparedFingerprint(prepared),
@@ -120,7 +125,10 @@ function plannedVerdict(
     subjectEntityType: prepared.subject?.source_type ?? null,
     targetEntityId: prepared.proposal.targetEntityId ?? null,
     resolvedTargetEntityId,
-    targetName: prepared.target?.name ?? null,
+    targetName:
+      prepared.proposal.action === "remove_alias"
+        ? (prepared.proposal.targetName ?? null)
+        : (prepared.target?.name ?? null),
     reason: prepared.proposal.reason,
     evidenceJson: JSON.stringify(prepared.evidence),
     evidenceFingerprint: preparedFingerprint(prepared),
@@ -137,7 +145,10 @@ function toCleanupVerdict(prepared: PreparedProposal): CleanupVerdict {
     name: prepared.subject?.name ?? prepared.proposal.subjectEntityId,
     action: prepared.proposal.action,
     targetEntityId: prepared.proposal.targetEntityId ?? null,
-    targetName: prepared.target?.name ?? null,
+    targetName:
+      prepared.proposal.action === "remove_alias"
+        ? (prepared.proposal.targetName ?? null)
+        : (prepared.target?.name ?? null),
     reason: prepared.proposal.reason,
     evidence: prepared.evidence.notes,
     mechanical: false,
@@ -200,7 +211,7 @@ function prepareProposals(args: ProposeGraphVerdictsArgs, entities: Map<string, 
  * SELECTs against the transaction handle.
  */
 async function validateWithCleanupPlanner(db: Kysely<DB>, proposals: PreparedProposal[]) {
-  return planProjectCleanup(db, proposals.map(toCleanupVerdict));
+  return planCleanup(db, proposals.map(toCleanupVerdict));
 }
 
 export async function handleProposeGraphVerdicts(

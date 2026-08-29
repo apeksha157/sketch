@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely, Selectable } from "kysely";
-import { whereLiveEntity } from "../db/repositories/entities";
+import { createEntityRepository, whereLiveEntity } from "../db/repositories/entities";
+import { recordAlias } from "../db/repositories/entity-alias-rows";
 import { type GraphVerdictRow, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
-import type { ContainersTable, DB, EntitiesTable } from "../db/schema";
+import type { ContainersTable, DB, EntitiesTable, EntityAliasProvenance } from "../db/schema";
 import type { CleanupAction, CleanupVerdict } from "./cleanup-adjudication";
 import {
   type CleanupApplyEffect,
@@ -12,9 +13,12 @@ import {
   applyArchive,
   applyMerge,
   applyNest,
-  planProjectCleanup,
+  applyRemoveAlias,
+  planCleanup,
 } from "./cleanup-apply";
 import { unmergeEntitiesInTransaction } from "./merge";
+import { normalizeName } from "./name-keys";
+import { strongestProvenanceTier } from "./provenance";
 import { type VerdictFingerprintEvidence, containerVerdictFingerprint, fingerprintFor } from "./verdict-fingerprint";
 
 export type GraphVerdictApplyErrorCode =
@@ -76,6 +80,8 @@ type ContainerApplyPlanRow = {
   entityStatus: ContainerEntityStatus;
   wouldChange: Record<string, number>;
 };
+
+type WouldChangeMetadata = Record<string, unknown>;
 
 function updatedCount(
   result: { numUpdatedRows?: bigint | number | string; numDeletedRows?: bigint | number | string } | undefined,
@@ -167,12 +173,13 @@ async function verifiedPlan(db: Kysely<DB>, verdict: GraphVerdictRow): Promise<C
     action: verdict.action,
     subject,
     target,
+    ...(verdict.action === "remove_alias" ? { targetName: verdict.target_name } : {}),
     evidence: parseEvidence(verdict.evidence_json),
   });
   if (fingerprint !== verdict.evidence_fingerprint) {
     throw new GraphVerdictApplyError("STALE_VERDICT", "Evidence changed since proposal", { verdictId: verdict.id });
   }
-  const rows = await planProjectCleanup(db, [toCleanupVerdict(verdict)]);
+  const rows = await planCleanup(db, [toCleanupVerdict(verdict)]);
   const plan = rows[0];
   if (!plan) throw new GraphVerdictApplyError("PLAN_BLOCKED", "Planner returned no row", { verdictId: verdict.id });
   if (plan.state !== "applied") {
@@ -199,7 +206,71 @@ function ledgerRefForEffect(effect: CleanupApplyEffect): string {
     if ("existing" in effect) return "noop:existing";
     return `relationship:${effect.relationshipId}`;
   }
+  if (effect.action === "remove_alias") return `alias-removed:${effect.normalizedAlias}`;
   return `archived-at:${effect.archivedAt}`;
+}
+
+function parseWouldChangeMetadata(raw: string | null): WouldChangeMetadata {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as WouldChangeMetadata) : {};
+  } catch {
+    return {};
+  }
+}
+
+function numericWouldChange(raw: string | null): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(parseWouldChangeMetadata(raw)).filter(
+      (entry): entry is [string, number] => typeof entry[1] === "number",
+    ),
+  );
+}
+
+async function addWouldChangeMetadata(
+  db: Kysely<DB>,
+  verdictId: string,
+  currentWouldChangeJson: string | null,
+  metadata: WouldChangeMetadata,
+): Promise<void> {
+  await db
+    .updateTable("graph_verdicts")
+    .set({
+      would_change_json: JSON.stringify({ ...parseWouldChangeMetadata(currentWouldChangeJson), ...metadata }),
+      updated_at: new Date().toISOString(),
+    })
+    .where("id", "=", verdictId)
+    .execute();
+}
+
+async function promoteMergeSurvivorTier(
+  db: Kysely<DB>,
+  verdict: GraphVerdictRow,
+  plan: ValidPlannedRow,
+): Promise<void> {
+  if (!plan.resolvedTargetEntityId) throw new GraphVerdictApplyError("APPLY_CONFLICT", "Merge target missing");
+  const row = await db
+    .selectFrom("entities")
+    .select(["id", "provenance_tier"])
+    .where("id", "=", plan.resolvedTargetEntityId)
+    .where(whereLiveEntity())
+    .executeTakeFirst();
+  if (!row) throw new GraphVerdictApplyError("APPLY_CONFLICT", "Merge survivor no longer live");
+  await addWouldChangeMetadata(db, verdict.id, verdict.would_change_json, {
+    priorSurvivorProvenanceTier: row.provenance_tier,
+  });
+  const nextTier = strongestProvenanceTier(row.provenance_tier, "human_confirmed");
+  if (nextTier === row.provenance_tier) return;
+  const result = await db
+    .updateTable("entities")
+    .set({ provenance_tier: nextTier, updated_at: new Date().toISOString() })
+    .where("id", "=", row.id)
+    .where("provenance_tier", "=", row.provenance_tier)
+    .executeTakeFirst();
+  if (updatedCount(result) !== 1) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Merge survivor tier changed during apply");
+  }
 }
 
 async function applyPlannedRow(
@@ -212,9 +283,22 @@ async function applyPlannedRow(
   if (plan.action === "keep") return "keep";
   if (plan.action === "merge_into") {
     const groupId = `graph-verdict:${verdict.id}`;
-    return ledgerRefForEffect(await applyMerge(db, plan, mutations, { mergeGroupId: groupId, userId: actorUserId }));
+    const ledgerRef = ledgerRefForEffect(
+      await applyMerge(db, plan, mutations, { mergeGroupId: groupId, userId: actorUserId }),
+    );
+    await promoteMergeSurvivorTier(db, verdict, plan);
+    return ledgerRef;
   }
   if (plan.action === "nest_under") return ledgerRefForEffect(await applyNest(db, plan, mutations));
+  if (plan.action === "remove_alias") {
+    const effect = await applyRemoveAlias(db, plan, mutations);
+    await addWouldChangeMetadata(db, verdict.id, verdict.would_change_json, {
+      removedAlias: effect.alias,
+      removedAliasProvenance: effect.aliasProvenance,
+      removedAliasCreatedBy: effect.aliasCreatedBy,
+    });
+    return ledgerRefForEffect(effect);
+  }
   return ledgerRefForEffect(await applyArchive(db, plan, mutations));
 }
 
@@ -263,13 +347,7 @@ function containerAppliedResult(verdict: GraphVerdictRow, plan: ContainerApplyPl
 }
 
 function storedWouldChange(verdict: GraphVerdictRow): Record<string, number> {
-  if (!verdict.would_change_json) return {};
-  try {
-    const parsed = JSON.parse(verdict.would_change_json) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
+  return numericWouldChange(verdict.would_change_json);
 }
 
 async function loadAppliedResult(db: Kysely<DB>, verdictId: string): Promise<GraphVerdictApplyResult | null> {
@@ -296,6 +374,7 @@ async function loadAppliedResult(db: Kysely<DB>, verdictId: string): Promise<Gra
     state: "applied",
     targetEntityId: verdict.target_entity_id,
     resolvedTargetEntityId: verdict.resolved_target_entity_id,
+    ...(verdict.action === "remove_alias" ? { targetName: verdict.target_name } : {}),
     reason: null,
     wouldChange: storedWouldChange(verdict),
   });
@@ -574,11 +653,15 @@ function parseLedgerRef(
   | { kind: "merge"; groupId: string }
   | { kind: "relationship"; id: string }
   | { kind: "archive"; at: string }
+  | { kind: "alias_removed"; normalizedAlias: string }
   | { kind: "existing" }
   | { kind: "keep" } {
   if (ref.startsWith("merge-group:")) return { kind: "merge", groupId: ref.slice("merge-group:".length) };
   if (ref.startsWith("relationship:")) return { kind: "relationship", id: ref.slice("relationship:".length) };
   if (ref.startsWith("archived-at:")) return { kind: "archive", at: ref.slice("archived-at:".length) };
+  if (ref.startsWith("alias-removed:")) {
+    return { kind: "alias_removed", normalizedAlias: ref.slice("alias-removed:".length) };
+  }
   if (ref === "noop:existing") return { kind: "existing" };
   if (ref === "keep") return { kind: "keep" };
   throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Unknown graph verdict ledger ref");
@@ -707,6 +790,65 @@ async function revertContainerVerdict(trx: Kysely<DB>, row: GraphVerdictRow, led
   await clearContainerVerdictLink(trx, row, ledger.entityId);
 }
 
+function aliasProvenanceFromMetadata(value: unknown): EntityAliasProvenance {
+  if (
+    value === "human_confirmed" ||
+    value === "judge" ||
+    value === "merge" ||
+    value === "mint_model" ||
+    value === "roster" ||
+    value === "legacy"
+  ) {
+    return value;
+  }
+  return "legacy";
+}
+
+async function restoreRemovedAlias(trx: Kysely<DB>, row: GraphVerdictRow, normalizedAlias: string): Promise<void> {
+  if (!row.subject_entity_id) {
+    throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Graph verdict subject entity is missing");
+  }
+  const metadata = parseWouldChangeMetadata(row.would_change_json);
+  const alias = typeof metadata.removedAlias === "string" ? metadata.removedAlias : row.target_name;
+  if (!alias || normalizeName(alias) !== normalizedAlias) {
+    throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Removed alias metadata no longer matches ledger");
+  }
+  const entity = await trx
+    .selectFrom("entities")
+    .select("id")
+    .where("id", "=", row.subject_entity_id)
+    .where(whereLiveEntity())
+    .executeTakeFirst();
+  if (!entity) throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Alias entity is not live");
+  const provenance = aliasProvenanceFromMetadata(metadata.removedAliasProvenance);
+  const createdBy = typeof metadata.removedAliasCreatedBy === "string" ? metadata.removedAliasCreatedBy : null;
+  await createEntityRepository(trx).appendAlias(entity.id, alias, provenance, createdBy);
+  await recordAlias(trx, {
+    entityId: entity.id,
+    alias,
+    provenance,
+    createdBy,
+  });
+}
+
+async function restoreMergeSurvivorTier(trx: Kysely<DB>, row: GraphVerdictRow, groupId: string): Promise<void> {
+  const metadata = parseWouldChangeMetadata(row.would_change_json);
+  const priorTier = metadata.priorSurvivorProvenanceTier;
+  if (typeof priorTier !== "string") return;
+  const merge = await trx
+    .selectFrom("entity_merges")
+    .select("survivor_entity_id")
+    .where("group_id", "=", groupId)
+    .executeTakeFirst();
+  if (!merge) return;
+  await trx
+    .updateTable("entities")
+    .set({ provenance_tier: priorTier, updated_at: new Date().toISOString() })
+    .where("id", "=", merge.survivor_entity_id)
+    .where(whereLiveEntity())
+    .execute();
+}
+
 export async function revertGraphVerdict(
   db: Kysely<DB>,
   input: { verdictId: string; actorUserId: string },
@@ -748,6 +890,7 @@ export async function revertGraphVerdict(
         .executeTakeFirst();
       if (!merge) throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Merge ledger row is not active");
       await unmergeEntitiesInTransaction(trx, { mergeId: merge.id, userId: input.actorUserId });
+      await restoreMergeSurvivorTier(trx, row, ledger.groupId);
     } else if (ledger.kind === "relationship") {
       const result = await trx.deleteFrom("entity_relationships").where("id", "=", ledger.id).executeTakeFirst();
       if (updatedCount(result) !== 1) {
@@ -764,6 +907,8 @@ export async function revertGraphVerdict(
       if (updatedCount(result) !== 1) {
         throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Archive row no longer matches ledger");
       }
+    } else if (ledger.kind === "alias_removed") {
+      await restoreRemovedAlias(trx, row, ledger.normalizedAlias);
     } else {
       throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "This verdict did not create a reversible graph row");
     }

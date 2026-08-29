@@ -18,6 +18,7 @@ const ACTION_LABELS: Record<string, string> = {
   merge_into: "merge into",
   nest_under: "nest under",
   archive: "archive",
+  remove_alias: "remove alias",
   classify_container: "classify",
 };
 
@@ -171,6 +172,7 @@ function RunVerdicts({ runId, onOpenVerdict }: { runId: string; onOpenVerdict: (
           <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
             {verdict.subjectName ?? verdict.subjectEntityId ?? verdict.subjectContainerId}
             {verdict.targetEntityId ? ` → ${verdict.targetName ?? verdict.targetEntityId}` : ""}
+            {verdict.action === "remove_alias" && verdict.targetName ? ` → ${verdict.targetName}` : ""}
             {containerClassificationOf(verdict) ? ` → ${containerClassificationOf(verdict)}` : ""}
           </span>
           <span className={`shrink-0 font-mono text-[10px] uppercase ${STATUS_TONES[verdict.status]}`}>
@@ -276,6 +278,9 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             value={`${verdict.targetName ?? verdict.targetEntityId}`}
             mono={!verdict.targetName}
           />
+        ) : null}
+        {verdict.action === "remove_alias" && verdict.targetName ? (
+          <DetailRow label="Alias" value={verdict.targetName} />
         ) : null}
         <DetailRow label="Status" value={verdict.status} mono />
         <DetailRow label="Reason" value={verdict.reason} />

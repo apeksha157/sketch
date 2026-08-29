@@ -20,6 +20,7 @@ export type VerdictFingerprintInput = {
   action: string;
   subject: VerdictFingerprintEntity | null;
   target: VerdictFingerprintEntity | null;
+  targetName?: string | null;
   evidence: VerdictFingerprintEvidence;
 };
 
@@ -53,6 +54,9 @@ export function graphVerdictFingerprint(input: VerdictFingerprintInput): string 
     action: input.action.toLowerCase(),
     subject: canonicalEntity(input.subject),
     target: canonicalEntity(input.target),
+    ...(input.targetName === undefined
+      ? {}
+      : { targetName: input.targetName ? normalizeName(input.targetName) : null }),
     evidence: {
       fileIds: sortedValues(input.evidence.fileIds),
       reviewIds: sortedValues(input.evidence.reviewIds),
@@ -86,12 +90,14 @@ export function fingerprintFor(input: {
   action: string;
   subject: Parameters<typeof fingerprintEntity>[0];
   target: Parameters<typeof fingerprintEntity>[0];
+  targetName?: string | null;
   evidence: VerdictFingerprintEvidence;
 }): string {
   return graphVerdictFingerprint({
     action: input.action,
     subject: fingerprintEntity(input.subject),
     target: fingerprintEntity(input.target),
+    ...(input.targetName === undefined ? {} : { targetName: input.targetName }),
     evidence: input.evidence,
   });
 }
