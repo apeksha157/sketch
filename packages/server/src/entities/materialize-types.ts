@@ -125,6 +125,7 @@ export interface MaterializeDeps {
    * reads switch from legacy `raw`-parsing scans to indexed SQL only when set.
    */
   normalizationBackfillComplete: boolean;
+  suppressContextLinking: boolean;
 }
 
 export type MaterializeResult =
@@ -162,6 +163,7 @@ export interface ReplaySourceFactsOptions {
    * `DEFAULT_FACT_BATCH_SIZE`.
    */
   batchSize?: number;
+  suppressContextLinking?: boolean;
 }
 
 export interface MaterializeProgress {
@@ -194,6 +196,7 @@ export interface MaterializeUnmaterializedOptions {
   onProgress?: (progress: MaterializeProgress) => void;
   shouldCancel?: () => boolean;
   stageReport?: StageReporter;
+  suppressContextLinking?: boolean;
 }
 
 export const MAX_MATERIALIZE_INDEXED_FILE_ID_FILTER = 1000;

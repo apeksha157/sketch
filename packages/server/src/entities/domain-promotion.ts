@@ -227,6 +227,7 @@ export async function sweepDomainPromotions(db: Kysely<DB>, logger: Logger): Pro
 
     const proposal = await proposeEntity(
       {
+        db,
         entityRepo,
         reviewRepo,
         resolutionLedger,

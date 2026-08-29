@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { type AdjacencySignals, decideAdjacency } from "../../entities/adjacency";
 
 export interface AdjacencyPerson {
   id: string;
@@ -74,7 +75,7 @@ function addToSetMap(map: Map<string, Set<string>>, key: string, value: string):
   else map.set(key, new Set([value]));
 }
 
-function hasEdge(candidateId: string, contextIds: Set<string>, edgeSet: Set<string>): boolean {
+function hasEdge(candidateId: string, contextIds: ReadonlySet<string>, edgeSet: Set<string>): boolean {
   for (const contextId of contextIds) {
     if (edgeSet.has(`${candidateId}:${contextId}`)) return true;
   }
@@ -83,7 +84,7 @@ function hasEdge(candidateId: string, contextIds: Set<string>, edgeSet: Set<stri
 
 function coMentionCount(
   candidateId: string,
-  contextIds: Set<string>,
+  contextIds: ReadonlySet<string>,
   excludeFileId: string,
   entityFiles: Map<string, Set<string>>,
 ): number {
@@ -125,17 +126,15 @@ function scoreTrial(params: {
     );
   }
 
-  const edgeScored = params.candidateIds.filter((candidateId) =>
-    hasEdge(candidateId, params.contextIds, params.edgeSet),
-  );
-  const rivalHasHistory =
-    edgeScored.length === 1 &&
-    params.candidateIds.some(
-      (candidateId) =>
-        candidateId !== edgeScored[0] &&
-        coMentionCount(candidateId, params.contextIds, params.fileId, params.entityFiles) > 0,
-    );
-  return edgeScored.length === 1 && rivalHasHistory ? [] : edgeScored;
+  const signals: AdjacencySignals = {
+    hasEdge: (candidateId, contextIds) => hasEdge(candidateId, contextIds, params.edgeSet),
+    rivalCoMentionCount: (candidateId, contextIds, excludeFileId) =>
+      coMentionCount(candidateId, contextIds, excludeFileId, params.entityFiles),
+  };
+  const decision = decideAdjacency(params.candidateIds, params.contextIds, params.fileId, signals);
+  if (decision.kind === "link") return [decision.winnerId];
+  if (decision.kind === "contested") return decision.scoredIds;
+  return [];
 }
 
 export function evaluateAdjacencyFixture(input: {

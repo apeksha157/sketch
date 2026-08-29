@@ -21,6 +21,16 @@ export function strongerAliasProvenance(
   return PROVENANCE_RANK[left] >= PROVENANCE_RANK[right] ? left : right;
 }
 
+/**
+ * Aliases taught by an adjudicated action (a merge, the judge, or a human
+ * confirm) keep exact-match solo-link authority in proposeEntity. Weaker
+ * tiers — legacy blob aliases, mint-model variations, roster imports — are
+ * recall candidates only; they surface for review instead of auto-linking.
+ */
+export function isSoloLinkAliasProvenance(provenance: EntityAliasProvenance): boolean {
+  return PROVENANCE_RANK[provenance] >= PROVENANCE_RANK.merge;
+}
+
 function provenanceRankSql(ref: string) {
   return sql<number>`CASE ${sql.ref(ref)}
     WHEN 'legacy' THEN 0

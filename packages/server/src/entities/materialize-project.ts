@@ -30,6 +30,7 @@ export async function materializeProjectSeed(
 
   const result = await proposeEntity(
     {
+      db: deps.db,
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
       resolutionLedger: deps.resolutionLedger,
@@ -49,9 +50,11 @@ export async function materializeProjectSeed(
       source: subjectSource,
       sourceId: subjectSourceId,
       evidence: fact.indexed_file_id ? [{ indexedFileId: fact.indexed_file_id }] : [],
+      contextFileId: fact.indexed_file_id,
       triggeredByUserId,
       metadata,
       provenanceTier: "structural",
+      suppressContextLinking: deps.suppressContextLinking,
     },
   );
 
