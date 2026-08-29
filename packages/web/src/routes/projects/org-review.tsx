@@ -389,7 +389,9 @@ export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; 
         </span>
       </div>
       {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}
-      {graphVerdicts.length > 0 ? <GraphVerdictsSection verdicts={graphVerdicts} /> : null}
+      {graphVerdicts.length > 0 ? (
+        <GraphVerdictsSection verdicts={graphVerdicts} allOpen={graphVerdictsQuery.data?.verdicts ?? graphVerdicts} />
+      ) : null}
       {showBandSearch ? (
         <div className="relative border-b border-amber-300/40 px-3 py-2 dark:border-amber-700/30">
           <MagnifyingGlassIcon size={14} className="absolute left-5 top-1/2 -translate-y-1/2 text-muted-foreground" />

@@ -37,6 +37,47 @@ function isStaleError(err: unknown): boolean {
   return err instanceof ApiRequestError && (err.code === "STALE_VERDICT" || err.code === "PLAN_DRIFT");
 }
 
+export type RelatedVerdictKind = "fan_in" | "chain_apply_this_first" | "chain_apply_other_first" | "same_subject";
+
+function verdictTargetId(verdict: GraphVerdict): string | null {
+  return verdict.resolvedTargetEntityId ?? verdict.targetEntityId;
+}
+
+/**
+ * Other OPEN verdicts that touch the same entities as `current`. The server
+ * dedupes on (subject, action) only, so fan-ins (two subjects merging into
+ * one survivor — safe in any order) and chains (one verdict's target is the
+ * other's subject — order decides which one goes stale) both reach the queue
+ * with no cross-reference. This computes that awareness read-time so the
+ * reviewer sees it BEFORE approving, not as a stale banner after.
+ */
+export function relatedOpenVerdicts(
+  current: GraphVerdict,
+  open: GraphVerdict[],
+): { verdict: GraphVerdict; kind: RelatedVerdictKind }[] {
+  const currentTarget = verdictTargetId(current);
+  const out: { verdict: GraphVerdict; kind: RelatedVerdictKind }[] = [];
+  for (const other of open) {
+    if (other.id === current.id) continue;
+    const otherTarget = verdictTargetId(other);
+    let kind: RelatedVerdictKind | null = null;
+    if (otherTarget && currentTarget && otherTarget === currentTarget) kind = "fan_in";
+    else if (currentTarget && other.subjectEntityId === currentTarget) kind = "chain_apply_this_first";
+    else if (otherTarget && current.subjectEntityId && otherTarget === current.subjectEntityId)
+      kind = "chain_apply_other_first";
+    else if (current.subjectEntityId && other.subjectEntityId === current.subjectEntityId) kind = "same_subject";
+    if (kind) out.push({ verdict: other, kind });
+  }
+  return out;
+}
+
+const RELATED_KIND_COPY: Record<RelatedVerdictKind, string> = {
+  fan_in: "lands on the same survivor — safe in any order",
+  chain_apply_this_first: "merges this proposal's target away — apply this one first or it goes stale",
+  chain_apply_other_first: "targets this proposal's subject — apply that one first or it goes stale",
+  same_subject: "same entity, different action",
+};
+
 /**
  * The server allows a dry run for awaiting and approved rows only; anything
  * later already happened, so the sheet shows the recorded ledger ref instead.
@@ -143,6 +184,12 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
     enabled: (evidence?.fileIds.length ?? 0) > 0,
   });
 
+  const openQuery = useQuery({
+    queryKey: ["graph-verdicts", "open"],
+    queryFn: () => api.graphVerdicts.listOpen(),
+  });
+  const related = relatedOpenVerdicts(current, openQuery.data?.verdicts ?? []);
+
   return (
     <div className="mt-3 flex flex-1 flex-col gap-4 text-[13px]">
       <dl className="space-y-1.5">
@@ -216,6 +263,28 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
               {sample}
             </p>
           ))}
+        </div>
+      ) : null}
+
+      {related.length > 0 ? (
+        <div data-testid="graph-verdict-related">
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Related proposals
+          </h3>
+          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+            {related.map(({ verdict: other, kind }) => (
+              <p key={other.id} className="text-[12px]">
+                <span className="font-mono text-[10px] uppercase text-muted-foreground">
+                  {GRAPH_VERDICT_ACTION_LABELS[other.action] ?? other.action}
+                </span>{" "}
+                <span className="font-medium">{other.subjectName ?? other.subjectEntityId}</span>
+                {verdictTargetId(other) ? (
+                  <span className="text-muted-foreground"> → {other.targetName ?? verdictTargetId(other)}</span>
+                ) : null}
+                <span className="text-muted-foreground"> — {RELATED_KIND_COPY[kind]}</span>
+              </p>
+            ))}
+          </div>
         </div>
       ) : null}
 
