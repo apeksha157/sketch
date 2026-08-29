@@ -11,6 +11,7 @@ const ALLOWED_ALIAS_BLOB_WRITERS = new Set([
   "connectors/entity-linking.ts",
   "db/repositories/entities.ts",
   "db/repositories/entity-aliases.ts",
+  "entities/cleanup-apply.ts",
   "entities/merge.ts",
 ]);
 const ALIAS_BLOB_WRITE_PATTERNS = [/aliases:\s*JSON\.stringify/, /\.set\(\{\s*aliases/];

@@ -16,7 +16,7 @@ import { type FileViewer, fileVisibilityPredicate } from "./connectors";
 import { type EntityAliasProvenance, recordAlias, recordAliases } from "./entity-alias-rows";
 
 const SYSTEM_ENTITY_SOURCE_TYPES = ["clickup_workspace", "clickup_space"];
-const PROTECTED_ENTITY_SOURCES = ["team", "team_directory"];
+export const PROTECTED_ENTITY_SOURCES = ["team", "team_directory"];
 const HOTNESS_WINDOW_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 

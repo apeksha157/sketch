@@ -542,7 +542,7 @@ describe("curation MCP server", () => {
     };
 
     expect(result).toMatchObject({ stored: 0, bounced: 2 });
-    expect(result.results.map((row) => row.validationReason)).toEqual(["source_not_live_project", "subject_not_found"]);
+    expect(result.results.map((row) => row.validationReason)).toEqual(["source_not_live", "subject_not_found"]);
     const rows = await db
       .selectFrom("graph_verdicts")
       .selectAll()
@@ -559,7 +559,7 @@ describe("curation MCP server", () => {
         expect.objectContaining({
           subject_entity_id: "merged-source",
           validation_status: "failed",
-          validation_reason: "source_not_live_project",
+          validation_reason: "source_not_live",
           status: "bounced",
         }),
         expect.objectContaining({

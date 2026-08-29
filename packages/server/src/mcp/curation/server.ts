@@ -130,7 +130,7 @@ export async function createCurationMcpServer(params: {
   );
   register<ProposeGraphVerdictsArgs>(
     "propose_graph_verdicts",
-    "Store project graph cleanup proposals after dry-run validation without applying them.",
+    "Store entity graph cleanup proposals after dry-run validation without applying them; remove_alias carries the alias in targetName.",
     proposeGraphVerdictsSchema,
     (args) => handleProposeGraphVerdicts(args, params.db, { userId: params.userId, tokenId: params.tokenId }),
   );
