@@ -1,22 +1,15 @@
 import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/entity-drawer/drawer-kit";
 import { TimelineStrip, usefulSnippet } from "@/components/entity-drawer/timeline-strip";
 /**
- * Shared entity-review band + reconcile sheet.
- *
- * Extracted from Files → Entities so the same reconcile UI is reused verbatim
- * on the Your Org surface. Two consumers:
- *   - {@link GhostReviewRow} + {@link ReviewDetailSheet} — the explorer renders
- *     ghost rows inline inside its own table, then opens the sheet.
- *   - {@link ReviewBand} — a self-contained band (used by Your Org) that fetches
- *     a type-scoped slice of the queue, splits it into "Confirm new" (no
- *     candidate) vs "Possible duplicates" (a match was suggested), and owns the
- *     sheet.
- *
- * Clicking a row opens a reconcile drawer with two side-by-side columns —
- * Proposed | Suggested existing — and inline ✓/✗ icon-buttons on the candidate
- * card. ✗ flips the right column to a "What instead?" chooser (search +
- * create-as-new). Orphan rows (no suggested candidate) open directly in chooser
- * mode.
+ * The two review sheets behind Your Org's review band (the band itself is
+ * {@link ReviewBandCapped} in routes/projects/org-review):
+ *   - {@link BirthInspectSheet} — read-only inspect for a birth row (origin,
+ *     linked files, tasks, rename-then-confirm, merge escape hatch).
+ *   - {@link ReviewDetailSheet} — the reconcile drawer for rows with a
+ *     suggested match: two side-by-side columns (Proposed | Suggested
+ *     existing) with inline ✓/✗ on the candidate card. ✗ flips the right
+ *     column to a "What instead?" chooser (search + create-as-new); orphan
+ *     rows open directly in chooser mode.
  */
 import { MergeDialog, MergePreview } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
@@ -32,17 +25,14 @@ import type {
 } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, displayAliases, entityAccent } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/lib/time";
 import {
   ArrowLeftIcon,
   ArrowSquareOutIcon,
   ArrowsLeftRightIcon,
   CheckIcon,
-  CubeIcon,
   PlugsConnectedIcon,
   PlusIcon,
   SparkleIcon,
-  UserIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
@@ -116,93 +106,6 @@ function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[]
 }
 
 /**
- * Self-contained review band scoped to a set of entity types. Fetches the
- * type-scoped queue slice, partitions it into births vs possible-duplicates,
- * and owns the reconcile sheet. Renders nothing when the scoped queue is empty.
- */
-export function ReviewBand({ types, title = "Needs your review" }: { types: string[]; title?: string }) {
-  const queryClient = useQueryClient();
-  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
-  const [inspectBirthId, setInspectBirthId] = useState<string | null>(null);
-  const { data } = useQuery({
-    queryKey: ["entity-review", "band", types.join(",")],
-    queryFn: () => api.entityReview.list({ limit: 200, types }),
-  });
-  const rows = data?.rows ?? [];
-  const total = data?.total ?? rows.length;
-
-  /**
-   * Births resolve inline, so refreshing the band, sidebar badge, and Files
-   * band together means invalidating the whole `["entity-review"]` prefix: the
-   * band key is NOT under `LIST_KEY`, so the mutation hook's list-scoped
-   * invalidation alone would miss it.
-   */
-  const refreshAfterResolve = () => {
-    queryClient.invalidateQueries({ queryKey: ["entity-review"] });
-    queryClient.invalidateQueries({ queryKey: ["entities"] });
-  };
-
-  if (rows.length === 0) return null;
-
-  const births = rows.filter((r) => !hasReviewCandidate(r));
-  const duplicates = rows.filter(hasReviewCandidate);
-
-  return (
-    <section className="mb-9 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
-      <div className="flex items-baseline justify-between border-b border-amber-300/50 px-3 py-2 dark:border-amber-700/40">
-        <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700 dark:text-amber-400">
-          {title} · {total}
-        </span>
-      </div>
-      {births.length > 0 ? (
-        <>
-          <GroupHeader label="Confirm new" count={births.length} />
-          {births.map((row) => (
-            <BirthRow
-              key={`review-${row.id}`}
-              row={row}
-              onResolved={refreshAfterResolve}
-              onInspect={setInspectBirthId}
-            />
-          ))}
-        </>
-      ) : null}
-      {duplicates.length > 0 ? (
-        <>
-          <GroupHeader label="Possible duplicates" count={duplicates.length} />
-          {duplicates.map((row) => (
-            <GhostReviewRow key={`review-${row.id}`} row={row} onSelect={setSelectedReviewId} />
-          ))}
-        </>
-      ) : null}
-      <ReviewDetailSheet reviewId={selectedReviewId} onClose={() => setSelectedReviewId(null)} />
-      <BirthInspectSheet
-        reviewId={inspectBirthId}
-        onResolved={refreshAfterResolve}
-        onClose={() => setInspectBirthId(null)}
-      />
-    </section>
-  );
-}
-
-function hasReviewCandidate(row: EntityReviewQueueRow): boolean {
-  return Boolean(row.candidate || (row.candidates?.length ?? 0) > 0);
-}
-
-function reviewCandidateNames(row: EntityReviewQueueRow): string[] {
-  const candidates = row.candidates ?? (row.candidate ? [row.candidate] : []);
-  return candidates.map((candidate) => candidate.name);
-}
-
-function GroupHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="border-b border-amber-300/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-amber-700/80 dark:border-amber-700/30 dark:text-amber-400/70">
-      {label} · {count}
-    </div>
-  );
-}
-
-/**
  * A small chip naming where a birth row came from: a tracker pull (ClickUp /
  * Linear) or an AI extraction from a connector's documents (Fireflies / Gmail).
  */
@@ -214,110 +117,6 @@ function OriginChip({ row }: { row: EntityReviewQueueRow }) {
       {origin.kind === "ai" ? <SparkleIcon size={9} weight="fill" /> : <PlugsConnectedIcon size={9} />}
       {origin.label}
     </Badge>
-  );
-}
-
-/**
- * A birth row (proposed entity with no candidate match). It resolves inline —
- * Confirm creates the entity from its seed, Dismiss drops it without creating
- * anything, Merge opens a search-only picker for the "actually a duplicate"
- * escape hatch. The actions only appear on hover/focus to keep the list calm;
- * clicking the row body opens a read-only inspect sheet (origin + linked files).
- * No reconcile drawer: a birth is not a merge, so there's nothing to compare.
- */
-function BirthRow({
-  row,
-  onResolved,
-  onInspect,
-}: {
-  row: EntityReviewQueueRow;
-  onResolved: () => void;
-  onInspect: (id: string) => void;
-}) {
-  const isPerson = row.entity_type === "person";
-  const [mergeOpen, setMergeOpen] = useState(false);
-  const mutations = useReviewMutations(row, onResolved);
-
-  return (
-    <div
-      className="group border-b border-border bg-amber-50/40 last:border-b-0 dark:bg-amber-950/20"
-      data-testid={`review-row-${row.id}`}
-    >
-      <div className="flex items-center gap-3 px-3 py-2.5 text-sm">
-        <button
-          type="button"
-          onClick={() => onInspect(row.id)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
-          data-testid="birth-inspect"
-        >
-          {isPerson ? (
-            <UserIcon size={14} className="shrink-0 text-muted-foreground" />
-          ) : (
-            <CubeIcon size={14} className="shrink-0 text-muted-foreground" />
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{row.proposed_name}</p>
-            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Badge variant="outline" className="text-[9px]">
-                {humanSourceType(row.entity_type)}
-              </Badge>
-              <OriginChip row={row} />
-              {row.evidenceCount > 0 ? <span>· {row.evidenceCount} linked</span> : null}
-            </span>
-          </div>
-        </button>
-
-        <div className="flex shrink-0 items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => mutations.confirm()}
-            disabled={mutations.isPending}
-            className="h-7 gap-1 border-emerald-400 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-600 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
-            data-testid="birth-confirm"
-          >
-            <CheckIcon size={13} weight="bold" />
-            Confirm
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setMergeOpen(true)}
-            disabled={mutations.isPending}
-            className="h-7 gap-1"
-            data-testid="birth-merge"
-          >
-            <ArrowsLeftRightIcon size={12} />
-            Merge
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => mutations.dismiss()}
-            disabled={mutations.isPending}
-            className="h-7 gap-1 text-muted-foreground hover:text-foreground"
-            data-testid="birth-dismiss"
-          >
-            <XIcon size={13} />
-            Dismiss
-          </Button>
-        </div>
-      </div>
-
-      {mutations.errorCopy ? (
-        <p className="px-3 pb-2 text-[11px] text-destructive">{mutations.errorCopy.message}</p>
-      ) : null}
-
-      <MergePickerDialog
-        open={mergeOpen}
-        onOpenChange={setMergeOpen}
-        row={row}
-        onPick={(entityId) => {
-          setMergeOpen(false);
-          mutations.mergeInto(entityId);
-        }}
-      />
-    </div>
   );
 }
 
@@ -607,65 +406,6 @@ function MergePickerDialog({
         />
       )}
     />
-  );
-}
-
-/**
- * "Ghost" row representing a pending entity_review_queue row. Subtle styling
- * (amber tint + Under-review label). Click opens the reconcile drawer.
- */
-export function GhostReviewRow({ row, onSelect }: { row: EntityReviewQueueRow; onSelect: (id: string) => void }) {
-  const isPerson = row.entity_type === "person";
-  return (
-    <div className="border-b border-border last:border-b-0" data-testid={`review-row-${row.id}`}>
-      <button
-        type="button"
-        onClick={() => onSelect(row.id)}
-        className="flex w-full cursor-pointer items-center gap-3 bg-amber-50/40 px-3 py-2.5 text-left text-sm hover:bg-amber-50 dark:bg-amber-950/20 dark:hover:bg-amber-950/30"
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {isPerson ? (
-            <UserIcon size={14} className="shrink-0 text-muted-foreground" />
-          ) : (
-            <CubeIcon size={14} className="shrink-0 text-muted-foreground" />
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{row.proposed_name}</p>
-            <p className="truncate text-[11px] text-muted-foreground">
-              <span className="font-medium text-amber-700 dark:text-amber-400">Under review</span>
-              {hasReviewCandidate(row) ? (
-                <> · suggests {reviewCandidateNames(row).join(", ")}</>
-              ) : (
-                <> · no suggested match</>
-              )}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex w-32 items-center justify-center gap-1.5">
-          <Badge variant="outline" className="text-[10px]">
-            {humanSourceType(row.entity_type)}
-          </Badge>
-        </div>
-
-        <span className="w-16 text-center font-mono text-xs text-muted-foreground">
-          {row.evidenceCount > 0 ? row.evidenceCount : "-"}
-        </span>
-
-        <div className="flex w-20 items-center justify-center gap-1">
-          <Badge
-            variant="outline"
-            className="border-amber-300 text-[10px] text-amber-700 dark:border-amber-700 dark:text-amber-400"
-          >
-            review
-          </Badge>
-        </div>
-
-        <div className="w-24 text-right">
-          <span className="text-xs text-muted-foreground">{formatRelativeTime(row.last_seen_at)}</span>
-        </div>
-      </button>
-    </div>
   );
 }
 

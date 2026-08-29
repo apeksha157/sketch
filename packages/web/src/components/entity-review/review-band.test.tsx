@@ -1,10 +1,16 @@
+/**
+ * Birth-row flows through the live band ({@link ReviewBandCapped}) and the
+ * review sheets this file exports: inline dismiss with the CAS timestamp,
+ * the read-only birth inspect sheet (origin chip, linked files, tasks,
+ * rename-then-confirm), and the multi-candidate reconcile chooser.
+ */
+import { ReviewBandCapped } from "@/routes/projects/org-review";
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/utils";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
-import { ReviewBand } from "./review-band";
 
 function birthRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -39,7 +45,13 @@ function birthRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("ReviewBand birth rows", () => {
+/** Click the row's own body (not its inline verbs) to open the right sheet. */
+async function openRow(user: ReturnType<typeof userEvent.setup>, id: string, name: RegExp) {
+  const row = await screen.findByTestId(`org-review-row-${id}`);
+  await user.click(within(row).getByRole("button", { name }));
+}
+
+describe("review band birth rows", () => {
   it("shows every ambiguous candidate in the row and chooser", async () => {
     const ambiguous = birthRow({
       candidate: null,
@@ -55,18 +67,17 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["person"]} />);
+    renderWithProviders(<ReviewBandCapped types={["person"]} />);
 
     expect(await screen.findByText(/Simran Suri/)).toBeInTheDocument();
-    expect(screen.getByText(/Simran Neeli/)).toBeInTheDocument();
-    await user.click(within(screen.getByTestId("review-row-rev-1")).getByRole("button"));
+    await openRow(user, "rev-1", /Canvasx/);
 
     expect(await screen.findByText("Possible matches")).toBeInTheDocument();
     expect(screen.getByTestId("suggested-candidate-candidate-a")).toBeInTheDocument();
     expect(screen.getByTestId("suggested-candidate-candidate-b")).toBeInTheDocument();
   });
 
-  it("shows a tracker origin chip and dismisses inline without opening the reconcile drawer", async () => {
+  it("dismisses inline from the band row without opening any sheet", async () => {
     const dismiss = vi.fn();
     server.use(
       http.get("/api/entity-review", () => HttpResponse.json({ rows: [birthRow()], total: 1 })),
@@ -77,24 +88,21 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["team"]} />);
+    renderWithProviders(<ReviewBandCapped types={["team"]} />);
 
-    expect(await screen.findByText("Canvasx")).toBeInTheDocument();
-    expect(screen.getByText("ClickUp")).toBeInTheDocument();
-    expect(screen.getByTestId("birth-confirm")).toBeInTheDocument();
-    expect(screen.getByTestId("birth-merge")).toBeInTheDocument();
-    expect(screen.queryByTestId("reconcile-proposed")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId("birth-dismiss"));
+    const row = await screen.findByTestId("org-review-row-rev-1");
+    expect(within(row).getByRole("button", { name: "Add" })).toBeInTheDocument();
+    await user.click(within(row).getByRole("button", { name: "Dismiss" }));
 
     await waitFor(() => expect(dismiss).toHaveBeenCalledTimes(1));
     expect(dismiss.mock.calls[0][0]).toMatchObject({
       id: "rev-1",
       body: { candidateGeneratedAt: "2026-06-28T00:00:00.000Z" },
     });
+    expect(screen.queryByTestId("birth-inspect-dismiss")).not.toBeInTheDocument();
   });
 
-  it("opens a read-only inspect sheet listing the linked files for an AI-inferred birth", async () => {
+  it("opens a read-only inspect sheet listing the origin and linked files for an AI-inferred birth", async () => {
     const aiRow = birthRow({
       source: "fireflies",
       source_id: "fireflies:team:canvasx",
@@ -124,13 +132,12 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["team"]} />);
+    renderWithProviders(<ReviewBandCapped types={["team"]} />);
 
-    expect(await screen.findByText("AI · Fireflies")).toBeInTheDocument();
-
-    await user.click(screen.getByTestId("birth-inspect"));
+    await openRow(user, "rev-1", /Canvasx/);
 
     expect(await screen.findByText("Linked files (1)")).toBeInTheDocument();
+    expect(screen.getByText("AI · Fireflies")).toBeInTheDocument();
     expect(screen.getByText("Kickoff sync")).toBeInTheDocument();
     // Inspect is one-column: the two-column reconcile layout never renders.
     expect(screen.queryByTestId("reconcile-proposed")).not.toBeInTheDocument();
@@ -144,9 +151,9 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["person"]} />);
+    renderWithProviders(<ReviewBandCapped types={["person"]} />);
 
-    await user.click(await screen.findByTestId("birth-inspect"));
+    await openRow(user, "rev-1", /Priya Shah/);
     expect(await screen.findByTestId("birth-inspect-dismiss")).toBeInTheDocument();
 
     await user.click(screen.getByTestId("birth-inspect-dismiss"));
@@ -168,9 +175,9 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["team"]} />);
+    renderWithProviders(<ReviewBandCapped types={["team"]} />);
 
-    await user.click(await screen.findByTestId("birth-inspect"));
+    await openRow(user, "rev-1", /Canvas Platform/);
     await user.click(await screen.findByTestId("birth-inspect-dismiss"));
 
     await waitFor(() => expect(dismiss).toHaveBeenCalledTimes(1));
@@ -203,9 +210,9 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["team"]} />);
+    renderWithProviders(<ReviewBandCapped types={["team"]} />);
 
-    await user.click(await screen.findByTestId("birth-inspect"));
+    await openRow(user, "rev-1", /Canvasx/);
 
     expect(await screen.findByText("Tasks under this (3)")).toBeInTheDocument();
     expect(screen.getByText("SKE-1: Alpha")).toBeInTheDocument();
@@ -232,9 +239,9 @@ describe("ReviewBand birth rows", () => {
     );
 
     const user = userEvent.setup();
-    renderWithProviders(<ReviewBand types={["team"]} />);
+    renderWithProviders(<ReviewBandCapped types={["team"]} />);
 
-    await user.click(await screen.findByTestId("birth-inspect"));
+    await openRow(user, "rev-1", /Canvasx/);
 
     const input = await screen.findByTestId("birth-name-input");
     await user.clear(input);
