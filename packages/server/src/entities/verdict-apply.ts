@@ -3,6 +3,7 @@ import type { Kysely, Selectable } from "kysely";
 import { createEntityRepository, whereLiveEntity } from "../db/repositories/entities";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
 import { type GraphVerdictRow, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
+import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { ContainersTable, DB, EntitiesTable, EntityAliasProvenance } from "../db/schema";
 import type { CleanupAction, CleanupVerdict } from "./cleanup-adjudication";
 import {
@@ -18,8 +19,15 @@ import {
 } from "./cleanup-apply";
 import { unmergeEntitiesInTransaction } from "./merge";
 import { normalizeName } from "./name-keys";
-import { strongestProvenanceTier } from "./provenance";
-import { type VerdictFingerprintEvidence, containerVerdictFingerprint, fingerprintFor } from "./verdict-fingerprint";
+import { type ProvenanceTier, strongestProvenanceTier } from "./provenance";
+import { resolveLiveEntity } from "./redirect";
+import { dismissReview, linkReviewRowToExistingEntity } from "./resolve";
+import {
+  type VerdictFingerprintEvidence,
+  containerVerdictFingerprint,
+  fingerprintFor,
+  mentionVerdictFingerprint,
+} from "./verdict-fingerprint";
 
 export type GraphVerdictApplyErrorCode =
   | "NOT_FOUND"
@@ -47,7 +55,7 @@ export type GraphVerdictApplyResult = {
   status: "approved" | "awaiting_human" | "applied";
   ledgerRef: string | null;
   wouldChange: Record<string, number>;
-  plan: CleanupApplyPlanRow | ContainerApplyPlanRow;
+  plan: CleanupApplyPlanRow | ContainerApplyPlanRow | MentionApplyPlanRow;
 };
 
 export type GraphVerdictReversionResult = {
@@ -82,6 +90,20 @@ type ContainerApplyPlanRow = {
 };
 
 type WouldChangeMetadata = Record<string, unknown>;
+
+type MentionAction = "link_to" | "dismiss";
+
+type MentionApplyPlanRow = {
+  entityId: null;
+  mentionName: string;
+  entityType: string;
+  action: MentionAction;
+  state: "applied";
+  targetEntityId: string | null;
+  resolvedTargetEntityId: string | null;
+  reason: string | null;
+  wouldChange: Record<string, number>;
+};
 
 function updatedCount(
   result: { numUpdatedRows?: bigint | number | string; numDeletedRows?: bigint | number | string } | undefined,
@@ -355,9 +377,131 @@ function storedWouldChange(verdict: GraphVerdictRow): Record<string, number> {
   return numericWouldChange(verdict.would_change_json);
 }
 
+function isMentionVerdict(verdict: Pick<GraphVerdictRow, "subject_mention_name" | "subject_entity_type" | "action">) {
+  return Boolean(
+    verdict.subject_mention_name &&
+      verdict.subject_entity_type &&
+      (verdict.action === "link_to" || verdict.action === "dismiss"),
+  );
+}
+
+async function matchingMentionReviewRows(
+  db: Kysely<DB>,
+  verdict: Pick<GraphVerdictRow, "subject_mention_name" | "subject_entity_type">,
+) {
+  if (!verdict.subject_mention_name || !verdict.subject_entity_type) return [];
+  return db
+    .selectFrom("entity_review_queue")
+    .selectAll()
+    .where("normalized_name", "=", verdict.subject_mention_name)
+    .where("entity_type", "=", verdict.subject_entity_type)
+    .where("status", "in", ["pending", "deferred"])
+    .orderBy("id", "asc")
+    .execute();
+}
+
+async function mentionFingerprintForDb(db: Kysely<DB>, verdict: GraphVerdictRow): Promise<string> {
+  const target = verdict.target_entity_id ? await resolveLiveEntity(db, verdict.target_entity_id) : null;
+  return mentionVerdictFingerprint({
+    action: verdict.action,
+    mentionName: verdict.subject_mention_name ?? "",
+    entityType: verdict.subject_entity_type ?? "",
+    rows: await matchingMentionReviewRows(db, verdict),
+    target,
+  });
+}
+
+export async function mentionPlan(
+  trx: Kysely<DB>,
+  verdict: Pick<
+    GraphVerdictRow,
+    "id" | "action" | "subject_mention_name" | "subject_entity_type" | "target_entity_id" | "reason"
+  >,
+): Promise<MentionApplyPlanRow> {
+  if (!verdict.subject_mention_name || !verdict.subject_entity_type) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention verdict subject is missing", {
+      verdictId: verdict.id,
+      reason: "mention_subject_required",
+    });
+  }
+  if (verdict.action !== "link_to" && verdict.action !== "dismiss") {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention verdict action is invalid", {
+      verdictId: verdict.id,
+      reason: "invalid_action",
+    });
+  }
+
+  let resolvedTarget: EntityRow | null = null;
+  if (verdict.action === "link_to") {
+    if (!verdict.target_entity_id) {
+      throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention link target is required", {
+        verdictId: verdict.id,
+        reason: "target_required",
+      });
+    }
+    resolvedTarget = await resolveLiveEntity(trx, verdict.target_entity_id);
+    if (!resolvedTarget) {
+      throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention link target is not live", {
+        verdictId: verdict.id,
+        reason: "target_not_live",
+      });
+    }
+    if (resolvedTarget.source_type !== verdict.subject_entity_type) {
+      throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention link target type does not match subject type", {
+        verdictId: verdict.id,
+        reason: "type_mismatch",
+      });
+    }
+  }
+
+  const reviewRows = await matchingMentionReviewRows(trx, verdict);
+  if (reviewRows.length === 0) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "No live review rows match mention verdict", {
+      verdictId: verdict.id,
+      reason: "review_row_not_found",
+    });
+  }
+
+  return {
+    entityId: null,
+    mentionName: verdict.subject_mention_name,
+    entityType: verdict.subject_entity_type,
+    action: verdict.action,
+    state: "applied",
+    targetEntityId: verdict.target_entity_id,
+    resolvedTargetEntityId: resolvedTarget?.id ?? null,
+    reason: verdict.reason,
+    wouldChange: { entity_review_queue: reviewRows.length },
+  };
+}
+
+function mentionAppliedResult(verdict: GraphVerdictRow, plan: MentionApplyPlanRow): GraphVerdictApplyResult {
+  return {
+    verdictId: verdict.id,
+    dryRun: false,
+    status: "applied",
+    ledgerRef: verdict.applied_ledger_ref,
+    wouldChange: plan.wouldChange,
+    plan,
+  };
+}
+
 async function loadAppliedResult(db: Kysely<DB>, verdictId: string): Promise<GraphVerdictApplyResult | null> {
   const verdict = await createGraphVerdictRepository(db).findById(verdictId);
   if (!verdict || verdict.status !== "applied") return null;
+  if (isMentionVerdict(verdict)) {
+    return mentionAppliedResult(verdict, {
+      entityId: null,
+      mentionName: verdict.subject_mention_name ?? "",
+      entityType: verdict.subject_entity_type ?? "",
+      action: verdict.action as MentionAction,
+      state: "applied",
+      targetEntityId: verdict.target_entity_id,
+      resolvedTargetEntityId: verdict.resolved_target_entity_id,
+      reason: null,
+      wouldChange: storedWouldChange(verdict),
+    });
+  }
   if (verdict.action === "classify_container" && verdict.subject_container_id) {
     const container = await db
       .selectFrom("containers")
@@ -588,6 +732,130 @@ async function applyContainerVerdict(
   return containerAppliedResult({ ...verdict, status: "applied", applied_ledger_ref: ledgerRef }, appliedPlan);
 }
 
+function requiredMentionDecisionUser(verdict: GraphVerdictRow): string {
+  if (!verdict.decided_by_user_id) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention verdict is missing decided_by_user_id", {
+      verdictId: verdict.id,
+    });
+  }
+  return verdict.decided_by_user_id;
+}
+
+async function recordMentionDismissLedger(trx: Kysely<DB>, verdict: GraphVerdictRow, reviewId: string): Promise<void> {
+  if (!verdict.subject_mention_name || !verdict.subject_entity_type) return;
+  const row = await trx.selectFrom("entity_review_queue").selectAll().where("id", "=", reviewId).executeTakeFirst();
+  if (!row) return;
+  const evidenceRows = await trx
+    .selectFrom("entity_review_evidence")
+    .select(["indexed_file_id", "source"])
+    .where("review_id", "=", row.id)
+    .execute();
+  await createResolutionDecisionRepository(trx).recordDismiss({
+    normalizedMentionName: verdict.subject_mention_name,
+    entityType: verdict.subject_entity_type,
+    targetName: null,
+    targetEmail: null,
+    decider: "human",
+    decidedBy: requiredMentionDecisionUser(verdict),
+    source: row.source ?? evidenceRows[0]?.source ?? "entity-review",
+    sourceId: row.source_id ?? `review:${row.id}`,
+    evidenceFileIds: [...new Set(evidenceRows.map((evidence) => evidence.indexed_file_id))],
+    verdictRef: verdict.id,
+  });
+}
+
+async function applyMentionVerdict(
+  trx: Kysely<DB>,
+  verdict: GraphVerdictRow,
+  dryRun: boolean | undefined,
+): Promise<GraphVerdictApplyResult> {
+  const fingerprint = await mentionFingerprintForDb(trx, verdict);
+  if (fingerprint !== verdict.evidence_fingerprint) {
+    throw new GraphVerdictApplyError("STALE_VERDICT", "Mention evidence changed since proposal", {
+      verdictId: verdict.id,
+    });
+  }
+  const plan = await mentionPlan(trx, verdict);
+  if (plan.resolvedTargetEntityId !== verdict.resolved_target_entity_id) {
+    throw new GraphVerdictApplyError("PLAN_DRIFT", "Resolved mention target changed since proposal", {
+      verdictId: verdict.id,
+      reason: "plan_drift",
+    });
+  }
+  if (dryRun) {
+    return {
+      verdictId: verdict.id,
+      dryRun: true,
+      status: verdict.status as "approved" | "awaiting_human",
+      ledgerRef: verdict.applied_ledger_ref,
+      wouldChange: plan.wouldChange,
+      plan,
+    };
+  }
+
+  const repo = createGraphVerdictRepository(trx);
+  const claimed = await repo.markApplied({ id: verdict.id, ledgerRef: null });
+  if (!claimed) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Graph verdict apply claim lost", { verdictId: verdict.id });
+  }
+  const reviewRows = await matchingMentionReviewRows(trx, verdict);
+  const decidedBy = requiredMentionDecisionUser(verdict);
+  const ledgerRef =
+    verdict.action === "link_to" ? `mention-linked:${reviewRows.length}` : `mention-dismissed:${reviewRows.length}`;
+  if (verdict.action === "link_to") {
+    if (!plan.resolvedTargetEntityId) throw new GraphVerdictApplyError("APPLY_CONFLICT", "Mention link target missing");
+    const target = await trx
+      .selectFrom("entities")
+      .select(["id", "provenance_tier"])
+      .where("id", "=", plan.resolvedTargetEntityId)
+      .where(whereLiveEntity())
+      .executeTakeFirst();
+    if (!target) throw new GraphVerdictApplyError("APPLY_CONFLICT", "Mention link target no longer live");
+    const appliedTier = strongestProvenanceTier(target.provenance_tier, "human_confirmed");
+    await addWouldChangeMetadata(trx, verdict.id, verdict.would_change_json, {
+      linkedReviewRows: reviewRows.map((row) => ({ id: row.id, candidateGeneratedAt: row.candidate_generated_at })),
+      priorTargetProvenanceTier: target.provenance_tier,
+      appliedTargetProvenanceTier: appliedTier,
+      resolvedTargetEntityId: plan.resolvedTargetEntityId,
+    });
+    for (const row of reviewRows) {
+      await linkReviewRowToExistingEntity(
+        { db: trx, userId: decidedBy },
+        { reviewId: row.id, entityId: plan.resolvedTargetEntityId },
+        {
+          decider: "human",
+          decidedBy,
+          provenanceTier: "human_confirmed",
+          verdictRef: verdict.id,
+          allowedStatuses: ["pending", "deferred"],
+          useExistingTransaction: true,
+        },
+      );
+    }
+  } else {
+    await addWouldChangeMetadata(trx, verdict.id, verdict.would_change_json, {
+      dismissedReviewRows: reviewRows.map((row) => ({ id: row.id, candidateGeneratedAt: row.candidate_generated_at })),
+    });
+    for (const row of reviewRows) {
+      if (!row.candidate_generated_at) {
+        throw new GraphVerdictApplyError("PLAN_BLOCKED", "Mention dismiss row is missing candidate_generated_at", {
+          verdictId: verdict.id,
+          reviewId: row.id,
+        });
+      }
+      await dismissReview({ db: trx, userId: decidedBy }, row.id, {
+        candidateGeneratedAt: row.candidate_generated_at,
+        decidedBy,
+        allowedStatuses: ["pending", "deferred"],
+        useExistingTransaction: true,
+      });
+    }
+    if (reviewRows[0]) await recordMentionDismissLedger(trx, verdict, reviewRows[0].id);
+  }
+  await repo.setAppliedLedgerRef({ id: verdict.id, ledgerRef });
+  return mentionAppliedResult({ ...verdict, status: "applied", applied_ledger_ref: ledgerRef }, plan);
+}
+
 export async function applyGraphVerdict(
   db: Kysely<DB>,
   input: { verdictId: string; actorUserId: string; dryRun?: boolean },
@@ -623,6 +891,9 @@ export async function applyGraphVerdict(
       }
       if (verdict.action === "classify_container") {
         return applyContainerVerdict(trx, verdict, input.dryRun);
+      }
+      if (isMentionVerdict(verdict)) {
+        return applyMentionVerdict(trx, verdict, input.dryRun);
       }
       const plan = await verifiedPlan(trx, verdict);
       if (input.dryRun) {
@@ -854,6 +1125,110 @@ async function restoreMergeSurvivorTier(trx: Kysely<DB>, row: GraphVerdictRow, g
     .execute();
 }
 
+function metadataReviewIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (item && typeof item === "object" && "id" in item ? item.id : null))
+    .filter((id): id is string => typeof id === "string");
+}
+
+function provenanceTierFromMetadata(value: unknown): ProvenanceTier | null {
+  if (
+    value === "inferred" ||
+    value === "machine_confirmed" ||
+    value === "human_confirmed" ||
+    value === "declared" ||
+    value === "structural"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+/**
+ * Reverting review-family verdicts restores the durable queue and decision
+ * rows only. Materialized mentions and evidence are derived projections; the
+ * next recreate pass rebuilds them from the now-stale ledger state.
+ */
+async function revertMentionVerdict(trx: Kysely<DB>, row: GraphVerdictRow, ledgerRef: string): Promise<void> {
+  const repo = createGraphVerdictRepository(trx);
+  const won = await repo.markReverted({ id: row.id });
+  if (!won) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Graph verdict reversion claim lost", { verdictId: row.id });
+  }
+  const metadata = parseWouldChangeMetadata(row.would_change_json);
+  const now = new Date().toISOString();
+  if (ledgerRef.startsWith("mention-linked:")) {
+    const targetId =
+      typeof metadata.resolvedTargetEntityId === "string"
+        ? metadata.resolvedTargetEntityId
+        : row.resolved_target_entity_id;
+    if (!targetId || !row.subject_mention_name || !row.subject_entity_type) {
+      throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Mention link metadata is incomplete");
+    }
+    for (const reviewId of metadataReviewIds(metadata.linkedReviewRows)) {
+      await trx
+        .updateTable("entity_review_queue")
+        .set({
+          status: "pending",
+          resolved_by: null,
+          resolved_at: null,
+          resolved_entity_id: null,
+          candidate_generated_at: now,
+        })
+        .where("id", "=", reviewId)
+        .where("status", "=", "confirmed")
+        .where("resolved_entity_id", "=", targetId)
+        .execute();
+    }
+    const decisions = await createResolutionDecisionRepository(trx).findActiveForMention(
+      row.subject_mention_name,
+      row.subject_entity_type,
+    );
+    if (decisions.link?.status === "active" && decisions.link.verdict_ref === row.id) {
+      await createResolutionDecisionRepository(trx).markStale(decisions.link.id);
+    }
+    const priorTier = provenanceTierFromMetadata(metadata.priorTargetProvenanceTier);
+    const appliedTier = provenanceTierFromMetadata(metadata.appliedTargetProvenanceTier);
+    if (priorTier && appliedTier && priorTier !== appliedTier) {
+      await trx
+        .updateTable("entities")
+        .set({ provenance_tier: priorTier, updated_at: now })
+        .where("id", "=", targetId)
+        .where(whereLiveEntity())
+        .where("provenance_tier", "=", appliedTier)
+        .execute();
+    }
+    return;
+  }
+  if (ledgerRef.startsWith("mention-dismissed:")) {
+    for (const reviewId of metadataReviewIds(metadata.dismissedReviewRows)) {
+      await trx
+        .updateTable("entity_review_queue")
+        .set({
+          status: "pending",
+          resolved_by: null,
+          resolved_at: null,
+          resolved_entity_id: null,
+          candidate_generated_at: now,
+        })
+        .where("id", "=", reviewId)
+        .where("status", "=", "dismissed")
+        .execute();
+    }
+    const decision = await trx
+      .selectFrom("resolution_decisions")
+      .select("id")
+      .where("verdict", "=", "dismiss")
+      .where("verdict_ref", "=", row.id)
+      .where("status", "=", "active")
+      .executeTakeFirst();
+    if (decision) await createResolutionDecisionRepository(trx).markStale(decision.id);
+    return;
+  }
+  throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Unknown mention verdict ledger ref");
+}
+
 export async function revertGraphVerdict(
   db: Kysely<DB>,
   input: { verdictId: string; actorUserId: string },
@@ -872,6 +1247,12 @@ export async function revertGraphVerdict(
   if (row.action === "classify_container") {
     return db.transaction().execute(async (trx) => {
       await revertContainerVerdict(trx, row, appliedLedgerRef);
+      return { verdictId: row.id, status: "reverted", ledgerRef: appliedLedgerRef };
+    });
+  }
+  if (isMentionVerdict(row)) {
+    return db.transaction().execute(async (trx) => {
+      await revertMentionVerdict(trx, row, appliedLedgerRef);
       return { verdictId: row.id, status: "reverted", ledgerRef: appliedLedgerRef };
     });
   }

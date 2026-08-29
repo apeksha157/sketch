@@ -9,12 +9,14 @@ import {
 import type { DB, EntitiesTable } from "../../db/schema";
 import type { CleanupAction, CleanupVerdict } from "../../entities/cleanup-adjudication";
 import { planCleanup } from "../../entities/cleanup-apply";
-import { normalizeName } from "../../entities/name-keys";
-import { GraphVerdictApplyError, applyGraphVerdict } from "../../entities/verdict-apply";
-import { fingerprintFor } from "../../entities/verdict-fingerprint";
+import { normalizeEntityMatchName, normalizeName } from "../../entities/name-keys";
+import { resolveLiveEntity } from "../../entities/redirect";
+import { GraphVerdictApplyError, applyGraphVerdict, mentionPlan } from "../../entities/verdict-apply";
+import { fingerprintFor, mentionVerdictFingerprint } from "../../entities/verdict-fingerprint";
 import { jsonResult } from "./queries";
 
-const actions = ["keep", "merge_into", "nest_under", "archive", "remove_alias"] as const;
+const entityActions = ["keep", "merge_into", "nest_under", "archive", "remove_alias"] as const;
+const mentionActions = ["link_to", "dismiss"] as const;
 
 const evidenceSchema = z.object({
   fileIds: z.array(z.string()).optional(),
@@ -22,20 +24,29 @@ const evidenceSchema = z.object({
   notes: z.array(z.string()).optional(),
 });
 
+const entityVerdictSchema = z.object({
+  action: z.enum(entityActions),
+  subjectEntityId: z.string().min(1),
+  targetEntityId: z.string().min(1).optional(),
+  targetName: z.string().min(1).optional(),
+  reason: z.string().min(1),
+  evidence: evidenceSchema.optional(),
+});
+
+const mentionVerdictSchema = z.object({
+  action: z.enum(mentionActions),
+  subjectMentionName: z.string().min(1),
+  subjectEntityType: z.string().min(1),
+  targetEntityId: z.string().min(1).optional(),
+  reason: z.string().min(1),
+  evidence: evidenceSchema.optional(),
+});
+
 export const proposeGraphVerdictsSchema = {
   autoApply: z.boolean().optional(),
   note: z.string().optional(),
   verdicts: z
-    .array(
-      z.object({
-        action: z.enum(actions),
-        subjectEntityId: z.string().min(1),
-        targetEntityId: z.string().min(1).optional(),
-        targetName: z.string().min(1).optional(),
-        reason: z.string().min(1),
-        evidence: evidenceSchema.optional(),
-      }),
-    )
+    .array(z.union([entityVerdictSchema, mentionVerdictSchema]))
     .min(1)
     .max(25),
 };
@@ -43,6 +54,9 @@ export const proposeGraphVerdictsSchema = {
 export type ProposeGraphVerdictsArgs = z.infer<z.ZodObject<typeof proposeGraphVerdictsSchema>>;
 
 type EntityRow = Selectable<EntitiesTable>;
+type EntityProposal = z.infer<typeof entityVerdictSchema>;
+type MentionProposal = z.infer<typeof mentionVerdictSchema>;
+type Proposal = ProposeGraphVerdictsArgs["verdicts"][number];
 
 type NormalizedEvidence = {
   fileIds: string[];
@@ -50,20 +64,32 @@ type NormalizedEvidence = {
   notes: string[];
 };
 
-type Proposal = ProposeGraphVerdictsArgs["verdicts"][number];
-
-type PreparedProposal = {
+type PreparedEntityProposal = {
+  kind: "entity";
   index: number;
-  proposal: Proposal;
+  proposal: EntityProposal;
   evidence: NormalizedEvidence;
   subject: EntityRow | null;
   target: EntityRow | null;
 };
 
+type PreparedMentionProposal = {
+  kind: "mention";
+  index: number;
+  proposal: MentionProposal;
+  normalizedMentionName: string;
+  evidence: NormalizedEvidence;
+  target: EntityRow | null;
+};
+
+type PreparedProposal = PreparedEntityProposal | PreparedMentionProposal;
+
 type ProposalResult = {
   verdictId: string;
-  action: CleanupAction;
-  subjectEntityId: string;
+  action: CleanupAction | "link_to" | "dismiss";
+  subjectEntityId: string | null;
+  subjectMentionName?: string | null;
+  subjectEntityType?: string | null;
   targetName: string | null;
   validationStatus: GraphVerdictValidationStatus;
   validationReason: string | null;
@@ -81,6 +107,10 @@ type StoredProposalBatch = {
   autoApplyCandidateIds: string[];
 };
 
+function isMentionProposal(proposal: Proposal): proposal is MentionProposal {
+  return "subjectMentionName" in proposal;
+}
+
 function sortedCapped(values: string[] | undefined, max: number): string[] {
   return [...new Set(values ?? [])].sort((a, b) => a.localeCompare(b)).slice(0, max);
 }
@@ -93,7 +123,7 @@ function normalizeEvidence(proposal: Proposal): NormalizedEvidence {
   };
 }
 
-function preparedFingerprint(prepared: PreparedProposal): string {
+function preparedFingerprint(prepared: PreparedEntityProposal): string {
   return fingerprintFor({
     action: prepared.proposal.action,
     subject: prepared.subject,
@@ -103,7 +133,37 @@ function preparedFingerprint(prepared: PreparedProposal): string {
   });
 }
 
+function mentionFallbackFingerprint(prepared: PreparedMentionProposal): string {
+  return mentionVerdictFingerprint({
+    action: prepared.proposal.action,
+    mentionName: prepared.normalizedMentionName,
+    entityType: prepared.proposal.subjectEntityType,
+    rows: [],
+    target: prepared.target,
+  });
+}
+
 function bouncedVerdict(prepared: PreparedProposal, validationReason: string): StoreGraphVerdictInput {
+  if (prepared.kind === "mention") {
+    return {
+      runId: "",
+      action: prepared.proposal.action,
+      subjectEntityId: null,
+      subjectContainerId: null,
+      subjectMentionName: prepared.normalizedMentionName,
+      subjectName: prepared.proposal.subjectMentionName,
+      subjectEntityType: prepared.proposal.subjectEntityType,
+      targetEntityId: prepared.proposal.targetEntityId ?? null,
+      targetName: prepared.target?.name ?? null,
+      reason: prepared.proposal.reason,
+      evidenceJson: JSON.stringify(prepared.evidence),
+      evidenceFingerprint: mentionFallbackFingerprint(prepared),
+      validationStatus: "failed",
+      validationReason,
+      wouldChangeJson: null,
+      status: "bounced",
+    };
+  }
   return {
     runId: "",
     action: prepared.proposal.action,
@@ -125,8 +185,8 @@ function bouncedVerdict(prepared: PreparedProposal, validationReason: string): S
   };
 }
 
-function plannedVerdict(
-  prepared: PreparedProposal,
+function plannedEntityVerdict(
+  prepared: PreparedEntityProposal,
   validationStatus: GraphVerdictValidationStatus,
   validationReason: string | null,
   wouldChange: Record<string, number> | null,
@@ -154,7 +214,36 @@ function plannedVerdict(
   };
 }
 
-function toCleanupVerdict(prepared: PreparedProposal): CleanupVerdict {
+function plannedMentionVerdict(
+  prepared: PreparedMentionProposal,
+  validationStatus: GraphVerdictValidationStatus,
+  validationReason: string | null,
+  wouldChange: Record<string, number> | null,
+  resolvedTargetEntityId: string | null,
+  fingerprint: string,
+): StoreGraphVerdictInput {
+  return {
+    runId: "",
+    action: prepared.proposal.action,
+    subjectEntityId: null,
+    subjectContainerId: null,
+    subjectMentionName: prepared.normalizedMentionName,
+    subjectName: prepared.proposal.subjectMentionName,
+    subjectEntityType: prepared.proposal.subjectEntityType,
+    targetEntityId: prepared.proposal.targetEntityId ?? null,
+    resolvedTargetEntityId,
+    targetName: prepared.target?.name ?? null,
+    reason: prepared.proposal.reason,
+    evidenceJson: JSON.stringify(prepared.evidence),
+    evidenceFingerprint: fingerprint,
+    validationStatus,
+    validationReason,
+    wouldChangeJson: wouldChange ? JSON.stringify(wouldChange) : null,
+    status: validationStatus === "ok" ? "awaiting_human" : "bounced",
+  };
+}
+
+function toCleanupVerdict(prepared: PreparedEntityProposal): CleanupVerdict {
   return {
     entityId: prepared.proposal.subjectEntityId,
     name: prepared.subject?.name ?? prepared.proposal.subjectEntityId,
@@ -176,9 +265,12 @@ function toCleanupVerdict(prepared: PreparedProposal): CleanupVerdict {
 async function loadEntities(db: Kysely<DB>, proposals: Proposal[]): Promise<Map<string, EntityRow>> {
   const ids = [
     ...new Set(
-      proposals.flatMap((proposal) =>
-        proposal.targetEntityId ? [proposal.subjectEntityId, proposal.targetEntityId] : [proposal.subjectEntityId],
-      ),
+      proposals.flatMap((proposal) => {
+        if (isMentionProposal(proposal)) return proposal.targetEntityId ? [proposal.targetEntityId] : [];
+        return proposal.targetEntityId
+          ? [proposal.subjectEntityId, proposal.targetEntityId]
+          : [proposal.subjectEntityId];
+      }),
     ),
   ];
   if (ids.length === 0) return new Map();
@@ -192,14 +284,42 @@ function prepareProposals(args: ProposeGraphVerdictsArgs, entities: Map<string, 
   const plannerInputs: PreparedProposal[] = [];
 
   for (const [index, proposal] of args.verdicts.entries()) {
-    const prepared: PreparedProposal = {
+    const evidence = normalizeEvidence(proposal);
+    if (isMentionProposal(proposal)) {
+      const normalizedMentionName = normalizeEntityMatchName(proposal.subjectEntityType, proposal.subjectMentionName);
+      const prepared: PreparedMentionProposal = {
+        kind: "mention",
+        index,
+        proposal,
+        normalizedMentionName,
+        evidence,
+        target: proposal.targetEntityId ? (entities.get(proposal.targetEntityId) ?? null) : null,
+      };
+      const pairKey = `mention\u0000${normalizedMentionName}\u0000${proposal.subjectEntityType}\u0000${proposal.action}`;
+      const duplicate = seenPairs.has(pairKey);
+      seenPairs.add(pairKey);
+      let validationReason: string | null = null;
+      if (duplicate) validationReason = "duplicate_in_batch";
+      else if (proposal.action === "link_to" && !proposal.targetEntityId) validationReason = "target_required";
+      else if (proposal.targetEntityId && !prepared.target) validationReason = "target_not_found";
+
+      if (validationReason) rows[index] = bouncedVerdict(prepared, validationReason);
+      else {
+        rows[index] = null;
+        plannerInputs.push(prepared);
+      }
+      continue;
+    }
+
+    const prepared: PreparedEntityProposal = {
+      kind: "entity",
       index,
       proposal,
-      evidence: normalizeEvidence(proposal),
+      evidence,
       subject: entities.get(proposal.subjectEntityId) ?? null,
       target: proposal.targetEntityId ? (entities.get(proposal.targetEntityId) ?? null) : null,
     };
-    const pairKey = `${proposal.subjectEntityId}\u0000${proposal.action}`;
+    const pairKey = `entity\u0000${proposal.subjectEntityId}\u0000${proposal.action}`;
     const duplicate = seenPairs.has(pairKey);
     seenPairs.add(pairKey);
     let validationReason: string | null = null;
@@ -221,12 +341,67 @@ function prepareProposals(args: ProposeGraphVerdictsArgs, entities: Map<string, 
 }
 
 /**
- * The cleanup planner is the validator here, not the approval gate. These
- * synthesized flags let it reach structural checks while still performing only
- * SELECTs against the transaction handle.
+ * Mention rows ride on the same proposal seam as cleanup rows but use the
+ * live review queue as their subject, so they validate through `mentionPlan`.
  */
-async function validateWithCleanupPlanner(db: Kysely<DB>, proposals: PreparedProposal[]) {
-  return planCleanup(db, proposals.map(toCleanupVerdict));
+async function validatePreparedProposal(db: Kysely<DB>, prepared: PreparedProposal): Promise<StoreGraphVerdictInput> {
+  if (prepared.kind === "entity") {
+    const [planRow] = await planCleanup(db, [toCleanupVerdict(prepared)]);
+    if (!planRow) return plannedEntityVerdict(prepared, "failed", "invalid_action", null, null);
+    return planRow.state === "applied"
+      ? plannedEntityVerdict(prepared, "ok", null, planRow.wouldChange, planRow.resolvedTargetEntityId)
+      : plannedEntityVerdict(
+          prepared,
+          "failed",
+          planRow.reason ?? "invalid_action",
+          null,
+          planRow.resolvedTargetEntityId,
+        );
+  }
+
+  const reviewRows = await db
+    .selectFrom("entity_review_queue")
+    .select(["id", "candidate_generated_at"])
+    .where("normalized_name", "=", prepared.normalizedMentionName)
+    .where("entity_type", "=", prepared.proposal.subjectEntityType)
+    .where("status", "in", ["pending", "deferred"])
+    .orderBy("id", "asc")
+    .execute();
+  const resolvedTarget = prepared.proposal.targetEntityId
+    ? await resolveLiveEntity(db, prepared.proposal.targetEntityId)
+    : null;
+  const fingerprint = mentionVerdictFingerprint({
+    action: prepared.proposal.action,
+    mentionName: prepared.normalizedMentionName,
+    entityType: prepared.proposal.subjectEntityType,
+    rows: reviewRows,
+    target: resolvedTarget,
+  });
+
+  try {
+    const planRow = await mentionPlan(db, {
+      id: "",
+      action: prepared.proposal.action,
+      subject_mention_name: prepared.normalizedMentionName,
+      subject_entity_type: prepared.proposal.subjectEntityType,
+      target_entity_id: prepared.proposal.targetEntityId ?? null,
+      reason: prepared.proposal.reason,
+    });
+    return plannedMentionVerdict(
+      prepared,
+      "ok",
+      null,
+      planRow.wouldChange,
+      planRow.resolvedTargetEntityId,
+      fingerprint,
+    );
+  } catch (error) {
+    const reason =
+      error instanceof GraphVerdictApplyError && typeof error.details?.reason === "string"
+        ? error.details.reason
+        : "invalid_action";
+    return plannedMentionVerdict(prepared, "failed", reason, null, null, fingerprint);
+  }
 }
 
 /**
@@ -288,21 +463,9 @@ export async function handleProposeGraphVerdicts(
     db.transaction().execute(async (trx): Promise<StoredProposalBatch> => {
       const entities = await loadEntities(trx, args.verdicts);
       const { rows, plannerInputs } = prepareProposals(args, entities);
-      const plannedRows = await validateWithCleanupPlanner(trx, plannerInputs);
 
-      for (const [plannerIndex, planRow] of plannedRows.entries()) {
-        const prepared = plannerInputs[plannerIndex];
-        if (!prepared) continue;
-        rows[prepared.index] =
-          planRow.state === "applied"
-            ? plannedVerdict(prepared, "ok", null, planRow.wouldChange, planRow.resolvedTargetEntityId)
-            : plannedVerdict(
-                prepared,
-                "failed",
-                planRow.reason ?? "invalid_action",
-                null,
-                planRow.resolvedTargetEntityId,
-              );
+      for (const prepared of plannerInputs) {
+        rows[prepared.index] = await validatePreparedProposal(trx, prepared);
       }
 
       const repo = createGraphVerdictRepository(trx);
@@ -318,19 +481,21 @@ export async function handleProposeGraphVerdicts(
         return { ...row, runId: run.id };
       });
       const stored = await repo.storeVerdicts(verdictRows);
-      const results: ProposalResult[] = stored.rows.map((row, index) => {
-        if (!row.subjectEntityId) throw new Error("Entity verdict missing subject entity id.");
-        return {
-          verdictId: stored.ids[index] ?? "",
-          action: row.action as CleanupAction,
-          subjectEntityId: row.subjectEntityId,
-          targetName: args.verdicts[index]?.targetName ?? null,
-          validationStatus: row.validationStatus,
-          validationReason: row.validationReason,
-          wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
-          disposition: row.status === "bounced" ? "bounced" : "awaiting_human",
-        };
-      });
+      const results: ProposalResult[] = stored.rows.map((row, index) => ({
+        verdictId: stored.ids[index] ?? "",
+        action: row.action as ProposalResult["action"],
+        subjectEntityId: row.subjectEntityId,
+        subjectMentionName: row.subjectMentionName ?? null,
+        subjectEntityType: row.subjectEntityType,
+        targetName:
+          args.verdicts[index] && "targetName" in args.verdicts[index]
+            ? (args.verdicts[index].targetName ?? null)
+            : null,
+        validationStatus: row.validationStatus,
+        validationReason: row.validationReason,
+        wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
+        disposition: row.status === "bounced" ? "bounced" : "awaiting_human",
+      }));
       const autoApplyCandidateIds = args.autoApply ? await eligibleRemoveAliasVerdictIds(trx, stored) : [];
       return {
         runId: run.id,
