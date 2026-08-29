@@ -190,7 +190,7 @@ export function ProjectsPage({
             type="team"
             typeLabel="Teams"
             isAdmin={isAdmin}
-            renderEmpty={(_search, expandReview) => (
+            renderEmpty={(expandReview) => (
               <TeamsEmpty pendingCount={teamReviewQuery.data?.total ?? 0} onExpandReview={expandReview} />
             )}
           />
@@ -199,13 +199,7 @@ export function ProjectsPage({
             type="project"
             typeLabel="Projects"
             isAdmin={isAdmin}
-            renderList={(entities, search) =>
-              search ? (
-                <EntityTable entities={entities} onSelect={openEntity} />
-              ) : (
-                <ProjectsTree entities={entities} onSelect={openEntity} isAdmin={isAdmin} />
-              )
-            }
+            renderList={(entities) => <ProjectsTree entities={entities} onSelect={openEntity} isAdmin={isAdmin} />}
           />
         ) : (
           <ProductsTab onDeclare={() => openAdd("product")} isAdmin={isAdmin} />

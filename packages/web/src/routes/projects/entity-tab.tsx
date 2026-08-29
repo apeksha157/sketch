@@ -7,40 +7,17 @@ import { EntityTable } from "@/components/entity-table";
  */
 import { type CuratedProduct, type EntityListItem, api } from "@/lib/api";
 import { useEntityUi } from "@/lib/entity-ui";
-import { CaretRightIcon, CubeIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, CubeIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
-import { Input } from "@sketch/ui/components/input";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
-import { ReviewBandCapped, useDebouncedSearch } from "./org-review";
+import { ReviewBandCapped } from "./org-review";
 
-function SearchInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div className="relative">
-      <MagnifyingGlassIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        value={value}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="pl-9 text-sm"
-      />
-    </div>
-  );
-}
-
-function useEntityList(type: string, search: string) {
+function useEntityList(type: string) {
   return useQuery({
-    queryKey: ["entities", type, search],
-    queryFn: () => api.entities.list({ type, search: search || undefined, sort: "hotness", limit: 200 }),
+    queryKey: ["entities", type],
+    queryFn: () => api.entities.list({ type, sort: "hotness", limit: 200 }),
     refetchInterval: 30000,
   });
 }
@@ -56,13 +33,12 @@ export function OrgEntityTab({
   typeLabel: string;
   isAdmin?: boolean;
   /** `expandReview` opens the review band in place (the old "See all → Review" destination). */
-  renderEmpty?: (search: string, expandReview: () => void) => ReactNode;
+  renderEmpty?: (expandReview: () => void) => ReactNode;
   /** Replaces the default flat EntityTable — the Projects tab renders its tree here. */
-  renderList?: (entities: EntityListItem[], search: string) => ReactNode;
+  renderList?: (entities: EntityListItem[]) => ReactNode;
 }) {
-  const { search, setSearch, debounced } = useDebouncedSearch();
   const { openEntity } = useEntityUi();
-  const { data, isLoading } = useEntityList(type, debounced);
+  const { data, isLoading } = useEntityList(type);
   const entities = data?.entities ?? [];
   const [reviewExpanded, setReviewExpanded] = useState(false);
 
@@ -74,7 +50,6 @@ export function OrgEntityTab({
         expanded={reviewExpanded}
         onExpandedChange={setReviewExpanded}
       />
-      <SearchInput value={search} onChange={setSearch} placeholder={`Search ${typeLabel.toLowerCase()}…`} />
       {isLoading ? (
         <div className="space-y-2">
           {[1, 2, 3, 4].map((k) => (
@@ -83,14 +58,12 @@ export function OrgEntityTab({
         </div>
       ) : entities.length === 0 ? (
         renderEmpty ? (
-          renderEmpty(debounced, () => setReviewExpanded(true))
+          renderEmpty(() => setReviewExpanded(true))
         ) : (
-          <OrgEmpty>
-            {debounced ? `No ${typeLabel.toLowerCase()} match your search.` : `No ${typeLabel.toLowerCase()} yet.`}
-          </OrgEmpty>
+          <OrgEmpty>{`No ${typeLabel.toLowerCase()} yet.`}</OrgEmpty>
         )
       ) : renderList ? (
-        renderList(entities, debounced)
+        renderList(entities)
       ) : (
         <EntityTable entities={entities} onSelect={openEntity} />
       )}
@@ -101,7 +74,7 @@ export function OrgEntityTab({
 export function ProductsTab({ onDeclare, isAdmin = false }: { onDeclare: () => void; isAdmin?: boolean }) {
   const { openEntity } = useEntityUi();
   const ours = useQuery({ queryKey: ["products"], queryFn: () => api.products.list() });
-  const tools = useEntityList("tool", "");
+  const tools = useEntityList("tool");
   const products = ours.data?.products ?? [];
   const toolEntities = tools.data?.entities ?? [];
 

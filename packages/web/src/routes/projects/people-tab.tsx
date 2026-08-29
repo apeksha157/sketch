@@ -10,19 +10,19 @@
  * last active. Rows render through the shared {@link OrgRow} primitive so their
  * density matches the rest of the surface.
  *
- * Search and the "Needs placement" chip both auto-expand the tail.
+ * The "Needs placement" chip auto-expands the tail; entity search lives in
+ * the org-wide box above the tabs.
  */
 import type { EntityListItem } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
 import { formatRelativeTime } from "@/routes/files/file-list";
-import { CaretDownIcon, MagnifyingGlassIcon, SparkleIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, SparkleIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
-import { Input } from "@sketch/ui/components/input";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { cn } from "@sketch/ui/lib/utils";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ContactLine } from "./contact-line";
 import { ReviewBandCapped } from "./org-review";
 import { OrgRow } from "./org-row";
@@ -36,26 +36,14 @@ interface CompanyInfo {
 }
 
 export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
   const [needsPlacementOnly, setNeedsPlacementOnly] = useState(false);
   const [tailExpanded, setTailExpanded] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDebounced(search.trim().toLowerCase()), 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [search]);
 
   const peopleQuery = useInfiniteQuery({
-    queryKey: ["entities", "person", "org-people", debounced],
+    queryKey: ["entities", "person", "org-people"],
     queryFn: ({ pageParam }) =>
       api.entities.list({
         type: "person",
-        search: debounced || undefined,
         sort: "mentions",
         limit: PAGE,
         offset: pageParam,
@@ -85,7 +73,7 @@ export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
   });
 
   const people = useMemo(() => peopleQuery.data?.pages.flatMap((p) => p.entities) ?? [], [peopleQuery.data]);
-  const totalPeople = peopleCountQuery.data?.total ?? (debounced ? 0 : (peopleQuery.data?.pages[0]?.total ?? 0));
+  const totalPeople = peopleCountQuery.data?.total ?? peopleQuery.data?.pages[0]?.total ?? 0;
 
   const companiesMap = useMemo(() => {
     const map = new Map<string, CompanyInfo>();
@@ -109,20 +97,14 @@ export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
   }, [graphQuery.data]);
 
   const needsPlacementCount = Math.max(0, totalPeople - personToCompany.size);
-  const showTail = tailExpanded || debounced.length > 0 || needsPlacementOnly;
+  const showTail = tailExpanded || needsPlacementOnly;
 
   const filteredPeople = useMemo(() => {
     return people.filter((p) => {
       const hasCompany = personToCompany.has(p.id) && companiesMap.has(personToCompany.get(p.id) as string);
-      if (needsPlacementOnly && hasCompany) return false;
-      if (debounced) {
-        const inName = p.name.toLowerCase().includes(debounced);
-        const inAlias = p.aliases.some((a) => a.toLowerCase().includes(debounced));
-        if (!inName && !inAlias) return false;
-      }
-      return true;
+      return !(needsPlacementOnly && hasCompany);
     });
-  }, [people, personToCompany, companiesMap, needsPlacementOnly, debounced]);
+  }, [people, personToCompany, companiesMap, needsPlacementOnly]);
 
   const { companyGroups, unaffiliated } = useMemo(() => {
     const byCompany = new Map<string, EntityListItem[]>();
@@ -149,17 +131,8 @@ export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
     <div className="space-y-4">
       <ReviewBandCapped types={["person"]} isAdmin={isAdmin} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-0 flex-1">
-          <MagnifyingGlassIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-            placeholder="Search people…"
-            className="pl-9 text-sm"
-          />
-        </div>
-        {needsPlacementCount > 0 ? (
+      {needsPlacementCount > 0 ? (
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={() => setNeedsPlacementOnly((v) => !v)}
@@ -172,8 +145,8 @@ export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
           >
             ⚑ Needs placement · {needsPlacementCount}
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="space-y-2">
@@ -231,9 +204,7 @@ export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
           ) : null}
 
           {filteredPeople.length === 0 ? (
-            <p className="px-3 py-10 text-center text-[12.5px] text-muted-foreground">
-              {debounced ? "No people match your search." : "No people yet."}
-            </p>
+            <p className="px-3 py-10 text-center text-[12.5px] text-muted-foreground">{"No people yet."}</p>
           ) : null}
         </div>
       )}
