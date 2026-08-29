@@ -1,3 +1,4 @@
+import { EntityRow } from "@/components/entity-table";
 /**
  * ProjectsTree — the Your Org → Projects tab rendered as a part_of tree,
  * grouped into client sections plus Internal.
@@ -13,7 +14,6 @@
  * Rows whose parent is off-page (the list caps at 200) render top-level.
  */
 import { type EntityListItem, api } from "@/lib/api";
-import { EntityRow } from "@/routes/files/entity-explorer";
 import { CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";

@@ -248,6 +248,24 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
         .execute();
     },
 
+    /**
+     * Cross-run listing for the review surface: every non-superseded verdict
+     * still needing a human step (awaiting a decision, or approved but not yet
+     * applied). Approved rows are included so a verdict never disappears from
+     * the queue between Approve and Apply.
+     */
+    async listByStatuses(statuses: GraphVerdictStatus[], params?: { limit?: number }): Promise<GraphVerdictRow[]> {
+      return db
+        .selectFrom("graph_verdicts")
+        .selectAll()
+        .where("status", "in", statuses)
+        .where("superseded_at", "is", null)
+        .orderBy("created_at", "asc")
+        .orderBy("id", "asc")
+        .limit(params?.limit ?? 200)
+        .execute();
+    },
+
     async findById(id: string): Promise<GraphVerdictRow | null> {
       const row = await db.selectFrom("graph_verdicts").selectAll().where("id", "=", id).executeTakeFirst();
       return row ?? null;

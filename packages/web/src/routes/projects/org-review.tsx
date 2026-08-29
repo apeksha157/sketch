@@ -17,6 +17,7 @@ import {
   WhatsAppIdentityRow,
   useWhatsAppIdentityReview,
 } from "@/components/entity-review/whatsapp-identity-review";
+import { GraphVerdictsSection, graphVerdictBandType } from "@/components/graph-verdicts-section";
 import { ProjectSuggestionsSection } from "@/components/project-suggestions";
 import { useReviewMutations } from "@/components/review-actions";
 import type { EntityReviewQueueRow } from "@/lib/api";
@@ -313,8 +314,10 @@ function PoolingSummary({
  * is gone. Collapsed: header count + first 3 rows. Expanded (in place):
  * search + the full type-scoped list in a capped scroll region, so the
  * directory below stays reachable. Projects additionally get the pending
- * mint dossiers first (admin) and the pooling summary last. `null` when
- * there is nothing to review keeps the entity list flush to the top.
+ * mint dossiers first (admin) and the pooling summary last. Admins also get
+ * the graph-curation verdict lane ({@link GraphVerdictsSection}) — open
+ * verdicts filtered to this tab's subject types. `null` when there is
+ * nothing to review keeps the entity list flush to the top.
  */
 export function ReviewBandCapped({
   types,
@@ -353,6 +356,17 @@ export function ReviewBandCapped({
   });
   const verdicts = isAdmin && isProjectBand ? (verdictsQuery.data?.verdicts ?? []) : [];
 
+  const graphVerdictsQuery = useQuery({
+    queryKey: ["graph-verdicts", "open"],
+    queryFn: () => api.graphVerdicts.listOpen(),
+    enabled: isAdmin,
+    retry: false,
+    refetchInterval: 30000,
+  });
+  const graphVerdicts = isAdmin
+    ? (graphVerdictsQuery.data?.verdicts ?? []).filter((verdict) => types.includes(graphVerdictBandType(verdict)))
+    : [];
+
   const poolingRows = isProjectBand
     ? rows.filter(
         (row) => isWeeklyPassProjectRow(row) && row.candidate_entity_id === null && (row.candidates?.length ?? 0) === 0,
@@ -364,11 +378,18 @@ export function ReviewBandCapped({
   const wa = useWhatsAppIdentityReview(types);
   const [waSelected, setWaSelected] = useState<string | null>(null);
 
-  if (rows.length === 0 && wa.items.length === 0 && verdicts.length === 0 && !activeSearch) return null;
+  if (
+    rows.length === 0 &&
+    wa.items.length === 0 &&
+    verdicts.length === 0 &&
+    graphVerdicts.length === 0 &&
+    !activeSearch
+  )
+    return null;
 
   const visibleRows = isExpanded ? actionableRows : actionableRows.slice(0, 3);
   const hiddenCount = actionableRows.length - visibleRows.length;
-  const headerCount = realTotal + wa.items.length + verdicts.length;
+  const headerCount = realTotal + wa.items.length + verdicts.length + graphVerdicts.length;
 
   return (
     <section className="mb-6 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
@@ -386,6 +407,7 @@ export function ReviewBandCapped({
         </button>
       </div>
       {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}
+      {graphVerdicts.length > 0 ? <GraphVerdictsSection verdicts={graphVerdicts} /> : null}
       {isExpanded ? (
         <div className="relative border-b border-amber-300/40 px-3 py-2 dark:border-amber-700/30">
           <MagnifyingGlassIcon size={14} className="absolute left-5 top-1/2 -translate-y-1/2 text-muted-foreground" />

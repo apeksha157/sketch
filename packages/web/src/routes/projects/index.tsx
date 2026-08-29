@@ -1,3 +1,4 @@
+import { AddEntityDialog } from "@/components/entity-review/add-entity-dialog";
 /**
  * Your Org — the single home for the entity graph. Five type tabs (People,
  * Companies, Teams, Projects, Products) plus a divider-separated Graph tab:
@@ -14,19 +15,22 @@
  * stays read-only in this run — the teach layer (contact-point CRUD, company
  * placement, internal/external) lands in run 2.
  */
-import { AddEntityDialog } from "@/components/entity-review/add-entity-dialog";
+import { EntityTable } from "@/components/entity-table";
 import { QuietAddButton } from "@/components/quiet-add-button";
 import { api } from "@/lib/api";
 import { useEntityUi } from "@/lib/entity-ui";
-import { EntityTable } from "@/routes/files/entity-explorer";
 import { type CoarseType, KnowledgeGraphView, NODE_COLOR } from "@/routes/files/knowledge-graph";
+import { MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { Input } from "@sketch/ui/components/input";
+import { Skeleton } from "@sketch/ui/components/skeleton";
 import { TabButton } from "@sketch/ui/components/tab-button";
 import { TabContentContainer } from "@sketch/ui/components/tab-content-container";
 import { useQuery } from "@tanstack/react-query";
 import { createRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { dashboardRoute, useDashboardAuth } from "../dashboard";
-import { OrgEntityTab, ProductsTab, TeamsEmpty } from "./entity-tab";
+import { OrgEmpty, OrgEntityTab, ProductsTab, TeamsEmpty } from "./entity-tab";
+import { useDebouncedSearch } from "./org-review";
 import { PeopleTab } from "./people-tab";
 import { ProjectsTree } from "./projects-tree";
 
@@ -95,6 +99,8 @@ export function ProjectsPage({
   const [addType, setAddType] = useState("person");
   const tab = activeTab ?? localTab;
   const setTab = onActiveTabChange ?? setLocalTab;
+  const orgSearch = useDebouncedSearch();
+  const searching = orgSearch.debounced.length > 0;
 
   const peopleCount = useEntityCount("person");
   const companiesCount = useEntityCount("company");
@@ -135,25 +141,48 @@ export function ProjectsPage({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border">
+      <div className="relative mt-5">
+        <MagnifyingGlassIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={orgSearch.search}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => orgSearch.setSearch(e.target.value)}
+          placeholder="Search everyone and everything…"
+          className="pl-9 text-sm"
+          data-testid="org-search-input"
+        />
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border">
         {tabs.map((t) => (
           <TabButton
             key={t.key}
             label={t.count !== null ? `${t.label} · ${t.count}` : t.label}
-            isActive={tab === t.key}
-            onClick={() => setTab(t.key)}
+            isActive={!searching && tab === t.key}
+            onClick={() => {
+              orgSearch.setSearch("");
+              setTab(t.key);
+            }}
             dot={tab === "graph" ? NODE_COLOR[TAB_TYPE[t.key]] : undefined}
           />
         ))}
         <div aria-hidden className="h-4 w-px self-center bg-border" />
-        <TabButton label="⬡ Graph" isActive={tab === "graph"} onClick={() => setTab("graph")} />
+        <TabButton
+          label="⬡ Graph"
+          isActive={!searching && tab === "graph"}
+          onClick={() => {
+            orgSearch.setSearch("");
+            setTab("graph");
+          }}
+        />
       </div>
 
       <TabContentContainer className="mt-5">
-        {tab === "graph" ? (
+        {searching ? (
+          <OrgSearchResults search={orgSearch.debounced} onSelect={openEntity} />
+        ) : tab === "graph" ? (
           <KnowledgeGraphView />
         ) : tab === "people" ? (
-          <PeopleTab />
+          <PeopleTab isAdmin={isAdmin} />
         ) : tab === "companies" ? (
           <OrgEntityTab type="company" typeLabel="Companies" isAdmin={isAdmin} />
         ) : tab === "teams" ? (
@@ -179,11 +208,49 @@ export function ProjectsPage({
             }
           />
         ) : (
-          <ProductsTab onDeclare={() => openAdd("product")} />
+          <ProductsTab onDeclare={() => openAdd("product")} isAdmin={isAdmin} />
         )}
       </TabContentContainer>
 
       <AddEntityDialog key={addType} open={addOpen} onOpenChange={setAddOpen} defaultType={addType} />
+    </div>
+  );
+}
+
+/**
+ * Every taxonomy type the org-wide search covers — the five tab types plus
+ * tools (which live inside the Products tab). One request; the shared table's
+ * Type column does the grouping work.
+ */
+const ORG_SEARCH_TYPES = "person,company,team,project,product,tool";
+
+function OrgSearchResults({ search, onSelect }: { search: string; onSelect: (id: string) => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["entities", "org-search", search],
+    queryFn: () => api.entities.list({ type: ORG_SEARCH_TYPES, search, sort: "hotness", limit: 100 }),
+  });
+  const entities = data?.entities ?? [];
+  const total = data?.total ?? 0;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        {[1, 2, 3, 4].map((k) => (
+          <Skeleton key={k} className="h-10 rounded-lg" />
+        ))}
+      </div>
+    );
+  }
+  if (entities.length === 0) {
+    return <OrgEmpty>Nothing across your org matches “{search}”.</OrgEmpty>;
+  }
+  return (
+    <div className="space-y-2" data-testid="org-search-results">
+      <p className="text-[11.5px] text-muted-foreground">
+        {total} match{total === 1 ? "" : "es"} across your whole org
+        {total > entities.length ? ` — showing the ${entities.length} most active` : ""}
+      </p>
+      <EntityTable entities={entities} onSelect={onSelect} />
     </div>
   );
 }

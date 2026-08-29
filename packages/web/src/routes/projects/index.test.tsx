@@ -171,6 +171,41 @@ describe("ProjectsPage", () => {
     expect(screen.getByRole("button", { name: "company" })).toHaveAttribute("data-variant", "default");
   });
 
+  it("searches every entity type at once from the org-wide box and opens results in the drawer", async () => {
+    const requestedTypes: Array<string | null> = [];
+    server.use(
+      http.get("/api/entities", ({ request }) => {
+        const url = new URL(request.url);
+        const search = url.searchParams.get("search");
+        if (!search) {
+          const entities = ENTITIES[url.searchParams.get("type") ?? ""] ?? [];
+          return HttpResponse.json({ entities, total: entities.length });
+        }
+        requestedTypes.push(url.searchParams.get("type"));
+        return HttpResponse.json({ entities: [PROJECT, TOOL], total: 2 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <ProjectsPage />
+        <StackProbe />
+      </>,
+    );
+
+    await user.type(await screen.findByTestId("org-search-input"), "atlas");
+
+    const results = await screen.findByTestId("org-search-results");
+    expect(results).toHaveTextContent("2 matches across your whole org");
+    expect(results).toHaveTextContent("Atlas Rollout");
+    expect(results).toHaveTextContent("Figma");
+    expect(requestedTypes).toContain("person,company,team,project,product,tool");
+    expect(screen.queryByText("Mira Shah")).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Atlas Rollout"));
+    expect(screen.getByTestId("open-stack")).toHaveTextContent("project-1");
+  });
+
   it("has no Review tab, maps legacy ?tab=review to People, and expands the band in place", async () => {
     server.use(
       http.get("/api/entity-review", ({ request }) => {

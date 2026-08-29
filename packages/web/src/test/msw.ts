@@ -579,6 +579,10 @@ export const handlers = [
     return HttpResponse.json({ runs: [] });
   }),
 
+  http.get("/api/graph-verdicts", () => {
+    return HttpResponse.json({ verdicts: [] });
+  }),
+
   http.get("/api/entity-review", () => {
     return HttpResponse.json({ rows: [], total: 0 });
   }),

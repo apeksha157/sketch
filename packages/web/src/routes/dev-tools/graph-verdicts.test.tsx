@@ -139,7 +139,6 @@ describe("graph verdicts panel", () => {
     await userEvent.click(await screen.findByTestId("graph-verdict-approve"));
     await waitFor(() => expect(decisions).toContain("approval"));
 
-    await userEvent.click(await screen.findByTestId("graph-verdict-row"));
     const applyButton = await screen.findByTestId("graph-verdict-apply");
     await waitFor(() => expect(decisions).toContain("dry-run"));
     await screen.findByText("entity_merges");
@@ -245,7 +244,6 @@ describe("graph verdicts panel", () => {
     expect(screen.getByText("team")).toBeInTheDocument();
     await userEvent.click(await screen.findByTestId("graph-verdict-approve"));
 
-    await userEvent.click(await screen.findByTestId("graph-verdict-row"));
     const applyButton = await screen.findByTestId("graph-verdict-apply");
     await waitFor(() => expect(decisions).toContain("dry-run"));
     await screen.findByText("containers");

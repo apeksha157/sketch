@@ -1,0 +1,101 @@
+/**
+ * "Agent proposals" — open graph-curation verdicts (awaiting a decision, or
+ * approved but not yet applied), rendered as a section of each type tab's
+ * review band. Presentational: the band owns the query (admin-gated there)
+ * and passes rows in, which also lets verdict presence count toward the
+ * band's render/early-return decision. Dismiss rejects inline without opening
+ * the sheet; row clicks open the shared {@link GraphVerdictSheet} with the
+ * dry-run preview and the full decision flow.
+ */
+import {
+  GRAPH_VERDICT_ACTION_LABELS,
+  GraphVerdictSheet,
+  containerClassificationOf,
+} from "@/components/graph-verdict-sheet";
+import { type GraphVerdict, api } from "@/lib/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+const BAND_TYPES = new Set(["person", "company", "team", "project", "product", "tool"]);
+
+/**
+ * Which type tab's band a verdict belongs to. Subject entity type when it is
+ * a real taxonomy type; container-classification verdicts land where their
+ * proposed classification will live (team → Teams, everything else →
+ * Projects, the container spine's home tab).
+ */
+export function graphVerdictBandType(verdict: GraphVerdict): string {
+  if (verdict.subjectEntityType && BAND_TYPES.has(verdict.subjectEntityType)) return verdict.subjectEntityType;
+  if (verdict.action === "classify_container" && containerClassificationOf(verdict) === "team") return "team";
+  return "project";
+}
+
+export function GraphVerdictsSection({ verdicts }: { verdicts: GraphVerdict[] }) {
+  const queryClient = useQueryClient();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const dismiss = useMutation({
+    mutationFn: (verdictId: string) => api.graphVerdicts.reject(verdictId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["graph-verdicts"] });
+    },
+  });
+
+  if (verdicts.length === 0) return null;
+
+  const open = verdicts.find((verdict) => verdict.id === openId) ?? null;
+
+  return (
+    <section
+      className="overflow-hidden border-b border-amber-300/40 dark:border-amber-700/30"
+      data-testid="review-band-graph-verdicts"
+    >
+      <div className="flex items-baseline justify-between border-b border-border bg-muted/30 px-3 py-2">
+        <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          Agent proposals · {verdicts.length}
+        </span>
+      </div>
+      <div className="divide-y divide-border/60">
+        {verdicts.map((verdict) => (
+          <div key={verdict.id} className="flex w-full items-center transition-colors hover:bg-foreground/10">
+            <button
+              type="button"
+              data-testid={`graph-verdict-band-row-${verdict.id}`}
+              onClick={() => setOpenId(verdict.id)}
+              className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
+            >
+              <span className="shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
+                {GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[12.5px]">
+                <span className="font-medium">
+                  {verdict.subjectName ?? verdict.subjectEntityId ?? verdict.subjectContainerId}
+                </span>
+                <span className="text-muted-foreground">
+                  {verdict.targetEntityId ? ` → ${verdict.targetName ?? verdict.targetEntityId}` : ""}
+                  {verdict.action === "remove_alias" && verdict.targetName ? ` → ${verdict.targetName}` : ""}
+                  {containerClassificationOf(verdict) ? ` → ${containerClassificationOf(verdict)}` : ""}
+                </span>
+              </span>
+              {verdict.status === "approved" ? (
+                <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground">
+                  approved — apply pending
+                </span>
+              ) : null}
+            </button>
+            {verdict.status === "awaiting_human" ? (
+              <button
+                type="button"
+                disabled={dismiss.isPending}
+                onClick={() => dismiss.mutate(verdict.id)}
+                className="shrink-0 px-3 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+              >
+                Dismiss
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <GraphVerdictSheet verdict={open} onClose={() => setOpenId(null)} />
+    </section>
+  );
+}

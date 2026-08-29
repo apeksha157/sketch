@@ -506,7 +506,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
     );
   }
   app.route("/api/graph-passes", graphPassRoutes(db, logger));
-  app.route("/api/graph-verdicts", graphVerdictRoutes(db, logger, { enabled: config.DEV_TOOLS_ENABLED }));
+  app.route("/api/graph-verdicts", graphVerdictRoutes(db, logger));
   app.route(
     "/api/project-minting",
     projectMintingRoutes(db, logger, {
