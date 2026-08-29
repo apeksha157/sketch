@@ -22,20 +22,23 @@
  *   indent padding).
  */
 import { CaretRightIcon, SparkleIcon } from "@phosphor-icons/react";
-import { Badge } from "@sketch/ui/components/badge";
 import { cn } from "@sketch/ui/lib/utils";
 import type { HTMLAttributes, ReactNode } from "react";
 
-/** The violet "AI discovered" chip — one look for every list. */
+/**
+ * The "AI discovered" tag — one look for every list. Styled like the app's
+ * other mono metadata tags (SourceTag), not a colored pill: it appears on most
+ * rows, so it has to read as quiet provenance, not an alert.
+ */
 export function AiBadge() {
   return (
-    <Badge
-      variant="secondary"
-      className="gap-0.5 bg-violet-100 px-1 py-0 text-[9px] text-violet-700 dark:bg-violet-900 dark:text-violet-300"
+    <span
+      title="AI discovered"
+      className="inline-flex shrink-0 items-center gap-0.5 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
     >
       <SparkleIcon size={8} weight="fill" />
       AI
-    </Badge>
+    </span>
   );
 }
 

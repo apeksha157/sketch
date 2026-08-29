@@ -200,14 +200,7 @@ function OriginChip({ row }: { row: EntityReviewQueueRow }) {
   const origin = birthOrigin(row);
   if (!origin) return null;
   return (
-    <Badge
-      variant="outline"
-      className={
-        origin.kind === "ai"
-          ? "gap-1 border-violet-300 text-[9px] text-violet-700 dark:border-violet-700 dark:text-violet-300"
-          : "gap-1 text-[9px]"
-      }
-    >
+    <Badge variant="outline" className="gap-1 text-[9px] text-muted-foreground">
       {origin.kind === "ai" ? <SparkleIcon size={9} weight="fill" /> : <PlugsConnectedIcon size={9} />}
       {origin.label}
     </Badge>
