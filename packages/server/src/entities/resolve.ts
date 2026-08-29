@@ -31,6 +31,7 @@ import {
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { type EvidenceRow, type QueueRow, createEntityReviewRepo } from "../db/repositories/entity-review";
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
+import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import { confirmUserEntityLink } from "../db/repositories/user-entity-linking";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../db/schema";
 import { inferAffiliationFromEmail } from "./affiliations";
@@ -41,7 +42,7 @@ import {
   materializeFromFact,
   shouldMarkMaterialized,
 } from "./materialize";
-import { parseAliasesString } from "./materialize-json";
+import { parseAliasesString, readPersonEmailFromMetadata } from "./materialize-json";
 import { mergeEntitiesInTransaction } from "./merge";
 import { normalizeEntityMatchName, normalizeName } from "./name-keys";
 
@@ -119,6 +120,7 @@ interface ResolveTxnCtx {
   db: Kysely<DB>;
   repo: ReturnType<typeof createEntityReviewRepo>;
   entityRepo: ReturnType<typeof createEntityRepository>;
+  resolutionLedger: ReturnType<typeof createResolutionDecisionRepository>;
   userId: string;
   machineActor?: boolean;
   now: string;
@@ -130,6 +132,7 @@ function createResolveTxnCtx(ctx: ResolveCtx, db: Kysely<DB>): ResolveTxnCtx {
     db,
     repo: createEntityReviewRepo(db),
     entityRepo: createEntityRepository(db),
+    resolutionLedger: createResolutionDecisionRepository(db),
     userId: ctx.userId,
     machineActor: ctx.machineActor,
     now: ctx.now ?? new Date().toISOString(),
@@ -865,6 +868,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
       if (renamed) await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
     } else {
       target = await fetchLiveTargetForReview(trxCtx, row, targetId);
+      await trxCtx.entityRepo.promoteProvenanceTier(target.id, "human_confirmed");
     }
     if (row.seed_source && row.seed_source_id) {
       await trxCtx.entityRepo.upsertSourceRef({
@@ -939,6 +943,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     }
     await writeReviewSourceRef(trxCtx, row, target.id);
     await reviveDeferredRelationsForEntity(trxCtx, target);
+    await recordResolutionLink(trxCtx, row, target, evidence, "human");
 
     // Pick-different: write rejection against original candidate so it isn't re-suggested.
     if (pickedDifferent && row.candidate_entity_id) {
@@ -947,6 +952,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
         rejectedName: row.proposed_name,
         rejectedBy: trxCtx.userId,
       });
+      await recordResolutionDistinct(trxCtx, row, row.candidate_entity_id, evidence);
     }
 
     // 7. Mark resolved.
@@ -962,7 +968,8 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
  * Explicit non-goals: alias teach, birth-time rename, stale-entity merge
  * collapse, auto-resolution short-circuit, picked-different rejection
  * bookkeeping, held-email attach plus affiliation inference, and linked-domain
- * candidate finalization.
+ * candidate finalization. Promotion to `machine_confirmed` and durable
+ * resolution-ledger writes are in scope.
  */
 export async function linkReviewRowToExistingEntity(
   ctx: ResolveCtx,
@@ -984,6 +991,9 @@ export async function linkReviewRowToExistingEntity(
     const target = await fetchLiveTargetForReview(trxCtx, row, opts.entityId);
     const evidence = await listResolveEvidenceOrThrow(trxCtx, row.id);
 
+    await trxCtx.entityRepo.promoteProvenanceTier(target.id, "machine_confirmed");
+    const promotedTarget = (await trxCtx.entityRepo.getEntity(target.id)) ?? target;
+    await recordResolutionLink(trxCtx, row, promotedTarget, evidence, "judge");
     await materializeEvidence(trxCtx, target, evidence, "confirmed");
     await rematerializeHeldLlmEvidence(trxCtx, row, evidence);
     await writeReviewSourceRef(trxCtx, row, target.id);
@@ -1037,16 +1047,70 @@ async function writeReviewSourceRef(ctx: ResolveTxnCtx, row: QueueRow, entityId:
   });
 }
 
+function resolutionSource(
+  row: QueueRow,
+  evidence: EvidenceRow[],
+  reviewId: string,
+): { source: string; sourceId: string } {
+  return {
+    source: row.source ?? evidence[0]?.source ?? "entity-review",
+    sourceId: row.source_id ?? `review:${reviewId}`,
+  };
+}
+
+function evidenceFileIds(evidence: EvidenceRow[]): string[] {
+  return [...new Set(evidence.map((row) => row.indexed_file_id))];
+}
+
+async function recordResolutionLink(
+  ctx: ResolveTxnCtx,
+  row: QueueRow,
+  target: Entity,
+  evidence: EvidenceRow[],
+  decider: "human" | "judge",
+): Promise<void> {
+  const { source, sourceId } = resolutionSource(row, evidence, row.id);
+  await ctx.resolutionLedger.recordLink({
+    normalizedMentionName: row.normalized_name,
+    entityType: row.entity_type,
+    targetEntityId: target.id,
+    targetName: target.name,
+    targetEmail: readPersonEmailFromMetadata(target.metadata) ?? row.proposed_email,
+    decider,
+    decidedBy: ctx.userId,
+    source,
+    sourceId,
+    evidenceFileIds: evidenceFileIds(evidence),
+  });
+}
+
+async function recordResolutionDistinct(
+  ctx: ResolveTxnCtx,
+  row: QueueRow,
+  targetEntityId: string,
+  evidence: EvidenceRow[],
+): Promise<void> {
+  const target = await ctx.entityRepo.getEntity(targetEntityId);
+  const { source, sourceId } = resolutionSource(row, evidence, row.id);
+  await ctx.resolutionLedger.recordDistinct({
+    normalizedMentionName: row.normalized_name,
+    entityType: row.entity_type,
+    targetEntityId,
+    targetName: target?.name ?? null,
+    targetEmail: target
+      ? (readPersonEmailFromMetadata(target.metadata) ?? row.proposed_email)
+      : (row.proposed_email ?? null),
+    decider: "human",
+    decidedBy: ctx.userId,
+    source,
+    sourceId,
+    evidenceFileIds: evidenceFileIds(evidence),
+  });
+}
+
 export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: RejectOptions): Promise<RejectResult> {
   return ctx.db.transaction().execute(async (trx) => {
-    const trxCtx: ResolveTxnCtx = {
-      db: trx,
-      repo: createEntityReviewRepo(trx),
-      entityRepo: createEntityRepository(trx),
-      userId: ctx.userId,
-      now: ctx.now ?? new Date().toISOString(),
-      logger: ctx.logger,
-    };
+    const trxCtx = createResolveTxnCtx(ctx, trx);
     const row = await fetchRow(trxCtx, reviewId);
 
     if (row.status === "rejected") {
@@ -1178,6 +1242,7 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
         rejectedName: row.proposed_name,
         rejectedBy: trxCtx.userId,
       });
+      await recordResolutionDistinct(trxCtx, row, row.candidate_entity_id, evidence);
     }
     if (opts.rejectAgainstEntityId && opts.rejectAgainstEntityId !== row.candidate_entity_id) {
       await trxCtx.repo.addRejection({
@@ -1185,6 +1250,7 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
         rejectedName: row.proposed_name,
         rejectedBy: trxCtx.userId,
       });
+      await recordResolutionDistinct(trxCtx, row, opts.rejectAgainstEntityId, evidence);
     }
 
     if (row.entity_type === "company") {
@@ -1213,14 +1279,7 @@ export async function dismissReview(
   opts: { candidateGeneratedAt: string },
 ): Promise<DismissResult> {
   return ctx.db.transaction().execute(async (trx) => {
-    const trxCtx: ResolveTxnCtx = {
-      db: trx,
-      repo: createEntityReviewRepo(trx),
-      entityRepo: createEntityRepository(trx),
-      userId: ctx.userId,
-      now: ctx.now ?? new Date().toISOString(),
-      logger: ctx.logger,
-    };
+    const trxCtx = createResolveTxnCtx(ctx, trx);
     const row = await fetchRow(trxCtx, reviewId);
 
     // Idempotent replay against an already-dismissed row.

@@ -30,6 +30,7 @@ export async function materializePersonSeed(
     {
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
+      resolutionLedger: deps.resolutionLedger,
       domainsRepo: deps.domainsRepo,
       lookup: deps.lookup,
       readEmail: deps.readEmail,
@@ -202,6 +203,7 @@ export async function materializePersonFact(
         {
           entityRepo: deps.entityRepo,
           reviewRepo: deps.reviewRepo,
+          resolutionLedger: deps.resolutionLedger,
           domainsRepo: deps.domainsRepo,
           lookup: deps.lookup,
           readEmail: deps.readEmail,

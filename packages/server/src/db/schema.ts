@@ -1585,6 +1585,26 @@ export interface EntityAliasRejectionsTable {
   rejected_at: Generated<string>;
 }
 
+export interface ResolutionDecisionsTable {
+  id: string;
+  normalized_mention_name: string;
+  entity_type: string;
+  scope: Generated<string>;
+  verdict: string;
+  target_entity_id: string | null;
+  target_name: string | null;
+  target_email: string | null;
+  decider: string;
+  decided_by: string;
+  source: string;
+  source_id: string;
+  evidence_file_ids: Generated<string>;
+  verdict_ref: string | null;
+  status: Generated<string>;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
 export interface IndexedFileFactsTable {
   id: string;
   indexed_file_id: string | null;
@@ -2117,6 +2137,7 @@ export interface DB {
   entity_review_evidence: EntityReviewEvidenceTable;
   entity_review_domain_candidates: EntityReviewDomainCandidatesTable;
   entity_alias_rejections: EntityAliasRejectionsTable;
+  resolution_decisions: ResolutionDecisionsTable;
   indexed_file_facts: IndexedFileFactsTable;
   normalization_backfill_state: NormalizationBackfillStateTable;
   tasks: TasksTable;

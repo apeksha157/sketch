@@ -23,6 +23,7 @@ import type { Logger } from "pino";
 import type { UpsertPersonEntityData, createEntityRepository } from "../db/repositories/entities";
 import type { EntityDomainsRepository } from "../db/repositories/entity-domains";
 import type { EntityReviewRepository } from "../db/repositories/entity-review";
+import type { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { EntitiesTable } from "../db/schema";
 import { isTrustedPersonScopeKey, personScopeKey, personScopeKeyId } from "./affiliations";
 import { TOOL_NAME_DENYLIST } from "./graph";
@@ -152,6 +153,7 @@ export type EntityLookup = {
 export interface ProposeDeps {
   entityRepo: ReturnType<typeof createEntityRepository>;
   reviewRepo: EntityReviewRepository;
+  resolutionLedger?: ReturnType<typeof createResolutionDecisionRepository>;
   domainsRepo?: EntityDomainsRepository;
   lookup: EntityLookup;
   logger?: Logger;
@@ -268,6 +270,7 @@ function canAutoLinkNameDedupCandidate(input: ProposeInput, candidate: RankedCan
 function createRejectedCandidateFilter(
   deps: ProposeDeps,
   rejectionKey: string,
+  excludedEntityIds: Set<string> = new Set(),
 ): (ranked: RankedCandidate[]) => Promise<RankedCandidate[]> {
   const rejectedByEntityId = new Map<string, boolean>();
   return async (ranked) => {
@@ -276,7 +279,9 @@ function createRejectedCandidateFilter(
     );
     const rejected = await deps.reviewRepo.listRejectedNamesForEntities(missingIds);
     for (const entityId of missingIds) rejectedByEntityId.set(entityId, rejected.has(`${entityId}:${rejectionKey}`));
-    return ranked.filter((candidate) => !rejectedByEntityId.get(candidate.entity.id));
+    return ranked.filter(
+      (candidate) => !excludedEntityIds.has(candidate.entity.id) && !rejectedByEntityId.get(candidate.entity.id),
+    );
   };
 }
 
@@ -284,6 +289,43 @@ function isEligibleMatchTarget(input: Pick<ProposeInput, "entityType">, entity: 
   return (
     entity.source_type === input.entityType && canUseEntityAsMatchTarget(entity.source_type, entity.provenance_tier)
   );
+}
+
+async function replayResolutionDecision(
+  deps: ProposeDeps,
+  input: ProposeInput,
+  normalized: string,
+  excludedEntityIds: Set<string>,
+): Promise<ProposeResult | null> {
+  if (!deps.resolutionLedger) return null;
+  const decisions = await deps.resolutionLedger.findActiveForMention(normalized, input.entityType, "global");
+  for (const row of decisions.distinct) {
+    if (row.target_entity_id) excludedEntityIds.add(row.target_entity_id);
+  }
+  if (decisions.dismiss.length > 0) return { kind: "suppressed", reason: "resolution_decision_dismissed" };
+  const link = decisions.link;
+  if (!link || link.status !== "active") return null;
+  const targetId = link.target_entity_id;
+  const target = targetId ? await deps.entityRepo.getEntity(targetId) : null;
+  if (target && isEligibleMatchTarget(input, target)) {
+    const { entity } = await persistEntity(deps, input, target);
+    return { kind: "linked", entity };
+  }
+  if (!link.target_name) {
+    await deps.resolutionLedger.markStale(link.id);
+    return null;
+  }
+  const targetNormalized = normalizeEntityMatchName(input.entityType, link.target_name);
+  const descriptorMatches = deps.lookup
+    .getByNormalizedName(targetNormalized)
+    .filter((entity) => isEligibleMatchTarget(input, entity));
+  if (descriptorMatches.length === 1) {
+    const { entity } = await persistEntity(deps, input, descriptorMatches[0]);
+    await deps.resolutionLedger.healTarget(link.id, entity.id);
+    return { kind: "linked", entity };
+  }
+  await deps.resolutionLedger.markStale(link.id);
+  return null;
 }
 
 /**
@@ -673,7 +715,8 @@ async function decideNameCandidates(
 export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
   const normalized = normalizeEntityMatchName(input.entityType, input.name);
   const rejectionKey = normalizeName(input.name);
-  const filterRejectedCandidates = createRejectedCandidateFilter(deps, rejectionKey);
+  const excludedEntityIds = new Set<string>();
+  const filterRejectedCandidates = createRejectedCandidateFilter(deps, rejectionKey, excludedEntityIds);
 
   if (input.entityType === "product") {
     const collision = await productCollidesWithThirdParty(deps, input.name);
@@ -763,6 +806,9 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
       [...exactById.values()].map((entity) => ({ entity, score: 1, reason: "exact-ambiguous" })),
     );
   }
+
+  const replayed = await replayResolutionDecision(deps, input, normalized, excludedEntityIds);
+  if (replayed) return replayed;
 
   if (input.entityType === "company" && input.evidenceDomain) {
     const domain = input.evidenceDomain.trim().toLowerCase();

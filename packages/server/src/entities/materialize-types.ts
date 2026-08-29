@@ -7,6 +7,7 @@ import type { EntityDomainsRepository } from "../db/repositories/entity-domains"
 import type { createEntityReviewRepo } from "../db/repositories/entity-review";
 import type { EntitySuppressionRepository } from "../db/repositories/entity-suppressions";
 import type { IndexedFileFactType } from "../db/repositories/indexed-file-facts";
+import type { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { DB, EntitiesTable, IndexedFileFactsTable } from "../db/schema";
 import type { MentionType } from "./graph";
 import type { CandidatePool, CandidatePoolEntry } from "./name-dedup";
@@ -89,6 +90,7 @@ export interface MaterializeDeps {
   logger?: Logger;
   entityRepo: ReturnType<typeof createEntityRepository>;
   reviewRepo: ReturnType<typeof createEntityReviewRepo>;
+  resolutionLedger: ReturnType<typeof createResolutionDecisionRepository>;
   suppressionRepo: EntitySuppressionRepository;
   domainsRepo: EntityDomainsRepository;
   lookup: EntityLookup;

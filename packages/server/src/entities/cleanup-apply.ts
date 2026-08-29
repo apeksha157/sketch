@@ -270,6 +270,7 @@ async function mutationCounts(
     ["entity_contact_points", "entity_id"],
     ["entity_share_emails", "entity_id"],
     ["entity_alias_rejections", "entity_id"],
+    ["resolution_decisions", "target_entity_id"],
     ["entity_domains", "entity_id"],
     ["entity_project_bindings", "entity_id"],
     ["entity_project_member_overrides", "entity_id"],

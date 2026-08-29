@@ -33,10 +33,10 @@ export interface RecreateConflict {
  * cascades don't fire mid-loop. `entity_domains` is handled separately
  * because it has a per-row override predicate (manual rows survive reset).
  *
- * `entity_alias_rejections` is a durable decision ledger, not derived graph
- * state. Rejections for deleted entities disappear through the entity FK; rows
- * for preserved entities must survive recreate so rejected aliases cannot be
- * re-taught by replay.
+ * `entity_alias_rejections` and `resolution_decisions` are durable decision
+ * ledgers, not derived graph state. Rejections for deleted entities disappear
+ * through the entity FK; resolution decisions intentionally do not, because
+ * replay checks target liveness before trusting a row.
  */
 const DERIVED_TABLES = [
   "entity_relationship_evidence",
@@ -81,14 +81,13 @@ async function deleteTable(db: Kysely<DB>, table: string, logger?: Logger): Prom
 }
 
 /**
- * Reset preserves human-blessed entities: `declared` (added/declared via Your
- * Org) and `human_confirmed` (approved from the review queue). Both encode an
- * explicit operator decision that replay cannot reconstruct — approvals live in
- * `entity_review_queue`, not in `indexed_file_facts`, so a deleted approved
- * entity would never come back as approved. Only derived tiers (`structural`,
- * `inferred`) are rebuilt from facts.
+ * Reset preserves durable-decision entities: `declared` (added/declared via
+ * Your Org), `human_confirmed` (approved from the review queue), and
+ * `machine_confirmed` (machine adjudication captured in the resolution
+ * ledger). These encode decisions replay cannot reconstruct from source facts.
+ * Only derived tiers (`structural`, `inferred`) are rebuilt from facts.
  */
-const PRESERVED_RESET_TIERS = ["declared", "human_confirmed"];
+const PRESERVED_RESET_TIERS = ["declared", "human_confirmed", "machine_confirmed"];
 
 /**
  * Human-written edges (declared, reparents, accepted minting verdicts) encode

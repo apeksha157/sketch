@@ -513,6 +513,7 @@ export function createEntityMaintenanceRoutes(db: Kysely<DB>, deps: EntityRoutes
         reviewQueueCleared: counts.reviewQueueCleared,
         reviewEvidenceCleared: counts.reviewEvidenceCleared,
         rejectionsCleared: counts.rejectionsCleared,
+        resolutionDecisionsCleared: counts.resolutionDecisionsCleared,
         factsMarkedUnmaterialized: dryRunFactsMarked,
       });
     }
