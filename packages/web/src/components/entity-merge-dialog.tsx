@@ -102,7 +102,7 @@ export function EntityMergeDialog({
 
         {overlapping.length > 0 ? (
           <div
-            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px]"
+            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
             data-testid="merge-agent-overlap"
           >
             {overlapping.map((verdict) => (

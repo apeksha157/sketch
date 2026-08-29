@@ -160,7 +160,7 @@ export function ReviewRowCompact({
       inlineSuffix={suggestion}
       meta={
         evidence ? (
-          <span className="hidden shrink-0 text-[10.5px] text-muted-foreground/70 sm:inline">{evidence}</span>
+          <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline">{evidence}</span>
         ) : null
       }
       actions={
@@ -253,7 +253,7 @@ function PoolingSummary({
         <button
           type="button"
           onClick={() => setListOpen((v) => !v)}
-          className="min-w-0 truncate text-left text-[11.5px] text-muted-foreground hover:text-foreground"
+          className="min-w-0 truncate text-left text-[11px] text-muted-foreground hover:text-foreground"
           data-testid="review-band-pooling-toggle"
         >
           {listOpen ? "▾" : "▸"} {rows.length} new {rows.length === 1 ? "name" : "names"} pooling for the weekly pass ·
@@ -290,13 +290,13 @@ function PoolingSummary({
               data-testid={`review-band-pooling-row-${row.id}`}
             >
               <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
-              <span className="min-w-0 flex-1 truncate text-[12px]">{row.proposed_name}</span>
+              <span className="min-w-0 flex-1 truncate text-xs">{row.proposed_name}</span>
               {isExpiringSoon(row) ? (
                 <SourceTag className="tracking-wide" data-testid="review-band-expiring-chip">
                   expiring
                 </SourceTag>
               ) : null}
-              <span className="shrink-0 text-[10.5px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
             </div>
           ))}
         </div>
@@ -554,7 +554,7 @@ export function ReviewBandCapped({
           />
         ))}
         {realTotal > rows.length ? (
-          <p className="border-t border-amber-300/40 px-3 py-2 text-[10.5px] text-muted-foreground dark:border-amber-700/30">
+          <p className="border-t border-amber-300/40 px-3 py-2 text-[10px] text-muted-foreground dark:border-amber-700/30">
             Showing {rows.length} of {realTotal}. Use the org search above to narrow the rest.
           </p>
         ) : null}
@@ -564,7 +564,7 @@ export function ReviewBandCapped({
           className="flex flex-wrap items-center gap-2 border-t border-amber-300/50 px-3 py-2 dark:border-amber-700/40"
           data-testid="review-band-bulk-bar"
         >
-          <span className="text-[11.5px] text-muted-foreground">{selectedRows.length} selected</span>
+          <span className="text-[11px] text-muted-foreground">{selectedRows.length} selected</span>
           <span className="flex-1" />
           <Button
             size="sm"

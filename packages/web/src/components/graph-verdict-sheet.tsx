@@ -90,7 +90,7 @@ export function GraphVerdictSheet({ verdict, onClose }: { verdict: GraphVerdict 
   return (
     <Sheet open={!!verdict} onOpenChange={(open) => !open && onClose()}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-[560px]">
-        <SheetTitle className="text-[14px]">
+        <SheetTitle className="text-sm">
           {verdict
             ? `${GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action} · ${verdict.subjectName ?? "verdict"}`
             : ""}
@@ -248,7 +248,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             ) : null
           ) : null}
           {evidence.notes.map((note) => (
-            <p key={note} className="mt-1 text-[12px] text-muted-foreground">
+            <p key={note} className="mt-1 text-xs text-muted-foreground">
               {note}
             </p>
           ))}
@@ -259,7 +259,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
         <div>
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sample items</h3>
           {containerEvidence.samples.map((sample) => (
-            <p key={sample} className="mt-0.5 truncate text-[12px] text-muted-foreground">
+            <p key={sample} className="mt-0.5 truncate text-xs text-muted-foreground">
               {sample}
             </p>
           ))}
@@ -273,7 +273,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
           </h3>
           <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
             {related.map(({ verdict: other, kind }) => (
-              <p key={other.id} className="text-[12px]">
+              <p key={other.id} className="text-xs">
                 <span className="font-mono text-[10px] uppercase text-muted-foreground">
                   {GRAPH_VERDICT_ACTION_LABELS[other.action] ?? other.action}
                 </span>{" "}
@@ -298,7 +298,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
           ) : previewStale ? (
             <StaleBanner />
           ) : previewQuery.isError ? (
-            <p className="text-[12px] text-destructive">Dry run failed: {String(previewQuery.error)}</p>
+            <p className="text-xs text-destructive">Dry run failed: {String(previewQuery.error)}</p>
           ) : (
             <WouldChangeTable counts={wouldChange} />
           )}
@@ -306,7 +306,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
       ) : null}
 
       {actionStale ? <StaleBanner /> : null}
-      {actionError && !actionStale ? <p className="text-[12px] text-destructive">{String(actionError)}</p> : null}
+      {actionError && !actionStale ? <p className="text-xs text-destructive">{String(actionError)}</p> : null}
 
       <div className="mt-auto flex justify-end gap-2 border-t border-border pt-3">
         {current.status === "awaiting_human" ? (
@@ -355,7 +355,7 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
   return (
     <div className="flex gap-2">
       <dt className="w-20 shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">{label}</dt>
-      <dd className={`min-w-0 break-words ${mono ? "font-mono text-[11.5px]" : "text-[12.5px]"}`}>{value}</dd>
+      <dd className={`min-w-0 break-words ${mono ? "font-mono text-[11px]" : "text-[12.5px]"}`}>{value}</dd>
     </div>
   );
 }
@@ -363,7 +363,7 @@ function DetailRow({ label, value, mono }: { label: string; value: string; mono?
 function StaleBanner() {
   return (
     <p
-      className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px]"
+      className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
       data-testid="graph-verdict-stale"
     >
       Evidence changed since this was proposed — the graph moved underneath it. Ask the agent to re-propose.
@@ -374,14 +374,14 @@ function StaleBanner() {
 function WouldChangeTable({ counts }: { counts: Record<string, number> | null }) {
   const entries = Object.entries(counts ?? {});
   if (entries.length === 0) {
-    return <p className="text-[12px] text-muted-foreground">No rows change — this action is a no-op.</p>;
+    return <p className="text-xs text-muted-foreground">No rows change — this action is a no-op.</p>;
   }
   return (
     <div className="divide-y divide-border rounded-md border border-border">
       {entries.map(([table, count]) => (
         <div key={table} className="flex items-center justify-between px-3 py-1.5">
-          <span className="font-mono text-[11.5px]">{table}</span>
-          <span className="font-mono text-[11.5px] text-muted-foreground">{count}</span>
+          <span className="font-mono text-[11px]">{table}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">{count}</span>
         </div>
       ))}
     </div>

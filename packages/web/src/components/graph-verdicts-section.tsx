@@ -86,14 +86,14 @@ export function GraphVerdictsSection({ verdicts, allOpen }: { verdicts: GraphVer
                 <>
                   {relatedOpenVerdicts(verdict, allOpen ?? verdicts).length > 0 ? (
                     <span
-                      className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
+                      className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
                       data-testid={`graph-verdict-related-chip-${verdict.id}`}
                     >
                       ⛓ related
                     </span>
                   ) : null}
                   {verdict.status === "approved" ? (
-                    <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground">
+                    <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-muted-foreground">
                       approved — apply pending
                     </span>
                   ) : null}

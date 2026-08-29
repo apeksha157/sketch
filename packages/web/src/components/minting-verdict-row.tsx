@@ -44,12 +44,12 @@ export function MintingVerdictRow({
           <span aria-hidden className="w-[34px] shrink-0" />
         )}
         <span className="shrink-0 text-[13px] font-medium text-foreground">{verdict.companyName}</span>
-        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           nominates <span className="text-foreground">{nominated}</span> — registry says{" "}
           {declared ? <span className="text-foreground">{declared}</span> : <span className="italic">undeclared</span>}
           {shape.length > 0 ? ` · ${shape.join(", ")}` : " · nothing proposed"}
         </span>
-        <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">{verdict.fileCount} files</span>
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{verdict.fileCount} files</span>
       </button>
       {trailing}
     </div>

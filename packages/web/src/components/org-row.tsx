@@ -127,7 +127,7 @@ export function OrgRow({
               </span>
               {primaryChips}
               {inlineSuffix ? (
-                <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">{inlineSuffix}</span>
+                <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{inlineSuffix}</span>
               ) : null}
             </div>
             {secondary ? <p className="truncate text-[11px] text-muted-foreground">{secondary}</p> : null}
