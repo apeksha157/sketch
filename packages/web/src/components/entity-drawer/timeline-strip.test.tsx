@@ -2,13 +2,13 @@
  * TimelineStrip contract:
  *  - day-grouped rows lead with the file title (email subject), snippet
  *    clamped under it, junk fact-snippets suppressed, no midnight clock time
- *  - expanding a multi-mention row fetches that file's mentions and shows
- *    each distinct quote
+ *  - expanding a row prefers read-time chunk quotes (/snippets) and falls
+ *    back to stored mention snippets when the chunks yield nothing
  *  - CRM activity rows show the activity label, not the raw source string
  */
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/utils";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -72,7 +72,7 @@ describe("TimelineStrip", () => {
     expect(screen.queryByText(/12:00/)).not.toBeInTheDocument();
   });
 
-  it("expands a multi-mention row into that file's distinct quotes", async () => {
+  it("expands into stored mention snippets when the file's chunks yield no quotes", async () => {
     server.use(
       http.get("/api/entities/e-1/mentions", ({ request }) => {
         if (new URL(request.url).searchParams.get("fileId") !== "f1") {
@@ -100,6 +100,39 @@ describe("TimelineStrip", () => {
     expect(screen.getAllByText("Sanaa confirmed the feedback is in")).toHaveLength(1);
     expect(screen.queryByText(/Corresponded 19e87b/)).not.toBeInTheDocument();
     expect(screen.getByText("Helios spec").closest("button")).not.toHaveAttribute("aria-expanded");
+  });
+
+  it("prefers read-time chunk quotes over stored mention snippets", async () => {
+    let mentionsCalled = false;
+    server.use(
+      http.get("/api/entities/e-1/snippets", ({ request }) => {
+        if (new URL(request.url).searchParams.get("fileId") !== "f1") return HttpResponse.json({ quotes: [] });
+        return HttpResponse.json({ quotes: ["Sanaa flagged the verification gap in standup"] });
+      }),
+      http.get("/api/entities/e-1/mentions", () => {
+        mentionsCalled = true;
+        return HttpResponse.json({ mentions: [], total: 0, hiddenCount: 0 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
+
+    const row = screen.getByText("Verification engine - feedback received").closest("button");
+    if (row) await user.click(row);
+    expect(await screen.findByText("Sanaa flagged the verification gap in standup")).toBeInTheDocument();
+    expect(mentionsCalled).toBe(false);
+  });
+
+  it("stays quiet when expansion finds nothing beyond the snippet already shown", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
+
+    const row = screen.getByText("Verification engine - feedback received").closest("button");
+    if (row) await user.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    await waitFor(() => expect(screen.queryByText(/Loading mentions/)).not.toBeInTheDocument());
+    expect(screen.queryByText(/No quotable text found/)).not.toBeInTheDocument();
+    expect(screen.getByText("Sanaa confirmed the feedback is in")).toBeInTheDocument();
   });
 
   it("expands a snippetless row through a custom quote loader (review evidence)", async () => {

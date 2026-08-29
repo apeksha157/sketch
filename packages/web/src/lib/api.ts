@@ -3717,6 +3717,9 @@ export const api = {
         hiddenCount: number;
       }>(`/api/entities/${id}/mentions${qs ? `?${qs}` : ""}`);
     },
+    snippets(id: string, fileId: string) {
+      return request<{ quotes: string[] }>(`/api/entities/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
+    },
     create(data: { name: string; sourceType: string; subtype?: string; aliases?: string[] }) {
       return request<{ entity: EntityListItem }>("/api/entities", {
         method: "POST",
