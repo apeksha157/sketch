@@ -5,7 +5,8 @@
  * (reversible) control. Admin-only (the routes enforce it); works for every
  * entity type and carries no project-specific concepts.
  */
-import { type EntityMergePreview, type EntityMergeRecord, api } from "@/lib/api";
+import { GRAPH_VERDICT_ACTION_LABELS } from "@/components/graph-verdict-sheet";
+import { type EntityMergePreview, type EntityMergeRecord, type GraphVerdict, api } from "@/lib/api";
 import { ApiRequestError } from "@/lib/api";
 import { ArrowsLeftRightIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
@@ -43,6 +44,14 @@ function invalidateEntitySurfaces(queryClient: ReturnType<typeof useQueryClient>
   queryClient.invalidateQueries({ queryKey: ["entity-graph"] });
 }
 
+function verdictTouches(verdict: GraphVerdict, entityId: string): boolean {
+  return (
+    verdict.subjectEntityId === entityId ||
+    verdict.targetEntityId === entityId ||
+    verdict.resolvedTargetEntityId === entityId
+  );
+}
+
 export function EntityMergeDialog({
   entityId,
   entityName,
@@ -53,6 +62,20 @@ export function EntityMergeDialog({
 }: EntityMergeDialogProps) {
   const [otherId, setOtherId] = useState<string | null>(null);
   const [survivorId, setSurvivorId] = useState(entityId);
+
+  /**
+   * Cross-pipeline guard: if an open agent proposal already touches this
+   * entity, say so before the human merges by hand — otherwise one of the
+   * two races the other and the loser only finds out via a stale banner at
+   * apply time. Non-blocking; the dialog is admin-only so the fetch is safe.
+   */
+  const openVerdictsQuery = useQuery({
+    queryKey: ["graph-verdicts", "open"],
+    queryFn: () => api.graphVerdicts.listOpen(),
+    enabled: open,
+    retry: false,
+  });
+  const overlapping = (openVerdictsQuery.data?.verdicts ?? []).filter((verdict) => verdictTouches(verdict, entityId));
 
   function reset() {
     setOtherId(null);
@@ -75,6 +98,22 @@ export function EntityMergeDialog({
             can undo it afterward.
           </DialogDescription>
         </DialogHeader>
+
+        {overlapping.length > 0 ? (
+          <div
+            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px]"
+            data-testid="merge-agent-overlap"
+          >
+            {overlapping.map((verdict) => (
+              <p key={verdict.id}>
+                An open agent proposal already covers this entity (
+                {GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action}
+                {verdict.targetName ? ` → ${verdict.targetName}` : ""}). Review it in Your Org before merging by hand —
+                whichever runs second goes stale.
+              </p>
+            ))}
+          </div>
+        ) : null}
 
         {otherId ? (
           <MergePreviewPane
@@ -118,7 +157,13 @@ function collisionsTotal(collisions: EntityMergePreview["collisions"]): number {
   return Object.values(collisions).reduce((a, b) => a + b, 0);
 }
 
-function MergePreviewPane({
+/**
+ * The one merge preview: survivor toggle, dry-run counts, blocked reasons,
+ * and the Confirm button. Exported so every surface that confirms an
+ * entity-to-entity merge (drawer dialog, WhatsApp identity review) shows the
+ * same consequences before committing.
+ */
+export function MergePreviewPane({
   entityId,
   entityName,
   otherId,

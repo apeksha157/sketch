@@ -51,7 +51,6 @@ const PERSON = entity({
 const COMPANY = entity({ id: "company-1", name: "Acme", sourceType: "company", subtype: "internal" });
 const PROJECT = entity({ id: "project-1", name: "Atlas Rollout", sourceType: "project" });
 const TOOL = entity({ id: "tool-1", name: "Figma", sourceType: "tool" });
-const SEARCHED_PERSON = entity({ id: "person-2", name: "Zara Khan", sourceType: "person" });
 
 const ENTITIES: Record<string, EntityListItem[]> = {
   person: [PERSON],
@@ -110,29 +109,17 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("Engineer · Internal")).toBeInTheDocument();
   });
 
-  it("sends People searches to the server", async () => {
-    const requestedSearches: Array<string | null> = [];
-    server.use(
-      http.get("/api/entities", ({ request }) => {
-        const url = new URL(request.url);
-        const type = url.searchParams.get("type") ?? "";
-        if (type !== "person") {
-          const entities = ENTITIES[type] ?? [];
-          return HttpResponse.json({ entities, total: entities.length });
-        }
-        const search = url.searchParams.get("search");
-        requestedSearches.push(search);
-        const entities = search === "zara" ? [SEARCHED_PERSON] : [PERSON];
-        return HttpResponse.json({ entities, total: entities.length });
-      }),
-    );
-    const user = userEvent.setup();
+  it("has no per-tab search boxes — the org-wide box is the only entity search", async () => {
     renderWithProviders(<ProjectsPage />);
 
-    await user.type(await screen.findByPlaceholderText("Search people…"), "Zara");
+    expect(await screen.findByText("Mira Shah")).toBeInTheDocument();
+    expect(screen.getByTestId("org-search-input")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search people…")).not.toBeInTheDocument();
 
-    expect(await screen.findByText("Zara Khan")).toBeInTheDocument();
-    expect(requestedSearches).toContain("zara");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /^Companies/ }));
+    await screen.findByText("Acme");
+    expect(screen.queryByPlaceholderText("Search companies…")).not.toBeInTheDocument();
   });
 
   it("opens entity rows from type tabs in the shared drawer", async () => {
@@ -206,7 +193,7 @@ describe("ProjectsPage", () => {
     expect(screen.getByTestId("open-stack")).toHaveTextContent("project-1");
   });
 
-  it("has no Review tab, maps legacy ?tab=review to People, and expands the band in place", async () => {
+  it("has no Review tab, maps legacy ?tab=review to People, and lists the full queue with no toggle", async () => {
     server.use(
       http.get("/api/entity-review", ({ request }) => {
         const types = new URL(request.url).searchParams.get("types");
@@ -247,7 +234,6 @@ describe("ProjectsPage", () => {
         });
       }),
     );
-    const user = userEvent.setup();
     renderWithProviders(<ProjectsPage />);
 
     await screen.findByText("Your Org");
@@ -257,8 +243,7 @@ describe("ProjectsPage", () => {
     expect(validateOrgTabSearch({ tab: "projects" })).toEqual({ tab: "projects" });
 
     await screen.findByText("Nadia Rahman");
-    await user.click(screen.getByTestId("review-band-toggle"));
-    expect(await screen.findByTestId("review-band-search")).toBeInTheDocument();
-    expect(screen.getByTestId("review-band-toggle")).toHaveTextContent("Collapse");
+    expect(screen.queryByTestId("review-band-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-band-search")).not.toBeInTheDocument();
   });
 });

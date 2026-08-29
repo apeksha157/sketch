@@ -25,12 +25,20 @@ import type {
   TaskStatus,
 } from "@/lib/api";
 import { api } from "@/lib/api";
-import { EntityAvatar, EntityChip, entityAccent, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
+import {
+  EntityAvatar,
+  EntityChip,
+  displayAliases,
+  entityAccent,
+  entityDisplayLabel,
+  useEntityUi,
+} from "@/lib/entity-ui";
 import {
   ArrowLeftIcon,
   ArrowsLeftRightIcon,
   CaretDownIcon,
   CaretRightIcon,
+  DotsThreeIcon,
   GlobeIcon,
   PencilSimpleIcon,
   PlusIcon,
@@ -38,6 +46,7 @@ import {
   SpinnerGapIcon,
   TrashIcon,
   WarningIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import {
   AlertDialog,
@@ -51,6 +60,13 @@ import {
 } from "@sketch/ui/components/alert-dialog";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@sketch/ui/components/dropdown-menu";
 import { Input } from "@sketch/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@sketch/ui/components/select";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
@@ -168,6 +184,7 @@ function EntityDrawerBody({ entityId, stackDepth, previousName, onBack, onOpenEn
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {entity.sourceType === "person" ? <IdentityStrip entity={entity} isAdmin={isAdmin} /> : null}
+        <AliasStrip entity={entity} isAdmin={isAdmin} />
         <SummaryBlock entity={entity} accent={accent} />
         <DrawerTabs
           entityId={entity.id}
@@ -232,35 +249,31 @@ function DrawerHeader({ entity, stackDepth, previousName, onBack, accent, onOpen
                 </span>
               ) : null}
               {isAdmin ? (
-                <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 text-[11px]"
-                    onClick={() => setMergeOpen(true)}
-                  >
-                    <ArrowsLeftRightIcon size={12} />
-                    Merge
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 text-[11px]"
-                    onClick={() => setShareOpen(true)}
-                  >
-                    <ShareNetworkIcon size={12} />
-                    Share
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 text-[11px] text-destructive hover:text-destructive"
-                    onClick={() => setDeleteOpen(true)}
-                  >
-                    <TrashIcon size={12} />
-                    Delete
-                  </Button>
-                </>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" className="h-7 w-7 p-0" aria-label="Entity actions">
+                      <DotsThreeIcon size={14} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setMergeOpen(true)}>
+                      <ArrowsLeftRightIcon size={12} />
+                      Merge…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setShareOpen(true)}>
+                      <ShareNetworkIcon size={12} />
+                      Share…
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => setDeleteOpen(true)}
+                    >
+                      <TrashIcon size={12} />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               ) : null}
             </div>
           </div>
@@ -383,14 +396,13 @@ function DeleteEntityDialog({
 
 /**
  * Identity flags rendered inline in the header. Person → email + role.
- * Company/product → domains (primary first). All types → aliases as a muted
- * trailing line.
+ * Company/product → domains (primary first). Aliases moved out of the header
+ * into {@link AliasStrip} — the raw list was junk-prone and unmanageable here.
  */
 function IdentityChips({ entity }: { entity: EntityDetail }) {
   const meta = entity.metadata ?? {};
   const role = typeof meta.role === "string" ? meta.role : null;
   const domains = entity.profile.domainsForCompany;
-  const aliases = entity.aliases;
 
   return (
     <>
@@ -409,10 +421,152 @@ function IdentityChips({ entity }: { entity: EntityDetail }) {
           {d.isPrimary ? " · primary" : null}
         </Badge>
       ))}
-      {aliases.length > 0 ? (
-        <span className="text-[11px] text-muted-foreground">Also: {aliases.join(", ")}</span>
-      ) : null}
     </>
+  );
+}
+
+/**
+ * Managed alias section. Display dedupes case-insensitively and hides values
+ * the drawer already shows (the name, contact points, domains). Admin delete
+ * removes every stored variant of the alias and records a rejection so the
+ * pipeline cannot re-mint it; add declares at human-confirmed provenance and
+ * lifts any standing rejection. Edit is remove-then-add.
+ */
+function AliasStrip({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boolean }) {
+  const queryClient = useQueryClient();
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingAlias, setEditingAlias] = useState<string | null>(null);
+  const [value, setValue] = useState("");
+
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["entity-drawer", "profile", entity.id] });
+    void queryClient.invalidateQueries({ queryKey: ["entities"] });
+    setFormOpen(false);
+    setEditingAlias(null);
+    setValue("");
+  };
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const next = value.trim();
+      if (!next) throw new Error("Alias is required");
+      if (editingAlias && editingAlias !== next) await api.entities.removeAlias(entity.id, editingAlias);
+      if (editingAlias !== next) await api.entities.addAlias(entity.id, next);
+    },
+    onSuccess: refresh,
+    onError: (error: Error) => toast.error(error.message),
+  });
+  const removeMutation = useMutation({
+    mutationFn: (alias: string) => api.entities.removeAlias(entity.id, alias),
+    onSuccess: (result) => {
+      toast.success(`Removed "${result.removed[0]}" — it won't come back on its own`);
+      refresh();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const display = displayAliases(entity.aliases, [
+    entity.name,
+    ...(entity.contactPoints ?? []).map((point) => point.value),
+    ...entity.profile.domainsForCompany.map((d) => d.domain),
+  ]);
+
+  if (display.length === 0 && !isAdmin) return null;
+
+  return (
+    <div className="mb-4 rounded-lg border bg-muted/20 px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Aliases</div>
+        {isAdmin && !formOpen ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 gap-1 text-[11px]"
+            onClick={() => {
+              setFormOpen(true);
+              setEditingAlias(null);
+              setValue("");
+            }}
+          >
+            <PlusIcon size={12} /> Add
+          </Button>
+        ) : null}
+      </div>
+      {display.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {display.map((alias) => (
+            <span
+              key={alias}
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[11px]"
+              data-testid={`alias-chip-${alias}`}
+            >
+              <span className="max-w-56 truncate">{alias}</span>
+              {isAdmin ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label={`Edit alias ${alias}`}
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setFormOpen(true);
+                      setEditingAlias(alias);
+                      setValue(alias);
+                    }}
+                  >
+                    <PencilSimpleIcon size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete alias ${alias}`}
+                    className="text-muted-foreground hover:text-destructive"
+                    disabled={removeMutation.isPending}
+                    onClick={() => removeMutation.mutate(alias)}
+                  >
+                    <XIcon size={11} />
+                  </button>
+                </>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-1 text-[11px] text-muted-foreground">No other names.</p>
+      )}
+      {isAdmin && formOpen ? (
+        <form
+          className="mt-2 flex flex-wrap items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveMutation.mutate();
+          }}
+        >
+          <Input
+            autoFocus
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            className="h-8 min-w-48 flex-1 text-xs"
+            placeholder="Another name this goes by"
+            aria-label={editingAlias ? `New value for ${editingAlias}` : "New alias"}
+            required
+          />
+          <Button type="submit" size="sm" className="h-8" disabled={saveMutation.isPending}>
+            {editingAlias ? "Save" : "Add"}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-8"
+            onClick={() => {
+              setFormOpen(false);
+              setEditingAlias(null);
+            }}
+          >
+            Cancel
+          </Button>
+        </form>
+      ) : null}
+    </div>
   );
 }
 
@@ -1005,7 +1159,7 @@ function DrawerTabs({ entityId, sourceType, relations, relationsLoading, isAdmin
       ) : tab === "tasks" && isProject ? (
         <TasksPanel entityId={entityId} tasksQuery={tasksQuery} />
       ) : tab === "timeline" ? (
-        <TimelinePanel timelineQuery={timelineQuery} />
+        <TimelinePanel entityId={entityId} timelineQuery={timelineQuery} />
       ) : (
         <RelationshipsPanel
           relations={relations}
@@ -1048,10 +1202,11 @@ function TabButton({
 }
 
 interface TimelinePanelProps {
+  entityId: string;
   timelineQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof api.entities.timeline>>>>;
 }
 
-function TimelinePanel({ timelineQuery }: TimelinePanelProps) {
+function TimelinePanel({ entityId, timelineQuery }: TimelinePanelProps) {
   if (timelineQuery.isLoading) {
     return <Skeleton className="h-24 w-full" />;
   }
@@ -1059,7 +1214,7 @@ function TimelinePanel({ timelineQuery }: TimelinePanelProps) {
   if (groups.length === 0) {
     return <p className="text-xs text-muted-foreground">No file mentions yet.</p>;
   }
-  return <TimelineStrip groups={groups} />;
+  return <TimelineStrip groups={groups} entityId={entityId} />;
 }
 
 /** Convenience re-export so callers can pull both the provider mount and the drawer from one place. */

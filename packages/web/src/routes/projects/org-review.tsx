@@ -23,7 +23,6 @@ import { useReviewMutations } from "@/components/review-actions";
 import type { EntityReviewQueueRow } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
@@ -33,7 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@sketch/ui/components/dialog";
-import { Input } from "@sketch/ui/components/input";
 import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -202,24 +200,23 @@ function nextPassLabel(): string {
 
 /**
  * Candidate-less, seed-less project rows are not individually actionable —
- * they pool for the weekly mint pass. Collapsed they are one summary line;
- * expanded they list read-only for transparency. "Run now" (admin) forces
+ * they pool for the weekly mint pass. One summary line by default; clicking
+ * it discloses the read-only list for transparency. "Run now" (admin) forces
  * this week's pass early, behind a warning: re-judging previously skipped
  * groups is where measured LLM variance re-mints junk.
  */
 function PoolingSummary({
   rows,
-  expanded,
   isAdmin,
   onRunStarted,
 }: {
   rows: EntityReviewQueueRow[];
-  expanded: boolean;
   isAdmin: boolean;
   onRunStarted: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [started, setStarted] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
   const run = useMutation({
     mutationFn: () => api.projectMinting.runNow(),
     onSuccess: () => {
@@ -236,11 +233,16 @@ function PoolingSummary({
   return (
     <div className="border-t border-amber-300/40 dark:border-amber-700/30" data-testid="review-band-pooling">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <span className="min-w-0 truncate text-[11.5px] text-muted-foreground">
-          {rows.length} new {rows.length === 1 ? "name" : "names"} pooling for the weekly pass · next pass{" "}
-          {nextPassLabel()}
+        <button
+          type="button"
+          onClick={() => setListOpen((v) => !v)}
+          className="min-w-0 truncate text-left text-[11.5px] text-muted-foreground hover:text-foreground"
+          data-testid="review-band-pooling-toggle"
+        >
+          {listOpen ? "▾" : "▸"} {rows.length} new {rows.length === 1 ? "name" : "names"} pooling for the weekly pass ·
+          next pass {nextPassLabel()}
           {expiringCount > 0 ? ` · ${expiringCount} expiring` : ""}
-        </span>
+        </button>
         {isAdmin ? (
           started ? (
             <span className="shrink-0 text-[11px] text-muted-foreground">pass running — check back shortly</span>
@@ -263,7 +265,7 @@ function PoolingSummary({
             : "Could not start the pass. Try again shortly."}
         </p>
       ) : null}
-      {expanded ? (
+      {listOpen ? (
         <div className="border-t border-amber-300/30 dark:border-amber-700/20">
           {rows.map((row) => (
             <div
@@ -311,30 +313,28 @@ function PoolingSummary({
 
 /**
  * Type-scoped review band — the only review surface now that the Review tab
- * is gone. Collapsed: header count + first 3 rows. Expanded (in place):
- * search + the full type-scoped list in a capped scroll region, so the
- * directory below stays reachable. Projects additionally get the pending
- * mint dossiers first (admin) and the pooling summary last. Admins also get
- * the graph-curation verdict lane ({@link GraphVerdictsSection}) — open
- * verdicts filtered to this tab's subject types. `null` when there is
+ * is gone. No collapsed preview: the full type-scoped list always renders in
+ * a capped scroll region, so the directory below stays reachable. The band has
+ * no search box of its own — the org-wide search is the only search, and the
+ * results view remounts this band with the query via `search` so pending
+ * reviews are filtered alongside entities. Projects additionally get the
+ * pending mint dossiers first (admin) and the pooling summary last. Admins
+ * also get the graph-curation verdict lane ({@link GraphVerdictsSection}) —
+ * open verdicts filtered to this tab's subject types. `null` when there is
  * nothing to review keeps the entity list flush to the top.
  */
 export function ReviewBandCapped({
   types,
   isAdmin = false,
-  expanded,
-  onExpandedChange,
+  search = "",
 }: {
   types: string[];
   isAdmin?: boolean;
-  expanded?: boolean;
-  onExpandedChange?: (expanded: boolean) => void;
+  search?: string;
 }) {
-  const [internalExpanded, setInternalExpanded] = useState(false);
-  const isExpanded = expanded ?? internalExpanded;
-  const setExpanded = onExpandedChange ?? setInternalExpanded;
-  const { search, setSearch, debounced } = useDebouncedSearch();
-  const activeSearch = isExpanded ? debounced : "";
+  const activeSearch = search.trim();
+  const matchesSearch = (...names: (string | null | undefined)[]) =>
+    activeSearch.length === 0 || names.some((n) => n?.toLowerCase().includes(activeSearch.toLowerCase()));
 
   const { data } = useQuery({
     queryKey: ["entity-review", "band-capped", types.join(","), activeSearch],
@@ -354,7 +354,10 @@ export function ReviewBandCapped({
     retry: false,
     refetchInterval: 30000,
   });
-  const verdicts = isAdmin && isProjectBand ? (verdictsQuery.data?.verdicts ?? []) : [];
+  const verdicts =
+    isAdmin && isProjectBand
+      ? (verdictsQuery.data?.verdicts ?? []).filter((verdict) => matchesSearch(verdict.companyName))
+      : [];
 
   const graphVerdictsQuery = useQuery({
     queryKey: ["graph-verdicts", "open"],
@@ -364,7 +367,10 @@ export function ReviewBandCapped({
     refetchInterval: 30000,
   });
   const graphVerdicts = isAdmin
-    ? (graphVerdictsQuery.data?.verdicts ?? []).filter((verdict) => types.includes(graphVerdictBandType(verdict)))
+    ? (graphVerdictsQuery.data?.verdicts ?? []).filter(
+        (verdict) =>
+          types.includes(graphVerdictBandType(verdict)) && matchesSearch(verdict.subjectName, verdict.targetName),
+      )
     : [];
 
   const poolingRows = isProjectBand
@@ -376,20 +382,12 @@ export function ReviewBandCapped({
   const actionableRows = rows.filter((row) => !poolingIds.has(row.id));
 
   const wa = useWhatsAppIdentityReview(types);
+  const waItems = wa.items.filter((item) => matchesSearch(item.phoneE164, item.lid));
   const [waSelected, setWaSelected] = useState<string | null>(null);
 
-  if (
-    rows.length === 0 &&
-    wa.items.length === 0 &&
-    verdicts.length === 0 &&
-    graphVerdicts.length === 0 &&
-    !activeSearch
-  )
-    return null;
+  if (rows.length === 0 && waItems.length === 0 && verdicts.length === 0 && graphVerdicts.length === 0) return null;
 
-  const visibleRows = isExpanded ? actionableRows : actionableRows.slice(0, 3);
-  const hiddenCount = actionableRows.length - visibleRows.length;
-  const headerCount = realTotal + wa.items.length + verdicts.length + graphVerdicts.length;
+  const headerCount = realTotal + waItems.length + verdicts.length + graphVerdicts.length;
 
   return (
     <section className="mb-6 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
@@ -397,37 +395,16 @@ export function ReviewBandCapped({
         <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700 dark:text-amber-400">
           Needs your review · {headerCount}
         </span>
-        <button
-          type="button"
-          onClick={() => setExpanded(!isExpanded)}
-          className="font-mono text-[10px] uppercase tracking-[0.08em] text-amber-700/80 hover:text-amber-800 dark:text-amber-400/80 dark:hover:text-amber-300"
-          data-testid="review-band-toggle"
-        >
-          {isExpanded ? "Collapse ▴" : "Show all ▾"}
-        </button>
       </div>
       {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}
-      {graphVerdicts.length > 0 ? <GraphVerdictsSection verdicts={graphVerdicts} /> : null}
-      {isExpanded ? (
-        <div className="relative border-b border-amber-300/40 px-3 py-2 dark:border-amber-700/30">
-          <MagnifyingGlassIcon size={14} className="absolute left-5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-            placeholder="Search pending reviews…"
-            className="h-8 pl-8 text-[12.5px]"
-            data-testid="review-band-search"
-          />
-        </div>
+      {graphVerdicts.length > 0 ? (
+        <GraphVerdictsSection verdicts={graphVerdicts} allOpen={graphVerdictsQuery.data?.verdicts ?? graphVerdicts} />
       ) : null}
-      <div className={cn(isExpanded && "max-h-[60vh] overflow-y-auto")}>
-        {activeSearch && actionableRows.length === 0 ? (
-          <p className="px-3 py-3 text-[11.5px] text-muted-foreground">No pending reviews match your search.</p>
-        ) : null}
-        {visibleRows.map((row) => (
-          <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} detail={isExpanded} />
+      <div className="max-h-[60vh] overflow-y-auto">
+        {actionableRows.map((row) => (
+          <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} detail />
         ))}
-        {wa.items.map((item) => (
+        {waItems.map((item) => (
           <WhatsAppIdentityRow
             key={item.id}
             item={item}
@@ -435,30 +412,20 @@ export function ReviewBandCapped({
             onResolve={(message) => wa.resolve(item.id, message)}
           />
         ))}
-        {isExpanded && realTotal > rows.length ? (
+        {realTotal > rows.length ? (
           <p className="border-t border-amber-300/40 px-3 py-2 text-[10.5px] text-muted-foreground dark:border-amber-700/30">
-            Showing {rows.length} of {realTotal}. Search to narrow the rest.
+            Showing {rows.length} of {realTotal}. Use the org search above to narrow the rest.
           </p>
         ) : null}
       </div>
       <PoolingSummary
         rows={poolingRows}
-        expanded={isExpanded}
         isAdmin={isAdmin}
         onRunStarted={() => {
           queryClient.invalidateQueries({ queryKey: ["project-minting"] });
           queryClient.invalidateQueries({ queryKey: ["entity-review"] });
         }}
       />
-      {!isExpanded && hiddenCount > 0 ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          className="w-full border-t border-amber-300/40 px-3 py-2 text-left font-mono text-[10px] uppercase tracking-[0.08em] text-amber-700/70 hover:text-amber-800 dark:border-amber-700/30 dark:text-amber-400/70"
-        >
-          {hiddenCount} more — show all ▾
-        </button>
-      ) : null}
       {sheets}
       <WhatsAppIdentityDrawer
         item={wa.items.find((item) => item.id === waSelected) ?? null}

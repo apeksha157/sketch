@@ -1,4 +1,5 @@
 import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/entity-drawer/drawer-kit";
+import { TimelineStrip, usefulSnippet } from "@/components/entity-drawer/timeline-strip";
 /**
  * Shared entity-review band + reconcile sheet.
  *
@@ -25,9 +26,11 @@ import type {
   EntityMention,
   EntityReviewEvidenceRow,
   EntityReviewQueueRow,
+  EntityTimelineGroup,
+  EntityTimelineItem,
 } from "@/lib/api";
 import { api } from "@/lib/api";
-import { EntityAvatar, entityAccent } from "@/lib/entity-ui";
+import { EntityAvatar, displayAliases, entityAccent } from "@/lib/entity-ui";
 import { formatRelativeTime } from "@/routes/files/file-list";
 import {
   ArrowLeftIcon,
@@ -49,6 +52,67 @@ import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { birthOrigin, entityEmail, humanSourceType, isWeeklyPassProjectRow } from "./entity-format";
+
+/**
+ * The review sheets render linked files with the same day-grouped timeline the
+ * entity drawer uses, so a proposed entity reads like a real one. Evidence
+ * rows are per-mention; fold them per file so ×N matches the drawer, keeping
+ * the first snippet that survives the junk filter.
+ */
+function evidenceTimelineGroups(evidence: EntityReviewEvidenceRow[]): EntityTimelineGroup[] {
+  const byFile = new Map<string, EntityTimelineItem>();
+  for (const e of evidence) {
+    const existing = byFile.get(e.indexed_file_id);
+    if (existing) {
+      existing.mentionCount += 1;
+      if (!usefulSnippet(existing.contextSnippet, existing.fileName) && e.contextSnippet)
+        existing.contextSnippet = e.contextSnippet;
+      if (e.seen_at > existing.occurredAt) existing.occurredAt = e.seen_at;
+      continue;
+    }
+    byFile.set(e.indexed_file_id, {
+      fileId: e.indexed_file_id,
+      fileName: e.file.name,
+      fileType: null,
+      contentCategory: "document",
+      sourceType: e.source,
+      occurredAt: e.seen_at,
+      mentionConfidence: "EXTRACTED",
+      mentionCount: 1,
+      contextSnippet: e.contextSnippet ?? null,
+      url: e.file.providerUrl,
+      rollupGroupId: null,
+      crmActivity: null,
+    });
+  }
+  const items = [...byFile.values()].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  return items.length > 0 ? [{ month: "evidence", items }] : [];
+}
+
+/**
+ * Expansion source for review evidence rows: quotes of the proposed name cut
+ * from the file's indexed chunks — a proposed entity has no mentions table
+ * behind it, so the drawer's entity-mentions loader doesn't apply.
+ */
+function reviewQuotesLoader(reviewId: string) {
+  return (item: EntityTimelineItem) => api.entityReview.snippets(reviewId, item.fileId).then((res) => res.quotes);
+}
+
+/** Same fold for the candidate side's recent mentions. */
+function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[] {
+  return evidenceTimelineGroups(
+    mentions.map((m) => ({
+      id: m.id,
+      review_id: "",
+      indexed_file_id: m.file.id,
+      source: m.file.source,
+      note: null,
+      seen_at: m.sourceDate,
+      contextSnippet: m.contextSnippet,
+      file: { name: m.file.fileName, providerUrl: m.file.providerUrl, sourcePath: m.file.sourcePath },
+    })),
+  );
+}
 
 /**
  * Self-contained review band scoped to a set of entity types. Fetches the
@@ -145,14 +209,7 @@ function OriginChip({ row }: { row: EntityReviewQueueRow }) {
   const origin = birthOrigin(row);
   if (!origin) return null;
   return (
-    <Badge
-      variant="outline"
-      className={
-        origin.kind === "ai"
-          ? "gap-1 border-violet-300 text-[9px] text-violet-700 dark:border-violet-700 dark:text-violet-300"
-          : "gap-1 text-[9px]"
-      }
-    >
+    <Badge variant="outline" className="gap-1 text-[9px] text-muted-foreground">
       {origin.kind === "ai" ? <SparkleIcon size={9} weight="fill" /> : <PlugsConnectedIcon size={9} />}
       {origin.label}
     </Badge>
@@ -441,36 +498,11 @@ function BirthInspectBody({
                   : "No linked files."}
               </p>
             ) : (
-              <EntryList>
-                {evidence.map((e) => (
-                  <li key={e.id}>
-                    <div className="flex w-full flex-col gap-1 px-3 py-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <SourceTag>{e.source}</SourceTag>
-                          <span className="truncate text-sm font-medium">{e.file.name}</span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="text-[10px] text-muted-foreground">{formatRelativeTime(e.seen_at)}</span>
-                          {e.file.providerUrl ? (
-                            <a
-                              href={e.file.providerUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-muted-foreground hover:text-foreground"
-                            >
-                              <ArrowSquareOutIcon size={12} />
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                      {e.file.sourcePath ? (
-                        <p className="line-clamp-2 text-[11px] text-muted-foreground">{e.file.sourcePath}</p>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </EntryList>
+              <TimelineStrip
+                groups={evidenceTimelineGroups(evidence)}
+                loadQuotes={reviewQuotesLoader(row.id)}
+                quotesScope={row.id}
+              />
             )}
           </div>
         ) : null}
@@ -533,9 +565,11 @@ function BirthInspectBody({
 }
 
 /**
- * Search-only picker for the birth-row "Merge" escape hatch. Wraps the shared
- * {@link EntityPicker} scoped to the row's type. Deliberately NOT the full
- * reconcile sheet — a birth merge only needs a target, no evidence compare.
+ * Two-step picker for the birth-row "Merge" escape hatch. Step one is the
+ * shared {@link EntityPicker}; picking does NOT merge — step two shows the
+ * target the way the entity drawer does (header anatomy + recent timeline) so
+ * the admin can look before committing. Only the explicit Merge button calls
+ * `onPick`.
  */
 function MergePickerDialog({
   open,
@@ -548,19 +582,130 @@ function MergePickerDialog({
   row: EntityReviewQueueRow;
   onPick: (entityId: string) => void;
 }) {
+  const [picked, setPicked] = useState<EntityListItem | null>(null);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setPicked(null);
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-base">Merge "{row.proposed_name}" into…</DialogTitle>
+          <DialogTitle className="text-base">
+            {picked ? `Merge "${row.proposed_name}" into ${picked.name}` : `Merge "${row.proposed_name}" into…`}
+          </DialogTitle>
           <DialogDescription>
-            Pick an existing {humanSourceType(row.entity_type).toLowerCase()} this is a duplicate of. No new entity is
-            created.
+            {picked
+              ? "Check this is the right one — the proposed entity and its evidence fold in here."
+              : `Pick an existing ${humanSourceType(row.entity_type).toLowerCase()} this is a duplicate of. No new entity is created.`}
           </DialogDescription>
         </DialogHeader>
-        <EntityPicker entityType={row.entity_type} onPick={onPick} />
+        {picked ? (
+          <MergeTargetPreview
+            row={row}
+            target={picked}
+            onBack={() => setPicked(null)}
+            onMerge={() => {
+              setPicked(null);
+              onPick(picked.id);
+            }}
+          />
+        ) : (
+          <EntityPicker entityType={row.entity_type} onPick={(_, entity) => setPicked(entity)} />
+        )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * The look-before-merge pane: the target rendered with the entity drawer's
+ * header anatomy and its recent timeline, so a bare name like "Rahul" is
+ * checkable against real activity before anything commits.
+ */
+function MergeTargetPreview({
+  row,
+  target,
+  onBack,
+  onMerge,
+}: {
+  row: EntityReviewQueueRow;
+  target: EntityListItem;
+  onBack: () => void;
+  onMerge: () => void;
+}) {
+  const timelineQuery = useQuery({
+    queryKey: ["entity-drawer", "timeline", target.id],
+    queryFn: () => api.entities.timeline(target.id),
+  });
+  const recentItems = (timelineQuery.data?.groups ?? []).flatMap((group) => group.items).slice(0, 6);
+  const email =
+    (target.contactPoints ?? []).find((point) => point.kind === "email" && point.isPrimary)?.value ??
+    (target.contactPoints ?? []).find((point) => point.kind === "email")?.value;
+  const aka = displayAliases(target.aliases ?? [], [target.name, email]);
+  const accent = entityAccent({ id: target.id, name: target.name, sourceType: target.sourceType });
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-col gap-3" data-testid="merge-target-preview">
+      <div
+        className="min-w-0 overflow-hidden rounded-lg border bg-muted/20"
+        style={{ borderTopColor: accent, borderTopWidth: 3 }}
+      >
+        <div className="flex items-start gap-3 px-4 py-3">
+          <EntityAvatar entity={{ id: target.id, name: target.name, sourceType: target.sourceType }} size="lg" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-serif text-[18px] leading-tight">{target.name}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
+                {humanSourceType(target.sourceType)}
+              </Badge>
+              {email ? <span className="font-mono text-[11px] text-muted-foreground">{email}</span> : null}
+              {target.mentionCount > 0 ? (
+                <span className="text-[11px] text-muted-foreground">
+                  {target.mentionCount} {target.mentionCount === 1 ? "mention" : "mentions"}
+                </span>
+              ) : null}
+            </div>
+            {aka.length > 0 ? (
+              <p className="mt-1 truncate text-[11px] text-muted-foreground">aka {aka.slice(0, 4).join(", ")}</p>
+            ) : null}
+          </div>
+        </div>
+        <div className="max-h-56 overflow-y-auto border-t px-4 py-3">
+          {timelineQuery.isLoading ? (
+            <p className="text-[11px] text-muted-foreground">Loading recent activity…</p>
+          ) : recentItems.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">No recent activity.</p>
+          ) : (
+            <TimelineStrip groups={[{ month: "recent", items: recentItems }]} entityId={target.id} />
+          )}
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        "{row.proposed_name}"
+        {row.evidenceCount > 0
+          ? ` and its ${row.evidenceCount} linked ${row.evidenceCount === 1 ? "file" : "files"}`
+          : ""}{" "}
+        fold into this {humanSourceType(target.sourceType).toLowerCase()}.
+      </p>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={onBack}>
+          <ArrowLeftIcon size={12} />
+          Back
+        </Button>
+        <Button
+          size="sm"
+          onClick={onMerge}
+          className="ml-auto h-7 gap-1 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700"
+          data-testid="merge-target-confirm"
+        >
+          <ArrowsLeftRightIcon size={12} />
+          Merge into {target.name}
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -710,6 +855,7 @@ function ReconcileBody({
         typeLabel={humanSourceType(row.entity_type)}
         email={row.proposed_email}
         evidence={evidence}
+        reviewId={row.id}
       />
       {mode === "candidate" ? (
         <CandidateView
@@ -758,6 +904,7 @@ function ReconcileColumn({
   typeLabel,
   email,
   evidence,
+  reviewId,
 }: {
   title: string;
   toneClass: string;
@@ -765,6 +912,7 @@ function ReconcileColumn({
   typeLabel: string;
   email: string | null;
   evidence: EntityReviewEvidenceRow[];
+  reviewId: string;
 }) {
   return (
     <div className={`flex min-h-0 flex-col rounded-lg border ${toneClass}`} data-testid="reconcile-proposed">
@@ -785,36 +933,13 @@ function ReconcileColumn({
         {evidence.length === 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">No evidence rows.</p>
         ) : (
-          <ul className="mt-1 flex-1 space-y-1 overflow-y-auto">
-            {evidence.map((e) => (
-              <li key={e.id} className="rounded-md border border-border bg-background p-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Badge variant="outline" className="shrink-0 text-[9px]">
-                      {e.source}
-                    </Badge>
-                    <span className="truncate font-medium">{e.file.name}</span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">{formatRelativeTime(e.seen_at)}</span>
-                    {e.file.providerUrl ? (
-                      <a
-                        href={e.file.providerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <ArrowSquareOutIcon size={12} />
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
-                {e.file.sourcePath ? (
-                  <p className="mt-1 text-[10px] text-muted-foreground/60">{e.file.sourcePath}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <div className="mt-1 flex-1 overflow-y-auto">
+            <TimelineStrip
+              groups={evidenceTimelineGroups(evidence)}
+              loadQuotes={reviewQuotesLoader(reviewId)}
+              quotesScope={reviewId}
+            />
+          </div>
         )}
       </div>
     </div>
@@ -880,28 +1005,6 @@ function CandidateView({
             ) : null}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isPending}
-            aria-label="Confirm merge"
-            data-testid="confirm-merge"
-            className="rounded-md border border-emerald-400 bg-emerald-50 p-1.5 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70"
-          >
-            <CheckIcon size={14} weight="bold" />
-          </button>
-          <button
-            type="button"
-            onClick={onReject}
-            disabled={isPending}
-            aria-label="Reject this match"
-            data-testid="reject-match"
-            className="rounded-md border border-foreground/25 bg-background p-1.5 text-foreground/80 hover:bg-muted hover:text-foreground disabled:opacity-50"
-          >
-            <XIcon size={14} weight="bold" />
-          </button>
-        </div>
       </div>
       {errorMessage ? (
         <div className="border-b border-border px-3 py-2 text-xs text-destructive">{errorMessage}</div>
@@ -913,37 +1016,32 @@ function CandidateView({
         {candidateMentions.length === 0 ? (
           <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
         ) : (
-          <ul className="mt-1 flex-1 space-y-1 overflow-y-auto">
-            {candidateMentions.map((m) => (
-              <li key={m.id} className="rounded-md border border-border bg-background p-2 text-xs">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Badge variant="outline" className="shrink-0 text-[9px]">
-                      {m.file.source}
-                    </Badge>
-                    <span className="truncate font-medium">{m.file.fileName}</span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">{formatRelativeTime(m.sourceDate)}</span>
-                    {m.file.providerUrl ? (
-                      <a
-                        href={m.file.providerUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <ArrowSquareOutIcon size={12} />
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
-                {m.file.sourcePath ? (
-                  <p className="mt-1 text-[10px] text-muted-foreground/60">{m.file.sourcePath}</p>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <div className="mt-1 flex-1 overflow-y-auto">
+            <TimelineStrip groups={mentionTimelineGroups(candidateMentions)} entityId={candidateEntity?.id} />
+          </div>
         )}
+      </div>
+      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
+        <Button
+          size="sm"
+          onClick={onConfirm}
+          disabled={isPending}
+          data-testid="confirm-merge"
+          className="h-7 gap-1 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+        >
+          <CheckIcon size={12} weight="bold" />
+          Merge into {candidateEntity?.name ?? row.candidate?.name ?? "this"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onReject}
+          disabled={isPending}
+          data-testid="reject-match"
+          className="h-7"
+        >
+          Not a match
+        </Button>
       </div>
     </div>
   );

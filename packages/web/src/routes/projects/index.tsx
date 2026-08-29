@@ -30,7 +30,7 @@ import { createRoute, useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { dashboardRoute, useDashboardAuth } from "../dashboard";
 import { OrgEmpty, OrgEntityTab, ProductsTab, TeamsEmpty } from "./entity-tab";
-import { useDebouncedSearch } from "./org-review";
+import { ReviewBandCapped, useDebouncedSearch } from "./org-review";
 import { PeopleTab } from "./people-tab";
 import { ProjectsTree } from "./projects-tree";
 
@@ -100,7 +100,7 @@ export function ProjectsPage({
   const tab = activeTab ?? localTab;
   const setTab = onActiveTabChange ?? setLocalTab;
   const orgSearch = useDebouncedSearch();
-  const searching = orgSearch.debounced.length > 0;
+  const searching = orgSearch.debounced.length > 0 && tab !== "graph";
 
   const peopleCount = useEntityCount("person");
   const companiesCount = useEntityCount("company");
@@ -178,9 +178,9 @@ export function ProjectsPage({
 
       <TabContentContainer className="mt-5">
         {searching ? (
-          <OrgSearchResults search={orgSearch.debounced} onSelect={openEntity} />
+          <OrgSearchResults search={orgSearch.debounced} onSelect={openEntity} isAdmin={isAdmin} />
         ) : tab === "graph" ? (
-          <KnowledgeGraphView />
+          <KnowledgeGraphView search={orgSearch.debounced} />
         ) : tab === "people" ? (
           <PeopleTab isAdmin={isAdmin} />
         ) : tab === "companies" ? (
@@ -190,22 +190,14 @@ export function ProjectsPage({
             type="team"
             typeLabel="Teams"
             isAdmin={isAdmin}
-            renderEmpty={(_search, expandReview) => (
-              <TeamsEmpty pendingCount={teamReviewQuery.data?.total ?? 0} onExpandReview={expandReview} />
-            )}
+            renderEmpty={() => <TeamsEmpty pendingCount={teamReviewQuery.data?.total ?? 0} />}
           />
         ) : tab === "projects" ? (
           <OrgEntityTab
             type="project"
             typeLabel="Projects"
             isAdmin={isAdmin}
-            renderList={(entities, search) =>
-              search ? (
-                <EntityTable entities={entities} onSelect={openEntity} />
-              ) : (
-                <ProjectsTree entities={entities} onSelect={openEntity} isAdmin={isAdmin} />
-              )
-            }
+            renderList={(entities) => <ProjectsTree entities={entities} onSelect={openEntity} isAdmin={isAdmin} />}
           />
         ) : (
           <ProductsTab onDeclare={() => openAdd("product")} isAdmin={isAdmin} />
@@ -224,13 +216,26 @@ export function ProjectsPage({
  */
 const ORG_SEARCH_TYPES = "person,company,team,project,product,tool";
 
-function OrgSearchResults({ search, onSelect }: { search: string; onSelect: (id: string) => void }) {
+/** The five tab types again, as an array for the search-scoped review band. */
+const ORG_SEARCH_REVIEW_TYPES = ["person", "company", "team", "project", "product"];
+
+function OrgSearchResults({
+  search,
+  onSelect,
+  isAdmin,
+}: {
+  search: string;
+  onSelect: (id: string) => void;
+  isAdmin: boolean;
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ["entities", "org-search", search],
     queryFn: () => api.entities.list({ type: ORG_SEARCH_TYPES, search, sort: "hotness", limit: 100 }),
   });
   const entities = data?.entities ?? [];
   const total = data?.total ?? 0;
+
+  const reviewBand = <ReviewBandCapped types={ORG_SEARCH_REVIEW_TYPES} isAdmin={isAdmin} search={search} />;
 
   if (isLoading) {
     return (
@@ -242,10 +247,16 @@ function OrgSearchResults({ search, onSelect }: { search: string; onSelect: (id:
     );
   }
   if (entities.length === 0) {
-    return <OrgEmpty>Nothing across your org matches “{search}”.</OrgEmpty>;
+    return (
+      <>
+        {reviewBand}
+        <OrgEmpty>Nothing across your org matches “{search}”.</OrgEmpty>
+      </>
+    );
   }
   return (
     <div className="space-y-2" data-testid="org-search-results">
+      {reviewBand}
       <p className="text-[11.5px] text-muted-foreground">
         {total} match{total === 1 ? "" : "es"} across your whole org
         {total > entities.length ? ` — showing the ${entities.length} most active` : ""}

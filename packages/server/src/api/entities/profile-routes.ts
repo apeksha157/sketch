@@ -19,6 +19,7 @@ import { createEntitySharesRepository } from "../../db/repositories/entity-share
 import { createEntitySuppressionRepository } from "../../db/repositories/entity-suppressions";
 import { createEntityTimelineRepository } from "../../db/repositories/entity-timeline";
 import type { DB } from "../../db/schema";
+import { AliasAdminError, addDeclaredAlias, removeAliasEverywhere } from "../../entities/alias-admin";
 import {
   DeclareRelationshipError,
   declareRelationship,
@@ -65,6 +66,16 @@ function serializeContactPoint(row: ContactPointRow) {
     source: row.source,
     verifiedAt: row.verified_at,
   };
+}
+
+function aliasAdminErrorResponse(c: Parameters<typeof denyIfNotAdmin>[0], err: AliasAdminError) {
+  const status =
+    err.code === "ENTITY_NOT_FOUND" || err.code === "ALIAS_NOT_FOUND"
+      ? 404
+      : err.code === "DUPLICATE_ALIAS"
+        ? 409
+        : 400;
+  return c.json({ error: { code: err.code, message: err.message } }, status);
 }
 
 function contactPointError(c: Parameters<typeof denyIfNotAdmin>[0], message: string, status: 400 | 409 = 400) {
@@ -1046,6 +1057,64 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
   });
 
   /**
+   * POST /api/entities/:id/aliases
+   * Declares an alias at human_confirmed provenance and lifts any standing
+   * rejection for that name, so a previously deleted alias can come back.
+   * Admin-only.
+   */
+  routes.post("/:id/aliases", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    let body: { alias?: string };
+    try {
+      body = (await c.req.json()) as { alias?: string };
+    } catch {
+      return c.json({ error: { code: "BAD_REQUEST", message: "Invalid JSON body" } }, 400);
+    }
+    if (typeof body.alias !== "string" || body.alias.trim().length === 0) {
+      return c.json({ error: { code: "BAD_REQUEST", message: "alias is required" } }, 400);
+    }
+    try {
+      const result = await addDeclaredAlias(db, {
+        entityId: c.req.param("id"),
+        alias: body.alias,
+        userId: (c.get("sub") as string | undefined) ?? "admin",
+      });
+      return c.json(result, 201);
+    } catch (err) {
+      if (err instanceof AliasAdminError) return aliasAdminErrorResponse(c, err);
+      throw err;
+    }
+  });
+
+  /**
+   * DELETE /api/entities/:id/aliases?value=…
+   * Removes every stored variant of the alias (all variants normalize to one
+   * name, and the matcher treats them as one) and records a rejection so the
+   * pipeline cannot re-mint it. The alias travels in the query string because
+   * alias values can contain path separators. Admin-only.
+   */
+  routes.delete("/:id/aliases", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const value = c.req.query("value");
+    if (!value || value.trim().length === 0) {
+      return c.json({ error: { code: "BAD_REQUEST", message: "value query param is required" } }, 400);
+    }
+    try {
+      const result = await removeAliasEverywhere(db, {
+        entityId: c.req.param("id"),
+        alias: value,
+        userId: (c.get("sub") as string | undefined) ?? "admin",
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof AliasAdminError) return aliasAdminErrorResponse(c, err);
+      throw err;
+    }
+  });
+
+  /**
    * GET /api/entities/:id/relations
    * Drawer Relationships section. Caps each side at 200; sets `truncated`
    * when more rows exist.
@@ -1368,6 +1437,7 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
   routes.get("/:id/mentions", async (c) => {
     const entityId = c.req.param("id");
     const sourceFilter = c.req.query("source")?.split(",").filter(Boolean);
+    const fileId = c.req.query("fileId");
     const since = c.req.query("since");
     const limit = Math.min(Number(c.req.query("limit")) || 20, 100);
     const offset = Number(c.req.query("offset")) || 0;
@@ -1405,6 +1475,9 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
     if (sourceFilter && sourceFilter.length > 0) {
       query = query.where("indexed_files.source", "in", sourceFilter);
     }
+    if (fileId) {
+      query = query.where("indexed_files.id", "=", fileId);
+    }
     if (since) {
       query = query.where(
         sql`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
@@ -1427,6 +1500,9 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
         .where("entity_mentions.entity_id", "=", entityId);
       if (sourceFilter && sourceFilter.length > 0) {
         q = q.where("indexed_files.source", "in", sourceFilter);
+      }
+      if (fileId) {
+        q = q.where("indexed_files.id", "=", fileId);
       }
       if (since) {
         q = q.where(

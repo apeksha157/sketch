@@ -37,6 +37,7 @@ import { createEntityReviewRepo, readReviewFreezeMs } from "../db/repositories/e
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import { createTaskRepository } from "../db/repositories/tasks";
 import type { DB } from "../db/schema";
+import { snippetsForFiles, snippetsInFile } from "./evidence-snippets";
 import { ResolveError, confirmReview, dismissReview, reclassifyReview, rejectReview } from "./resolve";
 import { reconcileStructuralAssigneeContributesTo } from "./structural-assignee";
 
@@ -406,6 +407,24 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
     }
   });
 
+  /**
+   * GET /api/entity-review/:id/snippets?fileId=…
+   * Every quote of the proposed name inside one evidence file — the expansion
+   * behind a review evidence row. Read-only: no freeze side effect.
+   */
+  app.get("/:id/snippets", async (c) => {
+    const id = c.req.param("id");
+    const fileId = c.req.query("fileId");
+    if (!fileId) return c.json({ error: { code: "BAD_REQUEST", message: "fileId query param is required" } }, 400);
+    const repo = createEntityReviewRepo(db);
+    const row = await repo.getById(id);
+    if (!row) return c.json({ error: { code: "NOT_FOUND", message: "review row not found" } }, 404);
+    const denied = await denyIfNotOwnerOrAdmin(c, repo, row);
+    if (denied) return denied;
+    const quotes = await snippetsInFile(db, fileId, row.proposed_name);
+    return c.json({ quotes });
+  });
+
   app.get("/:id", async (c) => {
     const id = c.req.param("id");
     const repo = createEntityReviewRepo(db);
@@ -447,8 +466,14 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
     const enrichedRow = { ...baseRow, evidenceCount: evidence.length, sourceBreakdown, candidate, candidates };
 
     // Evidence with file names for the review-mode drawer — capped so a
-    // 1000-evidence proposal doesn't drag the modal to its knees.
+    // 1000-evidence proposal doesn't drag the modal to its knees. Snippets are
+    // cut read-time from document_chunks (evidence rows store no quote text).
     const evidenceWithFiles = await repo.listEvidenceWithFiles(id, 50);
+    const snippets = await snippetsForFiles(
+      db,
+      evidenceWithFiles.map((e) => e.indexed_file_id),
+      baseRow.proposed_name,
+    );
     const enrichedEvidence = evidenceWithFiles.map((e) => ({
       id: e.id,
       review_id: e.review_id,
@@ -456,6 +481,7 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
       source: e.source,
       note: e.note,
       seen_at: e.seen_at,
+      contextSnippet: snippets.get(e.indexed_file_id) ?? null,
       file: {
         name: e.file_name,
         providerUrl: e.provider_url,

@@ -124,7 +124,7 @@ describe("Your Org graph-verdict band lane", () => {
     expect(fetches).toBe(0);
   });
 
-  it("walks a verdict from approve to apply in one sheet visit, then retires the section", async () => {
+  it("approves and applies a dry-run-green verdict with one primary click, then retires the section", async () => {
     const decisions: string[] = [];
     let verdicts: ReturnType<typeof verdictFixture>[] = [verdictFixture()];
     server.use(
@@ -157,12 +157,10 @@ describe("Your Org graph-verdict band lane", () => {
     await screen.findByText("Same firm under its short and long names");
     await waitFor(() => expect(decisions).toContain("dry-run"));
 
-    await userEvent.click(await screen.findByTestId("graph-verdict-approve"));
+    const primary = await screen.findByTestId("graph-verdict-approve");
+    expect(primary).toHaveTextContent("Approve & apply");
+    await userEvent.click(primary);
     await waitFor(() => expect(decisions).toContain("approval"));
-
-    const applyButton = await screen.findByTestId("graph-verdict-apply");
-    await waitFor(() => expect(applyButton).toBeEnabled());
-    await userEvent.click(applyButton);
     await waitFor(() => expect(decisions).toContain("apply"));
 
     await waitFor(() => expect(screen.queryByTestId("review-band-graph-verdicts")).not.toBeInTheDocument());

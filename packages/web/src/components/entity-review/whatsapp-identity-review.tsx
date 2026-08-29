@@ -15,6 +15,7 @@
  * endpoints: Save is a rename plus optional contact points, Merge folds the
  * placeholder into a person you already know, Dismiss retires it unnamed.
  */
+import { MergePreviewPane } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
 import { type WhatsAppContextMessage, type WhatsAppIdentityReviewItem, api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
@@ -290,6 +291,8 @@ function WhatsAppIdentityBody({
   const [phone, setPhone] = useState(item.phoneE164 ?? "");
   const [email, setEmail] = useState("");
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState<string | null>(null);
+  const [mergeSurvivorId, setMergeSurvivorId] = useState<string | null>(null);
   const trimmedName = name.trim();
   const initialName = (item.suggestion?.name ?? "").trim();
   const initialPhone = (item.phoneE164 ?? "").trim();
@@ -341,14 +344,21 @@ function WhatsAppIdentityBody({
     void runIdentityAction(action, onResolve, message).finally(() => setBusy(false));
   };
 
+  /**
+   * A suggestion pointing at an existing entity routes through the shared
+   * merge preview instead of merging on the spot — same consequences view as
+   * every other merge. A name-only suggestion still saves directly.
+   */
   const confirmSuggestion = () => {
     const suggestion = item.suggestion;
     if (!suggestion) return;
-    act(
-      () =>
-        suggestion.entityId ? api.entities.merge(suggestion.entityId, item.entityId) : saveIdentity(suggestion.name),
-      suggestion.entityId ? `Merged into ${suggestion.name}` : `Saved ${suggestion.name}`,
-    );
+    if (suggestion.entityId) {
+      setMergeTargetId(suggestion.entityId);
+      setMergeSurvivorId(suggestion.entityId);
+      setMergeOpen(true);
+      return;
+    }
+    act(() => saveIdentity(suggestion.name), `Saved ${suggestion.name}`);
   };
   const accent = "#f59e0b";
   const helper = item.suggestion
@@ -492,8 +502,17 @@ function WhatsAppIdentityBody({
         </Button>
       </div>
 
-      <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
-        <DialogContent className="sm:max-w-md">
+      <Dialog
+        open={mergeOpen}
+        onOpenChange={(open) => {
+          setMergeOpen(open);
+          if (!open) {
+            setMergeTargetId(null);
+            setMergeSurvivorId(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle className="text-base">Merge this contact into…</DialogTitle>
             <DialogDescription>
@@ -501,13 +520,34 @@ function WhatsAppIdentityBody({
               no new person is created.
             </DialogDescription>
           </DialogHeader>
-          <EntityPicker
-            entityType="person"
-            onPick={(entityId) => {
-              setMergeOpen(false);
-              act(() => api.entities.merge(entityId, item.entityId), "Merged");
-            }}
-          />
+          {mergeTargetId && mergeSurvivorId ? (
+            <MergePreviewPane
+              entityId={item.entityId}
+              entityName={trimmedName || item.phoneE164 || "This contact"}
+              otherId={mergeTargetId}
+              survivorId={mergeSurvivorId}
+              onSurvivorChange={setMergeSurvivorId}
+              onBack={() => {
+                setMergeTargetId(null);
+                setMergeSurvivorId(null);
+              }}
+              onMerged={() => {
+                setMergeOpen(false);
+                setMergeTargetId(null);
+                setMergeSurvivorId(null);
+                onResolve("Merged");
+              }}
+            />
+          ) : (
+            <EntityPicker
+              entityType="person"
+              excludeEntityId={item.entityId}
+              onPick={(entityId) => {
+                setMergeTargetId(entityId);
+                setMergeSurvivorId(entityId);
+              }}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </>

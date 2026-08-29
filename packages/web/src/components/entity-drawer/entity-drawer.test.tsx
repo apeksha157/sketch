@@ -225,7 +225,10 @@ describe("EntityDrawer", () => {
     expect(screen.queryByText("legacy-wrong@example.com")).not.toBeInTheDocument();
     expect(screen.getByText("+14155550123")).toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
-    expect(screen.getByText(/Also: S\. Chen/)).toBeInTheDocument();
+    // Aliases moved from the header blob into the managed Aliases section.
+    expect(screen.queryByText(/Also:/)).not.toBeInTheDocument();
+    expect(screen.getByText("Aliases")).toBeInTheDocument();
+    expect(screen.getByText("S. Chen")).toBeInTheDocument();
 
     // Summary renders identity + activity sentences directly (no LLM, no shimmer).
     expect(screen.getByText("Summary")).toBeInTheDocument();
@@ -329,7 +332,8 @@ describe("EntityDrawer", () => {
     renderWithProviders(<OpenOnceHarness initialId="e-sarah" />);
     await screen.findByRole("heading", { name: /Sarah Chen/ });
 
-    await user.click(await screen.findByRole("button", { name: /Delete/ }));
+    await user.click(await screen.findByRole("button", { name: "Entity actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
 
     const dialog = await screen.findByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));

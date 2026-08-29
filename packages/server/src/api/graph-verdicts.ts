@@ -129,6 +129,61 @@ export function graphVerdictRoutes(db: Kysely<DB>, logger: Logger) {
     return c.json({ verdicts: (await verdicts.listByRun(c.req.param("id"))).map(serializeVerdict) });
   });
 
+  /**
+   * Resolve a verdict's evidence file ids to something a reviewer can read:
+   * file name, source, date, and the subject entity's mention snippet in that
+   * file when one exists. Container verdicts (sample-based evidence) and
+   * verdicts with no file ids return an empty list.
+   */
+  routes.get("/:id/evidence", async (c) => {
+    const forbidden = requireAdmin(c);
+    if (forbidden) return c.json(forbidden, 403);
+
+    const row = await verdicts.findById(c.req.param("id"));
+    if (!row) return c.json({ error: { code: "NOT_FOUND", message: "Graph verdict not found" } }, 404);
+
+    const evidence = parseJson(row.evidence_json);
+    const fileIds =
+      evidence && typeof evidence === "object" && Array.isArray((evidence as { fileIds?: unknown }).fileIds)
+        ? ((evidence as { fileIds: unknown[] }).fileIds.filter((id) => typeof id === "string") as string[]).slice(0, 25)
+        : [];
+    if (fileIds.length === 0) return c.json({ rows: [] });
+
+    const files = await db
+      .selectFrom("indexed_files")
+      .select(["id", "file_name", "source", "source_updated_at", "source_created_at"])
+      .where("id", "in", fileIds)
+      .execute();
+
+    const snippetByFile = new Map<string, string>();
+    if (row.subject_entity_id) {
+      const mentions = await db
+        .selectFrom("entity_mentions")
+        .select(["indexed_file_id", "context_snippet"])
+        .where("entity_id", "=", row.subject_entity_id)
+        .where("indexed_file_id", "in", fileIds)
+        .where("context_snippet", "is not", null)
+        .orderBy("mentioned_at", "desc")
+        .execute();
+      for (const mention of mentions) {
+        if (!snippetByFile.has(mention.indexed_file_id) && mention.context_snippet) {
+          snippetByFile.set(mention.indexed_file_id, mention.context_snippet);
+        }
+      }
+    }
+
+    const rows = files
+      .map((file) => ({
+        fileId: file.id,
+        fileName: file.file_name,
+        source: file.source,
+        occurredAt: file.source_updated_at ?? file.source_created_at ?? null,
+        contextSnippet: snippetByFile.get(file.id) ?? null,
+      }))
+      .sort((a, b) => (b.occurredAt ?? "").localeCompare(a.occurredAt ?? ""));
+    return c.json({ rows });
+  });
+
   routes.post("/:id/approval", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);

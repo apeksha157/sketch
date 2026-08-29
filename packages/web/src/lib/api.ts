@@ -596,6 +596,14 @@ export interface GraphVerdictRun {
   rollups: Record<GraphVerdictStatus, number>;
 }
 
+export interface GraphVerdictEvidenceRow {
+  fileId: string;
+  fileName: string;
+  source: string;
+  occurredAt: string | null;
+  contextSnippet: string | null;
+}
+
 export interface GraphVerdict {
   id: string;
   runId: string;
@@ -687,6 +695,8 @@ export interface EntityReviewEvidenceRow {
   source: string;
   note: string | null;
   seen_at: string;
+  /** Read-time quote around the proposed name in this file, when found. */
+  contextSnippet?: string | null;
   file: {
     name: string;
     providerUrl: string | null;
@@ -3544,6 +3554,18 @@ export const api = {
     deleteContactPoint(id: string, contactPointId: string) {
       return request<void>(`/api/entities/${id}/contact-points/${contactPointId}`, { method: "DELETE" });
     },
+    addAlias(id: string, alias: string) {
+      return request<{ aliases: string[] }>(`/api/entities/${id}/aliases`, {
+        method: "POST",
+        body: JSON.stringify({ alias }),
+      });
+    },
+    removeAlias(id: string, alias: string) {
+      return request<{ removed: string[]; aliases: string[] }>(
+        `/api/entities/${id}/aliases?value=${encodeURIComponent(alias)}`,
+        { method: "DELETE" },
+      );
+    },
     relations(id: string) {
       return request<EntityRelationsResponse>(`/api/entities/${id}/relations`);
     },
@@ -3673,9 +3695,10 @@ export const api = {
         method: "DELETE",
       });
     },
-    mentions(id: string, opts?: { source?: string; since?: string; limit?: number; offset?: number }) {
+    mentions(id: string, opts?: { source?: string; fileId?: string; since?: string; limit?: number; offset?: number }) {
       const params = new URLSearchParams();
       if (opts?.source) params.set("source", opts.source);
+      if (opts?.fileId) params.set("fileId", opts.fileId);
       if (opts?.since) params.set("since", opts.since);
       if (opts?.limit) params.set("limit", String(opts.limit));
       if (opts?.offset) params.set("offset", String(opts.offset));
@@ -3875,6 +3898,9 @@ export const api = {
     listRunVerdicts(runId: string) {
       return request<{ verdicts: GraphVerdict[] }>(`/api/graph-verdicts/runs/${runId}/verdicts`);
     },
+    evidence(id: string) {
+      return request<{ rows: GraphVerdictEvidenceRow[] }>(`/api/graph-verdicts/${id}/evidence`);
+    },
     approve(id: string) {
       return request<{ verdict: GraphVerdict }>(`/api/graph-verdicts/${id}/approval`, { method: "POST" });
     },
@@ -3907,6 +3933,9 @@ export const api = {
     },
     get(id: string) {
       return request<EntityReviewDetailResponse>(`/api/entity-review/${id}`);
+    },
+    snippets(id: string, fileId: string) {
+      return request<{ quotes: string[] }>(`/api/entity-review/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
     },
     confirm(id: string, body: { candidateGeneratedAt: string; mergeIntoEntityId?: string; nameOverride?: string }) {
       return request<EntityReviewConfirmResult>(`/api/entity-review/${id}/confirm`, {

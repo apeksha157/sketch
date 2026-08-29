@@ -33,7 +33,8 @@ export function humanConnector(source: string): string {
     llm_relation: "AI",
     llm_extraction: "AI",
   };
-  return map[source] ?? source.charAt(0).toUpperCase() + source.slice(1);
+  const spaced = source.replace(/_/g, " ");
+  return map[source] ?? spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 /**

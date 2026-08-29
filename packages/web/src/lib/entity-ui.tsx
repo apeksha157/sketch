@@ -34,6 +34,27 @@ export function entityDisplayLabel(entity: { name: string; proposedName?: string
   return proposed ? `${proposed} (${entity.name})` : entity.name;
 }
 
+/**
+ * Aliases fit for showing to a human. The stored list is matcher working
+ * data: bare email addresses, "Name <email>" strings, and echoes of the name
+ * or contact points all help matching but read as junk. One filter for every
+ * surface (drawer Aliases section, merge preview) so they can't drift.
+ */
+export function displayAliases(aliases: string[], hide: (string | null | undefined)[]): string[] {
+  const hidden = new Set(
+    hide.filter((value): value is string => Boolean(value)).map((value) => value.trim().toLowerCase()),
+  );
+  const seen = new Set<string>();
+  return aliases.filter((alias) => {
+    const key = alias.trim().toLowerCase();
+    if (!key || hidden.has(key) || seen.has(key)) return false;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(key)) return false;
+    if (/<[^\s@]+@[^\s@]+>/.test(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 type DrawerMode = "drawer" | "popover";
 
 interface EntityUiContextValue {

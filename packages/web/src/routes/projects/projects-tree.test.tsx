@@ -60,7 +60,7 @@ describe("ProjectsTree", () => {
     expect(orphanRow).not.toHaveStyle({ paddingLeft: "20px" });
   });
 
-  it("shows every section's strip while dragging and PATCHes an un-nest + company move on a cross-section drop", async () => {
+  it("gates rearranging behind the Edit toggle, then shows every section's strip while dragging and PATCHes an un-nest + company move on a cross-section drop", async () => {
     let patched: { url: string; body: unknown } | null = null;
     server.use(
       http.patch("/api/entities/:id", async ({ request, params }) => {
@@ -77,7 +77,14 @@ describe("ProjectsTree", () => {
 
     renderWithProviders(<ProjectsTree entities={entities} onSelect={() => {}} isAdmin />);
 
-    fireEvent.dragStart(screen.getByTestId("entity-row-search-terms"));
+    const childRow = screen.getByTestId("entity-row-search-terms");
+    expect(childRow).not.toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(childRow);
+    expect(screen.queryByTestId("tree-drop-top-level-ow")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("tree-edit-toggle"));
+    expect(childRow).toHaveAttribute("draggable", "true");
+    fireEvent.dragStart(childRow);
 
     expect(screen.getByTestId("tree-drop-top-level-ow")).toHaveTextContent("drop here for top level");
     expect(screen.getByTestId("tree-drop-top-level-habuild")).toHaveTextContent("move to Habuild · top level");

@@ -1,11 +1,13 @@
 /**
  * The shared graph-verdict decision sheet, used by both the Your Org review
  * bands and the dev-tools runs panel. The sheet fetches a server dry run
- * before Apply is enabled, so the human always approves what the server says
- * will happen, never what the proposal claimed. Approving keeps the sheet
- * open on the refreshed verdict so Apply is one click away; every other
- * decision closes it.
+ * before anything applies, so the human always approves what the server says
+ * will happen, never what the proposal claimed. When the dry run is green the
+ * primary is a single "Approve & apply"; when it isn't, plain Approve keeps
+ * the sheet open on the refreshed verdict so Apply is one click away once the
+ * dry run recovers. Every other decision closes the sheet.
  */
+import { EvidenceList } from "@/components/evidence-list";
 import { ApiRequestError, type GraphVerdict, type GraphVerdictStatus, api } from "@/lib/api";
 import { Button } from "@sketch/ui/components/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
@@ -34,6 +36,47 @@ export const GRAPH_VERDICT_STATUS_TONES: Record<GraphVerdictStatus, string> = {
 function isStaleError(err: unknown): boolean {
   return err instanceof ApiRequestError && (err.code === "STALE_VERDICT" || err.code === "PLAN_DRIFT");
 }
+
+export type RelatedVerdictKind = "fan_in" | "chain_apply_this_first" | "chain_apply_other_first" | "same_subject";
+
+function verdictTargetId(verdict: GraphVerdict): string | null {
+  return verdict.resolvedTargetEntityId ?? verdict.targetEntityId;
+}
+
+/**
+ * Other OPEN verdicts that touch the same entities as `current`. The server
+ * dedupes on (subject, action) only, so fan-ins (two subjects merging into
+ * one survivor — safe in any order) and chains (one verdict's target is the
+ * other's subject — order decides which one goes stale) both reach the queue
+ * with no cross-reference. This computes that awareness read-time so the
+ * reviewer sees it BEFORE approving, not as a stale banner after.
+ */
+export function relatedOpenVerdicts(
+  current: GraphVerdict,
+  open: GraphVerdict[],
+): { verdict: GraphVerdict; kind: RelatedVerdictKind }[] {
+  const currentTarget = verdictTargetId(current);
+  const out: { verdict: GraphVerdict; kind: RelatedVerdictKind }[] = [];
+  for (const other of open) {
+    if (other.id === current.id) continue;
+    const otherTarget = verdictTargetId(other);
+    let kind: RelatedVerdictKind | null = null;
+    if (otherTarget && currentTarget && otherTarget === currentTarget) kind = "fan_in";
+    else if (currentTarget && other.subjectEntityId === currentTarget) kind = "chain_apply_this_first";
+    else if (otherTarget && current.subjectEntityId && otherTarget === current.subjectEntityId)
+      kind = "chain_apply_other_first";
+    else if (current.subjectEntityId && other.subjectEntityId === current.subjectEntityId) kind = "same_subject";
+    if (kind) out.push({ verdict: other, kind });
+  }
+  return out;
+}
+
+const RELATED_KIND_COPY: Record<RelatedVerdictKind, string> = {
+  fan_in: "lands on the same survivor — safe in any order",
+  chain_apply_this_first: "merges this proposal's target away — apply this one first or it goes stale",
+  chain_apply_other_first: "targets this proposal's subject — apply that one first or it goes stale",
+  same_subject: "same entity, different action",
+};
 
 /**
  * The server allows a dry run for awaiting and approved rows only; anything
@@ -102,18 +145,50 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
     onSuccess: settle,
     onError: setActionError,
   });
+  /**
+   * The one-click primary when the dry run is green: the approve→apply state
+   * machine stays intact server-side, only the UI collapses the two steps.
+   * If apply fails after approval, the sheet stays open on the approved
+   * verdict with the error (or stale banner) showing — same as the two-step
+   * path would have.
+   */
+  const approveAndApply = useMutation({
+    mutationFn: async () => {
+      const approved = await api.graphVerdicts.approve(current.id);
+      setCurrent(approved.verdict);
+      return api.graphVerdicts.apply(current.id);
+    },
+    onSuccess: settle,
+    onError: (err) => {
+      setActionError(err);
+      invalidate();
+    },
+  });
   const revert = useMutation({
     mutationFn: () => api.graphVerdicts.revert(current.id),
     onSuccess: settle,
     onError: setActionError,
   });
 
-  const busy = approve.isPending || reject.isPending || apply.isPending || revert.isPending;
+  const busy =
+    approve.isPending || reject.isPending || apply.isPending || revert.isPending || approveAndApply.isPending;
   const previewStale = previewQuery.isError && isStaleError(previewQuery.error);
   const actionStale = isStaleError(actionError);
   const evidence = current.action === "classify_container" ? null : parseEvidence(current.evidence);
   const containerEvidence = current.action === "classify_container" ? parseContainerEvidence(current.evidence) : null;
   const wouldChange = previewQuery.data?.application.wouldChange ?? asCounts(current.wouldChange);
+
+  const evidenceQuery = useQuery({
+    queryKey: ["graph-verdicts", "evidence", current.id],
+    queryFn: () => api.graphVerdicts.evidence(current.id),
+    enabled: (evidence?.fileIds.length ?? 0) > 0,
+  });
+
+  const openQuery = useQuery({
+    queryKey: ["graph-verdicts", "open"],
+    queryFn: () => api.graphVerdicts.listOpen(),
+  });
+  const related = relatedOpenVerdicts(current, openQuery.data?.verdicts ?? []);
 
   return (
     <div className="mt-3 flex flex-1 flex-col gap-4 text-[13px]">
@@ -154,6 +229,24 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             review
             {evidence.reviewIds.length === 1 ? "" : "s"}
           </p>
+          {evidence.fileIds.length > 0 ? (
+            evidenceQuery.isLoading ? (
+              <Skeleton className="mt-1.5 h-14 rounded-md" />
+            ) : (evidenceQuery.data?.rows.length ?? 0) > 0 ? (
+              <div className="mt-1.5">
+                <EvidenceList
+                  testId="graph-verdict-evidence"
+                  items={(evidenceQuery.data?.rows ?? []).map((row) => ({
+                    key: row.fileId,
+                    snippet: row.contextSnippet,
+                    fileName: row.fileName,
+                    source: row.source,
+                    occurredAt: row.occurredAt,
+                  }))}
+                />
+              </div>
+            ) : null
+          ) : null}
           {evidence.notes.map((note) => (
             <p key={note} className="mt-1 text-[12px] text-muted-foreground">
               {note}
@@ -170,6 +263,28 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
               {sample}
             </p>
           ))}
+        </div>
+      ) : null}
+
+      {related.length > 0 ? (
+        <div data-testid="graph-verdict-related">
+          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Related proposals
+          </h3>
+          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+            {related.map(({ verdict: other, kind }) => (
+              <p key={other.id} className="text-[12px]">
+                <span className="font-mono text-[10px] uppercase text-muted-foreground">
+                  {GRAPH_VERDICT_ACTION_LABELS[other.action] ?? other.action}
+                </span>{" "}
+                <span className="font-medium">{other.subjectName ?? other.subjectEntityId}</span>
+                {verdictTargetId(other) ? (
+                  <span className="text-muted-foreground"> → {other.targetName ?? verdictTargetId(other)}</span>
+                ) : null}
+                <span className="text-muted-foreground"> — {RELATED_KIND_COPY[kind]}</span>
+              </p>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -199,9 +314,20 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             <Button size="sm" variant="outline" disabled={busy} onClick={() => reject.mutate()}>
               Reject
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => approve.mutate()} data-testid="graph-verdict-approve">
-              Approve
-            </Button>
+            {previewQuery.isSuccess ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => approveAndApply.mutate()}
+                data-testid="graph-verdict-approve"
+              >
+                Approve &amp; apply
+              </Button>
+            ) : (
+              <Button size="sm" disabled={busy} onClick={() => approve.mutate()} data-testid="graph-verdict-approve">
+                Approve
+              </Button>
+            )}
           </>
         ) : null}
         {current.status === "approved" ? (

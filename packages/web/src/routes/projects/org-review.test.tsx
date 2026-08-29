@@ -131,7 +131,7 @@ describe("projects review band action policy", () => {
     expect(pooling).toHaveTextContent("2 new names pooling for the weekly pass");
     expect(pooling).toHaveTextContent("1 expiring");
 
-    await userEvent.click(screen.getByTestId("review-band-toggle"));
+    await userEvent.click(screen.getByTestId("review-band-pooling-toggle"));
     const chips = await screen.findAllByTestId("review-band-expiring-chip");
     expect(chips).toHaveLength(1);
     expect(screen.getByTestId("review-band-pooling-row-row-stale")).toHaveTextContent("expiring");

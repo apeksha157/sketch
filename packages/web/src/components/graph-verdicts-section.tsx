@@ -11,6 +11,7 @@ import {
   GRAPH_VERDICT_ACTION_LABELS,
   GraphVerdictSheet,
   containerClassificationOf,
+  relatedOpenVerdicts,
 } from "@/components/graph-verdict-sheet";
 import { type GraphVerdict, api } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -30,7 +31,13 @@ export function graphVerdictBandType(verdict: GraphVerdict): string {
   return "project";
 }
 
-export function GraphVerdictsSection({ verdicts }: { verdicts: GraphVerdict[] }) {
+/**
+ * `allOpen` is the unfiltered open-verdict list (a chain can cross type
+ * tabs); it defaults to the section's own rows when the caller has nothing
+ * wider. Rows that share a survivor or form a chain get a "related" chip —
+ * the sheet spells out which order is safe.
+ */
+export function GraphVerdictsSection({ verdicts, allOpen }: { verdicts: GraphVerdict[]; allOpen?: GraphVerdict[] }) {
   const queryClient = useQueryClient();
   const [openId, setOpenId] = useState<string | null>(null);
   const dismiss = useMutation({
@@ -76,6 +83,14 @@ export function GraphVerdictsSection({ verdicts }: { verdicts: GraphVerdict[] })
                   {containerClassificationOf(verdict) ? ` → ${containerClassificationOf(verdict)}` : ""}
                 </span>
               </span>
+              {relatedOpenVerdicts(verdict, allOpen ?? verdicts).length > 0 ? (
+                <span
+                  className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
+                  data-testid={`graph-verdict-related-chip-${verdict.id}`}
+                >
+                  ⛓ related
+                </span>
+              ) : null}
               {verdict.status === "approved" ? (
                 <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground">
                   approved — apply pending
