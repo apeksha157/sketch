@@ -836,28 +836,6 @@ function CandidateView({
             ) : null}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isPending}
-            aria-label="Confirm merge"
-            data-testid="confirm-merge"
-            className="rounded-md border border-emerald-400 bg-emerald-50 p-1.5 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70"
-          >
-            <CheckIcon size={14} weight="bold" />
-          </button>
-          <button
-            type="button"
-            onClick={onReject}
-            disabled={isPending}
-            aria-label="Reject this match"
-            data-testid="reject-match"
-            className="rounded-md border border-foreground/25 bg-background p-1.5 text-foreground/80 hover:bg-muted hover:text-foreground disabled:opacity-50"
-          >
-            <XIcon size={14} weight="bold" />
-          </button>
-        </div>
       </div>
       {errorMessage ? (
         <div className="border-b border-border px-3 py-2 text-xs text-destructive">{errorMessage}</div>
@@ -882,6 +860,28 @@ function CandidateView({
             />
           </div>
         )}
+      </div>
+      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
+        <Button
+          size="sm"
+          onClick={onConfirm}
+          disabled={isPending}
+          data-testid="confirm-merge"
+          className="h-7 gap-1 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+        >
+          <CheckIcon size={12} weight="bold" />
+          Merge into {candidateEntity?.name ?? row.candidate?.name ?? "this"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onReject}
+          disabled={isPending}
+          data-testid="reject-match"
+          className="h-7"
+        >
+          Not a match
+        </Button>
       </div>
     </div>
   );

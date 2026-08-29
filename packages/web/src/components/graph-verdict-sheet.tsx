@@ -1,10 +1,11 @@
 /**
  * The shared graph-verdict decision sheet, used by both the Your Org review
  * bands and the dev-tools runs panel. The sheet fetches a server dry run
- * before Apply is enabled, so the human always approves what the server says
- * will happen, never what the proposal claimed. Approving keeps the sheet
- * open on the refreshed verdict so Apply is one click away; every other
- * decision closes it.
+ * before anything applies, so the human always approves what the server says
+ * will happen, never what the proposal claimed. When the dry run is green the
+ * primary is a single "Approve & apply"; when it isn't, plain Approve keeps
+ * the sheet open on the refreshed verdict so Apply is one click away once the
+ * dry run recovers. Every other decision closes the sheet.
  */
 import { EvidenceList } from "@/components/evidence-list";
 import { ApiRequestError, type GraphVerdict, type GraphVerdictStatus, api } from "@/lib/api";
@@ -103,13 +104,33 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
     onSuccess: settle,
     onError: setActionError,
   });
+  /**
+   * The one-click primary when the dry run is green: the approve→apply state
+   * machine stays intact server-side, only the UI collapses the two steps.
+   * If apply fails after approval, the sheet stays open on the approved
+   * verdict with the error (or stale banner) showing — same as the two-step
+   * path would have.
+   */
+  const approveAndApply = useMutation({
+    mutationFn: async () => {
+      const approved = await api.graphVerdicts.approve(current.id);
+      setCurrent(approved.verdict);
+      return api.graphVerdicts.apply(current.id);
+    },
+    onSuccess: settle,
+    onError: (err) => {
+      setActionError(err);
+      invalidate();
+    },
+  });
   const revert = useMutation({
     mutationFn: () => api.graphVerdicts.revert(current.id),
     onSuccess: settle,
     onError: setActionError,
   });
 
-  const busy = approve.isPending || reject.isPending || apply.isPending || revert.isPending;
+  const busy =
+    approve.isPending || reject.isPending || apply.isPending || revert.isPending || approveAndApply.isPending;
   const previewStale = previewQuery.isError && isStaleError(previewQuery.error);
   const actionStale = isStaleError(actionError);
   const evidence = current.action === "classify_container" ? null : parseEvidence(current.evidence);
@@ -224,9 +245,20 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             <Button size="sm" variant="outline" disabled={busy} onClick={() => reject.mutate()}>
               Reject
             </Button>
-            <Button size="sm" disabled={busy} onClick={() => approve.mutate()} data-testid="graph-verdict-approve">
-              Approve
-            </Button>
+            {previewQuery.isSuccess ? (
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => approveAndApply.mutate()}
+                data-testid="graph-verdict-approve"
+              >
+                Approve &amp; apply
+              </Button>
+            ) : (
+              <Button size="sm" disabled={busy} onClick={() => approve.mutate()} data-testid="graph-verdict-approve">
+                Approve
+              </Button>
+            )}
           </>
         ) : null}
         {current.status === "approved" ? (

@@ -136,15 +136,13 @@ describe("graph verdicts panel", () => {
     await userEvent.click(await screen.findByTestId("graph-verdict-row"));
 
     expect(screen.queryByTestId("graph-verdict-apply")).toBeNull();
-    await userEvent.click(await screen.findByTestId("graph-verdict-approve"));
-    await waitFor(() => expect(decisions).toContain("approval"));
-
-    const applyButton = await screen.findByTestId("graph-verdict-apply");
     await waitFor(() => expect(decisions).toContain("dry-run"));
     await screen.findByText("entity_merges");
-    await waitFor(() => expect(applyButton).toBeEnabled());
 
-    await userEvent.click(applyButton);
+    const primary = screen.getByTestId("graph-verdict-approve");
+    await waitFor(() => expect(primary).toHaveTextContent("Approve & apply"));
+    await userEvent.click(primary);
+    await waitFor(() => expect(decisions).toContain("approval"));
     await waitFor(() => expect(decisions).toContain("apply"));
   });
 
@@ -242,13 +240,12 @@ describe("graph verdicts panel", () => {
 
     await screen.findByText("Fix onboarding drop-off");
     expect(screen.getByText("team")).toBeInTheDocument();
-    await userEvent.click(await screen.findByTestId("graph-verdict-approve"));
-
-    const applyButton = await screen.findByTestId("graph-verdict-apply");
     await waitFor(() => expect(decisions).toContain("dry-run"));
     await screen.findByText("containers");
-    await waitFor(() => expect(applyButton).toBeEnabled());
-    await userEvent.click(applyButton);
+
+    const primary = screen.getByTestId("graph-verdict-approve");
+    await waitFor(() => expect(primary).toHaveTextContent("Approve & apply"));
+    await userEvent.click(primary);
     await waitFor(() => expect(decisions).toContain("apply"));
   });
 });
