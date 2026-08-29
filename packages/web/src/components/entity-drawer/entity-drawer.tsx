@@ -36,8 +36,6 @@ import {
 import {
   ArrowLeftIcon,
   ArrowsLeftRightIcon,
-  CaretDownIcon,
-  CaretRightIcon,
   DotsThreeIcon,
   GlobeIcon,
   PencilSimpleIcon,
@@ -46,7 +44,6 @@ import {
   SpinnerGapIcon,
   TrashIcon,
   WarningIcon,
-  XIcon,
 } from "@phosphor-icons/react";
 import {
   AlertDialog,
@@ -183,8 +180,7 @@ function EntityDrawerBody({ entityId, stackDepth, previousName, onBack, onOpenEn
         isAdmin={isAdmin}
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        {entity.sourceType === "person" ? <IdentityStrip entity={entity} isAdmin={isAdmin} /> : null}
-        <AliasStrip entity={entity} isAdmin={isAdmin} />
+        <IdentitySection entity={entity} isAdmin={isAdmin} />
         <SummaryBlock entity={entity} accent={accent} />
         <DrawerTabs
           entityId={entity.id}
@@ -426,258 +422,165 @@ function IdentityChips({ entity }: { entity: EntityDetail }) {
 }
 
 /**
- * Managed alias section. Display dedupes case-insensitively and hides values
- * the drawer already shows (the name, contact points, domains). Admin delete
- * removes every stored variant of the alias and records a rejection so the
- * pipeline cannot re-mint it; add declares at human-confirmed provenance and
- * lifts any standing rejection. Edit is remove-then-add.
+ * One registry entry per identity-handle kind the section can edit. A future
+ * kind (github, slack handle…) is a new row here plus its backend support —
+ * no new UI. `name` rows live in the aliases blob; the rest are contact
+ * points, which only person entities carry.
  */
-function AliasStrip({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boolean }) {
-  const queryClient = useQueryClient();
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingAlias, setEditingAlias] = useState<string | null>(null);
-  const [value, setValue] = useState("");
+const IDENTITY_KINDS = [
+  { kind: "email", label: "Email", placeholder: "name@example.com", personOnly: true, hasPrimary: true },
+  { kind: "phone", label: "Phone", placeholder: "+14155550123", personOnly: true, hasPrimary: true },
+  { kind: "name", label: "Name", placeholder: "Another name this goes by", personOnly: false, hasPrimary: false },
+] as const;
 
-  const refresh = () => {
-    void queryClient.invalidateQueries({ queryKey: ["entity-drawer", "profile", entity.id] });
-    void queryClient.invalidateQueries({ queryKey: ["entities"] });
-    setFormOpen(false);
-    setEditingAlias(null);
-    setValue("");
-  };
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const next = value.trim();
-      if (!next) throw new Error("Alias is required");
-      if (editingAlias && editingAlias !== next) await api.entities.removeAlias(entity.id, editingAlias);
-      if (editingAlias !== next) await api.entities.addAlias(entity.id, next);
-    },
-    onSuccess: refresh,
-    onError: (error: Error) => toast.error(error.message),
-  });
-  const removeMutation = useMutation({
-    mutationFn: (alias: string) => api.entities.removeAlias(entity.id, alias),
-    onSuccess: (result) => {
-      toast.success(`Removed "${result.removed[0]}" — it won't come back on its own`);
-      refresh();
-    },
-    onError: (error: Error) => toast.error(error.message),
-  });
-
-  const display = displayAliases(entity.aliases, [
-    entity.name,
-    ...(entity.contactPoints ?? []).map((point) => point.value),
-    ...entity.profile.domainsForCompany.map((d) => d.domain),
-  ]);
-
-  if (display.length === 0 && !isAdmin) return null;
-
-  return (
-    <div className="mb-4 rounded-lg border bg-muted/20 px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Aliases</div>
-        {isAdmin && !formOpen ? (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-7 gap-1 text-[11px]"
-            onClick={() => {
-              setFormOpen(true);
-              setEditingAlias(null);
-              setValue("");
-            }}
-          >
-            <PlusIcon size={12} /> Add
-          </Button>
-        ) : null}
-      </div>
-      {display.length > 0 ? (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {display.map((alias) => (
-            <span
-              key={alias}
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[11px]"
-              data-testid={`alias-chip-${alias}`}
-            >
-              <span className="max-w-56 truncate">{alias}</span>
-              {isAdmin ? (
-                <>
-                  <button
-                    type="button"
-                    aria-label={`Edit alias ${alias}`}
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => {
-                      setFormOpen(true);
-                      setEditingAlias(alias);
-                      setValue(alias);
-                    }}
-                  >
-                    <PencilSimpleIcon size={11} />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Delete alias ${alias}`}
-                    className="text-muted-foreground hover:text-destructive"
-                    disabled={removeMutation.isPending}
-                    onClick={() => removeMutation.mutate(alias)}
-                  >
-                    <XIcon size={11} />
-                  </button>
-                </>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      ) : (
-        <p className="mt-1 text-[11px] text-muted-foreground">No other names.</p>
-      )}
-      {isAdmin && formOpen ? (
-        <form
-          className="mt-2 flex flex-wrap items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            saveMutation.mutate();
-          }}
-        >
-          <Input
-            autoFocus
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            className="h-8 min-w-48 flex-1 text-xs"
-            placeholder="Another name this goes by"
-            aria-label={editingAlias ? `New value for ${editingAlias}` : "New alias"}
-            required
-          />
-          <Button type="submit" size="sm" className="h-8" disabled={saveMutation.isPending}>
-            {editingAlias ? "Save" : "Add"}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-8"
-            onClick={() => {
-              setFormOpen(false);
-              setEditingAlias(null);
-            }}
-          >
-            Cancel
-          </Button>
-        </form>
-      ) : null}
-    </div>
-  );
-}
-
-const EDITABLE_CONTACT_KINDS: Array<{ kind: EntityContactPointKind; label: string }> = [
-  { kind: "email", label: "Email" },
-  { kind: "phone", label: "Phone" },
-];
+type IdentityKind = (typeof IDENTITY_KINDS)[number]["kind"];
 
 function localContactValue(kind: EntityContactPointKind, value: string): string {
   const trimmed = value.trim();
   return kind === "email" ? trimmed.toLowerCase() : trimmed.replace(/[\s()-]/g, "");
 }
 
-function IdentityStrip({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boolean }) {
+interface IdentityForm {
+  kind: IdentityKind;
+  value: string;
+  isPrimary: boolean;
+  originalAlias?: string;
+  originalPoint?: EntityContactPoint;
+}
+
+/**
+ * The one card for every way this entity is identified — contact points
+ * (email/phone) and name aliases together. Reading stays quiet: mono value
+ * lines plus a single "aka" line, no edit chrome. All CRUD sits behind the
+ * explicit Edit toggle, where the rows unify two stores: alias writes go to
+ * the alias API (delete records a rejection so the pipeline can't re-mint
+ * the name; add declares human-confirmed provenance; edit is
+ * remove-then-add), contact writes go to the contact-point API.
+ */
+function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boolean }) {
   const queryClient = useQueryClient();
-  const points = (entity.contactPoints ?? []).filter((point) => point.kind === "email" || point.kind === "phone");
-  const [expanded, setExpanded] = useState(points.length === 0);
-  const [editing, setEditing] = useState<EntityContactPoint | null>(null);
-  const [addingKind, setAddingKind] = useState<EntityContactPointKind | null>(null);
-  const [value, setValue] = useState("");
-  const [isPrimary, setIsPrimary] = useState(false);
+  const isPerson = entity.sourceType === "person";
+  const points = isPerson
+    ? (entity.contactPoints ?? []).filter((point) => point.kind === "email" || point.kind === "phone")
+    : [];
+  const sortedPoints = [...points].sort((a, b) =>
+    a.kind === b.kind ? Number(b.isPrimary) - Number(a.isPrimary) : a.kind === "email" ? -1 : 1,
+  );
+  const aliases = displayAliases(entity.aliases, [
+    entity.name,
+    ...(entity.contactPoints ?? []).map((point) => point.value),
+    ...entity.profile.domainsForCompany.map((d) => d.domain),
+  ]);
+  const kinds = IDENTITY_KINDS.filter((def) => isPerson || !def.personOnly);
+
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState<IdentityForm | null>(null);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["entity-drawer", "profile", entity.id] });
     void queryClient.invalidateQueries({ queryKey: ["entities"] });
-    setEditing(null);
-    setAddingKind(null);
-    setValue("");
-    setIsPrimary(false);
+    setForm(null);
   };
   const saveMutation = useMutation({
     mutationFn: async () => {
-      const kind = editing?.kind ?? addingKind;
-      if (!kind) throw new Error("Choose a contact type");
-      const normalized = localContactValue(kind, value);
+      if (!form) return;
+      if (form.kind === "name") {
+        const next = form.value.trim();
+        if (!next) throw new Error("Alias is required");
+        if (form.originalAlias && form.originalAlias !== next) {
+          await api.entities.removeAlias(entity.id, form.originalAlias);
+        }
+        if (form.originalAlias !== next) await api.entities.addAlias(entity.id, next);
+        return;
+      }
+      const normalized = localContactValue(form.kind, form.value);
       const duplicate = points.some(
         (point) =>
-          point.id !== editing?.id && point.kind === kind && localContactValue(kind, point.value) === normalized,
+          point.id !== form.originalPoint?.id &&
+          point.kind === form.kind &&
+          localContactValue(form.kind, point.value) === normalized,
       );
       if (duplicate) throw new Error("This contact point already exists on this person");
-      return editing
-        ? api.entities.updateContactPoint(entity.id, editing.id, { value, isPrimary })
-        : api.entities.createContactPoint(entity.id, {
-            kind: kind as "email" | "phone",
-            value,
-            makePrimary: isPrimary,
-          });
+      if (form.originalPoint) {
+        await api.entities.updateContactPoint(entity.id, form.originalPoint.id, {
+          value: form.value,
+          isPrimary: form.isPrimary,
+        });
+      } else {
+        await api.entities.createContactPoint(entity.id, {
+          kind: form.kind,
+          value: form.value,
+          makePrimary: form.isPrimary,
+        });
+      }
     },
     onSuccess: refresh,
     onError: (error: Error) => toast.error(error.message),
   });
   const deleteMutation = useMutation({
-    mutationFn: (contactPointId: string) => api.entities.deleteContactPoint(entity.id, contactPointId),
-    onSuccess: refresh,
+    mutationFn: async (target: { alias?: string; pointId?: string }) => {
+      if (target.alias) return api.entities.removeAlias(entity.id, target.alias);
+      if (target.pointId) await api.entities.deleteContactPoint(entity.id, target.pointId);
+      return null;
+    },
+    onSuccess: (result) => {
+      if (result && "removed" in result) {
+        toast.success(`Removed "${result.removed[0]}" — it won't come back on its own`);
+      }
+      refresh();
+    },
     onError: (error: Error) => toast.error(error.message),
   });
 
-  const primaryEmail =
-    points.find((point) => point.kind === "email" && point.isPrimary) ?? points.find((point) => point.kind === "email");
-  const primaryPhone =
-    points.find((point) => point.kind === "phone" && point.isPrimary) ?? points.find((point) => point.kind === "phone");
-  const primaryIds = new Set([primaryEmail?.id, primaryPhone?.id]);
-  const additional = points.filter((point) => !primaryIds.has(point.id)).length;
+  const empty = sortedPoints.length === 0 && aliases.length === 0;
+  if (empty && !isAdmin) return null;
+
+  const formKindDef = form ? IDENTITY_KINDS.find((def) => def.kind === form.kind) : null;
+  const startAdd = (def: (typeof IDENTITY_KINDS)[number]) =>
+    setForm({
+      kind: def.kind,
+      value: "",
+      isPrimary: def.hasPrimary && !points.some((point) => point.kind === def.kind),
+    });
 
   return (
-    <div className="mb-4 rounded-lg border bg-muted/20">
-      <div className="flex items-center gap-2 px-4 py-3">
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
-          onClick={() => setExpanded((current) => !current)}
-          aria-expanded={expanded}
-        >
-          <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Identity</div>
-            {!expanded ? (
-              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
-                {primaryEmail ? <span>{primaryEmail.value}</span> : null}
-                {primaryPhone ? <span>{primaryPhone.value}</span> : null}
-                {!primaryEmail && !primaryPhone ? (
-                  <span className="text-muted-foreground">No email or phone</span>
-                ) : null}
-                {additional > 0 ? <span className="text-muted-foreground">+{additional}</span> : null}
-              </div>
-            ) : null}
-          </div>
-          {expanded ? <CaretDownIcon size={14} /> : <CaretRightIcon size={14} />}
-        </button>
-        {isAdmin && !expanded ? (
+    <div className="mb-4 rounded-lg border bg-muted/20 px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Identity</div>
+        {isAdmin ? (
           <Button
             type="button"
             size="sm"
-            variant="ghost"
-            className="h-7 gap-1 text-[11px]"
+            variant={editing ? "secondary" : "ghost"}
+            className="h-7 text-[11px]"
+            data-testid="identity-edit-toggle"
             onClick={() => {
-              setExpanded(true);
-              setAddingKind("email");
-              setValue("");
-              setIsPrimary(!points.some((point) => point.kind === "email"));
+              setEditing((current) => !current);
+              setForm(null);
             }}
           >
-            <PlusIcon size={12} /> Add
+            {editing ? "Done" : "Edit"}
           </Button>
         ) : null}
       </div>
 
-      {expanded ? (
-        <div className="space-y-2 border-t px-4 py-3">
-          {points.map((point) => (
-            <div key={point.id} className="flex items-center gap-2 rounded-md bg-background px-3 py-2">
-              <span className="w-12 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">
+      {!editing ? (
+        <div className="mt-1 space-y-0.5">
+          {sortedPoints.map((point) => (
+            <div key={point.id} className="truncate font-mono text-xs">
+              {point.value}
+            </div>
+          ))}
+          {aliases.length > 0 ? (
+            <div className="truncate text-xs text-muted-foreground">aka {aliases.join(" · ")}</div>
+          ) : null}
+          {empty ? <div className="text-[11px] text-muted-foreground">Nothing recorded yet.</div> : null}
+        </div>
+      ) : (
+        <div className="mt-2 space-y-2">
+          {sortedPoints.map((point) => (
+            <div key={point.id} className="flex items-center gap-2 rounded-md bg-background px-3 py-1.5">
+              <span className="w-11 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">
                 {point.kind}
               </span>
               <span className="min-w-0 flex-1 truncate font-mono text-xs">{point.value}</span>
@@ -687,40 +590,69 @@ function IdentityStrip({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boo
                   Primary
                 </Badge>
               ) : null}
-              {isAdmin ? (
-                <>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7"
-                    aria-label={`Edit ${point.value}`}
-                    onClick={() => {
-                      setEditing(point);
-                      setAddingKind(null);
-                      setValue(point.value);
-                      setIsPrimary(point.isPrimary);
-                    }}
-                  >
-                    <PencilSimpleIcon size={13} />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 text-destructive hover:text-destructive"
-                    aria-label={`Delete ${point.value}`}
-                    disabled={deleteMutation.isPending}
-                    onClick={() => deleteMutation.mutate(point.id)}
-                  >
-                    <TrashIcon size={13} />
-                  </Button>
-                </>
-              ) : null}
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                aria-label={`Edit ${point.value}`}
+                onClick={() =>
+                  setForm({
+                    kind: point.kind as IdentityKind,
+                    value: point.value,
+                    isPrimary: point.isPrimary,
+                    originalPoint: point,
+                  })
+                }
+              >
+                <PencilSimpleIcon size={13} />
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-destructive hover:text-destructive"
+                aria-label={`Delete ${point.value}`}
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteMutation.mutate({ pointId: point.id })}
+              >
+                <TrashIcon size={13} />
+              </Button>
+            </div>
+          ))}
+          {aliases.map((alias) => (
+            <div
+              key={alias}
+              className="flex items-center gap-2 rounded-md bg-background px-3 py-1.5"
+              data-testid={`alias-row-${alias}`}
+            >
+              <span className="w-11 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">name</span>
+              <span className="min-w-0 flex-1 truncate text-xs">{alias}</span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                aria-label={`Edit alias ${alias}`}
+                onClick={() => setForm({ kind: "name", value: alias, isPrimary: false, originalAlias: alias })}
+              >
+                <PencilSimpleIcon size={13} />
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-destructive hover:text-destructive"
+                aria-label={`Delete alias ${alias}`}
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteMutation.mutate({ alias })}
+              >
+                <TrashIcon size={13} />
+              </Button>
             </div>
           ))}
 
-          {isAdmin && (editing || addingKind) ? (
+          {form && formKindDef ? (
             <form
               className="flex flex-wrap items-center gap-2 rounded-md border bg-background p-2"
               onSubmit={(event) => {
@@ -728,61 +660,74 @@ function IdentityStrip({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boo
                 saveMutation.mutate();
               }}
             >
-              <span className="w-12 text-[10px] font-semibold uppercase text-muted-foreground">
-                {editing?.kind ?? addingKind}
+              <span className="w-11 text-[10px] font-semibold uppercase text-muted-foreground">
+                {form.kind === "name" ? "name" : form.kind}
               </span>
               <Input
                 autoFocus
-                value={value}
-                onChange={(event) => setValue(event.target.value)}
-                className="h-8 min-w-48 flex-1 font-mono text-xs"
-                placeholder={addingKind === "phone" ? "+14155550123" : "name@example.com"}
+                value={form.value}
+                onChange={(event) => setForm({ ...form, value: event.target.value })}
+                className={cn("h-8 min-w-48 flex-1 text-xs", form.kind !== "name" && "font-mono")}
+                placeholder={formKindDef.placeholder}
+                aria-label={
+                  form.originalAlias || form.originalPoint
+                    ? `New value for ${form.originalAlias ?? form.originalPoint?.value}`
+                    : `New ${formKindDef.label.toLowerCase()}`
+                }
                 required
               />
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <input type="checkbox" checked={isPrimary} onChange={(event) => setIsPrimary(event.target.checked)} />
-                Primary
-              </label>
+              {formKindDef.hasPrimary ? (
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={form.isPrimary}
+                    onChange={(event) => setForm({ ...form, isPrimary: event.target.checked })}
+                  />
+                  Primary
+                </label>
+              ) : null}
               <Button type="submit" size="sm" className="h-8" disabled={saveMutation.isPending}>
                 Save
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-8"
-                onClick={() => {
-                  setEditing(null);
-                  setAddingKind(null);
-                }}
-              >
+              <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => setForm(null)}>
                 Cancel
               </Button>
             </form>
-          ) : null}
-
-          {isAdmin && !editing && !addingKind ? (
-            <div className="flex gap-2 pt-1">
-              {EDITABLE_CONTACT_KINDS.map(({ kind, label }) => (
+          ) : kinds.length === 1 ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 text-[11px]"
+              data-testid="identity-add"
+              onClick={() => startAdd(kinds[0])}
+            >
+              <PlusIcon size={12} /> Add name
+            </Button>
+          ) : (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
                 <Button
-                  key={kind}
                   type="button"
                   size="sm"
                   variant="outline"
                   className="h-7 gap-1 text-[11px]"
-                  onClick={() => {
-                    setAddingKind(kind);
-                    setValue("");
-                    setIsPrimary(!points.some((point) => point.kind === kind));
-                  }}
+                  data-testid="identity-add"
                 >
-                  <PlusIcon size={12} /> Add {label.toLowerCase()}
+                  <PlusIcon size={12} /> Add
                 </Button>
-              ))}
-            </div>
-          ) : null}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {kinds.map((def) => (
+                  <DropdownMenuItem key={def.kind} onClick={() => startAdd(def)}>
+                    {def.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
