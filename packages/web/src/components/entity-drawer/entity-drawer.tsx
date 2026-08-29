@@ -36,6 +36,7 @@ import {
 import {
   ArrowLeftIcon,
   ArrowsLeftRightIcon,
+  CheckIcon,
   DotsThreeIcon,
   GlobeIcon,
   PencilSimpleIcon,
@@ -710,35 +711,40 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
                   form?.originalAlias === alias ? (
                     <form
                       key={alias}
-                      className="inline-flex items-center gap-1"
+                      className="inline-flex items-center gap-1 rounded-full border border-foreground/40 px-2 py-0.5 text-[11px]"
                       onSubmit={(event) => {
                         event.preventDefault();
                         saveMutation.mutate();
                       }}
                     >
-                      <Input
+                      <input
                         autoFocus
                         value={form.value}
                         onChange={(event) => setForm({ ...form, value: event.target.value })}
                         onKeyDown={(event) => {
                           if (event.key === "Escape") setForm(null);
                         }}
-                        className="h-7 w-44 rounded-full px-2.5 text-[11px]"
+                        style={{ width: `${Math.max(6, form.value.length)}ch` }}
+                        className="max-w-56 bg-transparent text-[11px] outline-none"
                         aria-label={`New value for ${alias}`}
                         required
                       />
-                      <Button type="submit" size="sm" className="h-7 text-[11px]" disabled={saveMutation.isPending}>
-                        Save
-                      </Button>
-                      <Button
+                      <button
+                        type="submit"
+                        aria-label={`Save alias ${alias}`}
+                        className="text-muted-foreground hover:text-foreground"
+                        disabled={saveMutation.isPending}
+                      >
+                        <CheckIcon size={12} />
+                      </button>
+                      <button
                         type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-[11px]"
+                        aria-label={`Cancel editing ${alias}`}
+                        className="text-muted-foreground hover:text-foreground"
                         onClick={() => setForm(null)}
                       >
-                        Cancel
-                      </Button>
+                        <XIcon size={12} />
+                      </button>
                     </form>
                   ) : (
                     <span
