@@ -1,4 +1,5 @@
 import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/entity-drawer/drawer-kit";
+import { TimelineStrip, usefulSnippet } from "@/components/entity-drawer/timeline-strip";
 /**
  * Shared entity-review band + reconcile sheet.
  *
@@ -18,7 +19,6 @@ import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/en
  * mode.
  */
 import { EntityPicker } from "@/components/entity-picker";
-import { EvidenceList } from "@/components/evidence-list";
 import { detailKey, useReviewMutations } from "@/components/review-actions";
 import type {
   ChildTask,
@@ -26,6 +26,8 @@ import type {
   EntityMention,
   EntityReviewEvidenceRow,
   EntityReviewQueueRow,
+  EntityTimelineGroup,
+  EntityTimelineItem,
 } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, entityAccent } from "@/lib/entity-ui";
@@ -51,15 +53,56 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { birthOrigin, entityEmail, humanSourceType, isWeeklyPassProjectRow } from "./entity-format";
 
-function reviewEvidenceItem(e: EntityReviewEvidenceRow) {
-  return {
-    key: e.id,
-    snippet: e.contextSnippet ?? null,
-    fileName: e.file.name,
-    source: e.source,
-    occurredAt: e.seen_at,
-    href: e.file.providerUrl,
-  };
+/**
+ * The review sheets render linked files with the same day-grouped timeline the
+ * entity drawer uses, so a proposed entity reads like a real one. Evidence
+ * rows are per-mention; fold them per file so ×N matches the drawer, keeping
+ * the first snippet that survives the junk filter.
+ */
+function evidenceTimelineGroups(evidence: EntityReviewEvidenceRow[]): EntityTimelineGroup[] {
+  const byFile = new Map<string, EntityTimelineItem>();
+  for (const e of evidence) {
+    const existing = byFile.get(e.indexed_file_id);
+    if (existing) {
+      existing.mentionCount += 1;
+      if (!usefulSnippet(existing.contextSnippet, existing.fileName) && e.contextSnippet)
+        existing.contextSnippet = e.contextSnippet;
+      if (e.seen_at > existing.occurredAt) existing.occurredAt = e.seen_at;
+      continue;
+    }
+    byFile.set(e.indexed_file_id, {
+      fileId: e.indexed_file_id,
+      fileName: e.file.name,
+      fileType: null,
+      contentCategory: "document",
+      sourceType: e.source,
+      occurredAt: e.seen_at,
+      mentionConfidence: "EXTRACTED",
+      mentionCount: 1,
+      contextSnippet: e.contextSnippet ?? null,
+      url: e.file.providerUrl,
+      rollupGroupId: null,
+      crmActivity: null,
+    });
+  }
+  const items = [...byFile.values()].sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+  return items.length > 0 ? [{ month: "evidence", items }] : [];
+}
+
+/** Same fold for the candidate side's recent mentions. */
+function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[] {
+  return evidenceTimelineGroups(
+    mentions.map((m) => ({
+      id: m.id,
+      review_id: "",
+      indexed_file_id: m.file.id,
+      source: m.file.source,
+      note: null,
+      seen_at: m.sourceDate,
+      contextSnippet: m.contextSnippet,
+      file: { name: m.file.fileName, providerUrl: m.file.providerUrl, sourcePath: m.file.sourcePath },
+    })),
+  );
 }
 
 /**
@@ -453,7 +496,7 @@ function BirthInspectBody({
                   : "No linked files."}
               </p>
             ) : (
-              <EvidenceList items={evidence.map(reviewEvidenceItem)} />
+              <TimelineStrip groups={evidenceTimelineGroups(evidence)} />
             )}
           </div>
         ) : null}
@@ -769,7 +812,7 @@ function ReconcileColumn({
           <p className="mt-1 text-xs text-muted-foreground">No evidence rows.</p>
         ) : (
           <div className="mt-1 flex-1 overflow-y-auto">
-            <EvidenceList items={evidence.map(reviewEvidenceItem)} />
+            <TimelineStrip groups={evidenceTimelineGroups(evidence)} />
           </div>
         )}
       </div>
@@ -848,16 +891,7 @@ function CandidateView({
           <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
         ) : (
           <div className="mt-1 flex-1 overflow-y-auto">
-            <EvidenceList
-              items={candidateMentions.map((m) => ({
-                key: m.id,
-                snippet: m.contextSnippet,
-                fileName: m.file.fileName,
-                source: m.file.source,
-                occurredAt: m.sourceDate,
-                href: m.file.providerUrl,
-              }))}
-            />
+            <TimelineStrip groups={mentionTimelineGroups(candidateMentions)} />
           </div>
         )}
       </div>
