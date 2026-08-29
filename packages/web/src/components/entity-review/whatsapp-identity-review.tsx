@@ -16,8 +16,7 @@
  * placeholder into a person you already know, Dismiss retires it unnamed.
  */
 import { CompactAction } from "@/components/compact-action";
-import { MergePreviewPane } from "@/components/entity-merge-dialog";
-import { EntityPicker } from "@/components/entity-picker";
+import { MergeDialog, MergePreview } from "@/components/entity-merge-dialog";
 import { type WhatsAppContextMessage, type WhatsAppIdentityReviewItem, api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
 import { formatRelativeTime } from "@/lib/time";
@@ -279,8 +278,7 @@ function WhatsAppIdentityBody({
   const [phone, setPhone] = useState(item.phoneE164 ?? "");
   const [email, setEmail] = useState("");
   const [mergeOpen, setMergeOpen] = useState(false);
-  const [mergeTargetId, setMergeTargetId] = useState<string | null>(null);
-  const [mergeSurvivorId, setMergeSurvivorId] = useState<string | null>(null);
+  const [mergeSeedId, setMergeSeedId] = useState<string | null>(null);
   const trimmedName = name.trim();
   const initialName = (item.suggestion?.name ?? "").trim();
   const initialPhone = (item.phoneE164 ?? "").trim();
@@ -341,8 +339,7 @@ function WhatsAppIdentityBody({
     const suggestion = item.suggestion;
     if (!suggestion) return;
     if (suggestion.entityId) {
-      setMergeTargetId(suggestion.entityId);
-      setMergeSurvivorId(suggestion.entityId);
+      setMergeSeedId(suggestion.entityId);
       setMergeOpen(true);
       return;
     }
@@ -490,54 +487,33 @@ function WhatsAppIdentityBody({
         </Button>
       </div>
 
-      <Dialog
+      <MergeDialog
         open={mergeOpen}
         onOpenChange={(open) => {
           setMergeOpen(open);
-          if (!open) {
-            setMergeTargetId(null);
-            setMergeSurvivorId(null);
-          }
+          if (!open) setMergeSeedId(null);
         }}
-      >
-        <DialogContent className="sm:max-w-[520px]">
-          <DialogHeader>
-            <DialogTitle className="text-base">Merge this contact into…</DialogTitle>
-            <DialogDescription>
-              Pick the person this WhatsApp contact already is. Their number and group history fold into that entity —
-              no new person is created.
-            </DialogDescription>
-          </DialogHeader>
-          {mergeTargetId && mergeSurvivorId ? (
-            <MergePreviewPane
-              entityId={item.entityId}
-              entityName={trimmedName || item.phoneE164 || "This contact"}
-              otherId={mergeTargetId}
-              survivorId={mergeSurvivorId}
-              onSurvivorChange={setMergeSurvivorId}
-              onBack={() => {
-                setMergeTargetId(null);
-                setMergeSurvivorId(null);
-              }}
-              onMerged={() => {
-                setMergeOpen(false);
-                setMergeTargetId(null);
-                setMergeSurvivorId(null);
-                onResolve("Merged");
-              }}
-            />
-          ) : (
-            <EntityPicker
-              entityType="person"
-              excludeEntityId={item.entityId}
-              onPick={(entityId) => {
-                setMergeTargetId(entityId);
-                setMergeSurvivorId(entityId);
-              }}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
+        initialPickId={mergeSeedId}
+        entityType="person"
+        excludeEntityId={item.entityId}
+        title={() => "Merge this contact into…"}
+        description={() =>
+          "Pick the person this WhatsApp contact already is. Their number and group history fold into that entity — no new person is created."
+        }
+        renderPreview={(picked, reset) => (
+          <MergePreview
+            subject={{ kind: "entity", id: item.entityId, name: trimmedName || item.phoneE164 || "This contact" }}
+            target={picked}
+            defaultSurvivor="target"
+            onBack={reset}
+            onMerged={() => {
+              setMergeOpen(false);
+              setMergeSeedId(null);
+              onResolve("Merged");
+            }}
+          />
+        )}
+      />
     </>
   );
 }

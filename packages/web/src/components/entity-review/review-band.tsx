@@ -18,6 +18,7 @@ import { TimelineStrip, usefulSnippet } from "@/components/entity-drawer/timelin
  * create-as-new). Orphan rows (no suggested candidate) open directly in chooser
  * mode.
  */
+import { MergeDialog, MergePreview } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
 import { detailKey, useReviewMutations } from "@/components/review-actions";
 import type {
@@ -565,11 +566,10 @@ function BirthInspectBody({
 }
 
 /**
- * Two-step picker for the birth-row "Merge" escape hatch. Step one is the
- * shared {@link EntityPicker}; picking does NOT merge — step two shows the
- * target the way the entity drawer does (header anatomy + recent timeline) so
- * the admin can look before committing. Only the explicit Merge button calls
- * `onPick`.
+ * The birth-row "Merge" escape hatch, on the shared {@link MergeDialog} +
+ * {@link MergePreview} surface. Picking does NOT merge — the preview shows
+ * the target with the drawer's anatomy first, and only the explicit Merge
+ * button calls `onPick`.
  */
 function MergePickerDialog({
   open,
@@ -582,130 +582,31 @@ function MergePickerDialog({
   row: EntityReviewQueueRow;
   onPick: (entityId: string) => void;
 }) {
-  const [picked, setPicked] = useState<EntityListItem | null>(null);
   return (
-    <Dialog
+    <MergeDialog
       open={open}
-      onOpenChange={(next) => {
-        if (!next) setPicked(null);
-        onOpenChange(next);
-      }}
-    >
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="text-base">
-            {picked ? `Merge "${row.proposed_name}" into ${picked.name}` : `Merge "${row.proposed_name}" into…`}
-          </DialogTitle>
-          <DialogDescription>
-            {picked
-              ? "Check this is the right one — the proposed entity and its evidence fold in here."
-              : `Pick an existing ${humanSourceType(row.entity_type).toLowerCase()} this is a duplicate of. No new entity is created.`}
-          </DialogDescription>
-        </DialogHeader>
-        {picked ? (
-          <MergeTargetPreview
-            row={row}
-            target={picked}
-            onBack={() => setPicked(null)}
-            onMerge={() => {
-              setPicked(null);
-              onPick(picked.id);
-            }}
-          />
-        ) : (
-          <EntityPicker entityType={row.entity_type} onPick={(_, entity) => setPicked(entity)} />
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * The look-before-merge pane: the target rendered with the entity drawer's
- * header anatomy and its recent timeline, so a bare name like "Rahul" is
- * checkable against real activity before anything commits.
- */
-function MergeTargetPreview({
-  row,
-  target,
-  onBack,
-  onMerge,
-}: {
-  row: EntityReviewQueueRow;
-  target: EntityListItem;
-  onBack: () => void;
-  onMerge: () => void;
-}) {
-  const timelineQuery = useQuery({
-    queryKey: ["entity-drawer", "timeline", target.id],
-    queryFn: () => api.entities.timeline(target.id),
-  });
-  const recentItems = (timelineQuery.data?.groups ?? []).flatMap((group) => group.items).slice(0, 6);
-  const email =
-    (target.contactPoints ?? []).find((point) => point.kind === "email" && point.isPrimary)?.value ??
-    (target.contactPoints ?? []).find((point) => point.kind === "email")?.value;
-  const aka = displayAliases(target.aliases ?? [], [target.name, email]);
-  const accent = entityAccent({ id: target.id, name: target.name, sourceType: target.sourceType });
-
-  return (
-    <div className="flex min-h-0 min-w-0 flex-col gap-3" data-testid="merge-target-preview">
-      <div
-        className="min-w-0 overflow-hidden rounded-lg border bg-muted/20"
-        style={{ borderTopColor: accent, borderTopWidth: 3 }}
-      >
-        <div className="flex items-start gap-3 px-4 py-3">
-          <EntityAvatar entity={{ id: target.id, name: target.name, sourceType: target.sourceType }} size="lg" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-serif text-[18px] leading-tight">{target.name}</p>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
-                {humanSourceType(target.sourceType)}
-              </Badge>
-              {email ? <span className="font-mono text-[11px] text-muted-foreground">{email}</span> : null}
-              {target.mentionCount > 0 ? (
-                <span className="text-[11px] text-muted-foreground">
-                  {target.mentionCount} {target.mentionCount === 1 ? "mention" : "mentions"}
-                </span>
-              ) : null}
-            </div>
-            {aka.length > 0 ? (
-              <p className="mt-1 truncate text-[11px] text-muted-foreground">aka {aka.slice(0, 4).join(", ")}</p>
-            ) : null}
-          </div>
-        </div>
-        <div className="max-h-56 overflow-y-auto border-t px-4 py-3">
-          {timelineQuery.isLoading ? (
-            <p className="text-[11px] text-muted-foreground">Loading recent activity…</p>
-          ) : recentItems.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">No recent activity.</p>
-          ) : (
-            <TimelineStrip groups={[{ month: "recent", items: recentItems }]} entityId={target.id} />
-          )}
-        </div>
-      </div>
-      <p className="text-[11px] text-muted-foreground">
-        "{row.proposed_name}"
-        {row.evidenceCount > 0
-          ? ` and its ${row.evidenceCount} linked ${row.evidenceCount === 1 ? "file" : "files"}`
-          : ""}{" "}
-        fold into this {humanSourceType(target.sourceType).toLowerCase()}.
-      </p>
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={onBack}>
-          <ArrowLeftIcon size={12} />
-          Back
-        </Button>
-        <Button
-          size="sm"
-          onClick={onMerge}
-          className="ml-auto h-7 gap-1 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700"
-          data-testid="merge-target-confirm"
-        >
-          <ArrowsLeftRightIcon size={12} />
-          Merge into {target.name}
-        </Button>
-      </div>
-    </div>
+      onOpenChange={onOpenChange}
+      entityType={row.entity_type}
+      title={(picked) =>
+        picked ? `Merge "${row.proposed_name}" into ${picked.name}` : `Merge "${row.proposed_name}" into…`
+      }
+      description={(picked) =>
+        picked
+          ? "Check this is the right one — the proposed entity and its evidence fold in here."
+          : `Pick an existing ${humanSourceType(row.entity_type).toLowerCase()} this is a duplicate of. No new entity is created.`
+      }
+      renderPreview={(picked, reset) => (
+        <MergePreview
+          subject={{ kind: "proposal", row }}
+          target={picked}
+          onBack={reset}
+          onMerge={(targetId) => {
+            reset();
+            onPick(targetId);
+          }}
+        />
+      )}
+    />
   );
 }
 
