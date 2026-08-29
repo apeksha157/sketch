@@ -3553,6 +3553,18 @@ export const api = {
     deleteContactPoint(id: string, contactPointId: string) {
       return request<void>(`/api/entities/${id}/contact-points/${contactPointId}`, { method: "DELETE" });
     },
+    addAlias(id: string, alias: string) {
+      return request<{ aliases: string[] }>(`/api/entities/${id}/aliases`, {
+        method: "POST",
+        body: JSON.stringify({ alias }),
+      });
+    },
+    removeAlias(id: string, alias: string) {
+      return request<{ removed: string[]; aliases: string[] }>(
+        `/api/entities/${id}/aliases?value=${encodeURIComponent(alias)}`,
+        { method: "DELETE" },
+      );
+    },
     relations(id: string) {
       return request<EntityRelationsResponse>(`/api/entities/${id}/relations`);
     },

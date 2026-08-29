@@ -225,7 +225,10 @@ describe("EntityDrawer", () => {
     expect(screen.queryByText("legacy-wrong@example.com")).not.toBeInTheDocument();
     expect(screen.getByText("+14155550123")).toBeInTheDocument();
     expect(screen.getByText("+1")).toBeInTheDocument();
-    expect(screen.getByText(/Also: S\. Chen/)).toBeInTheDocument();
+    // Aliases moved from the header blob into the managed Aliases section.
+    expect(screen.queryByText(/Also:/)).not.toBeInTheDocument();
+    expect(screen.getByText("Aliases")).toBeInTheDocument();
+    expect(screen.getByText("S. Chen")).toBeInTheDocument();
 
     // Summary renders identity + activity sentences directly (no LLM, no shimmer).
     expect(screen.getByText("Summary")).toBeInTheDocument();

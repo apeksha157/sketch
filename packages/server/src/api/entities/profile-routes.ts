@@ -19,6 +19,7 @@ import { createEntitySharesRepository } from "../../db/repositories/entity-share
 import { createEntitySuppressionRepository } from "../../db/repositories/entity-suppressions";
 import { createEntityTimelineRepository } from "../../db/repositories/entity-timeline";
 import type { DB } from "../../db/schema";
+import { AliasAdminError, addDeclaredAlias, removeAliasEverywhere } from "../../entities/alias-admin";
 import {
   DeclareRelationshipError,
   declareRelationship,
@@ -65,6 +66,16 @@ function serializeContactPoint(row: ContactPointRow) {
     source: row.source,
     verifiedAt: row.verified_at,
   };
+}
+
+function aliasAdminErrorResponse(c: Parameters<typeof denyIfNotAdmin>[0], err: AliasAdminError) {
+  const status =
+    err.code === "ENTITY_NOT_FOUND" || err.code === "ALIAS_NOT_FOUND"
+      ? 404
+      : err.code === "DUPLICATE_ALIAS"
+        ? 409
+        : 400;
+  return c.json({ error: { code: err.code, message: err.message } }, status);
 }
 
 function contactPointError(c: Parameters<typeof denyIfNotAdmin>[0], message: string, status: 400 | 409 = 400) {
@@ -1043,6 +1054,64 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
       }
     });
     return c.body(null, 204);
+  });
+
+  /**
+   * POST /api/entities/:id/aliases
+   * Declares an alias at human_confirmed provenance and lifts any standing
+   * rejection for that name, so a previously deleted alias can come back.
+   * Admin-only.
+   */
+  routes.post("/:id/aliases", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    let body: { alias?: string };
+    try {
+      body = (await c.req.json()) as { alias?: string };
+    } catch {
+      return c.json({ error: { code: "BAD_REQUEST", message: "Invalid JSON body" } }, 400);
+    }
+    if (typeof body.alias !== "string" || body.alias.trim().length === 0) {
+      return c.json({ error: { code: "BAD_REQUEST", message: "alias is required" } }, 400);
+    }
+    try {
+      const result = await addDeclaredAlias(db, {
+        entityId: c.req.param("id"),
+        alias: body.alias,
+        userId: (c.get("sub") as string | undefined) ?? "admin",
+      });
+      return c.json(result, 201);
+    } catch (err) {
+      if (err instanceof AliasAdminError) return aliasAdminErrorResponse(c, err);
+      throw err;
+    }
+  });
+
+  /**
+   * DELETE /api/entities/:id/aliases?value=…
+   * Removes every stored variant of the alias (all variants normalize to one
+   * name, and the matcher treats them as one) and records a rejection so the
+   * pipeline cannot re-mint it. The alias travels in the query string because
+   * alias values can contain path separators. Admin-only.
+   */
+  routes.delete("/:id/aliases", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const value = c.req.query("value");
+    if (!value || value.trim().length === 0) {
+      return c.json({ error: { code: "BAD_REQUEST", message: "value query param is required" } }, 400);
+    }
+    try {
+      const result = await removeAliasEverywhere(db, {
+        entityId: c.req.param("id"),
+        alias: value,
+        userId: (c.get("sub") as string | undefined) ?? "admin",
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof AliasAdminError) return aliasAdminErrorResponse(c, err);
+      throw err;
+    }
   });
 
   /**
