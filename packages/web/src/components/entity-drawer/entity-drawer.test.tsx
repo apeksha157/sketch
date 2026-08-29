@@ -329,7 +329,8 @@ describe("EntityDrawer", () => {
     renderWithProviders(<OpenOnceHarness initialId="e-sarah" />);
     await screen.findByRole("heading", { name: /Sarah Chen/ });
 
-    await user.click(await screen.findByRole("button", { name: /Delete/ }));
+    await user.click(await screen.findByRole("button", { name: "Entity actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
 
     const dialog = await screen.findByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: "Delete" }));

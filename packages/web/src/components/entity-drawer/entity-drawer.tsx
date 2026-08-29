@@ -31,6 +31,7 @@ import {
   ArrowsLeftRightIcon,
   CaretDownIcon,
   CaretRightIcon,
+  DotsThreeIcon,
   GlobeIcon,
   PencilSimpleIcon,
   PlusIcon,
@@ -51,6 +52,13 @@ import {
 } from "@sketch/ui/components/alert-dialog";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@sketch/ui/components/dropdown-menu";
 import { Input } from "@sketch/ui/components/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@sketch/ui/components/select";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
@@ -232,35 +240,31 @@ function DrawerHeader({ entity, stackDepth, previousName, onBack, accent, onOpen
                 </span>
               ) : null}
               {isAdmin ? (
-                <>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 text-[11px]"
-                    onClick={() => setMergeOpen(true)}
-                  >
-                    <ArrowsLeftRightIcon size={12} />
-                    Merge
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 text-[11px]"
-                    onClick={() => setShareOpen(true)}
-                  >
-                    <ShareNetworkIcon size={12} />
-                    Share
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 text-[11px] text-destructive hover:text-destructive"
-                    onClick={() => setDeleteOpen(true)}
-                  >
-                    <TrashIcon size={12} />
-                    Delete
-                  </Button>
-                </>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" className="h-7 w-7 p-0" aria-label="Entity actions">
+                      <DotsThreeIcon size={14} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => setMergeOpen(true)}>
+                      <ArrowsLeftRightIcon size={12} />
+                      Merge…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setShareOpen(true)}>
+                      <ShareNetworkIcon size={12} />
+                      Share…
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => setDeleteOpen(true)}
+                    >
+                      <TrashIcon size={12} />
+                      Delete
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               ) : null}
             </div>
           </div>
