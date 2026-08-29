@@ -1766,6 +1766,46 @@ describe("proposeEntity", () => {
     expect(queue.candidate_reason).toBe("token-set");
   });
 
+  it("29a. edit-distance candidates surface in the lookup but never change propose decisions", async () => {
+    const entityRepo = createEntityRepository(db);
+    const akanksha = await entityRepo.upsertEntity({
+      name: "Akanksha Labs",
+      sourceType: "company",
+      subtype: "external",
+      status: "confirmed",
+    });
+    const materializeDeps = await buildMaterializeDeps(db);
+
+    expect(materializeDeps.lookup.findNameDedupCandidates?.("company", "Akansha Labs")).toMatchObject([
+      { entity: { id: akanksha.id }, score: 0.9, reason: "edit-distance" },
+    ]);
+
+    const result = await proposeEntity(
+      {
+        entityRepo: materializeDeps.entityRepo,
+        reviewRepo: materializeDeps.reviewRepo,
+        domainsRepo: materializeDeps.domainsRepo,
+        lookup: materializeDeps.lookup,
+        readEmail: materializeDeps.readEmail,
+        onEntityResolved: materializeDeps.onEntityResolved,
+      },
+      {
+        name: "Akansha Labs",
+        entityType: "company",
+        subtype: "external",
+        source: "llm",
+        sourceId: "mention-akansha-labs",
+        evidence: [],
+        triggeredByUserId: "user-1",
+      },
+    );
+
+    expect(result.kind).toBe("created");
+    if (result.kind !== "created") throw new Error("unreachable");
+    expect(result.entity.name).toBe("Akansha Labs");
+    expect(await db.selectFrom("entity_review_queue").selectAll().execute()).toEqual([]);
+  });
+
   it("30. suppresses a product proposal matching an existing company entity", async () => {
     const entityRepo = createEntityRepository(db);
     await entityRepo.upsertEntity({

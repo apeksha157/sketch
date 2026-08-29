@@ -41,7 +41,7 @@ export type CandidateReason =
   | "birth-gated"
   | "strict-normalized"
   | "token-set"
-  | "minhash"
+  | "edit-distance"
   | "adjacency"
   | "embedding";
 
@@ -119,14 +119,14 @@ export type EntityLookup = {
   getByAlias?(normalized: string): IndexEntityRow[];
   /** All entities of the given type (used for prefix/token-superset scan). */
   listByType(entityType: ProposeEntityType): IndexEntityRow[];
-  /** Same-type normalized-strict, token-set, or MinHash candidates over names and aliases. */
+  /** Same-type normalized-strict, token-set, or edit-distance candidates over names and aliases. */
   findNameDedupCandidates?(
     entityType: ProposeEntityType,
     name: string,
   ): Array<{
     entity: IndexEntityRow;
     score: number;
-    reason: Extract<CandidateReason, "strict-normalized" | "token-set" | "minhash">;
+    reason: Extract<CandidateReason, "strict-normalized" | "token-set" | "edit-distance">;
   }>;
   retrieveEmbeddingCandidates?(entityType: ProposeEntityType, name: string): Promise<RankedCandidate[]>;
   /** Company ids associated with a normalized corporate domain. */
@@ -256,6 +256,11 @@ async function productCollidesWithThirdParty(
 
 function canAutoLinkNameDedupCandidate(input: ProposeInput, candidate: RankedCandidate): boolean {
   if (candidate.reason === "token-set") return false;
+  /**
+   * MinHash could auto-link. One-edit auto-linking needs adjacency guardrails
+   * and is deliberately deferred to PR 2.2.
+   */
+  if (candidate.reason === "edit-distance") return false;
   if (input.entityType === "person" && candidate.reason === "strict-normalized" && !input.email) return false;
   return true;
 }
@@ -470,12 +475,7 @@ function pickConfirmedCanonical(
 }
 
 function isSingleStrictPersonReference(ranked: RankedCandidate[]): boolean {
-  return (
-    ranked.length === 1 &&
-    (ranked[0].reason === "exact-ambiguous" ||
-      ranked[0].reason === "strict-normalized" ||
-      ranked[0].reason === "minhash")
-  );
+  return ranked.length === 1 && (ranked[0].reason === "exact-ambiguous" || ranked[0].reason === "strict-normalized");
 }
 
 function canAutoLinkScopedPersonCandidate(input: ProposeInput, candidate: RankedCandidate): boolean {
@@ -797,8 +797,15 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
     }
   }
 
+  /**
+   * Edit-distance candidates are decision-inert in this phase: letting them
+   * demote creation to queueing would make graph recreate drop real entities
+   * whose names sit one edit apart (Himansh vs Himanshu). They surface through
+   * findNameDedupCandidates for review tooling; wiring them into decisions
+   * ships with the adjacency guardrails in the T2 expansion.
+   */
   const dedupCandidates = (deps.lookup.findNameDedupCandidates?.(input.entityType, input.name) ?? []).filter(
-    (candidate) => isEligibleMatchTarget(input, candidate.entity),
+    (candidate) => candidate.reason !== "edit-distance" && isEligibleMatchTarget(input, candidate.entity),
   );
   if (dedupCandidates.length > 0) {
     let ranked: RankedCandidate[] = dedupCandidates.map((candidate) => ({
