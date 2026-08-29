@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { type Kysely, sql } from "kysely";
+import { filterAliasWritesForEntityName } from "../../entities/alias-write-gate";
 import { parseAliasesString } from "../../entities/materialize-json";
 import { normalizeName } from "../../entities/name-keys";
 import type { DB } from "../schema";
 import { type EntityAliasProvenance, recordAliases } from "./entity-alias-rows";
+import { createEntityReviewRepo } from "./entity-review";
 
 const MAX_ALIAS_MERGE_ATTEMPTS = 8;
 
@@ -112,10 +114,15 @@ export async function mergeEntityAliases(
 
     const aliases = parseAliasesString(entity.aliases);
     const seen = new Set([entity.name, ...aliases].map((value) => value.trim().toLowerCase()).filter(Boolean));
+    const ledgerBlocked = await createEntityReviewRepo(db).listRejectedNamesForEntities([entity.id]);
     const added: string[] = [];
-    for (const candidate of candidates) {
+    for (const candidate of filterAliasWritesForEntityName(
+      candidates.filter((value): value is string => typeof value === "string"),
+      entity.name,
+    )) {
       const value = candidate?.trim();
       if (!value) continue;
+      if (ledgerBlocked.has(`${entity.id}:${normalizeName(value)}`)) continue;
       const key = value.toLowerCase();
       if (seen.has(key)) continue;
       aliases.push(value);
