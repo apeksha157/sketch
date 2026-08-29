@@ -32,12 +32,16 @@ export interface RecreateConflict {
  * Order matters: evidence → relationships → mentions → entities, so FK
  * cascades don't fire mid-loop. `entity_domains` is handled separately
  * because it has a per-row override predicate (manual rows survive reset).
+ *
+ * `entity_alias_rejections` is a durable decision ledger, not derived graph
+ * state. Rejections for deleted entities disappear through the entity FK; rows
+ * for preserved entities must survive recreate so rejected aliases cannot be
+ * re-taught by replay.
  */
 const DERIVED_TABLES = [
   "entity_relationship_evidence",
   "entity_relationships",
   "entity_review_evidence",
-  "entity_alias_rejections",
   "entity_review_queue",
   "entity_candidates",
   "entity_mentions",
@@ -324,7 +328,6 @@ export async function resetDerivedEntityData(
   const warnings = [
     `${deleted.entities ?? 0} entities will be deleted and recreated from durable facts.`,
     `${deleted.entity_review_queue ?? 0} review-queue rows will be deleted.`,
-    `${deleted.entity_alias_rejections ?? 0} alias rejections will be deleted; rejected aliases may be re-proposed after recreate.`,
   ];
   if (filesWithoutSourceFacts > 0) {
     warnings.push(
@@ -477,7 +480,6 @@ async function resetDerivedEntityDataInner(db: Kysely<DB>, logger: Logger): Prom
   const warnings = [
     `${deleted.entities ?? 0} entities will be deleted and recreated from durable facts.`,
     `${deleted.entity_review_queue ?? 0} review-queue rows will be deleted.`,
-    `${deleted.entity_alias_rejections ?? 0} alias rejections will be deleted; rejected aliases may be re-proposed after recreate.`,
   ];
   if (filesWithoutSourceFacts > 0) {
     warnings.push(

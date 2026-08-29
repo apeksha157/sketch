@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely, Selectable } from "kysely";
 import { createEntityRepository, whereLiveEntity } from "../db/repositories/entities";
-import { recordAlias } from "../db/repositories/entity-alias-rows";
+import { createEntityReviewRepo } from "../db/repositories/entity-review";
 import { type GraphVerdictRow, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
 import type { ContainersTable, DB, EntitiesTable, EntityAliasProvenance } from "../db/schema";
 import type { CleanupAction, CleanupVerdict } from "./cleanup-adjudication";
@@ -292,6 +292,11 @@ async function applyPlannedRow(
   if (plan.action === "nest_under") return ledgerRefForEffect(await applyNest(db, plan, mutations));
   if (plan.action === "remove_alias") {
     const effect = await applyRemoveAlias(db, plan, mutations);
+    await createEntityReviewRepo(db).addRejection({
+      entityId: plan.entityId,
+      rejectedName: effect.alias,
+      rejectedBy: `graph-verdict:${verdict.id}`,
+    });
     await addWouldChangeMetadata(db, verdict.id, verdict.would_change_json, {
       removedAlias: effect.alias,
       removedAliasProvenance: effect.aliasProvenance,
@@ -822,13 +827,13 @@ async function restoreRemovedAlias(trx: Kysely<DB>, row: GraphVerdictRow, normal
   if (!entity) throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Alias entity is not live");
   const provenance = aliasProvenanceFromMetadata(metadata.removedAliasProvenance);
   const createdBy = typeof metadata.removedAliasCreatedBy === "string" ? metadata.removedAliasCreatedBy : null;
-  await createEntityRepository(trx).appendAlias(entity.id, alias, provenance, createdBy);
-  await recordAlias(trx, {
-    entityId: entity.id,
-    alias,
-    provenance,
-    createdBy,
-  });
+  await trx
+    .deleteFrom("entity_alias_rejections")
+    .where("entity_id", "=", entity.id)
+    .where("normalized_rejected_name", "=", normalizedAlias)
+    .where("rejected_by", "=", `graph-verdict:${row.id}`)
+    .execute();
+  await createEntityRepository(trx).appendAlias(entity.id, alias, provenance, createdBy, { bypassGate: true });
 }
 
 async function restoreMergeSurvivorTier(trx: Kysely<DB>, row: GraphVerdictRow, groupId: string): Promise<void> {
