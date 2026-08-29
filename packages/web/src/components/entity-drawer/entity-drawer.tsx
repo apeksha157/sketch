@@ -451,9 +451,69 @@ interface IdentityForm {
 }
 
 /**
- * The row-shaped identity editor, rendered in place of the row being edited
- * (or appended when adding) so the journey never jumps away from the value
- * it concerns. Enter saves, Escape cancels.
+ * The chip-shaped alias editor — an editing or brand-new name renders as a
+ * chip among the other chips, so the wall never reflows around a bulky form.
+ * Enter saves, Escape cancels.
+ */
+function AliasChipEditor({
+  form,
+  pending,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  form: IdentityForm;
+  pending: boolean;
+  onChange: (form: IdentityForm) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const subject = form.originalAlias ?? "new name";
+  return (
+    <form
+      className="inline-flex items-center gap-1 rounded-full border border-foreground/40 px-2 py-0.5 text-[11px]"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <input
+        autoFocus
+        value={form.value}
+        onChange={(event) => onChange({ ...form, value: event.target.value })}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onCancel();
+        }}
+        placeholder="New name"
+        style={{ width: `${Math.max(9, form.value.length)}ch` }}
+        className="max-w-56 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground"
+        aria-label={form.originalAlias ? `New value for ${form.originalAlias}` : "New name"}
+        required
+      />
+      <button
+        type="submit"
+        aria-label={`Save ${subject}`}
+        className="text-muted-foreground hover:text-foreground"
+        disabled={pending}
+      >
+        <CheckIcon size={12} />
+      </button>
+      <button
+        type="button"
+        aria-label={`Cancel ${subject}`}
+        className="text-muted-foreground hover:text-foreground"
+        onClick={onCancel}
+      >
+        <XIcon size={12} />
+      </button>
+    </form>
+  );
+}
+
+/**
+ * The row-shaped identity editor for contact points, rendered in place of
+ * the row being edited (or appended when adding) so the journey never jumps
+ * away from the value it concerns. Enter saves, Escape cancels.
  */
 function IdentityRowForm({
   form,
@@ -488,7 +548,7 @@ function IdentityRowForm({
         onKeyDown={(event) => {
           if (event.key === "Escape") onCancel();
         }}
-        className={cn("h-8 min-w-48 flex-1 text-xs", form.kind !== "name" && "font-mono")}
+        className={cn("h-7 min-w-48 flex-1 text-xs", form.kind !== "name" && "font-mono")}
         placeholder={def.placeholder}
         aria-label={
           form.originalAlias || form.originalPoint
@@ -507,10 +567,10 @@ function IdentityRowForm({
           Primary
         </label>
       ) : null}
-      <Button type="submit" size="sm" className="h-8" disabled={pending}>
+      <Button type="submit" size="sm" className="h-7 text-[11px]" disabled={pending}>
         Save
       </Button>
-      <Button type="button" size="sm" variant="ghost" className="h-8" onClick={onCancel}>
+      <Button type="button" size="sm" variant="ghost" className="h-7 text-[11px]" onClick={onCancel}>
         Cancel
       </Button>
     </form>
@@ -605,6 +665,7 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
   if (empty && !isAdmin) return null;
 
   const formKindDef = form ? IDENTITY_KINDS.find((def) => def.kind === form.kind) : null;
+  const addingName = form?.kind === "name" && !form.originalAlias;
   const startAdd = (def: (typeof IDENTITY_KINDS)[number]) =>
     setForm({
       kind: def.kind,
@@ -701,7 +762,7 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
               </div>
             ),
           )}
-          {aliases.length > 0 ? (
+          {aliases.length > 0 || addingName ? (
             <div className="flex items-start gap-2 rounded-md bg-background px-3 py-2">
               <span className="w-11 shrink-0 pt-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
                 name
@@ -709,43 +770,14 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
               <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
                 {aliases.map((alias) =>
                   form?.originalAlias === alias ? (
-                    <form
+                    <AliasChipEditor
                       key={alias}
-                      className="inline-flex items-center gap-1 rounded-full border border-foreground/40 px-2 py-0.5 text-[11px]"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        saveMutation.mutate();
-                      }}
-                    >
-                      <input
-                        autoFocus
-                        value={form.value}
-                        onChange={(event) => setForm({ ...form, value: event.target.value })}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") setForm(null);
-                        }}
-                        style={{ width: `${Math.max(6, form.value.length)}ch` }}
-                        className="max-w-56 bg-transparent text-[11px] outline-none"
-                        aria-label={`New value for ${alias}`}
-                        required
-                      />
-                      <button
-                        type="submit"
-                        aria-label={`Save alias ${alias}`}
-                        className="text-muted-foreground hover:text-foreground"
-                        disabled={saveMutation.isPending}
-                      >
-                        <CheckIcon size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Cancel editing ${alias}`}
-                        className="text-muted-foreground hover:text-foreground"
-                        onClick={() => setForm(null)}
-                      >
-                        <XIcon size={12} />
-                      </button>
-                    </form>
+                      form={form}
+                      pending={saveMutation.isPending}
+                      onChange={setForm}
+                      onSave={() => saveMutation.mutate()}
+                      onCancel={() => setForm(null)}
+                    />
                   ) : (
                     <span
                       key={alias}
@@ -773,11 +805,20 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
                     </span>
                   ),
                 )}
+                {addingName && form ? (
+                  <AliasChipEditor
+                    form={form}
+                    pending={saveMutation.isPending}
+                    onChange={setForm}
+                    onSave={() => saveMutation.mutate()}
+                    onCancel={() => setForm(null)}
+                  />
+                ) : null}
               </div>
             </div>
           ) : null}
 
-          {form && formKindDef && !form.originalPoint && !form.originalAlias ? (
+          {form && formKindDef && form.kind !== "name" && !form.originalPoint ? (
             <IdentityRowForm
               form={form}
               def={formKindDef}
