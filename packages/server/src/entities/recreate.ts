@@ -449,6 +449,7 @@ export async function recreateEntityGraph(deps: RecreateDeps): Promise<RecreateS
       factTypes: deps.materializeFactTypes,
       onProgress: deps.onProgress,
       shouldCancel: deps.shouldCancel,
+      suppressContextLinking: true,
     });
 
     if (deps.shouldCancel?.()) throw new Error("Re-enrich stopped");

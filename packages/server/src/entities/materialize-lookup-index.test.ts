@@ -440,10 +440,10 @@ describe("lookup index row sharing", () => {
     );
 
     expect(nameLinked.kind).toBe("linked");
-    expect(aliasLinked.kind).toBe("linked");
-    if (nameLinked.kind !== "linked" || aliasLinked.kind !== "linked") throw new Error("expected linked products");
+    expect(aliasLinked.kind).toBe("queued");
+    if (nameLinked.kind !== "linked" || aliasLinked.kind !== "queued") throw new Error("expected product outcomes");
     expect(nameLinked.entity.id).toBe(product.id);
-    expect(aliasLinked.entity.id).toBe(product.id);
+    expect(aliasLinked.candidateEntityId).toBe(product.id);
 
     const company = await entityRepo.upsertEntity({
       name: "Fresh Vendor",

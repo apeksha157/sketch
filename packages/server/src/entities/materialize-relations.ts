@@ -258,6 +258,7 @@ async function materializeRelationEndpoint(
   }
   const result = await proposeEntity(
     {
+      db: deps.db,
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
       resolutionLedger: deps.resolutionLedger,
@@ -279,12 +280,14 @@ async function materializeRelationEndpoint(
         ? `${fact.indexed_file_id ?? "no-file"}:${role}:${endpoint.name}`
         : `${fact.indexed_file_id ?? "no-file"}:${fact.content_hash ?? "no-hash"}:${role}:${endpoint.name}`,
       evidence: fact.indexed_file_id ? [{ indexedFileId: fact.indexed_file_id }] : [],
+      contextFileId: fact.indexed_file_id,
       triggeredByUserId,
       aliases: endpoint.variations,
       metadata: { origin: "ai", relationEndpoint: true },
       provenanceTier: "inferred",
       evidenceDomain: typeof raw.evidenceDomain === "string" ? raw.evidenceDomain : null,
       linkOnly: options.linkOnly,
+      suppressContextLinking: deps.suppressContextLinking,
       queueInsteadOfCreate:
         endpoint.type === "project" || (endpoint.type === "product" && deps.birthGateTypes.has("product")),
     },

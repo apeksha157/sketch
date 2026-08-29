@@ -60,6 +60,7 @@ export async function materializeNonPersonLlmEntity(
 
   const result = await proposeEntity(
     {
+      db: deps.db,
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
       resolutionLedger: deps.resolutionLedger,
@@ -79,12 +80,14 @@ export async function materializeNonPersonLlmEntity(
       source: "llm_extraction",
       sourceId: fact.subject_source_id ?? `${fact.indexed_file_id ?? "no-file"}:${fact.subject_name}`,
       evidence: fact.indexed_file_id ? [{ indexedFileId: fact.indexed_file_id }] : [],
+      contextFileId: fact.indexed_file_id,
       triggeredByUserId,
       aliases: variations,
       metadata: { origin: "ai" },
       provenanceTier: "inferred",
       evidenceDomain: typeof raw.evidenceDomain === "string" ? raw.evidenceDomain : null,
       linkOnly: options.linkOnly,
+      suppressContextLinking: deps.suppressContextLinking,
     },
   );
 

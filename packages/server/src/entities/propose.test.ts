@@ -854,12 +854,12 @@ describe("proposeEntity", () => {
     expect(queue[0].candidate_reason).toBe("exact-ambiguous");
   });
 
-  it("13. alias-match links — post-Confirm proposal hits the alias half of the fast-path", async () => {
+  it("13. alias-match queues — post-Confirm proposal is a candidate, not a fast-path link", async () => {
     // Models the post-Confirm scenario: existing entity 'Simran Suri'
     // already carries 'Simran Suri Neeli' in its aliases JSON (the state
     // left behind after a reviewer Confirmed a merge proposal). A future
-    // propose for 'Simran Suri Neeli' with no email must auto-link to
-    // that entity, not fall through to the fuzzy ranker.
+    // propose for 'Simran Suri Neeli' with no email must queue that
+    // entity as a candidate rather than using the alias as link authority.
     const entityRepo = createEntityRepository(db);
     const ss = await entityRepo.upsertPersonEntity({
       name: "Simran Suri",
@@ -887,12 +887,12 @@ describe("proposeEntity", () => {
       triggeredByUserId: "user-1",
     });
 
-    expect(result.kind).toBe("linked");
-    if (result.kind !== "linked") throw new Error("unreachable");
-    expect(result.entity.id).toBe(ss.id);
+    expect(result.kind).toBe("queued");
 
     const queue = await db.selectFrom("entity_review_queue").selectAll().execute();
-    expect(queue).toHaveLength(0);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].candidate_entity_id).toBe(ss.id);
+    expect(queue[0].candidate_reason).toBe("alias-exact");
   });
 
   it("14. alias-match dedup — same entity returned by name+alias counts as one (no ambiguity misfire)", async () => {
@@ -1903,7 +1903,9 @@ describe("proposeEntity", () => {
       triggeredByUserId: "user-1",
     });
 
-    expect(aliasOnly.kind).toBe("created");
+    expect(aliasOnly.kind).toBe("queued");
+    if (aliasOnly.kind !== "queued") throw new Error("expected alias candidate queue");
+    expect(aliasOnly.candidateEntityId).not.toBeNull();
 
     const domainCollision = await proposeEntity(deps, {
       name: "Nullcorp",

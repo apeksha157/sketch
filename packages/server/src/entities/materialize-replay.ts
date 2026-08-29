@@ -316,6 +316,7 @@ export async function replaySourceFacts(
     structuralAutoBirthTypes: opts.structuralAutoBirthTypes,
     birthGateDryRun: opts.birthGateDryRun,
     embeddingProvider: opts.embeddingProvider,
+    suppressContextLinking: opts.suppressContextLinking,
   });
   const batchSize = opts.batchSize && opts.batchSize > 0 ? Math.floor(opts.batchSize) : DEFAULT_FACT_BATCH_SIZE;
   for (const factType of FACT_REPLAY_ORDER) {
@@ -430,6 +431,7 @@ async function materializeUnmaterializedFactsInner(
     structuralAutoBirthTypes: opts.structuralAutoBirthTypes,
     birthGateDryRun: opts.birthGateDryRun,
     embeddingProvider: opts.embeddingProvider,
+    suppressContextLinking: opts.suppressContextLinking,
   });
   summary.indexBuilds++;
 

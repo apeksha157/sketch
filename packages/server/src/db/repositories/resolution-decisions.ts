@@ -3,7 +3,7 @@ import { type Kysely, type Selectable, sql } from "kysely";
 import type { DB, ResolutionDecisionsTable } from "../schema";
 
 export type ResolutionDecision = Selectable<ResolutionDecisionsTable>;
-export type ResolutionDecisionDecider = "human" | "judge";
+export type ResolutionDecisionDecider = "human" | "judge" | "adjacency";
 
 export interface RecordResolutionDecisionInput {
   normalizedMentionName: string;

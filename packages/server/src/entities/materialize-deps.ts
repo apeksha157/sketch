@@ -590,6 +590,7 @@ export interface BuildMaterializeDepsOptions {
   structuralAutoBirthTypes?: Set<ProposeEntityType>;
   birthGateDryRun?: boolean;
   embeddingProvider?: EmbeddingProvider | null;
+  suppressContextLinking?: boolean;
 }
 
 export function createEntityLookupFromIndex(opts: {
@@ -790,6 +791,7 @@ export async function buildMaterializeDeps(
       return null;
     },
     normalizationBackfillComplete,
+    suppressContextLinking: opts.suppressContextLinking ?? false,
     countActiveLlmFilesForName: async (normalizedName, mentionType) => {
       if (normalizationBackfillComplete) {
         return countActiveLlmFilesIndexed(db, normalizedName, mentionType);
