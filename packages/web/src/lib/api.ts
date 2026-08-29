@@ -3865,6 +3865,9 @@ export const api = {
     },
   },
   graphVerdicts: {
+    listOpen() {
+      return request<{ verdicts: GraphVerdict[] }>("/api/graph-verdicts?status=awaiting_human,approved");
+    },
     listRuns() {
       return request<{ runs: GraphVerdictRun[] }>("/api/graph-verdicts/runs");
     },

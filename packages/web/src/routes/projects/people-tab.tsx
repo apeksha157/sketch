@@ -35,7 +35,7 @@ interface CompanyInfo {
   subtype: string | null;
 }
 
-export function PeopleTab() {
+export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [needsPlacementOnly, setNeedsPlacementOnly] = useState(false);
@@ -147,7 +147,7 @@ export function PeopleTab() {
 
   return (
     <div className="space-y-4">
-      <ReviewBandCapped types={["person"]} />
+      <ReviewBandCapped types={["person"]} isAdmin={isAdmin} />
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-0 flex-1">

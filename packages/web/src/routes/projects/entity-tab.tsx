@@ -1,3 +1,4 @@
+import { EntityTable } from "@/components/entity-table";
 /**
  * Per-type entity tabs for the Your Org surface. Each mounts the Entity
  * Explorer table ({@link EntityTable}) filtered to one taxonomy type, opened by
@@ -6,7 +7,6 @@
  */
 import { type CuratedProduct, type EntityListItem, api } from "@/lib/api";
 import { useEntityUi } from "@/lib/entity-ui";
-import { EntityTable } from "@/routes/files/entity-explorer";
 import { CaretRightIcon, CubeIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Input } from "@sketch/ui/components/input";
@@ -98,7 +98,7 @@ export function OrgEntityTab({
   );
 }
 
-export function ProductsTab({ onDeclare }: { onDeclare: () => void }) {
+export function ProductsTab({ onDeclare, isAdmin = false }: { onDeclare: () => void; isAdmin?: boolean }) {
   const { openEntity } = useEntityUi();
   const ours = useQuery({ queryKey: ["products"], queryFn: () => api.products.list() });
   const tools = useEntityList("tool", "");
@@ -107,7 +107,7 @@ export function ProductsTab({ onDeclare }: { onDeclare: () => void }) {
 
   return (
     <div className="space-y-4">
-      <ReviewBandCapped types={["product"]} />
+      <ReviewBandCapped types={["product"]} isAdmin={isAdmin} />
 
       <section>
         <SectionLabel label="Ours" note={`${products.length} declared`} accent />
