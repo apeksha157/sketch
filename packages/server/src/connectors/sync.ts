@@ -39,6 +39,7 @@ import {
   resolveOpenRouterEnrichmentConfig,
 } from "./enrichment-providers";
 import { createGeminiGenerator } from "./gemini-generate";
+import { type ContainerMapping, classificationToContainerTarget } from "./hierarchy-mapping";
 import { applyMicrosoftOAuthConfig, resolveMicrosoftOAuthConfig } from "./microsoft-graph";
 import { createOpenRouterGenerator } from "./openrouter-generate";
 import { type PostSyncGraphInputCollector, createPostSyncGraphInputCollector } from "./post-sync";
@@ -110,6 +111,29 @@ export interface RunConnectorSyncOptions {
   postSyncMode?: "inline" | "deferred";
   postSyncInputCollector?: PostSyncGraphInputCollector;
   slackIndexingFacade?: SlackIndexingFacade | null;
+}
+
+/**
+ * Active mode resolves any stored classification into connector-local target overrides.
+ * `classification_status` is intentionally not filtered: archival and verdict state are
+ * enforced by verdict application, while sync consumes the applied classification value.
+ */
+async function loadActiveContainerTargetOverrides(
+  db: Kysely<DB>,
+  connectorConfigId: string,
+): Promise<ContainerMapping> {
+  const rows = await db
+    .selectFrom("containers")
+    .select(["external_id", "classification"])
+    .where("connector_config_id", "=", connectorConfigId)
+    .where("classification", "is not", null)
+    .execute();
+  const overrides: ContainerMapping = {};
+  for (const row of rows) {
+    const target = classificationToContainerTarget(row.classification);
+    if (target) overrides[row.external_id] = target;
+  }
+  return overrides;
 }
 
 /**
@@ -317,6 +341,10 @@ export async function runConnectorSync(
       appConfig?.CONTAINER_CLASSIFICATION_MODE && appConfig.CONTAINER_CLASSIFICATION_MODE !== "off"
         ? createContainerRepository(db)
         : null;
+    const containerTargetOverrides =
+      appConfig?.CONTAINER_CLASSIFICATION_MODE === "active"
+        ? await loadActiveContainerTargetOverrides(db, config.id)
+        : undefined;
 
     const existingHashes = await loadExistingContentHashes(db, connectorType, config.id);
     const resolveNameToEmail = await buildSyncNameResolver(db);
@@ -421,6 +449,7 @@ export async function runConnectorSync(
             });
           }
         : undefined,
+      containerTargetOverrides,
       onEmailSuppressed: async (record) => {
         await recordSuppressedEmailRecord(db, {
           connectorConfigId: config.id,

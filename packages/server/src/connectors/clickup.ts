@@ -20,6 +20,7 @@ import {
   type HierarchyMapping,
   type HierarchyMappingConfig,
   type HierarchyNode,
+  classificationOverridesKey,
   computeStructureAwareDefault,
   hasStoredHierarchyMapping,
   readHierarchyMappingConfig,
@@ -401,17 +402,27 @@ export function resolveListCycle(params: {
   workspaceName: string;
   workspaceId: string;
   storedMapping: unknown;
+  hierarchyMapping?: HierarchyMapping;
+  hierarchyMappingConfig?: HierarchyMappingConfig;
   logger?: Pick<Logger, "warn">;
 }): SyncedTaskCycle | null {
-  const mappingConfig = readHierarchyMappingConfig(params.storedMapping);
-  if (!hasStoredHierarchyMapping(mappingConfig, CLICKUP_HIERARCHY_LEVEL_KEYS)) {
+  const mappingConfig = params.hierarchyMappingConfig ?? readHierarchyMappingConfig(params.storedMapping);
+  const hasStoredMapping = hasStoredHierarchyMapping(mappingConfig, CLICKUP_HIERARCHY_LEVEL_KEYS);
+  const hasListOverride = Boolean(mappingConfig[classificationOverridesKey]?.[params.list.id]);
+  if (!hasStoredMapping && !hasListOverride) {
     return detectSprintCycle(params.list, params.space, params.folder);
   }
 
-  const mapping = resolveHierarchyMapping(CLICKUP_HIERARCHY_LEVELS, mappingConfig, {
-    levelContexts: [{ key: "list", hasDates: hasListDates(params.list) }],
-    logger: params.logger,
-  });
+  const mapping = hasStoredMapping
+    ? resolveHierarchyMapping(CLICKUP_HIERARCHY_LEVELS, mappingConfig, {
+        levelContexts: [{ key: "list", hasDates: hasListDates(params.list) }],
+        logger: params.logger,
+      })
+    : (params.hierarchyMapping ??
+      resolveHierarchyMapping(CLICKUP_HIERARCHY_LEVELS, mappingConfig, {
+        levelContexts: [{ key: "list", hasDates: hasListDates(params.list) }],
+        logger: params.logger,
+      }));
   const effectiveTarget = resolveContainerTarget(mappingConfig, "list", params.list.id, mapping.list);
   if (effectiveTarget !== "cycle") return null;
 
@@ -751,12 +762,25 @@ export function createClickUpConnector(): Connector {
       await clickupRequest("/user", token, pino({ level: "silent" }));
     },
 
-    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed, onPersonSeed, onContainerObservation }) {
+    async *sync({
+      credentials,
+      scopeConfig,
+      cursor,
+      logger,
+      onEntitySeed,
+      onPersonSeed,
+      onContainerObservation,
+      containerTargetOverrides,
+    }) {
       const token = getAccessToken(credentials);
       const allowedWorkspaces = (scopeConfig.workspaces as string[] | undefined) ?? [];
       const allowedSpaces = (scopeConfig.spaces as string[] | undefined) ?? [];
       const storedHierarchyMapping = scopeConfig.hierarchyMapping;
       const hierarchyMappingConfig = readHierarchyMappingConfig(storedHierarchyMapping);
+      const activeHierarchyMappingConfig =
+        containerTargetOverrides && Object.keys(containerTargetOverrides).length > 0
+          ? { ...hierarchyMappingConfig, [classificationOverridesKey]: containerTargetOverrides }
+          : hierarchyMappingConfig;
       const hasStoredMapping = hasStoredHierarchyMapping(hierarchyMappingConfig, CLICKUP_HIERARCHY_LEVEL_KEYS);
       const seenAssignees = new Map<string, { username: string; email?: string }>();
 
@@ -797,7 +821,7 @@ export function createClickUpConnector(): Connector {
 
         const workspaceMapping = resolveHierarchyMapping(
           CLICKUP_HIERARCHY_LEVELS,
-          hasStoredMapping ? storedHierarchyMapping : computeStructureAwareDefault(CLICKUP_HIERARCHY_LEVELS),
+          hasStoredMapping ? activeHierarchyMappingConfig : computeStructureAwareDefault(CLICKUP_HIERARCHY_LEVELS),
           { logger },
         );
 
@@ -805,7 +829,7 @@ export function createClickUpConnector(): Connector {
           await maybeSeedMappedClickUpNode({
             onEntitySeed,
             mapping: workspaceMapping,
-            mappingConfig: hierarchyMappingConfig,
+            mappingConfig: activeHierarchyMappingConfig,
             levelKey: "workspace",
             node: { id: team.id, name: workspaceName },
             workspaceName,
@@ -868,7 +892,7 @@ export function createClickUpConnector(): Connector {
           hierarchyMapping = resolveHierarchyMapping(
             CLICKUP_HIERARCHY_LEVELS,
             hasStoredMapping
-              ? storedHierarchyMapping
+              ? activeHierarchyMappingConfig
               : computeStructureAwareDefault(CLICKUP_HIERARCHY_LEVELS, {
                   hasFolders: foldersRes.folders.length > 0,
                   hasFolderlessLists: folderlessLists.length > 0,
@@ -879,7 +903,7 @@ export function createClickUpConnector(): Connector {
             await maybeSeedMappedClickUpNode({
               onEntitySeed,
               mapping: hierarchyMapping,
-              mappingConfig: hierarchyMappingConfig,
+              mappingConfig: activeHierarchyMappingConfig,
               levelKey: "space",
               node: space,
               workspaceName,
@@ -906,7 +930,7 @@ export function createClickUpConnector(): Connector {
               await maybeSeedMappedClickUpNode({
                 onEntitySeed,
                 mapping: hierarchyMapping,
-                mappingConfig: hierarchyMappingConfig,
+                mappingConfig: activeHierarchyMappingConfig,
                 levelKey: "folder",
                 node: folder,
                 workspaceName,
@@ -931,7 +955,7 @@ export function createClickUpConnector(): Connector {
                 await maybeSeedMappedClickUpNode({
                   onEntitySeed,
                   mapping: hierarchyMapping,
-                  mappingConfig: hierarchyMappingConfig,
+                  mappingConfig: activeHierarchyMappingConfig,
                   levelKey: "list",
                   node: list,
                   workspaceName,
@@ -948,10 +972,12 @@ export function createClickUpConnector(): Connector {
                 workspaceName,
                 workspaceId: team.id,
                 storedMapping: storedHierarchyMapping,
+                hierarchyMapping,
+                hierarchyMappingConfig: activeHierarchyMappingConfig,
                 logger,
               });
               const effectiveListTarget = resolveContainerTarget(
-                hierarchyMappingConfig,
+                activeHierarchyMappingConfig,
                 "list",
                 list.id,
                 hierarchyMapping.list ?? "ignore",
@@ -973,7 +999,7 @@ export function createClickUpConnector(): Connector {
                 sinceMs,
                 cycle ?? undefined,
                 hierarchyMapping,
-                hierarchyMappingConfig,
+                activeHierarchyMappingConfig,
                 !STRUCTURAL_TASK_GATED_TARGETS.has(effectiveListTarget),
                 listStats,
               );
@@ -1002,7 +1028,7 @@ export function createClickUpConnector(): Connector {
               await maybeSeedMappedClickUpNode({
                 onEntitySeed,
                 mapping: hierarchyMapping,
-                mappingConfig: hierarchyMappingConfig,
+                mappingConfig: activeHierarchyMappingConfig,
                 levelKey: "list",
                 node: list,
                 workspaceName,
@@ -1018,10 +1044,12 @@ export function createClickUpConnector(): Connector {
               workspaceName,
               workspaceId: team.id,
               storedMapping: storedHierarchyMapping,
+              hierarchyMapping,
+              hierarchyMappingConfig: activeHierarchyMappingConfig,
               logger,
             });
             const effectiveListTarget = resolveContainerTarget(
-              hierarchyMappingConfig,
+              activeHierarchyMappingConfig,
               "list",
               list.id,
               hierarchyMapping.list ?? "ignore",
@@ -1043,7 +1071,7 @@ export function createClickUpConnector(): Connector {
               sinceMs,
               cycle ?? undefined,
               hierarchyMapping,
-              hierarchyMappingConfig,
+              activeHierarchyMappingConfig,
               !STRUCTURAL_TASK_GATED_TARGETS.has(effectiveListTarget),
               listStats,
             );
