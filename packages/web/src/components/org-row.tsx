@@ -5,7 +5,9 @@
  * compact review row: quiet, one-line-first, small type.
  *
  * Slots:
- * - `avatar` — always an {@link EntityAvatar} at `sm`, the one shared size.
+ * - `avatar` — an {@link EntityAvatar} at `sm`, the one shared size. Rows
+ *   without an entity (graph-verdict proposals) lead with a mono tag instead,
+ *   and select-mode rows prepend a checkbox in this slot.
  * - `primary` — the primary line (name), with optional inline `primaryChips`.
  * - `inlineSuffix` — a muted continuation on the *same* line as the primary
  *   (the review row's "→ suggestion"); mutually exclusive in practice with
@@ -15,6 +17,9 @@
  * - `meta` — right-aligned fixed-width columns (counts, dates, status, type).
  * - `trailing` — arbitrary non-interactive trailing content.
  * - `caret` — an optional trailing affordance caret.
+ * - `actions` — interactive trailing content (CompactAction verbs) rendered as
+ *   a sibling of the row button: buttons can't nest inside buttons, so this is
+ *   the one sanctioned place for in-row verbs.
  * - `footer` — rendered inside the bordered cell, under the interactive area.
  * - `leading` — rendered before the row button, outside its click target
  *   (the tree's caret / drag grip).
@@ -57,7 +62,7 @@ export function OrgListHeader({ columns }: { columns: { label: string; className
 }
 
 export interface OrgRowProps {
-  avatar: ReactNode;
+  avatar?: ReactNode;
   primary: ReactNode;
   primaryChips?: ReactNode;
   inlineSuffix?: ReactNode;
@@ -66,12 +71,16 @@ export interface OrgRowProps {
   meta?: ReactNode;
   trailing?: ReactNode;
   caret?: boolean;
+  actions?: ReactNode;
   footer?: ReactNode;
   leading?: ReactNode;
   containerProps?: HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
   onOpen: () => void;
+  disabled?: boolean;
   className?: string;
+  rowClassName?: string;
   testId?: string;
+  buttonTestId?: string;
 }
 
 export function OrgRow({
@@ -84,12 +93,16 @@ export function OrgRow({
   meta,
   trailing,
   caret,
+  actions,
   footer,
   leading,
   containerProps,
   onOpen,
+  disabled,
   className,
+  rowClassName,
   testId,
+  buttonTestId,
 }: OrgRowProps) {
   return (
     <div
@@ -97,11 +110,13 @@ export function OrgRow({
       className={cn("group border-b border-border last:border-b-0", className, containerProps?.className)}
       data-testid={testId}
     >
-      <div className="flex items-center">
+      <div className={cn("flex items-center", rowClassName)}>
         {leading}
         <button
           type="button"
           onClick={onOpen}
+          disabled={disabled}
+          data-testid={buttonTestId}
           className="flex w-full min-w-0 flex-1 cursor-pointer items-center gap-2.5 px-3 py-1.5 text-left hover:bg-muted/30"
         >
           {avatar}
@@ -128,6 +143,7 @@ export function OrgRow({
             />
           ) : null}
         </button>
+        {actions}
       </div>
       {footer}
     </div>

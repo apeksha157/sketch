@@ -67,7 +67,8 @@ describe("Your Org graph-verdict band lane", () => {
 
     const section = await screen.findByTestId("review-band-graph-verdicts");
     expect(section).toHaveTextContent("Agent proposals · 1");
-    expect(section).toHaveTextContent("OW → Oliver Wyman");
+    expect(section).toHaveTextContent("OW");
+    expect(section).toHaveTextContent("→ Oliver Wyman");
     expect(screen.queryByText("Falcon Dashboard")).not.toBeInTheDocument();
     expect(screen.getByText("Needs your review · 1")).toBeInTheDocument();
   });
