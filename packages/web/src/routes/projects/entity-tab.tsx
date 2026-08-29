@@ -11,7 +11,7 @@ import { CaretRightIcon, CubeIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import { ReviewBandCapped } from "./org-review";
 
 function useEntityList(type: string) {
@@ -32,24 +32,17 @@ export function OrgEntityTab({
   type: string;
   typeLabel: string;
   isAdmin?: boolean;
-  /** `expandReview` opens the review band in place (the old "See all → Review" destination). */
-  renderEmpty?: (expandReview: () => void) => ReactNode;
+  renderEmpty?: () => ReactNode;
   /** Replaces the default flat EntityTable — the Projects tab renders its tree here. */
   renderList?: (entities: EntityListItem[]) => ReactNode;
 }) {
   const { openEntity } = useEntityUi();
   const { data, isLoading } = useEntityList(type);
   const entities = data?.entities ?? [];
-  const [reviewExpanded, setReviewExpanded] = useState(false);
 
   return (
     <div className="space-y-4">
-      <ReviewBandCapped
-        types={[type]}
-        isAdmin={isAdmin}
-        expanded={reviewExpanded}
-        onExpandedChange={setReviewExpanded}
-      />
+      <ReviewBandCapped types={[type]} isAdmin={isAdmin} />
       {isLoading ? (
         <div className="space-y-2">
           {[1, 2, 3, 4].map((k) => (
@@ -58,7 +51,7 @@ export function OrgEntityTab({
         </div>
       ) : entities.length === 0 ? (
         renderEmpty ? (
-          renderEmpty(() => setReviewExpanded(true))
+          renderEmpty()
         ) : (
           <OrgEmpty>{`No ${typeLabel.toLowerCase()} yet.`}</OrgEmpty>
         )
@@ -189,20 +182,14 @@ export function OrgEmpty({ children }: { children: ReactNode }) {
   );
 }
 
-export function TeamsEmpty({ pendingCount, onExpandReview }: { pendingCount: number; onExpandReview: () => void }) {
+export function TeamsEmpty({ pendingCount }: { pendingCount: number }) {
   return (
     <OrgEmpty>
       Teams appear from Linear &amp; ClickUp
       {pendingCount > 0 ? (
         <>
           {" — "}
-          <button
-            type="button"
-            onClick={onExpandReview}
-            className="font-medium text-foreground underline-offset-2 hover:underline"
-          >
-            {pendingCount} waiting for review ↑
-          </button>
+          <span className="font-medium text-foreground">{pendingCount} waiting for review ↑</span>
         </>
       ) : (
         "."

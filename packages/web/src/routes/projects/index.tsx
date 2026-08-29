@@ -190,9 +190,7 @@ export function ProjectsPage({
             type="team"
             typeLabel="Teams"
             isAdmin={isAdmin}
-            renderEmpty={(expandReview) => (
-              <TeamsEmpty pendingCount={teamReviewQuery.data?.total ?? 0} onExpandReview={expandReview} />
-            )}
+            renderEmpty={() => <TeamsEmpty pendingCount={teamReviewQuery.data?.total ?? 0} />}
           />
         ) : tab === "projects" ? (
           <OrgEntityTab

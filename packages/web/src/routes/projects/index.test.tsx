@@ -193,7 +193,7 @@ describe("ProjectsPage", () => {
     expect(screen.getByTestId("open-stack")).toHaveTextContent("project-1");
   });
 
-  it("has no Review tab, maps legacy ?tab=review to People, and expands the band in place", async () => {
+  it("has no Review tab, maps legacy ?tab=review to People, and lists the full queue with no toggle", async () => {
     server.use(
       http.get("/api/entity-review", ({ request }) => {
         const types = new URL(request.url).searchParams.get("types");
@@ -234,7 +234,6 @@ describe("ProjectsPage", () => {
         });
       }),
     );
-    const user = userEvent.setup();
     renderWithProviders(<ProjectsPage />);
 
     await screen.findByText("Your Org");
@@ -244,8 +243,7 @@ describe("ProjectsPage", () => {
     expect(validateOrgTabSearch({ tab: "projects" })).toEqual({ tab: "projects" });
 
     await screen.findByText("Nadia Rahman");
-    await user.click(screen.getByTestId("review-band-toggle"));
-    expect(await screen.findByTestId("review-band-search")).toBeInTheDocument();
-    expect(screen.getByTestId("review-band-toggle")).toHaveTextContent("Collapse");
+    expect(screen.queryByTestId("review-band-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-band-search")).not.toBeInTheDocument();
   });
 });
