@@ -7,8 +7,11 @@
  * `entityType` so the picker never returns mismatched types — defence in
  * depth against the backend's TYPE_MISMATCH 422.
  */
+import { OrgRow } from "@/components/org-row";
 import { api } from "@/lib/api";
 import type { EntityListItem } from "@/lib/api";
+import { EntityAvatar } from "@/lib/entity-ui";
+import { formatRelativeTime } from "@/routes/files/file-list";
 import { Input } from "@sketch/ui/components/input";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -71,17 +74,30 @@ export function EntityPicker({ entityType, excludeEntityId, onPick, placeholder 
   );
 }
 
+/**
+ * Candidate rows carry the Your Org row anatomy so bare names are tellable
+ * apart before picking: email, mention volume, and recency ride under the
+ * name — all from the list response the picker already fetches.
+ */
 function EntityRow({ entity, onPick }: { entity: EntityListItem; onPick: () => void }) {
-  const email = readEmail(entity.metadata);
+  const contactPoints = entity.contactPoints ?? [];
+  const email =
+    contactPoints.find((point) => point.kind === "email" && point.isPrimary)?.value ??
+    contactPoints.find((point) => point.kind === "email")?.value ??
+    readEmail(entity.metadata);
+  const parts: string[] = [];
+  if (email) parts.push(email);
+  if (entity.mentionCount > 0)
+    parts.push(`${entity.mentionCount} ${entity.mentionCount === 1 ? "mention" : "mentions"}`);
+  if (entity.lastMentionAt) parts.push(`last seen ${formatRelativeTime(entity.lastMentionAt)}`);
   return (
-    <button
-      type="button"
-      onClick={onPick}
-      className="w-full flex items-center justify-between gap-3 px-3 py-2 hover:bg-accent text-left"
-    >
-      <span className="font-medium truncate">{entity.name}</span>
-      {email ? <span className="text-muted-foreground truncate">{email}</span> : null}
-    </button>
+    <OrgRow
+      avatar={<EntityAvatar entity={{ id: entity.id, name: entity.name, sourceType: entity.sourceType }} size="sm" />}
+      primary={entity.name}
+      secondary={parts.length > 0 ? parts.join(" · ") : null}
+      onOpen={onPick}
+      testId={`entity-picker-row-${entity.id}`}
+    />
   );
 }
 
