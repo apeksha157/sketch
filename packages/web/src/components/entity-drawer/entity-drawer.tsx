@@ -25,7 +25,14 @@ import type {
   TaskStatus,
 } from "@/lib/api";
 import { api } from "@/lib/api";
-import { EntityAvatar, EntityChip, entityAccent, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
+import {
+  EntityAvatar,
+  EntityChip,
+  displayAliases,
+  entityAccent,
+  entityDisplayLabel,
+  useEntityUi,
+} from "@/lib/entity-ui";
 import {
   ArrowLeftIcon,
   ArrowsLeftRightIcon,
@@ -457,20 +464,11 @@ function AliasStrip({ entity, isAdmin }: { entity: EntityDetail; isAdmin: boolea
     onError: (error: Error) => toast.error(error.message),
   });
 
-  const hidden = new Set(
-    [
-      entity.name,
-      ...(entity.contactPoints ?? []).map((point) => point.value),
-      ...entity.profile.domainsForCompany.map((d) => d.domain),
-    ].map((v) => v.trim().toLowerCase()),
-  );
-  const seen = new Set<string>();
-  const display = entity.aliases.filter((alias) => {
-    const key = alias.trim().toLowerCase();
-    if (!key || hidden.has(key) || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  const display = displayAliases(entity.aliases, [
+    entity.name,
+    ...(entity.contactPoints ?? []).map((point) => point.value),
+    ...entity.profile.domainsForCompany.map((d) => d.domain),
+  ]);
 
   if (display.length === 0 && !isAdmin) return null;
 

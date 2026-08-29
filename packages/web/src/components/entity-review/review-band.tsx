@@ -30,7 +30,7 @@ import type {
   EntityTimelineItem,
 } from "@/lib/api";
 import { api } from "@/lib/api";
-import { EntityAvatar, entityAccent } from "@/lib/entity-ui";
+import { EntityAvatar, displayAliases, entityAccent } from "@/lib/entity-ui";
 import { formatRelativeTime } from "@/routes/files/file-list";
 import {
   ArrowLeftIcon,
@@ -631,11 +631,15 @@ function MergeTargetPreview({
   const email =
     (target.contactPoints ?? []).find((point) => point.kind === "email" && point.isPrimary)?.value ??
     (target.contactPoints ?? []).find((point) => point.kind === "email")?.value;
+  const aka = displayAliases(target.aliases ?? [], [target.name, email]);
   const accent = entityAccent({ id: target.id, name: target.name, sourceType: target.sourceType });
 
   return (
-    <div className="flex min-h-0 flex-col gap-3" data-testid="merge-target-preview">
-      <div className="rounded-lg border bg-muted/20" style={{ borderTopColor: accent, borderTopWidth: 3 }}>
+    <div className="flex min-h-0 min-w-0 flex-col gap-3" data-testid="merge-target-preview">
+      <div
+        className="min-w-0 overflow-hidden rounded-lg border bg-muted/20"
+        style={{ borderTopColor: accent, borderTopWidth: 3 }}
+      >
         <div className="flex items-start gap-3 px-4 py-3">
           <EntityAvatar entity={{ id: target.id, name: target.name, sourceType: target.sourceType }} size="lg" />
           <div className="min-w-0 flex-1">
@@ -651,10 +655,8 @@ function MergeTargetPreview({
                 </span>
               ) : null}
             </div>
-            {target.aliases.length > 0 ? (
-              <p className="mt-1 truncate text-[11px] text-muted-foreground">
-                aka {target.aliases.slice(0, 4).join(", ")}
-              </p>
+            {aka.length > 0 ? (
+              <p className="mt-1 truncate text-[11px] text-muted-foreground">aka {aka.slice(0, 4).join(", ")}</p>
             ) : null}
           </div>
         </div>
