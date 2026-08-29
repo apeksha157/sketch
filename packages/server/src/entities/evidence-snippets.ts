@@ -30,6 +30,36 @@ export function extractSnippet(content: string, name: string, windowChars = 90):
 }
 
 /**
+ * Every quote of `name` inside one file — the expansion behind a review
+ * evidence row. One snippet per matching chunk, deduped case-insensitively,
+ * capped. Same LIKE pre-filter + {@link extractSnippet} exact check as
+ * {@link snippetsForFiles}.
+ */
+export async function snippetsInFile(db: Kysely<DB>, fileId: string, name: string, limit = 10): Promise<string[]> {
+  const needle = name.trim().toLowerCase();
+  if (needle.length === 0) return [];
+  const rows = await db
+    .selectFrom("document_chunks")
+    .select(["chunk_index", "content"])
+    .where("indexed_file_id", "=", fileId)
+    .where(sql`lower(content)`, "like", `%${needle}%`)
+    .orderBy("chunk_index")
+    .limit(50)
+    .execute();
+
+  const seen = new Set<string>();
+  const quotes: string[] = [];
+  for (const row of rows) {
+    const snippet = extractSnippet(row.content, name);
+    if (!snippet || seen.has(snippet.toLowerCase())) continue;
+    seen.add(snippet.toLowerCase());
+    quotes.push(snippet);
+    if (quotes.length >= limit) break;
+  }
+  return quotes;
+}
+
+/**
  * Read-time snippets for review-queue evidence: for each file, the first
  * chunk that mentions the proposed name, cut to a quote. One query for the
  * whole evidence list; the LIKE is a broad pre-filter (wildcards in the name

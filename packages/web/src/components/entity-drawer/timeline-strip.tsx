@@ -30,6 +30,13 @@ interface TimelineStripProps {
   groups: EntityTimelineGroup[];
   /** Enables per-file mention expansion; without it rows only unclamp. */
   entityId?: string;
+  /**
+   * Custom quote source for rows without an entity behind them (review
+   * evidence): expansion calls this instead of the entity-mentions endpoint.
+   * `quotesScope` keys the cache — pass something stable like the review id.
+   */
+  loadQuotes?: (item: EntityTimelineItem) => Promise<(string | null)[]>;
+  quotesScope?: string;
 }
 
 const CONNECTOR_GLYPHS = new Set([
@@ -136,32 +143,37 @@ function Glyph({ item }: { item: EntityTimelineItem }) {
 }
 
 /**
- * The ×N drill-down: every mention of the entity in this one file, shown as
- * deduped quotes once the row expands. Fetched lazily per expansion.
+ * The drill-down: every quote of the entity in this one file, deduped, once
+ * the row expands. Fetched lazily per expansion from whichever source the
+ * strip was given (entity mentions, or a custom loader for review evidence).
  */
-function ExpandedMentions({
-  entityId,
+function ExpandedQuotes({
+  scope,
   item,
   primarySnippet,
+  load,
 }: {
-  entityId: string;
+  scope: string;
   item: EntityTimelineItem;
   primarySnippet: string | null;
+  load: (item: EntityTimelineItem) => Promise<(string | null)[]>;
 }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["entity-mentions", entityId, item.fileId],
-    queryFn: () => api.entities.mentions(entityId, { fileId: item.fileId, limit: 25 }),
+    queryKey: ["timeline-quotes", scope, item.fileId],
+    queryFn: () => load(item),
   });
   if (isLoading) return <p className="mt-1 text-[11px] text-muted-foreground">Loading mentions…</p>;
   const seen = new Set<string>(primarySnippet ? [primarySnippet.toLowerCase()] : []);
   const quotes: string[] = [];
-  for (const mention of data?.mentions ?? []) {
-    const snippet = usefulSnippet(mention.contextSnippet, item.fileName);
+  for (const raw of data ?? []) {
+    const snippet = usefulSnippet(raw, item.fileName);
     if (!snippet || seen.has(snippet.toLowerCase())) continue;
     seen.add(snippet.toLowerCase());
     quotes.push(snippet);
   }
-  if (quotes.length === 0) return null;
+  if (quotes.length === 0) {
+    return <p className="mt-1 text-[11px] italic text-muted-foreground/70">No quotable text found in this file.</p>;
+  }
   return (
     <div className="mt-1 space-y-1 border-l-2 border-border pl-2">
       {quotes.map((quote) => (
@@ -173,13 +185,32 @@ function ExpandedMentions({
   );
 }
 
-function TimelineRow({ item, entityId }: { item: EntityTimelineItem; entityId?: string }) {
+function TimelineRow({
+  item,
+  entityId,
+  loadQuotes,
+  quotesScope,
+}: {
+  item: EntityTimelineItem;
+  entityId?: string;
+  loadQuotes?: (item: EntityTimelineItem) => Promise<(string | null)[]>;
+  quotesScope?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const meta = item.crmActivity
     ? (ACTIVITY_META[item.crmActivity.activityType] ?? { Icon: FileTextIcon, label: "Activity" })
     : null;
   const snippet = item.crmActivity ? null : usefulSnippet(item.contextSnippet, item.fileName);
-  const expandable = !item.crmActivity && (snippet !== null || (item.mentionCount > 1 && !!entityId));
+  const load =
+    loadQuotes ??
+    (entityId
+      ? (target: EntityTimelineItem) =>
+          api.entities
+            .mentions(entityId, { fileId: target.fileId, limit: 25 })
+            .then((res) => res.mentions.map((mention) => mention.contextSnippet))
+      : undefined);
+  const scope = loadQuotes ? (quotesScope ?? "custom") : (entityId ?? "none");
+  const expandable = !item.crmActivity && (snippet !== null || !!loadQuotes || (item.mentionCount > 1 && !!entityId));
   const time = clockTime(item.occurredAt);
 
   const attribution: string[] = [];
@@ -212,7 +243,7 @@ function TimelineRow({ item, entityId }: { item: EntityTimelineItem; entityId?: 
             {snippet}
           </p>
         ) : null}
-        {expanded && entityId ? <ExpandedMentions entityId={entityId} item={item} primarySnippet={snippet} /> : null}
+        {expanded && load ? <ExpandedQuotes scope={scope} item={item} primarySnippet={snippet} load={load} /> : null}
         <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/70">
           <span className="truncate">{attribution.join(" · ")}</span>
           {item.crmActivity?.hasBody ? <SparkleIcon size={10} weight="fill" className="shrink-0 text-primary" /> : null}
@@ -222,7 +253,7 @@ function TimelineRow({ item, entityId }: { item: EntityTimelineItem; entityId?: 
   );
 }
 
-export function TimelineStrip({ groups, entityId }: TimelineStripProps) {
+export function TimelineStrip({ groups, entityId, loadQuotes, quotesScope }: TimelineStripProps) {
   const items = groups.flatMap((g) => g.items);
   const dayGroups = groupByDay(items);
 
@@ -238,7 +269,13 @@ export function TimelineStrip({ groups, entityId }: TimelineStripProps) {
             <div className="relative">
               <div aria-hidden className="absolute bottom-1 left-[11px] top-1 w-px bg-border" />
               {group.items.map((item) => (
-                <TimelineRow key={item.fileId} item={item} entityId={entityId} />
+                <TimelineRow
+                  key={item.fileId}
+                  item={item}
+                  entityId={entityId}
+                  loadQuotes={loadQuotes}
+                  quotesScope={quotesScope}
+                />
               ))}
             </div>
           </div>

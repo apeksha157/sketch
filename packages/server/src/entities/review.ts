@@ -37,7 +37,7 @@ import { createEntityReviewRepo, readReviewFreezeMs } from "../db/repositories/e
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import { createTaskRepository } from "../db/repositories/tasks";
 import type { DB } from "../db/schema";
-import { snippetsForFiles } from "./evidence-snippets";
+import { snippetsForFiles, snippetsInFile } from "./evidence-snippets";
 import { ResolveError, confirmReview, dismissReview, reclassifyReview, rejectReview } from "./resolve";
 import { reconcileStructuralAssigneeContributesTo } from "./structural-assignee";
 
@@ -405,6 +405,24 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
     } catch (err) {
       return handleResolveError(c, err);
     }
+  });
+
+  /**
+   * GET /api/entity-review/:id/snippets?fileId=…
+   * Every quote of the proposed name inside one evidence file — the expansion
+   * behind a review evidence row. Read-only: no freeze side effect.
+   */
+  app.get("/:id/snippets", async (c) => {
+    const id = c.req.param("id");
+    const fileId = c.req.query("fileId");
+    if (!fileId) return c.json({ error: { code: "BAD_REQUEST", message: "fileId query param is required" } }, 400);
+    const repo = createEntityReviewRepo(db);
+    const row = await repo.getById(id);
+    if (!row) return c.json({ error: { code: "NOT_FOUND", message: "review row not found" } }, 404);
+    const denied = await denyIfNotOwnerOrAdmin(c, repo, row);
+    if (denied) return denied;
+    const quotes = await snippetsInFile(db, fileId, row.proposed_name);
+    return c.json({ quotes });
   });
 
   app.get("/:id", async (c) => {

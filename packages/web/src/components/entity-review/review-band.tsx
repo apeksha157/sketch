@@ -89,6 +89,15 @@ function evidenceTimelineGroups(evidence: EntityReviewEvidenceRow[]): EntityTime
   return items.length > 0 ? [{ month: "evidence", items }] : [];
 }
 
+/**
+ * Expansion source for review evidence rows: quotes of the proposed name cut
+ * from the file's indexed chunks — a proposed entity has no mentions table
+ * behind it, so the drawer's entity-mentions loader doesn't apply.
+ */
+function reviewQuotesLoader(reviewId: string) {
+  return (item: EntityTimelineItem) => api.entityReview.snippets(reviewId, item.fileId).then((res) => res.quotes);
+}
+
 /** Same fold for the candidate side's recent mentions. */
 function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[] {
   return evidenceTimelineGroups(
@@ -489,7 +498,11 @@ function BirthInspectBody({
                   : "No linked files."}
               </p>
             ) : (
-              <TimelineStrip groups={evidenceTimelineGroups(evidence)} />
+              <TimelineStrip
+                groups={evidenceTimelineGroups(evidence)}
+                loadQuotes={reviewQuotesLoader(row.id)}
+                quotesScope={row.id}
+              />
             )}
           </div>
         ) : null}
@@ -842,6 +855,7 @@ function ReconcileBody({
         typeLabel={humanSourceType(row.entity_type)}
         email={row.proposed_email}
         evidence={evidence}
+        reviewId={row.id}
       />
       {mode === "candidate" ? (
         <CandidateView
@@ -890,6 +904,7 @@ function ReconcileColumn({
   typeLabel,
   email,
   evidence,
+  reviewId,
 }: {
   title: string;
   toneClass: string;
@@ -897,6 +912,7 @@ function ReconcileColumn({
   typeLabel: string;
   email: string | null;
   evidence: EntityReviewEvidenceRow[];
+  reviewId: string;
 }) {
   return (
     <div className={`flex min-h-0 flex-col rounded-lg border ${toneClass}`} data-testid="reconcile-proposed">
@@ -918,7 +934,11 @@ function ReconcileColumn({
           <p className="mt-1 text-xs text-muted-foreground">No evidence rows.</p>
         ) : (
           <div className="mt-1 flex-1 overflow-y-auto">
-            <TimelineStrip groups={evidenceTimelineGroups(evidence)} />
+            <TimelineStrip
+              groups={evidenceTimelineGroups(evidence)}
+              loadQuotes={reviewQuotesLoader(reviewId)}
+              quotesScope={reviewId}
+            />
           </div>
         )}
       </div>
@@ -997,7 +1017,7 @@ function CandidateView({
           <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
         ) : (
           <div className="mt-1 flex-1 overflow-y-auto">
-            <TimelineStrip groups={mentionTimelineGroups(candidateMentions)} />
+            <TimelineStrip groups={mentionTimelineGroups(candidateMentions)} entityId={candidateEntity?.id} />
           </div>
         )}
       </div>

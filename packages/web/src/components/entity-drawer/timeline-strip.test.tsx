@@ -102,6 +102,28 @@ describe("TimelineStrip", () => {
     expect(screen.getByText("Helios spec").closest("button")).not.toHaveAttribute("aria-expanded");
   });
 
+  it("expands a snippetless row through a custom quote loader (review evidence)", async () => {
+    const load = async () => ["Shashank walked the team through the demo funnel", "Corresponded 19e87b7823248128"];
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TimelineStrip
+        groups={[
+          {
+            month: "2026-08",
+            items: [item({ fileId: "f9", fileName: "Daily CD Training – 2026-08-20", sourceType: "gmail" })],
+          },
+        ]}
+        loadQuotes={load}
+        quotesScope="review-1"
+      />,
+    );
+    const row = screen.getByText("Daily CD Training – 2026-08-20").closest("button");
+    expect(row).toHaveAttribute("aria-expanded", "false");
+    if (row) await user.click(row);
+    expect(await screen.findByText("Shashank walked the team through the demo funnel")).toBeInTheDocument();
+    expect(screen.queryByText(/Corresponded 19e87b/)).not.toBeInTheDocument();
+  });
+
   it("renders CRM activity rows with the activity label instead of the raw source", () => {
     renderWithProviders(
       <TimelineStrip

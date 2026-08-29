@@ -3933,6 +3933,9 @@ export const api = {
     get(id: string) {
       return request<EntityReviewDetailResponse>(`/api/entity-review/${id}`);
     },
+    snippets(id: string, fileId: string) {
+      return request<{ quotes: string[] }>(`/api/entity-review/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
+    },
     confirm(id: string, body: { candidateGeneratedAt: string; mergeIntoEntityId?: string; nameOverride?: string }) {
       return request<EntityReviewConfirmResult>(`/api/entity-review/${id}/confirm`, {
         method: "POST",
