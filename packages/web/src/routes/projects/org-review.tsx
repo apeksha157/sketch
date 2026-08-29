@@ -23,7 +23,6 @@ import { useReviewMutations } from "@/components/review-actions";
 import type { EntityReviewQueueRow } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
@@ -33,7 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@sketch/ui/components/dialog";
-import { Input } from "@sketch/ui/components/input";
 import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useRef, useState } from "react";
@@ -316,16 +314,27 @@ function PoolingSummary({
 /**
  * Type-scoped review band — the only review surface now that the Review tab
  * is gone. No collapsed preview: the full type-scoped list always renders in
- * a capped scroll region (with its own search once the queue is big enough),
- * so the directory below stays reachable. Projects additionally get the
+ * a capped scroll region, so the directory below stays reachable. The band has
+ * no search box of its own — the org-wide search is the only search, and the
+ * results view remounts this band with the query via `search` so pending
+ * reviews are filtered alongside entities. Projects additionally get the
  * pending mint dossiers first (admin) and the pooling summary last. Admins
  * also get the graph-curation verdict lane ({@link GraphVerdictsSection}) —
  * open verdicts filtered to this tab's subject types. `null` when there is
  * nothing to review keeps the entity list flush to the top.
  */
-export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; isAdmin?: boolean }) {
-  const { search, setSearch, debounced } = useDebouncedSearch();
-  const activeSearch = debounced;
+export function ReviewBandCapped({
+  types,
+  isAdmin = false,
+  search = "",
+}: {
+  types: string[];
+  isAdmin?: boolean;
+  search?: string;
+}) {
+  const activeSearch = search.trim();
+  const matchesSearch = (...names: (string | null | undefined)[]) =>
+    activeSearch.length === 0 || names.some((n) => n?.toLowerCase().includes(activeSearch.toLowerCase()));
 
   const { data } = useQuery({
     queryKey: ["entity-review", "band-capped", types.join(","), activeSearch],
@@ -345,7 +354,10 @@ export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; 
     retry: false,
     refetchInterval: 30000,
   });
-  const verdicts = isAdmin && isProjectBand ? (verdictsQuery.data?.verdicts ?? []) : [];
+  const verdicts =
+    isAdmin && isProjectBand
+      ? (verdictsQuery.data?.verdicts ?? []).filter((verdict) => matchesSearch(verdict.companyName))
+      : [];
 
   const graphVerdictsQuery = useQuery({
     queryKey: ["graph-verdicts", "open"],
@@ -355,7 +367,10 @@ export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; 
     refetchInterval: 30000,
   });
   const graphVerdicts = isAdmin
-    ? (graphVerdictsQuery.data?.verdicts ?? []).filter((verdict) => types.includes(graphVerdictBandType(verdict)))
+    ? (graphVerdictsQuery.data?.verdicts ?? []).filter(
+        (verdict) =>
+          types.includes(graphVerdictBandType(verdict)) && matchesSearch(verdict.subjectName, verdict.targetName),
+      )
     : [];
 
   const poolingRows = isProjectBand
@@ -367,19 +382,12 @@ export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; 
   const actionableRows = rows.filter((row) => !poolingIds.has(row.id));
 
   const wa = useWhatsAppIdentityReview(types);
+  const waItems = wa.items.filter((item) => matchesSearch(item.phoneE164, item.lid));
   const [waSelected, setWaSelected] = useState<string | null>(null);
 
-  if (
-    rows.length === 0 &&
-    wa.items.length === 0 &&
-    verdicts.length === 0 &&
-    graphVerdicts.length === 0 &&
-    !activeSearch
-  )
-    return null;
+  if (rows.length === 0 && waItems.length === 0 && verdicts.length === 0 && graphVerdicts.length === 0) return null;
 
-  const headerCount = realTotal + wa.items.length + verdicts.length + graphVerdicts.length;
-  const showBandSearch = realTotal > 5 || activeSearch.length > 0;
+  const headerCount = realTotal + waItems.length + verdicts.length + graphVerdicts.length;
 
   return (
     <section className="mb-6 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
@@ -392,26 +400,11 @@ export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; 
       {graphVerdicts.length > 0 ? (
         <GraphVerdictsSection verdicts={graphVerdicts} allOpen={graphVerdictsQuery.data?.verdicts ?? graphVerdicts} />
       ) : null}
-      {showBandSearch ? (
-        <div className="relative border-b border-amber-300/40 px-3 py-2 dark:border-amber-700/30">
-          <MagnifyingGlassIcon size={14} className="absolute left-5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-            placeholder="Search pending reviews…"
-            className="h-8 pl-8 text-[12.5px]"
-            data-testid="review-band-search"
-          />
-        </div>
-      ) : null}
       <div className="max-h-[60vh] overflow-y-auto">
-        {activeSearch && actionableRows.length === 0 ? (
-          <p className="px-3 py-3 text-[11.5px] text-muted-foreground">No pending reviews match your search.</p>
-        ) : null}
         {actionableRows.map((row) => (
           <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} detail />
         ))}
-        {wa.items.map((item) => (
+        {waItems.map((item) => (
           <WhatsAppIdentityRow
             key={item.id}
             item={item}
@@ -421,7 +414,7 @@ export function ReviewBandCapped({ types, isAdmin = false }: { types: string[]; 
         ))}
         {realTotal > rows.length ? (
           <p className="border-t border-amber-300/40 px-3 py-2 text-[10.5px] text-muted-foreground dark:border-amber-700/30">
-            Showing {rows.length} of {realTotal}. Search to narrow the rest.
+            Showing {rows.length} of {realTotal}. Use the org search above to narrow the rest.
           </p>
         ) : null}
       </div>
