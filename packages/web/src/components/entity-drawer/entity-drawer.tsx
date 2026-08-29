@@ -478,6 +478,7 @@ function AliasChipEditor({
       }}
     >
       <input
+        // biome-ignore lint/a11y/noAutofocus: the editor only appears on an explicit edit/add click, so focus belongs in it
         autoFocus
         value={form.value}
         onChange={(event) => onChange({ ...form, value: event.target.value })}
