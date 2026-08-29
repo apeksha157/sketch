@@ -1253,6 +1253,7 @@ export interface ResetSubmitResponse {
   reviewQueueCleared?: number;
   reviewEvidenceCleared?: number;
   rejectionsCleared?: number;
+  resolutionDecisionsCleared?: number;
   factsMarkedUnmaterialized?: number;
 }
 

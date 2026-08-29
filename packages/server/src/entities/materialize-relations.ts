@@ -260,6 +260,7 @@ async function materializeRelationEndpoint(
     {
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
+      resolutionLedger: deps.resolutionLedger,
       domainsRepo: deps.domainsRepo,
       lookup: deps.lookup,
       logger: deps.logger,

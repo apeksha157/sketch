@@ -100,6 +100,8 @@ Vitest, three projects per package by filename suffix. Default to plain unit; th
 
 **Commands:** `pnpm test:changed` (per-iteration, affected unit tests) · `pnpm test:unit` (full unit tier, no integration) · `pnpm test` (everything; enforced by the pre-push hook and CI).
 
+**Resource budget:** the full `pnpm test` run is heavy — hundreds of vitest workers plus PGlite instances — and has crashed the machine when other work was running. Check `uptime` BEFORE `pnpm test` or `git push` (the pre-push hook runs the full suite): only run it when the 1-minute load average is comfortably low (< ~5) and no other heavy sessions/builds are active. Under load, commit the work to its branch immediately and defer the push + PR to a lean moment; individual test files via `npx vitest run <file>` are cheap and safe anytime.
+
 ## Key Design Decisions
 
 - Platform formatting via system prompt only, no post-processing

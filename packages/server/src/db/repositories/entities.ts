@@ -11,7 +11,7 @@ import {
 import { parseAliasesString } from "../../entities/materialize-json";
 import { matchesNameOrAliasExactly, normalizeEntityMatchName, normalizeName } from "../../entities/name-keys";
 import { HIDDEN_ENTITY_SOURCE_TYPES } from "../../entities/profile-facts";
-import type { ProvenanceTier } from "../../entities/provenance";
+import { type ProvenanceTier, strongestProvenanceTier } from "../../entities/provenance";
 import { resolveLiveEntity, resolveLiveEntityId, resolveSourceRefToLiveEntityId } from "../../entities/redirect";
 import { normalizePhoneLike } from "../../identity-normalization";
 import { yieldToEventLoop } from "../../lib/event-loop";
@@ -744,6 +744,25 @@ export function createEntityRepository(db: Kysely<DB>) {
 
     async reconcilePersonSubtype(entityId: string, subtype: "internal" | "external", provenanceTier?: ProvenanceTier) {
       return reconcilePersonSubtypeForEntity(entityId, subtype, provenanceTier);
+    },
+
+    async promoteProvenanceTier(entityId: string, tier: ProvenanceTier): Promise<boolean> {
+      const targetEntityId = await resolveLiveEntityId(db, entityId);
+      const row = await db
+        .selectFrom("entities")
+        .select(["id", "provenance_tier"])
+        .where("id", "=", targetEntityId)
+        .where(whereLiveEntity())
+        .executeTakeFirst();
+      if (!row) return false;
+      const next = strongestProvenanceTier(row.provenance_tier, tier);
+      if (next === row.provenance_tier) return false;
+      await db
+        .updateTable("entities")
+        .set({ provenance_tier: next, updated_at: new Date().toISOString() })
+        .where("id", "=", row.id)
+        .execute();
+      return true;
     },
 
     /**

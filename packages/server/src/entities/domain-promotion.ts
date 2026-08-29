@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import { createEntityRepository } from "../db/repositories/entities";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
+import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { DB } from "../db/schema";
 import { buildLookupIndex, createEntityLookupFromIndex, registerEntity } from "./materialize-deps";
 import { readPersonEmailFromMetadata } from "./materialize-json";
@@ -72,6 +73,7 @@ export async function finalizeDomainPromotion(
 
   const domainsRepo = createEntityDomainsRepository(db);
   const entityRepo = createEntityRepository(db);
+  const resolutionLedger = createResolutionDecisionRepository(db);
   await domainsRepo.upsertDomain({
     entityId: input.companyEntityId,
     domain: input.domain,
@@ -187,6 +189,7 @@ export async function sweepDomainPromotions(db: Kysely<DB>, logger: Logger): Pro
     logger,
   });
   const reviewRepo = createEntityReviewRepo(db);
+  const resolutionLedger = createResolutionDecisionRepository(db);
 
   for (const candidate of candidates) {
     const domain = candidate.domain;
@@ -226,6 +229,7 @@ export async function sweepDomainPromotions(db: Kysely<DB>, logger: Logger): Pro
       {
         entityRepo,
         reviewRepo,
+        resolutionLedger,
         domainsRepo,
         lookup,
         readEmail: (entity) => readPersonEmailFromMetadata(entity.metadata),

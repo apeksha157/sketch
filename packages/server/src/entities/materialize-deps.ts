@@ -12,6 +12,7 @@ import { createEntityRepository, whereLiveEntity } from "../db/repositories/enti
 import { createEntityDomainsRepository, domainMatchesName } from "../db/repositories/entity-domains";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
 import { createEntitySuppressionRepository } from "../db/repositories/entity-suppressions";
+import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { DB } from "../db/schema";
 import { personScopeKeyForDomain, personScopeKeyId } from "./affiliations";
 import { DEFAULT_FACT_BATCH_SIZE, forEachFactBatch } from "./fact-batches";
@@ -696,6 +697,7 @@ export async function buildMaterializeDeps(
 ): Promise<MaterializeDeps> {
   const entityRepo = createEntityRepository(db);
   const reviewRepo = createEntityReviewRepo(db);
+  const resolutionLedger = createResolutionDecisionRepository(db);
   const suppressionRepo = createEntitySuppressionRepository(db);
   const domainsRepo = createEntityDomainsRepository(db);
   const index = await buildLookupIndex(db);
@@ -737,6 +739,7 @@ export async function buildMaterializeDeps(
     logger: opts.logger,
     entityRepo,
     reviewRepo,
+    resolutionLedger,
     suppressionRepo,
     domainsRepo,
     lookup,
