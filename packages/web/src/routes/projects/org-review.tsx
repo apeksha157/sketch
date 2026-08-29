@@ -1,3 +1,4 @@
+import { CompactAction } from "@/components/compact-action";
 /**
  * The review surface for Your Org: each type tab's band, expanding in place
  * to the full type-scoped list (the standalone Review tab is gone — triage
@@ -82,35 +83,6 @@ export function useReviewRowSheets() {
   );
 
   return { openRow, sheets, refresh };
-}
-
-function CompactAction({
-  label,
-  emphasis,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  emphasis?: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        "px-1.5 py-0.5 text-[11px] disabled:opacity-40",
-        emphasis ? "font-medium text-foreground hover:underline" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-    </button>
-  );
 }
 
 /**
@@ -290,14 +262,13 @@ function PoolingSummary({
           started ? (
             <span className="shrink-0 text-[11px] text-muted-foreground">pass running — check back shortly</span>
           ) : (
-            <button
-              type="button"
+            <CompactAction
+              label="Run now"
+              emphasis
+              className="shrink-0"
               onClick={() => setConfirmOpen(true)}
-              className="shrink-0 px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:underline"
               data-testid="review-band-run-now"
-            >
-              Run now
-            </button>
+            />
           )
         ) : null}
       </div>
@@ -503,14 +474,13 @@ export function ReviewBandCapped({
           Needs your review · {headerCount}
         </span>
         {actionableRows.length > 0 ? (
-          <button
-            type="button"
+          <CompactAction
+            label={selectMode ? "Done" : "Select"}
+            emphasis
+            className="shrink-0"
             onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
-            className="shrink-0 px-1.5 text-[11px] font-medium text-foreground hover:underline"
             data-testid="review-band-select-toggle"
-          >
-            {selectMode ? "Done" : "Select"}
-          </button>
+          />
         ) : null}
       </div>
       {selectMode ? (
@@ -549,22 +519,13 @@ export function ReviewBandCapped({
             Births only
           </label>
           <span className="flex-1" />
-          <button
-            type="button"
+          <CompactAction
+            label={`Select all ${selectableVisible.length}`}
             onClick={() => setSelected(new Set(selectableVisible.map((row) => row.id)))}
-            className="text-[11px] text-muted-foreground hover:text-foreground"
             data-testid="review-band-select-all"
-          >
-            Select all {selectableVisible.length}
-          </button>
+          />
           <span className="text-muted-foreground/40">·</span>
-          <button
-            type="button"
-            onClick={() => setSelected(new Set())}
-            className="text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            Clear
-          </button>
+          <CompactAction label="Clear" onClick={() => setSelected(new Set())} />
         </div>
       ) : null}
       {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}

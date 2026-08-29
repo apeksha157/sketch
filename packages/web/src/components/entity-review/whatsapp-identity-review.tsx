@@ -15,6 +15,7 @@
  * endpoints: Save is a rename plus optional contact points, Merge folds the
  * placeholder into a person you already know, Dismiss retires it unnamed.
  */
+import { CompactAction } from "@/components/compact-action";
 import { MergePreviewPane } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
 import { type WhatsAppContextMessage, type WhatsAppIdentityReviewItem, api } from "@/lib/api";
@@ -215,27 +216,14 @@ export function WhatsAppIdentityRow({
           </div>
         </button>
         <span className="flex shrink-0 items-center gap-0.5 py-2 pr-3">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen();
-            }}
-            className="px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:underline"
-          >
-            {primaryLabel}
-          </button>
+          <CompactAction label={primaryLabel} emphasis onClick={onOpen} />
           <span className="text-muted-foreground/40">·</span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void runIdentityAction(() => api.entities.dismissWhatsAppIdentity(item.entityId), onResolve, "Dismissed");
-            }}
-            className="px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            Dismiss
-          </button>
+          <CompactAction
+            label="Dismiss"
+            onClick={() =>
+              void runIdentityAction(() => api.entities.dismissWhatsAppIdentity(item.entityId), onResolve, "Dismissed")
+            }
+          />
         </span>
       </div>
     </div>

@@ -7,6 +7,7 @@
  * render/early-return decision. Dismiss rejects inline without opening the
  * sheet; junk should never cost a click more than it has to.
  */
+import { CompactAction } from "@/components/compact-action";
 import { MintingVerdictRow } from "@/components/minting-verdict-row";
 import { MintingVerdictSheet } from "@/components/minting-verdict-sheet";
 import { type ProjectMintingVerdict, api } from "@/lib/api";
@@ -42,14 +43,12 @@ export function ProjectSuggestionsSection({ verdicts }: { verdicts: ProjectMinti
             verdict={verdict}
             onOpen={() => setOpenId(verdict.id)}
             trailing={
-              <button
-                type="button"
+              <CompactAction
+                label="Dismiss"
+                className="shrink-0"
                 disabled={dismiss.isPending}
                 onClick={() => dismiss.mutate(verdict.id)}
-                className="shrink-0 text-[12px] text-muted-foreground hover:text-foreground disabled:opacity-50"
-              >
-                Dismiss
-              </button>
+              />
             }
           />
         ))}
