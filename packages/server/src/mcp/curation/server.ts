@@ -21,6 +21,7 @@ import {
   curationListAffiliationsSchema,
   handleCurationListAffiliations,
 } from "./list-affiliations";
+import { type CurationListAliasesArgs, curationListAliasesSchema, handleCurationListAliases } from "./list-aliases";
 import {
   type CurationListCandidatesArgs,
   curationListCandidatesSchema,
@@ -127,6 +128,12 @@ export async function createCurationMcpServer(params: {
     "List read-only curation candidate rows for supported candidate families.",
     curationListCandidatesSchema,
     (args) => handleCurationListCandidates(args, params.db),
+  );
+  register<CurationListAliasesArgs>(
+    "curation_list_aliases",
+    "Enumerate live entity aliases for read-only cleanup campaigns, filterable by alias provenance and entity type.",
+    curationListAliasesSchema,
+    (args) => handleCurationListAliases(args, params.db),
   );
   register<ProposeGraphVerdictsArgs>(
     "propose_graph_verdicts",

@@ -239,6 +239,7 @@ describe("curation MCP server", () => {
       "curation_find_entities",
       "curation_graph_overview",
       "curation_list_affiliations",
+      "curation_list_aliases",
       "curation_list_candidates",
       "curation_shared_evidence",
       "propose_graph_verdicts",
