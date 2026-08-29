@@ -6,8 +6,10 @@
  * skips refresh when token is still valid.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createContainerRepository } from "../db/repositories/containers";
+import { createTestDb } from "../test-utils";
 import { createLinearConnector } from "./linear";
-import type { EntitySeed, SyncedItem } from "./types";
+import type { ContainerObservation, EntitySeed, SyncedItem } from "./types";
 
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify({ data }), {
@@ -27,10 +29,10 @@ function emptyPage(field: string): Response {
  */
 function routeLinearRequest(
   body: string,
-  handlers: { teams?: () => Response; teamMembers?: () => Response },
+  handlers: { projects?: () => Response; teams?: () => Response; teamMembers?: () => Response },
 ): Response {
   if (body.includes("query Issues(")) return emptyPage("issues");
-  if (body.includes("query Projects(")) return emptyPage("projects");
+  if (body.includes("query Projects(")) return handlers.projects?.() ?? emptyPage("projects");
   if (body.includes("query TeamMembers(")) return handlers.teamMembers?.() ?? emptyPage("team");
   if (body.includes("query Teams(")) return handlers.teams?.() ?? emptyPage("teams");
   return jsonResponse({});
@@ -40,16 +42,19 @@ async function drainSync(
   connector: ReturnType<typeof createLinearConnector>,
   opts: {
     scopeConfig?: Record<string, unknown>;
+    cursor?: string | null;
     onEntitySeed?: (seed: EntitySeed) => Promise<void>;
+    onContainerObservation?: (observation: ContainerObservation) => Promise<void>;
   } = {},
 ): Promise<SyncedItem[]> {
   const items: SyncedItem[] = [];
   for await (const item of connector.sync({
     credentials: { type: "api_key", api_key: "test-key" },
     scopeConfig: opts.scopeConfig ?? {},
-    cursor: null,
+    cursor: opts.cursor ?? null,
     logger: (await import("pino")).default({ level: "silent" }),
     onEntitySeed: opts.onEntitySeed,
+    onContainerObservation: opts.onContainerObservation,
   })) {
     items.push(item);
   }
@@ -268,6 +273,120 @@ describe("Linear team sync honors configured team scope", () => {
 
     const memberEdgeTargets = teamItems.flatMap((i) => i.relationships?.map((r) => r.target.sourceId) ?? []);
     expect(memberEdgeTargets).toEqual(["team-eng"]);
+  });
+});
+
+describe("Linear project sync observes dormant containers", () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, "fetch");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("observes dormant projects under a cursor without re-seeding or re-yielding them", async () => {
+    const db = await createTestDb();
+    const connectorConfigId = "linear-dormant-projects";
+    await db.insertInto("users").values({ id: "linear-dormant-user", name: "Linear Dormant User" }).execute();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: connectorConfigId,
+        connector_type: "linear",
+        auth_type: "api_key",
+        credentials: "{}",
+        created_by: "linear-dormant-user",
+      })
+      .execute();
+    const cursor = "2026-08-01T00:00:00.000Z";
+    const projectsPage = () =>
+      jsonResponse({
+        projects: {
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            {
+              id: "project-dormant",
+              name: "Dormant Project",
+              description: "Already indexed",
+              url: "https://linear.example/project-dormant",
+              state: "started",
+              lead: null,
+              startDate: null,
+              targetDate: null,
+              teams: { nodes: [{ id: "team-eng", name: "Engineering", key: "ENG" }] },
+              createdAt: "2026-06-01T00:00:00.000Z",
+              updatedAt: "2026-07-01T00:00:00.000Z",
+            },
+            {
+              id: "project-updated",
+              name: "Updated Project",
+              description: "Needs indexing",
+              url: "https://linear.example/project-updated",
+              state: "started",
+              lead: null,
+              startDate: null,
+              targetDate: null,
+              teams: { nodes: [{ id: "team-eng", name: "Engineering", key: "ENG" }] },
+              createdAt: "2026-06-01T00:00:00.000Z",
+              updatedAt: "2026-08-02T00:00:00.000Z",
+            },
+          ],
+        },
+      });
+    const projectRequest: { variables?: Record<string, unknown> } = {};
+    fetchSpy.mockImplementation((async (_url: unknown, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      if (body.includes("query Projects(")) {
+        projectRequest.variables = JSON.parse(body).variables as Record<string, unknown>;
+      }
+      return routeLinearRequest(body, { projects: projectsPage });
+    }) as typeof globalThis.fetch);
+
+    const seeds: EntitySeed[] = [];
+    const connector = createLinearConnector();
+    const containerRepo = createContainerRepository(db);
+    try {
+      const items = await drainSync(connector, {
+        cursor,
+        onEntitySeed: async (seed) => {
+          seeds.push(seed);
+        },
+        onContainerObservation: async (observation) => {
+          await containerRepo.observeContainer({
+            connectorConfigId,
+            connectorType: "linear",
+            externalId: observation.externalId,
+            levelKey: observation.levelKey,
+            name: observation.name,
+            pathIds: observation.pathIds,
+            pathNames: observation.pathNames,
+            parentExternalId: observation.parentExternalId,
+            providerTypedKind: observation.providerTypedKind,
+          });
+        },
+      });
+
+      const projectRows = await db
+        .selectFrom("containers")
+        .select(["external_id", "level_key"])
+        .where("connector_config_id", "=", connectorConfigId)
+        .where("level_key", "=", "project")
+        .orderBy("external_id", "asc")
+        .execute();
+
+      expect(projectRequest.variables?.filter).toBeUndefined();
+      expect(projectRows).toEqual([
+        { external_id: "project-dormant", level_key: "project" },
+        { external_id: "project-updated", level_key: "project" },
+      ]);
+      expect(seeds.map((seed) => seed.sourceId)).toEqual(["project-updated"]);
+      expect(items.map((item) => item.providerFileId)).toEqual(["project-project-updated"]);
+    } finally {
+      await db.destroy();
+    }
   });
 });
 

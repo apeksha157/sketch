@@ -137,7 +137,12 @@ async function seedIndexedFile(
 
 async function seedVerdict(
   db: Kysely<DB>,
-  input: { id: string; containerId: string; status: "awaiting_human" | "approved" | "applied" | "rejected" },
+  input: {
+    id: string;
+    containerId: string;
+    status: "awaiting_human" | "approved" | "applied" | "rejected";
+    evidenceFingerprint?: string;
+  },
 ): Promise<void> {
   await db
     .insertInto("graph_verdict_runs")
@@ -167,7 +172,7 @@ async function seedVerdict(
       target_name: null,
       reason: "Seeded verdict.",
       evidence_json: "{}",
-      evidence_fingerprint: "seeded-fingerprint",
+      evidence_fingerprint: input.evidenceFingerprint ?? "seeded-fingerprint",
       validation_status: "ok",
       validation_reason: null,
       would_change_json: null,
@@ -342,6 +347,59 @@ describe("judgeUnclassifiedContainers", () => {
     await expect(db.selectFrom("graph_verdicts").selectAll().execute()).resolves.toHaveLength(1);
     const runRows = await createGraphVerdictRepository(db).listRunsWithRollups();
     expect(runRows).toHaveLength(1);
+  });
+
+  it("keeps currently rejected container verdicts out of the docket until the fingerprint changes", async () => {
+    await seedConnector(db, { hierarchyMapping: { levels: { folder: "project" } } });
+    await seedContainer(db, {
+      id: "space-parent",
+      name: "Space",
+      levelKey: "space",
+      parentContainerId: null,
+      pathNames: ["Workspace"],
+      classification: "project",
+      classificationStatus: "active",
+    });
+    await seedContainer(db, {
+      id: "rejected-folder",
+      externalId: "rejected-ext",
+      name: "Rejected Folder",
+      itemCount: 1,
+    });
+    const rejectedContainer = await db
+      .selectFrom("containers")
+      .selectAll()
+      .where("id", "=", "rejected-folder")
+      .executeTakeFirstOrThrow();
+    await seedVerdict(db, {
+      id: "rejected-verdict",
+      containerId: "rejected-folder",
+      status: "rejected",
+      evidenceFingerprint: containerVerdictFingerprint({
+        action: "classify_container",
+        container: rejectedContainer,
+      }),
+    });
+    const prompts: string[] = [];
+    const generator = generatorFor({ verdicts: [] }, prompts);
+
+    const rejectedRun = await judgeUnclassifiedContainers({ db, logger: testLogger(), generator }, CONNECTOR_ID);
+
+    expect(rejectedRun).toMatchObject({ containersPrompted: 0, verdictsStored: 0 });
+    expect(prompts).toHaveLength(0);
+
+    await db
+      .updateTable("containers")
+      .set({ name: "Renamed Rejected Folder" })
+      .where("id", "=", "rejected-folder")
+      .execute();
+
+    const renamedRun = await judgeUnclassifiedContainers({ db, logger: testLogger(), generator }, CONNECTOR_ID);
+
+    expect(renamedRun).toMatchObject({ containersPrompted: 1, verdictsStored: 0 });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("containerId: rejected-folder");
+    expect(prompts[0]).toContain("name: Renamed Rejected Folder");
   });
 
   it("drops invalid and malformed model output and contains judge failures", async () => {
