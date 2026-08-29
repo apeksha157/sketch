@@ -1368,6 +1368,7 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
   routes.get("/:id/mentions", async (c) => {
     const entityId = c.req.param("id");
     const sourceFilter = c.req.query("source")?.split(",").filter(Boolean);
+    const fileId = c.req.query("fileId");
     const since = c.req.query("since");
     const limit = Math.min(Number(c.req.query("limit")) || 20, 100);
     const offset = Number(c.req.query("offset")) || 0;
@@ -1405,6 +1406,9 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
     if (sourceFilter && sourceFilter.length > 0) {
       query = query.where("indexed_files.source", "in", sourceFilter);
     }
+    if (fileId) {
+      query = query.where("indexed_files.id", "=", fileId);
+    }
     if (since) {
       query = query.where(
         sql`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
@@ -1427,6 +1431,9 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
         .where("entity_mentions.entity_id", "=", entityId);
       if (sourceFilter && sourceFilter.length > 0) {
         q = q.where("indexed_files.source", "in", sourceFilter);
+      }
+      if (fileId) {
+        q = q.where("indexed_files.id", "=", fileId);
       }
       if (since) {
         q = q.where(

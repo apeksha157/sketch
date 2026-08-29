@@ -3682,9 +3682,10 @@ export const api = {
         method: "DELETE",
       });
     },
-    mentions(id: string, opts?: { source?: string; since?: string; limit?: number; offset?: number }) {
+    mentions(id: string, opts?: { source?: string; fileId?: string; since?: string; limit?: number; offset?: number }) {
       const params = new URLSearchParams();
       if (opts?.source) params.set("source", opts.source);
+      if (opts?.fileId) params.set("fileId", opts.fileId);
       if (opts?.since) params.set("since", opts.since);
       if (opts?.limit) params.set("limit", String(opts.limit));
       if (opts?.offset) params.set("offset", String(opts.offset));

@@ -1009,7 +1009,7 @@ function DrawerTabs({ entityId, sourceType, relations, relationsLoading, isAdmin
       ) : tab === "tasks" && isProject ? (
         <TasksPanel entityId={entityId} tasksQuery={tasksQuery} />
       ) : tab === "timeline" ? (
-        <TimelinePanel timelineQuery={timelineQuery} />
+        <TimelinePanel entityId={entityId} timelineQuery={timelineQuery} />
       ) : (
         <RelationshipsPanel
           relations={relations}
@@ -1052,10 +1052,11 @@ function TabButton({
 }
 
 interface TimelinePanelProps {
+  entityId: string;
   timelineQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof api.entities.timeline>>>>;
 }
 
-function TimelinePanel({ timelineQuery }: TimelinePanelProps) {
+function TimelinePanel({ entityId, timelineQuery }: TimelinePanelProps) {
   if (timelineQuery.isLoading) {
     return <Skeleton className="h-24 w-full" />;
   }
@@ -1063,7 +1064,7 @@ function TimelinePanel({ timelineQuery }: TimelinePanelProps) {
   if (groups.length === 0) {
     return <p className="text-xs text-muted-foreground">No file mentions yet.</p>;
   }
-  return <TimelineStrip groups={groups} />;
+  return <TimelineStrip groups={groups} entityId={entityId} />;
 }
 
 /** Convenience re-export so callers can pull both the provider mount and the drawer from one place. */
