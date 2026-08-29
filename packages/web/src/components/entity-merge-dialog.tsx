@@ -118,7 +118,13 @@ function collisionsTotal(collisions: EntityMergePreview["collisions"]): number {
   return Object.values(collisions).reduce((a, b) => a + b, 0);
 }
 
-function MergePreviewPane({
+/**
+ * The one merge preview: survivor toggle, dry-run counts, blocked reasons,
+ * and the Confirm button. Exported so every surface that confirms an
+ * entity-to-entity merge (drawer dialog, WhatsApp identity review) shows the
+ * same consequences before committing.
+ */
+export function MergePreviewPane({
   entityId,
   entityName,
   otherId,
