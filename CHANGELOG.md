@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [1.5.0] -- 2026-08-29
+
+- Fixes GitHub and Linear access updates by replacing the misleading `Done` button with a persistent `Save access` footer and keeping saved recipients visible in the picker.
+- Ports Canvas automation UX to the automations builder with coordinated sidebars, animated card expansion, responsive toolbar, per-step failure display, and an agent-only Reasoning tab.
+- Adds sync-driven container inventory, container-subject verdicts with provider-fact settlement, an LLM container judge with dev-tools verdict UI, and activated container classifications for seeding, parenting, and cycles.
+- Derives team membership from sustained home-container activity with deterministic suppression handling and maturity reopen proposals.
+- Makes container classification safe for already-synced tenants by preserving trustworthy statistics, observing dormant Linear projects, and suppressing unchanged rejected judge proposals.
+- Extends the automation builder wall-clock budget from 2 to 10 minutes and routes abort results through the resumable interruption path.
+- Adds PR-0 resolution validation harness with a pinned 1,014-file corpus manifest, snapshot refresh, and seven baseline assertions against real canvas-ai data.
+- Introduces `entity_aliases` table with provenance backfill and dual-write seam across all alias choke points, replacing the JSON-blob source of truth.
+- Generalizes the verdict planner to support person and company entities, adds `remove_alias` verdict action end-to-end, and promotes survivor tier to `human_confirmed` on approved merges.
+- Adds alias write-gate screening junk aliases at every teach path and durable removal ledger preventing re-teaching of blocked or removed aliases across mint, roster, and confirm flows.
+- Adds `autoApply` mode for `remove_alias` verdicts that auto-approves proven-bad machine aliases without per-row approval friction while preserving human gates for stronger provenance.
+- Adds `curation_list_aliases` MCP tool with provenance and entity-type filters plus deterministic pagination, and echoes `targetName` on every `propose_graph_verdicts` result row.
+
 ## [1.4.4] -- 2026-08-26
 
 - Fixes search to make Teams meetings reachable through `kind: "meeting"` and `source: "teams"` filters.
