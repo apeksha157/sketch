@@ -306,7 +306,7 @@ describe("EntityDrawer", () => {
     await user.click(await screen.findByTestId("identity-edit-toggle"));
 
     const aliasRow = await screen.findByTestId("alias-row-S. Chen");
-    expect(within(aliasRow).getByText("name")).toBeInTheDocument();
+    expect(screen.getByText("name")).toBeInTheDocument();
     await user.click(within(aliasRow).getByLabelText("Delete alias S. Chen"));
 
     await waitFor(() => expect(deletedAlias).toBe("S. Chen"));

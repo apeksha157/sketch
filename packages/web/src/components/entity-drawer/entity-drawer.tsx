@@ -44,6 +44,7 @@ import {
   SpinnerGapIcon,
   TrashIcon,
   WarningIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import {
   AlertDialog,
@@ -620,37 +621,41 @@ function IdentitySection({ entity, isAdmin }: { entity: EntityDetail; isAdmin: b
               </Button>
             </div>
           ))}
-          {aliases.map((alias) => (
-            <div
-              key={alias}
-              className="flex items-center gap-2 rounded-md bg-background px-3 py-1.5"
-              data-testid={`alias-row-${alias}`}
-            >
-              <span className="w-11 shrink-0 text-[10px] font-semibold uppercase text-muted-foreground">name</span>
-              <span className="min-w-0 flex-1 truncate text-xs">{alias}</span>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
-                aria-label={`Edit alias ${alias}`}
-                onClick={() => setForm({ kind: "name", value: alias, isPrimary: false, originalAlias: alias })}
-              >
-                <PencilSimpleIcon size={13} />
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 text-destructive hover:text-destructive"
-                aria-label={`Delete alias ${alias}`}
-                disabled={deleteMutation.isPending}
-                onClick={() => deleteMutation.mutate({ alias })}
-              >
-                <TrashIcon size={13} />
-              </Button>
+          {aliases.length > 0 ? (
+            <div className="flex items-start gap-2 rounded-md bg-background px-3 py-2">
+              <span className="w-11 shrink-0 pt-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
+                name
+              </span>
+              <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
+                {aliases.map((alias) => (
+                  <span
+                    key={alias}
+                    className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px]"
+                    data-testid={`alias-row-${alias}`}
+                  >
+                    <span className="max-w-56 truncate">{alias}</span>
+                    <button
+                      type="button"
+                      aria-label={`Edit alias ${alias}`}
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => setForm({ kind: "name", value: alias, isPrimary: false, originalAlias: alias })}
+                    >
+                      <PencilSimpleIcon size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete alias ${alias}`}
+                      className="text-muted-foreground hover:text-destructive"
+                      disabled={deleteMutation.isPending}
+                      onClick={() => deleteMutation.mutate({ alias })}
+                    >
+                      <XIcon size={11} />
+                    </button>
+                  </span>
+                ))}
+              </div>
             </div>
-          ))}
+          ) : null}
 
           {form && formKindDef ? (
             <form
