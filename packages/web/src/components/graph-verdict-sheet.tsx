@@ -22,6 +22,8 @@ export const GRAPH_VERDICT_ACTION_LABELS: Record<string, string> = {
   archive: "archive",
   remove_alias: "remove alias",
   classify_container: "classify",
+  link_to: "link mention",
+  dismiss: "dismiss mention",
 };
 
 export const GRAPH_VERDICT_STATUS_TONES: Record<GraphVerdictStatus, string> = {

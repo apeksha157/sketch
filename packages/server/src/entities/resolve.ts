@@ -33,6 +33,7 @@ import { type EvidenceRow, type QueueRow, createEntityReviewRepo } from "../db/r
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import { confirmUserEntityLink } from "../db/repositories/user-entity-linking";
+import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/users";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../db/schema";
 import { inferAffiliationFromEmail } from "./affiliations";
 import { finalizeLinkedDomainCandidates } from "./domain-promotion";
@@ -348,11 +349,19 @@ async function markResolvedOrThrow(
   row: QueueRow,
   status: "confirmed" | "rejected",
   resolvedEntityId: string,
+  opts: { resolvedBy?: string; allowedStatuses?: string[] } = {},
 ): Promise<QueueRow> {
   if (!row.candidate_generated_at) {
     throw new ResolveError("CANDIDATE_DRIFT", "row missing candidate_generated_at", { currentRow: row });
   }
-  const won = await ctx.repo.markResolved(row.id, status, resolvedEntityId, ctx.userId, row.candidate_generated_at);
+  const won = await ctx.repo.markResolved(
+    row.id,
+    status,
+    resolvedEntityId,
+    opts.resolvedBy ?? ctx.userId,
+    row.candidate_generated_at,
+    opts.allowedStatuses,
+  );
   if (!won) {
     const currentRow = await fetchRow(ctx, row.id);
     throw new ResolveError("CANDIDATE_DRIFT", "row was resolved or refreshed by another request", {
@@ -943,7 +952,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     }
     await writeReviewSourceRef(trxCtx, row, target.id);
     await reviveDeferredRelationsForEntity(trxCtx, target);
-    await recordResolutionLink(trxCtx, row, target, evidence, "human");
+    await recordResolutionLink(trxCtx, row, target, evidence, { decider: "human" });
 
     // Pick-different: write rejection against original candidate so it isn't re-suggested.
     if (pickedDifferent && row.candidate_entity_id) {
@@ -974,8 +983,16 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
 export async function linkReviewRowToExistingEntity(
   ctx: ResolveCtx,
   opts: { reviewId: string; entityId: string },
+  decision: {
+    decider?: "human" | "judge";
+    decidedBy?: string;
+    provenanceTier?: "human_confirmed" | "machine_confirmed";
+    verdictRef?: string | null;
+    allowedStatuses?: string[];
+    useExistingTransaction?: boolean;
+  } = {},
 ): Promise<ConfirmResult> {
-  return ctx.db.transaction().execute(async (trx) => {
+  const run = async (trx: Kysely<DB>) => {
     const trxCtx = createResolveTxnCtx(ctx, trx);
     const loaded = await fetchConfirmableReview(trxCtx, opts.reviewId);
     if (loaded.kind === "idempotent") {
@@ -990,16 +1007,26 @@ export async function linkReviewRowToExistingEntity(
     const row = loaded.row;
     const target = await fetchLiveTargetForReview(trxCtx, row, opts.entityId);
     const evidence = await listResolveEvidenceOrThrow(trxCtx, row.id);
+    const decider = decision.decider ?? "judge";
+    const decidedBy = decision.decidedBy ?? MACHINE_PRINCIPAL_USER_ID;
+    const provenanceTier = decision.provenanceTier ?? "machine_confirmed";
 
-    await trxCtx.entityRepo.promoteProvenanceTier(target.id, "machine_confirmed");
+    await trxCtx.entityRepo.promoteProvenanceTier(target.id, provenanceTier);
     const promotedTarget = (await trxCtx.entityRepo.getEntity(target.id)) ?? target;
-    await recordResolutionLink(trxCtx, row, promotedTarget, evidence, "judge");
+    await recordResolutionLink(trxCtx, row, promotedTarget, evidence, {
+      decider,
+      decidedBy,
+      verdictRef: decision.verdictRef ?? null,
+    });
     await materializeEvidence(trxCtx, target, evidence, "confirmed");
     await rematerializeHeldLlmEvidence(trxCtx, row, evidence);
     await writeReviewSourceRef(trxCtx, row, target.id);
     await reviveDeferredRelationsForEntity(trxCtx, target);
 
-    const refreshedRow = await markResolvedOrThrow(trxCtx, row, "confirmed", target.id);
+    const refreshedRow = await markResolvedOrThrow(trxCtx, row, "confirmed", target.id, {
+      resolvedBy: decidedBy,
+      allowedStatuses: decision.allowedStatuses,
+    });
     return {
       row: refreshedRow,
       targetEntityId: target.id,
@@ -1007,7 +1034,8 @@ export async function linkReviewRowToExistingEntity(
       mergedStaleEntityId: null,
       idempotent: false,
     };
-  });
+  };
+  return decision.useExistingTransaction ? run(ctx.db) : ctx.db.transaction().execute(run);
 }
 
 /**
@@ -1067,7 +1095,7 @@ async function recordResolutionLink(
   row: QueueRow,
   target: Entity,
   evidence: EvidenceRow[],
-  decider: "human" | "judge",
+  opts: { decider: "human" | "judge"; decidedBy?: string; verdictRef?: string | null },
 ): Promise<void> {
   const { source, sourceId } = resolutionSource(row, evidence, row.id);
   await ctx.resolutionLedger.recordLink({
@@ -1076,11 +1104,12 @@ async function recordResolutionLink(
     targetEntityId: target.id,
     targetName: target.name,
     targetEmail: readPersonEmailFromMetadata(target.metadata) ?? row.proposed_email,
-    decider,
-    decidedBy: ctx.userId,
+    decider: opts.decider,
+    decidedBy: opts.decidedBy ?? ctx.userId,
     source,
     sourceId,
     evidenceFileIds: evidenceFileIds(evidence),
+    verdictRef: opts.verdictRef ?? null,
   });
 }
 
@@ -1276,9 +1305,14 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
 export async function dismissReview(
   ctx: ResolveCtx,
   reviewId: string,
-  opts: { candidateGeneratedAt: string },
+  opts: {
+    candidateGeneratedAt: string;
+    decidedBy?: string;
+    allowedStatuses?: string[];
+    useExistingTransaction?: boolean;
+  },
 ): Promise<DismissResult> {
-  return ctx.db.transaction().execute(async (trx) => {
+  const run = async (trx: Kysely<DB>) => {
     const trxCtx = createResolveTxnCtx(ctx, trx);
     const row = await fetchRow(trxCtx, reviewId);
 
@@ -1309,7 +1343,12 @@ export async function dismissReview(
       throw new ResolveError("CANDIDATE_DRIFT", "row missing candidate_generated_at", { currentRow: row });
     }
 
-    const won = await trxCtx.repo.markDismissed(row.id, ctx.userId, row.candidate_generated_at);
+    const won = await trxCtx.repo.markDismissed(
+      row.id,
+      opts.decidedBy ?? ctx.userId,
+      row.candidate_generated_at,
+      opts.allowedStatuses,
+    );
     if (!won) {
       const currentRow = await fetchRow(trxCtx, row.id);
       throw new ResolveError("CANDIDATE_DRIFT", "row was resolved or refreshed by another request", {
@@ -1318,7 +1357,8 @@ export async function dismissReview(
       });
     }
     return { row: await fetchRow(trxCtx, row.id), idempotent: false };
-  });
+  };
+  return opts.useExistingTransaction ? run(ctx.db) : ctx.db.transaction().execute(run);
 }
 
 export async function reclassifyReview(

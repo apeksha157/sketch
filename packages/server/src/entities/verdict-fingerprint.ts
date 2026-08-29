@@ -33,6 +33,11 @@ export type ContainerVerdictFingerprintRow = {
   has_dates: number;
 };
 
+export type MentionVerdictFingerprintRow = {
+  id: string;
+  candidate_generated_at: string | null;
+};
+
 function sortedValues(values: string[]): string[] {
   return [...new Set(values.map((value) => value.toLowerCase()))].sort();
 }
@@ -125,6 +130,25 @@ export function containerVerdictFingerprint(input: {
       providerTypedKind: input.container.provider_typed_kind?.toLowerCase() ?? null,
       hasDates: input.container.has_dates === 1,
     },
+  };
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+}
+
+export function mentionVerdictFingerprint(input: {
+  action: string;
+  mentionName: string;
+  entityType: string;
+  rows: MentionVerdictFingerprintRow[];
+  target: Parameters<typeof fingerprintEntity>[0];
+}): string {
+  const canonical = {
+    action: input.action.toLowerCase(),
+    mentionName: input.mentionName,
+    entityType: input.entityType.toLowerCase(),
+    rows: [...input.rows]
+      .map((row) => ({ id: row.id.toLowerCase(), candidateGeneratedAt: row.candidate_generated_at }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    target: fingerprintEntity(input.target),
   };
   return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
 }

@@ -610,6 +610,7 @@ export interface GraphVerdict {
   action: string;
   subjectEntityId: string | null;
   subjectContainerId: string | null;
+  subjectMentionName: string | null;
   subjectName: string | null;
   subjectEntityType: string | null;
   targetEntityId: string | null;

@@ -119,6 +119,40 @@ export function createResolutionDecisionRepository(db: Kysely<DB>) {
       return Number(result?.numInsertedOrUpdatedRows ?? 0) > 0;
     },
 
+    async recordDismiss(input: Omit<RecordResolutionDecisionInput, "targetEntityId">): Promise<boolean> {
+      const existing = await db
+        .selectFrom("resolution_decisions")
+        .select("id")
+        .where("normalized_mention_name", "=", input.normalizedMentionName)
+        .where("entity_type", "=", input.entityType)
+        .where("scope", "=", input.scope ?? "global")
+        .where("verdict", "=", "dismiss")
+        .where("status", "=", "active")
+        .executeTakeFirst();
+      if (existing) return false;
+      const result = await db
+        .insertInto("resolution_decisions")
+        .values({
+          id: randomUUID(),
+          normalized_mention_name: input.normalizedMentionName,
+          entity_type: input.entityType,
+          scope: input.scope ?? "global",
+          verdict: "dismiss",
+          target_entity_id: null,
+          target_name: input.targetName ?? null,
+          target_email: input.targetEmail ?? null,
+          decider: input.decider,
+          decided_by: input.decidedBy,
+          source: input.source,
+          source_id: input.sourceId,
+          evidence_file_ids: uniqueJson(input.evidenceFileIds),
+          verdict_ref: input.verdictRef ?? null,
+          status: "active",
+        })
+        .executeTakeFirst();
+      return Number(result?.numInsertedOrUpdatedRows ?? 0) > 0;
+    },
+
     async findActiveForMention(
       normalizedName: string,
       entityType: string,

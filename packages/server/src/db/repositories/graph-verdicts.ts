@@ -24,6 +24,7 @@ export interface StoreGraphVerdictInput {
   action: string;
   subjectEntityId: string | null;
   subjectContainerId?: string | null;
+  subjectMentionName?: string | null;
   subjectName: string | null;
   subjectEntityType: string | null;
   targetEntityId: string | null;
@@ -57,6 +58,7 @@ function toInsert(input: StoreGraphVerdictInput, id: string, now: string): Inser
     action: input.action,
     subject_entity_id: input.subjectEntityId,
     subject_container_id: input.subjectContainerId ?? null,
+    subject_mention_name: input.subjectMentionName ?? null,
     subject_name: input.subjectName,
     subject_entity_type: input.subjectEntityType,
     target_entity_id: input.targetEntityId,
@@ -89,11 +91,23 @@ function approvedPendingBounce(input: StoreGraphVerdictInput): StoreGraphVerdict
 }
 
 function activeSubject(verdict: StoreGraphVerdictInput): {
-  column: "subject_container_id" | "subject_entity_id";
+  kind: "container" | "mention" | "entity";
+  column: "subject_container_id" | "subject_mention_name" | "subject_entity_id";
   id: string;
+  entityType?: string;
 } {
-  if (verdict.subjectContainerId) return { column: "subject_container_id", id: verdict.subjectContainerId };
-  if (verdict.subjectEntityId) return { column: "subject_entity_id", id: verdict.subjectEntityId };
+  if (verdict.subjectContainerId) {
+    return { kind: "container", column: "subject_container_id", id: verdict.subjectContainerId };
+  }
+  if (verdict.subjectMentionName && verdict.subjectEntityType) {
+    return {
+      kind: "mention",
+      column: "subject_mention_name",
+      id: verdict.subjectMentionName,
+      entityType: verdict.subjectEntityType,
+    };
+  }
+  if (verdict.subjectEntityId) return { kind: "entity", column: "subject_entity_id", id: verdict.subjectEntityId };
   throw new Error("Graph verdict subject is missing.");
 }
 
@@ -101,7 +115,7 @@ async function withContainerSubjectEntity(
   db: Kysely<DB>,
   verdict: StoreGraphVerdictInput,
 ): Promise<StoreGraphVerdictInput> {
-  if (!verdict.subjectContainerId || verdict.subjectEntityId) return verdict;
+  if (!verdict.subjectContainerId || verdict.subjectEntityId || verdict.subjectMentionName) return verdict;
   const container = await db
     .selectFrom("containers")
     .select("classified_entity_id")
@@ -148,28 +162,34 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
           continue;
         }
         const subject = activeSubject(verdict);
-        const approved = await db
+        let approvedQuery = db
           .selectFrom("graph_verdicts")
           .select("id")
           .where(subject.column, "=", subject.id)
           .where("action", "=", verdict.action)
           .where("status", "=", "approved")
-          .where("superseded_at", "is", null)
-          .executeTakeFirst();
+          .where("superseded_at", "is", null);
+        if (subject.kind === "mention") {
+          approvedQuery = approvedQuery.where("subject_entity_type", "=", subject.entityType ?? "");
+        }
+        const approved = await approvedQuery.executeTakeFirst();
         rows.push(approved ? approvedPendingBounce(verdict) : verdict);
       }
       const ids = rows.map(() => randomUUID());
       const awaiting = rows.filter((verdict) => verdict.status === "awaiting_human");
       for (const verdict of awaiting) {
         const subject = activeSubject(verdict);
-        await db
+        let updateQuery = db
           .updateTable("graph_verdicts")
           .set({ superseded_at: now, updated_at: now })
           .where(subject.column, "=", subject.id)
           .where("action", "=", verdict.action)
           .where("status", "=", "awaiting_human")
-          .where("superseded_at", "is", null)
-          .execute();
+          .where("superseded_at", "is", null);
+        if (subject.kind === "mention") {
+          updateQuery = updateQuery.where("subject_entity_type", "=", subject.entityType ?? "");
+        }
+        await updateQuery.execute();
       }
       if (rows.length > 0) {
         await db

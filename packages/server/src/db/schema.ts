@@ -991,6 +991,7 @@ export interface GraphVerdictsTable {
   action: string;
   subject_entity_id: string | null;
   subject_container_id: string | null;
+  subject_mention_name: string | null;
   subject_name: string | null;
   subject_entity_type: string | null;
   target_entity_id: string | null;
