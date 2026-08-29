@@ -9,6 +9,8 @@ import {
 import type { DB, EntitiesTable } from "../../db/schema";
 import type { CleanupAction, CleanupVerdict } from "../../entities/cleanup-adjudication";
 import { planCleanup } from "../../entities/cleanup-apply";
+import { normalizeName } from "../../entities/name-keys";
+import { GraphVerdictApplyError, applyGraphVerdict } from "../../entities/verdict-apply";
 import { fingerprintFor } from "../../entities/verdict-fingerprint";
 import { jsonResult } from "./queries";
 
@@ -21,6 +23,7 @@ const evidenceSchema = z.object({
 });
 
 export const proposeGraphVerdictsSchema = {
+  autoApply: z.boolean().optional(),
   note: z.string().optional(),
   verdicts: z
     .array(
@@ -64,6 +67,17 @@ type ProposalResult = {
   validationStatus: GraphVerdictValidationStatus;
   validationReason: string | null;
   wouldChange: Record<string, number> | null;
+  disposition: ProposalDisposition;
+};
+
+type ProposalDisposition = "autoApplied" | "awaiting_human" | "bounced" | `auto_apply_failed:${string}`;
+
+type StoredProposalBatch = {
+  runId: string;
+  stored: number;
+  bounced: number;
+  results: ProposalResult[];
+  autoApplyCandidateIds: string[];
 };
 
 function sortedCapped(values: string[] | undefined, max: number): string[] {
@@ -214,64 +228,143 @@ async function validateWithCleanupPlanner(db: Kysely<DB>, proposals: PreparedPro
   return planCleanup(db, proposals.map(toCleanupVerdict));
 }
 
+/**
+ * Auto-apply only removes aliases whose row provenance proves the alias came
+ * from machine cleanup or legacy backfill. A missing row is not enough evidence:
+ * unknown provenance parks for human review rather than overriding identity
+ * signals that were never mirrored into `entity_aliases`.
+ */
+async function eligibleRemoveAliasVerdictIds(
+  db: Kysely<DB>,
+  stored: { ids: string[]; rows: StoreGraphVerdictInput[] },
+): Promise<string[]> {
+  const eligibleIds: string[] = [];
+  for (const [index, row] of stored.rows.entries()) {
+    if (row.action !== "remove_alias" || row.status !== "awaiting_human" || !row.subjectEntityId || !row.targetName) {
+      continue;
+    }
+    const alias = await db
+      .selectFrom("entity_aliases")
+      .select("provenance")
+      .where("entity_id", "=", row.subjectEntityId)
+      .where("normalized_alias", "=", normalizeName(row.targetName))
+      .executeTakeFirst();
+    if (alias?.provenance === "mint_model" || alias?.provenance === "legacy") {
+      const id = stored.ids[index];
+      if (id) eligibleIds.push(id);
+    }
+  }
+  return eligibleIds;
+}
+
+function autoApplyFailureCode(error: unknown): string {
+  if (error instanceof GraphVerdictApplyError) return error.code;
+  return "APPLY_CONFLICT";
+}
+
+function dispositionSummary(results: ProposalResult[]): string {
+  const counts = {
+    autoApplied: 0,
+    awaiting_human: 0,
+    bounced: 0,
+    autoApplyFailed: 0,
+  };
+  for (const result of results) {
+    if (result.disposition === "autoApplied") counts.autoApplied += 1;
+    else if (result.disposition === "awaiting_human") counts.awaiting_human += 1;
+    else if (result.disposition === "bounced") counts.bounced += 1;
+    else counts.autoApplyFailed += 1;
+  }
+  return `autoApplied=${counts.autoApplied} awaiting_human=${counts.awaiting_human} bounced=${counts.bounced} auto_apply_failed=${counts.autoApplyFailed}`;
+}
+
 export async function handleProposeGraphVerdicts(
   args: ProposeGraphVerdictsArgs,
   db: Kysely<DB>,
   authContext: { userId: string; tokenId: string },
 ) {
-  return jsonResult(
-    await withGraphVerdictUniqueRetry(async () =>
-      db.transaction().execute(async (trx) => {
-        const entities = await loadEntities(trx, args.verdicts);
-        const { rows, plannerInputs } = prepareProposals(args, entities);
-        const plannedRows = await validateWithCleanupPlanner(trx, plannerInputs);
+  const batch = await withGraphVerdictUniqueRetry(async () =>
+    db.transaction().execute(async (trx): Promise<StoredProposalBatch> => {
+      const entities = await loadEntities(trx, args.verdicts);
+      const { rows, plannerInputs } = prepareProposals(args, entities);
+      const plannedRows = await validateWithCleanupPlanner(trx, plannerInputs);
 
-        for (const [plannerIndex, planRow] of plannedRows.entries()) {
-          const prepared = plannerInputs[plannerIndex];
-          if (!prepared) continue;
-          rows[prepared.index] =
-            planRow.state === "applied"
-              ? plannedVerdict(prepared, "ok", null, planRow.wouldChange, planRow.resolvedTargetEntityId)
-              : plannedVerdict(
-                  prepared,
-                  "failed",
-                  planRow.reason ?? "invalid_action",
-                  null,
-                  planRow.resolvedTargetEntityId,
-                );
-        }
+      for (const [plannerIndex, planRow] of plannedRows.entries()) {
+        const prepared = plannerInputs[plannerIndex];
+        if (!prepared) continue;
+        rows[prepared.index] =
+          planRow.state === "applied"
+            ? plannedVerdict(prepared, "ok", null, planRow.wouldChange, planRow.resolvedTargetEntityId)
+            : plannedVerdict(
+                prepared,
+                "failed",
+                planRow.reason ?? "invalid_action",
+                null,
+                planRow.resolvedTargetEntityId,
+              );
+      }
 
-        const repo = createGraphVerdictRepository(trx);
-        const run = await repo.createRun({
-          source: "curation_mcp",
-          proposedByUserId: authContext.userId,
-          tokenId: authContext.tokenId,
-          note: args.note ?? null,
-          verdictsProposed: args.verdicts.length,
-        });
-        const verdictRows = rows.map((row) => {
-          if (!row) throw new Error("Missing graph verdict row.");
-          return { ...row, runId: run.id };
-        });
-        const stored = await repo.storeVerdicts(verdictRows);
-        const results: ProposalResult[] = stored.rows.map((row, index) => {
-          if (!row.subjectEntityId) throw new Error("Entity verdict missing subject entity id.");
-          return {
-            verdictId: stored.ids[index] ?? "",
-            action: row.action as CleanupAction,
-            subjectEntityId: row.subjectEntityId,
-            validationStatus: row.validationStatus,
-            validationReason: row.validationReason,
-            wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
-          };
-        });
+      const repo = createGraphVerdictRepository(trx);
+      const run = await repo.createRun({
+        source: "curation_mcp",
+        proposedByUserId: authContext.userId,
+        tokenId: authContext.tokenId,
+        note: args.note ?? null,
+        verdictsProposed: args.verdicts.length,
+      });
+      const verdictRows = rows.map((row) => {
+        if (!row) throw new Error("Missing graph verdict row.");
+        return { ...row, runId: run.id };
+      });
+      const stored = await repo.storeVerdicts(verdictRows);
+      const results: ProposalResult[] = stored.rows.map((row, index) => {
+        if (!row.subjectEntityId) throw new Error("Entity verdict missing subject entity id.");
         return {
-          runId: run.id,
-          stored: stored.rows.filter((row) => row.status === "awaiting_human").length,
-          bounced: stored.rows.filter((row) => row.status === "bounced").length,
-          results,
+          verdictId: stored.ids[index] ?? "",
+          action: row.action as CleanupAction,
+          subjectEntityId: row.subjectEntityId,
+          validationStatus: row.validationStatus,
+          validationReason: row.validationReason,
+          wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
+          disposition: row.status === "bounced" ? "bounced" : "awaiting_human",
         };
-      }),
-    ),
+      });
+      const autoApplyCandidateIds = args.autoApply ? await eligibleRemoveAliasVerdictIds(trx, stored) : [];
+      return {
+        runId: run.id,
+        stored: stored.rows.filter((row) => row.status === "awaiting_human").length,
+        bounced: stored.rows.filter((row) => row.status === "bounced").length,
+        results,
+        autoApplyCandidateIds,
+      };
+    }),
   );
+
+  const repo = createGraphVerdictRepository(db);
+  for (const verdictId of batch.autoApplyCandidateIds) {
+    const result = batch.results.find((row) => row.verdictId === verdictId);
+    if (!result) continue;
+    const approved = await repo.markApproved({
+      id: verdictId,
+      actorUserId: authContext.userId,
+    });
+    if (!approved) {
+      result.disposition = "auto_apply_failed:APPLY_CONFLICT";
+      continue;
+    }
+    try {
+      await applyGraphVerdict(db, { verdictId, actorUserId: authContext.userId });
+      result.disposition = "autoApplied";
+    } catch (error) {
+      result.disposition = `auto_apply_failed:${autoApplyFailureCode(error)}`;
+    }
+  }
+
+  return jsonResult({
+    runId: batch.runId,
+    stored: batch.stored,
+    bounced: batch.bounced,
+    results: batch.results,
+    summary: dispositionSummary(batch.results),
+  });
 }
