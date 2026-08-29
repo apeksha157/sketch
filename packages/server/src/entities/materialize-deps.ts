@@ -29,7 +29,7 @@ import {
   type CandidatePoolEntry,
   addToCandidatePool,
   buildCandidatePool,
-  findFuzzyMatches,
+  findEditDistanceMatches,
   findStrictMatches,
   findTokenSetMatches,
   removeFromCandidatePool,
@@ -614,23 +614,23 @@ export function createEntityLookupFromIndex(opts: {
       const strictEntityIds = new Set(strict.map((match) => match.entityId));
       const tokenSet = findTokenSetMatches(name, pool);
       const tokenSetEntityIds = new Set(tokenSet.map((match) => match.entityId));
-      const fuzzy = findFuzzyMatches(name, pool);
+      const editDistance = findEditDistanceMatches(name, pool);
       const byEntity = new Map<
         string,
         {
           entity: IndexEntityRow;
           score: number;
-          reason: "strict-normalized" | "token-set" | "minhash";
+          reason: "strict-normalized" | "token-set" | "edit-distance";
         }
       >();
-      for (const match of [...strict, ...tokenSet, ...fuzzy]) {
+      for (const match of [...strict, ...tokenSet, ...editDistance]) {
         const entity = entitiesById.get(match.entityId);
         if (!entity) continue;
         const reason = strictEntityIds.has(match.entityId)
           ? "strict-normalized"
           : tokenSetEntityIds.has(match.entityId)
             ? "token-set"
-            : "minhash";
+            : "edit-distance";
         const existing = byEntity.get(match.entityId);
         if (!existing || match.score > existing.score)
           byEntity.set(match.entityId, { entity, score: match.score, reason });
