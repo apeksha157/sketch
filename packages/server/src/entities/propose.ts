@@ -353,7 +353,7 @@ async function persistEntity(
       });
       if (input.email) {
         await deps.entityRepo.attachEmailIfAbsent(reconciled.id, input.email);
-        await deps.entityRepo.appendAlias(reconciled.id, input.email);
+        await deps.entityRepo.appendAlias(reconciled.id, input.email, "mint_model", input.source);
       }
       const entity = (await deps.entityRepo.getEntity(reconciled.id)) ?? reconciled;
       return { entity, created: false };
@@ -397,6 +397,11 @@ async function persistEntity(
   return { entity, created: true };
 }
 
+/**
+ * Heuristic machine alias writes deliberately use the §3 `mint_model` tier.
+ * A narrower `auto_dedup` tier would be more descriptive, but adding it here
+ * would widen the durable-memory enum ahead of the agentic-resolution plan.
+ */
 async function linkNameDedupCandidate(
   deps: ProposeDeps,
   input: ProposeInput,
@@ -407,7 +412,7 @@ async function linkNameDedupCandidate(
     (alias) => alias.trim() && alias.trim().toLowerCase() !== matched.name.trim().toLowerCase(),
   );
   for (const alias of aliasesToAppend) {
-    await deps.entityRepo.appendAlias(entity.id, alias);
+    await deps.entityRepo.appendAlias(entity.id, alias, "mint_model", input.source);
   }
   const refreshed = (await deps.entityRepo.getEntity(entity.id)) ?? entity;
   await deps.onEntityResolved?.(refreshed);
@@ -694,7 +699,7 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
         sourceId: input.sourceId,
       });
       if (reconciled.name.trim().toLowerCase() !== input.name.trim().toLowerCase()) {
-        await deps.entityRepo.appendAlias(reconciled.id, input.name);
+        await deps.entityRepo.appendAlias(reconciled.id, input.name, "mint_model", input.source);
       }
       const entity = (await deps.entityRepo.getEntityBySourceRef(input.source, input.sourceId)) ?? reconciled;
       await deps.onEntityResolved?.(entity);
@@ -721,7 +726,7 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
         input.provenanceTier,
       );
       if (candidate.name.trim().toLowerCase() !== input.name.trim().toLowerCase()) {
-        await deps.entityRepo.appendAlias(reconciled.id, input.name);
+        await deps.entityRepo.appendAlias(reconciled.id, input.name, "mint_model", input.source);
       }
       const entity = (await deps.entityRepo.getEntity(reconciled.id)) ?? reconciled;
       await deps.onEntityResolved?.(entity);

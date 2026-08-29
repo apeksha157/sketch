@@ -84,7 +84,7 @@ async function applySeedAliases(
 ): Promise<IndexEntityRow> {
   let refreshed = entity;
   for (const alias of aliases) {
-    await deps.entityRepo.appendAlias(refreshed.id, alias);
+    await deps.entityRepo.appendAlias(refreshed.id, alias, "mint_model", "structural_seed");
   }
   if (aliases.length > 0) {
     refreshed = (await deps.entityRepo.getEntity(refreshed.id)) ?? refreshed;

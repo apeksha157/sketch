@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Kysely, RawBuilder, Selectable } from "kysely";
 import { sql } from "kysely";
 import { deleteNameEmbedding } from "../../connectors/embeddings/trunk-name-embeddings";
+import { parseAliasesString } from "../../entities/materialize-json";
 import { matchesNameOrAliasExactly, normalizeEntityMatchName, normalizeName } from "../../entities/name-keys";
 import { HIDDEN_ENTITY_SOURCE_TYPES } from "../../entities/profile-facts";
 import type { ProvenanceTier } from "../../entities/provenance";
@@ -12,6 +13,7 @@ import { parseTimestampMs } from "../../timestamps";
 import { isPg } from "../dialect";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../schema";
 import { type FileViewer, fileVisibilityPredicate } from "./connectors";
+import { type EntityAliasProvenance, recordAlias, recordAliases } from "./entity-alias-rows";
 
 const SYSTEM_ENTITY_SOURCE_TYPES = ["clickup_workspace", "clickup_space"];
 const PROTECTED_ENTITY_SOURCES = ["team", "team_directory"];
@@ -247,16 +249,6 @@ function normalizeLinkedin(value: string): string {
   return decodeURIComponent(parts[inIndex + 1]).toLowerCase();
 }
 
-function parseAliasesString(aliases: string | null): string[] {
-  if (!aliases) return [];
-  try {
-    const parsed = JSON.parse(aliases);
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 function normalizeAliasInput(aliases: string[] | undefined): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -389,7 +381,11 @@ export function createEntityRepository(db: Kysely<DB>) {
       .execute();
   }
 
-  async function createEntityRow(data: UpsertEntityData) {
+  async function createEntityRow(
+    data: UpsertEntityData,
+    aliasProvenance: EntityAliasProvenance = "mint_model",
+    aliasCreatedBy?: string | null,
+  ) {
     const id = randomUUID();
     const now = new Date().toISOString();
     await db
@@ -409,6 +405,7 @@ export function createEntityRepository(db: Kysely<DB>) {
         updated_at: now,
       })
       .execute();
+    if (data.aliases) await recordAliases(db, id, data.aliases, aliasProvenance, aliasCreatedBy);
 
     return await db
       .selectFrom("entities")
@@ -457,7 +454,7 @@ export function createEntityRepository(db: Kysely<DB>) {
   return {
     // ── CRUD ──
 
-    async upsertEntity(data: UpsertEntityData) {
+    async upsertEntity(data: UpsertEntityData, aliasProvenance: EntityAliasProvenance = "mint_model") {
       const existing = await db
         .selectFrom("entities")
         .selectAll()
@@ -486,6 +483,7 @@ export function createEntityRepository(db: Kysely<DB>) {
           })
           .where("id", "=", existing.id)
           .execute();
+        if (data.aliases) await recordAliases(db, existing.id, data.aliases, aliasProvenance);
         return await db
           .selectFrom("entities")
           .selectAll()
@@ -513,6 +511,7 @@ export function createEntityRepository(db: Kysely<DB>) {
           updated_at: now,
         })
         .execute();
+      if (data.aliases) await recordAliases(db, id, data.aliases, aliasProvenance);
 
       return await db
         .selectFrom("entities")
@@ -522,8 +521,8 @@ export function createEntityRepository(db: Kysely<DB>) {
         .executeTakeFirstOrThrow();
     },
 
-    async createEntity(data: UpsertEntityData) {
-      return await createEntityRow(data);
+    async createEntity(data: UpsertEntityData, aliasProvenance: EntityAliasProvenance = "mint_model") {
+      return await createEntityRow(data, aliasProvenance);
     },
 
     /**
@@ -585,6 +584,7 @@ export function createEntityRepository(db: Kysely<DB>) {
           })
           .where("id", "=", best.id)
           .execute();
+        await recordAliases(db, best.id, mergedAliases, "human_confirmed");
         return await db
           .selectFrom("entities")
           .selectAll()
@@ -593,13 +593,16 @@ export function createEntityRepository(db: Kysely<DB>) {
           .executeTakeFirstOrThrow();
       }
 
-      return await createEntityRow({
-        name,
-        sourceType: "product",
-        aliases,
-        status: "confirmed",
-        provenanceTier: "declared",
-      });
+      return await createEntityRow(
+        {
+          name,
+          sourceType: "product",
+          aliases,
+          status: "confirmed",
+          provenanceTier: "declared",
+        },
+        "human_confirmed",
+      );
     },
 
     /**
@@ -671,6 +674,7 @@ export function createEntityRepository(db: Kysely<DB>) {
         hotness: number;
         provenance_tier: string;
       }>,
+      aliasProvenance: EntityAliasProvenance = "mint_model",
     ) {
       const entityId = await resolveLiveEntityId(db, id);
       const existing = updates.name
@@ -681,6 +685,9 @@ export function createEntityRepository(db: Kysely<DB>) {
         .set({ ...updates, updated_at: new Date().toISOString() })
         .where("id", "=", entityId)
         .execute();
+      if (updates.aliases !== undefined) {
+        await recordAliases(db, entityId, parseAliasesString(updates.aliases), aliasProvenance);
+      }
       if (existing && updates.name && existing.name !== updates.name) {
         await deleteNameEmbedding(db, "entity", entityId);
       }
@@ -698,7 +705,12 @@ export function createEntityRepository(db: Kysely<DB>) {
      * aliases column is stored as a JSON string, not jsonb — read, parse,
      * mutate, stringify, write. Touches `updated_at`.
      */
-    async appendAlias(entityId: string, aliasName: string) {
+    async appendAlias(
+      entityId: string,
+      aliasName: string,
+      provenance: EntityAliasProvenance,
+      createdBy?: string | null,
+    ) {
       const targetEntityId = await resolveLiveEntityId(db, entityId);
       const trimmed = aliasName.trim();
       if (!trimmed) return;
@@ -709,7 +721,7 @@ export function createEntityRepository(db: Kysely<DB>) {
         .where(whereLiveEntity())
         .executeTakeFirst();
       if (!row) return;
-      const aliases: string[] = row.aliases ? JSON.parse(row.aliases) : [];
+      const aliases = parseAliasesString(row.aliases);
       if (aliases.some((a) => a.toLowerCase() === trimmed.toLowerCase())) return;
       aliases.push(trimmed);
       await db
@@ -717,6 +729,7 @@ export function createEntityRepository(db: Kysely<DB>) {
         .set({ aliases: JSON.stringify(aliases), updated_at: new Date().toISOString() })
         .where("id", "=", targetEntityId)
         .execute();
+      await recordAlias(db, { entityId: targetEntityId, alias: trimmed, provenance, createdBy });
     },
 
     /**
@@ -1544,7 +1557,7 @@ export function createEntityRepository(db: Kysely<DB>) {
         }
 
         if (existing.name !== data.name) {
-          const aliases: string[] = JSON.parse(existing.aliases || "[]");
+          const aliases = parseAliasesString(existing.aliases);
           if (!aliases.some((a) => a.toLowerCase() === existing.name.toLowerCase())) {
             aliases.push(existing.name);
             updates.aliases = JSON.stringify(aliases);
@@ -1552,6 +1565,14 @@ export function createEntityRepository(db: Kysely<DB>) {
         }
 
         await db.updateTable("entities").set(updates).where("id", "=", existing.id).execute();
+        if (typeof updates.aliases === "string") {
+          await recordAlias(db, {
+            entityId: existing.id,
+            alias: existing.name,
+            provenance: "mint_model",
+            createdBy: data.source,
+          });
+        }
         if (existing.name !== data.name) {
           await deleteNameEmbedding(db, "entity", existing.id);
         }
@@ -1650,6 +1671,7 @@ export function createEntityRepository(db: Kysely<DB>) {
           })
           .where("id", "=", match.id)
           .execute();
+        if (data.aliases) await recordAliases(db, match.id, data.aliases, "mint_model", "llm_extraction");
         const fresh = await db
           .selectFrom("entities")
           .selectAll()
@@ -1678,6 +1700,7 @@ export function createEntityRepository(db: Kysely<DB>) {
           updated_at: now,
         })
         .execute();
+      if (data.aliases) await recordAliases(db, id, data.aliases, "mint_model", "llm_extraction");
 
       const entity = await db
         .selectFrom("entities")
@@ -1737,7 +1760,8 @@ export function createEntityRepository(db: Kysely<DB>) {
         const byEmail = matches.size === 1 ? [...matches.values()][0] : undefined;
 
         if (byEmail) {
-          const aliases: string[] = JSON.parse(byEmail.aliases || "[]");
+          const aliases = parseAliasesString(byEmail.aliases);
+          const addedAliases: string[] = [];
           let canonicalName = byEmail.name;
           let changed = false;
 
@@ -1749,6 +1773,7 @@ export function createEntityRepository(db: Kysely<DB>) {
             canonicalName = data.name;
             if (!aliases.some((a) => a.toLowerCase() === byEmail.name.toLowerCase())) {
               aliases.push(byEmail.name);
+              addedAliases.push(byEmail.name);
             }
             changed = true;
           } else if (
@@ -1756,11 +1781,13 @@ export function createEntityRepository(db: Kysely<DB>) {
             !aliases.some((a) => a.toLowerCase() === data.name.toLowerCase())
           ) {
             aliases.push(data.name);
+            addedAliases.push(data.name);
             changed = true;
           }
 
           if (data.email && !aliases.some((a) => a.toLowerCase() === data.email?.toLowerCase())) {
             aliases.push(data.email);
+            addedAliases.push(data.email);
             changed = true;
           }
           if (changed) {
@@ -1769,6 +1796,7 @@ export function createEntityRepository(db: Kysely<DB>) {
               .set({ name: canonicalName, aliases: JSON.stringify(aliases), updated_at: new Date().toISOString() })
               .where("id", "=", byEmail.id)
               .execute();
+            await recordAliases(db, byEmail.id, addedAliases, "mint_model", data.source);
           }
 
           // Ensure source ref exists
@@ -1824,7 +1852,8 @@ export function createEntityRepository(db: Kysely<DB>) {
         // Update email in metadata + aliases if we have one and they don't
         if (data.email) {
           const meta = JSON.parse(byName.metadata || "{}");
-          const aliases: string[] = JSON.parse(byName.aliases || "[]");
+          const aliases = parseAliasesString(byName.aliases);
+          const addedAliases: string[] = [];
           let changed = false;
           if (!meta.email) {
             meta.email = data.email;
@@ -1832,6 +1861,7 @@ export function createEntityRepository(db: Kysely<DB>) {
           }
           if (!aliases.some((a) => a.toLowerCase() === data.email?.toLowerCase())) {
             aliases.push(data.email);
+            addedAliases.push(data.email);
             changed = true;
           }
           if (changed) {
@@ -1844,6 +1874,7 @@ export function createEntityRepository(db: Kysely<DB>) {
               })
               .where("id", "=", byName.id)
               .execute();
+            await recordAliases(db, byName.id, addedAliases, "mint_model", data.source);
           }
         }
 
@@ -1923,6 +1954,8 @@ export function createEntityRepository(db: Kysely<DB>) {
         .execute();
 
       await ensurePersonEmailContactPoint(id, data.email, data.source);
+      if (data.email)
+        await recordAlias(db, { entityId: id, alias: data.email, provenance: "mint_model", createdBy: data.source });
 
       return await db
         .selectFrom("entities")
@@ -1969,6 +2002,8 @@ export function createEntityRepository(db: Kysely<DB>) {
         .execute();
 
       await ensurePersonEmailContactPoint(id, data.email, data.source);
+      if (data.email)
+        await recordAlias(db, { entityId: id, alias: data.email, provenance: "mint_model", createdBy: data.source });
 
       return await db
         .selectFrom("entities")

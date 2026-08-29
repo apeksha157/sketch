@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely, Selectable } from "kysely";
 import { isPg } from "../db/dialect";
+import { deleteAliasRows, recordAliases } from "../db/repositories/entity-alias-rows";
 import type {
   DB,
   EntitiesTable,
@@ -1178,6 +1179,7 @@ async function carryLoserAliasesToSurvivor(
   loser: Entity,
   survivor: Entity,
   moves: EntityMergeMove[],
+  createdBy?: string | null,
 ): Promise<void> {
   const aliases = parseAliasesString(survivor.aliases);
   const existingKeys = new Set<string>();
@@ -1207,6 +1209,7 @@ async function carryLoserAliasesToSurvivor(
     .where("deleted_at", "is", null)
     .where("merged_into_entity_id", "is", null)
     .execute();
+  await recordAliases(db, survivor.id, added, "merge", createdBy);
 }
 
 async function addAliasIfAbsent(
@@ -1215,6 +1218,7 @@ async function addAliasIfAbsent(
   aliasesRaw: string | null,
   value: string,
   moves: EntityMergeMove[],
+  createdBy?: string | null,
 ): Promise<string | null> {
   const trimmed = value.trim();
   const normalizedKey = normalizeStrict(trimmed);
@@ -1231,6 +1235,7 @@ async function addAliasIfAbsent(
     .where("deleted_at", "is", null)
     .where("merged_into_entity_id", "is", null)
     .execute();
+  await recordAliases(db, entityId, [trimmed], "merge", createdBy);
   return next;
 }
 
@@ -1252,10 +1257,11 @@ async function renameSurvivor(
   survivor: Entity,
   requestedName: string | undefined,
   moves: EntityMergeMove[],
+  createdBy?: string | null,
 ): Promise<Entity> {
   const name = requestedName?.trim();
   if (!name || name === survivor.name) return survivor;
-  const aliases = await addAliasIfAbsent(db, survivor.id, survivor.aliases, survivor.name, moves);
+  const aliases = await addAliasIfAbsent(db, survivor.id, survivor.aliases, survivor.name, moves, createdBy);
   const nameStatus = "confirmed";
   moves.push({
     table: "entities",
@@ -1684,6 +1690,11 @@ async function reverseAliasAdditions(db: Kysely<DB>, survivorId: string, moves: 
     .set({ aliases: next.length > 0 ? JSON.stringify(next) : null, updated_at: new Date().toISOString() })
     .where("id", "=", survivorId)
     .execute();
+  await deleteAliasRows(
+    db,
+    survivorId,
+    aliasMoves.map((move) => move.value),
+  );
 }
 
 export async function mergeEntitiesInTransaction(
@@ -1695,8 +1706,15 @@ export async function mergeEntitiesInTransaction(
   assertMergeable(survivor, loser, input);
 
   const moves: EntityMergeMove[] = [];
+  const aliasCreatedBy = input.userId ?? input.mergedBy ?? "merge";
   if (survivor)
-    survivor = await renameSurvivor(db, survivor, input.survivorName ?? rescuedSurvivorName(survivor, loser), moves);
+    survivor = await renameSurvivor(
+      db,
+      survivor,
+      input.survivorName ?? rescuedSurvivorName(survivor, loser),
+      moves,
+      aliasCreatedBy,
+    );
   if (survivor?.source_type === "person" && loser?.source_type === "person") {
     const internalSubtype = survivor.subtype === "internal" || loser.subtype === "internal";
     if (internalSubtype && survivor.subtype !== "internal") {
@@ -1713,7 +1731,7 @@ export async function mergeEntitiesInTransaction(
     }
   }
   await applyMergeMoves(db, input.loserId, input.survivorId, moves);
-  if (survivor && loser) await carryLoserAliasesToSurvivor(db, loser, survivor, moves);
+  if (survivor && loser) await carryLoserAliasesToSurvivor(db, loser, survivor, moves, aliasCreatedBy);
 
   const now = new Date().toISOString();
   if (survivor && loser) {

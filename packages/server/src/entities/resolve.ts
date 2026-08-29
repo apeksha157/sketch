@@ -41,6 +41,7 @@ import {
   materializeFromFact,
   shouldMarkMaterialized,
 } from "./materialize";
+import { parseAliasesString } from "./materialize-json";
 import { mergeEntitiesInTransaction } from "./merge";
 import { normalizeEntityMatchName, normalizeName } from "./name-keys";
 
@@ -222,16 +223,6 @@ function readJsonObject(raw: string | null): Record<string, unknown> {
   }
 }
 
-function parseAliases(raw: string | null): string[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 function shouldMarkHeldFactMaterialized(result: MaterializeResult): boolean {
   if (result.kind === "entity_created" || result.kind === "entity_linked" || result.kind === "structural") return true;
   if (result.kind === "queued" || result.kind === "queued_held") return false;
@@ -397,7 +388,7 @@ async function reviveDeferredRelationsForEntity(
 ): Promise<{ revived: number; overflowed: boolean }> {
   const candidates = [
     normalizeName(resolvedEntity.name),
-    ...parseAliases(resolvedEntity.aliases).map((alias) => normalizeName(alias)),
+    ...parseAliasesString(resolvedEntity.aliases).map((alias) => normalizeName(alias)),
   ].filter((name) => name.length > 0);
   const names = [...new Set(candidates)];
   if (names.length === 0) return { revived: 0, overflowed: false };
@@ -461,7 +452,7 @@ async function autoResolutionShortCircuit(ctx: ResolveTxnCtx, target: Entity, pr
   const fresh = await fetchEntity(ctx, target.id);
   if (!fresh) return false;
   if (normalizeName(fresh.name) === normalized) return true;
-  const aliases: string[] = fresh.aliases ? JSON.parse(fresh.aliases) : [];
+  const aliases = parseAliasesString(fresh.aliases);
   return aliases.some((a) => normalizeName(a) === normalized);
 }
 
@@ -818,7 +809,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
           provenanceTier: "human_confirmed",
         });
       }
-      if (renamed) await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name);
+      if (renamed) await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
     } else {
       const fetchedTarget = await fetchEntity(trxCtx, targetId);
       if (!fetchedTarget) {
@@ -842,7 +833,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
       });
     }
     for (const alias of parseSeedAliases(row.seed_aliases)) {
-      await trxCtx.entityRepo.appendAlias(target.id, alias);
+      await trxCtx.entityRepo.appendAlias(target.id, alias, "mint_model", row.seed_source ?? "review_seed");
     }
 
     // Evidence cap (chunking deferred).
@@ -860,7 +851,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     let mergedStaleEntityId: string | null = null;
     if (!shortCircuited) {
       // 4. Alias append.
-      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name);
+      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
 
       // 5. Stale-entity merge.
       const stales = await findStaleCandidates(trxCtx, target, row.proposed_name);
@@ -952,7 +943,7 @@ async function findReResolveMatches(ctx: ResolveTxnCtx, row: QueueRow, excludeEn
       out.push(c);
       continue;
     }
-    const aliases: string[] = c.aliases ? JSON.parse(c.aliases) : [];
+    const aliases = parseAliasesString(c.aliases);
     if (aliases.some((a) => normalizeName(a) === normalized)) out.push(c);
   }
   return out;
@@ -1091,7 +1082,7 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
       }
       createdEntityId = target.id;
       // Self-alias so a future identical proposal hits the exact-name fast-path.
-      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name);
+      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
       // Re-fetch so we have the alias-bearing entity below.
       const refreshed = await fetchEntity(trxCtx, target.id);
       if (refreshed) target = refreshed;
