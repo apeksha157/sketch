@@ -31,7 +31,7 @@ import type {
 } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, displayAliases, entityAccent } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
+import { formatRelativeTime } from "@/lib/time";
 import {
   ArrowLeftIcon,
   ArrowSquareOutIcon,

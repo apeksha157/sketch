@@ -20,7 +20,7 @@ import { MergePreviewPane } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
 import { type WhatsAppContextMessage, type WhatsAppIdentityReviewItem, api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
+import { formatRelativeTime } from "@/lib/time";
 import { ArrowsLeftRightIcon, CheckIcon, UserFocusIcon, WhatsappLogoIcon, XIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";

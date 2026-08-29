@@ -11,11 +11,11 @@
  */
 import { type EntityRelationView, api } from "@/lib/api";
 import { EntityAvatar, entityAccent, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
+import { formatRelativeTime } from "@/lib/time";
 import { Badge } from "@sketch/ui/components/badge";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@sketch/ui/components/dialog";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
-import { formatRelative } from "./drawer-kit";
 
 const CONFIDENCE_ORDER: Record<string, number> = { CONFIRMED: -1, AMBIGUOUS: 0, EXTRACTED: 1, INFERRED: 2 };
 
@@ -110,7 +110,7 @@ function PopoverBody({ entityId }: { entityId: string }) {
           ))}
         </div>
       ) : null}
-      <p className="text-[11px] text-muted-foreground">Last seen {formatRelative(entity.profile.lastSeenAt)}</p>
+      <p className="text-[11px] text-muted-foreground">Last seen {formatRelativeTime(entity.profile.lastSeenAt)}</p>
       <button
         type="button"
         onClick={() => ui.openEntity(entity.id, { mode: "drawer" })}
