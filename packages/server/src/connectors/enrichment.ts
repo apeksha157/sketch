@@ -17,6 +17,7 @@ import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
 import { createEntityRepository, whereLiveEntity } from "../db/repositories/entities";
 import { PERSON_PARTICIPANT_FACT_TYPES } from "../db/repositories/indexed-file-facts";
+import { createLlmUsageRepository } from "../db/repositories/llm-usage";
 import { parseOrgContext } from "../db/repositories/settings";
 import type { DB } from "../db/schema";
 import { materializeUnmaterializedFacts } from "../entities/materialize";
@@ -33,13 +34,20 @@ import { type KnownEntityForPrompt, buildFileScopedKnownEntities } from "./file-
 import { type GeminiGenerator, createGeminiGenerator } from "./gemini-generate";
 import { buildParticipantBlock } from "./participant-block";
 import { type PersonCandidateScan, buildPersonCandidateBlock, buildPersonCandidateScan } from "./person-candidate-scan";
-import { smartEnrichFile } from "./smart-enrichment";
+import { type SmartEnrichmentUsageRecorder, smartEnrichFile } from "./smart-enrichment";
 import { extractDatesFromText } from "./tagging";
 
 /** Max files to enrich for explicit/manual runs. */
 export const MAX_FILES_PER_RUN = 5000;
 export const SCHEDULED_ENRICHMENT_MAX_FILES_PER_RUN = 50;
 export const SCHEDULED_ENRICHMENT_TIME_BUDGET_MS = 5 * 60 * 1000;
+/**
+ * Terminal retry cap for each durable enrichment stage. With the current
+ * backoff ladder this gives roughly two and a half days of retries; no new
+ * status value is needed because terminal failure is derivable as
+ * status = "failed" and attempts >= this cap.
+ */
+export const MAX_ENRICHMENT_STAGE_ATTEMPTS = 8;
 
 const PROJECT_BASELINE_LIMIT = 200;
 const ENRICHMENT_BACKOFF_MS = [
@@ -143,6 +151,31 @@ function contentVersionMatches(row: FileContentVersion | undefined, version: Fil
   if (version.contentHash !== null) return true;
   if (row.content !== version.content) return false;
   return version.content !== null || row.sourceUpdatedAt === version.sourceUpdatedAt;
+}
+
+function recordLlmUsageForFile(
+  deps: Pick<EnrichmentDeps, "db" | "logger">,
+  indexedFileId: string,
+): NonNullable<SmartEnrichmentUsageRecorder> {
+  const repo = createLlmUsageRepository(deps.db);
+  return (context, meta) => {
+    void (async () => {
+      try {
+        await repo.recordUsage({
+          context,
+          indexedFileId,
+          model: meta.model,
+          outcome: meta.outcome,
+          promptTokens: meta.usage?.promptTokens ?? null,
+          completionTokens: meta.usage?.completionTokens ?? null,
+          durationMs: meta.durationMs,
+          costUsd: meta.costUsd ?? null,
+        });
+      } catch (err) {
+        deps.logger.warn({ err, indexedFileId, context }, "Failed to record LLM usage telemetry");
+      }
+    })();
+  };
 }
 
 /**
@@ -524,12 +557,14 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
         eb("embedding_status", "=", "pending"),
         eb.and([
           eb("embedding_status", "=", "failed"),
+          eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
           eb.or([eb("embedding_next_retry_at", "is", null), eb("embedding_next_retry_at", "<=", now)]),
         ]),
         eb.and([eb("embedding_status", "=", "done"), eb("summary_status", "=", "pending")]),
         eb.and([
           eb("embedding_status", "=", "done"),
           eb("summary_status", "=", "failed"),
+          eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
           eb.or([eb("summary_next_retry_at", "is", null), eb("summary_next_retry_at", "<=", now)]),
         ]),
       ]),
@@ -624,6 +659,7 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
                   debugDumpDir: deps.debugDumpDir,
                   stageReport: deps.stageReport,
                   ensureFresh: () => ensureFileFresh(db, file.id, fileVersion),
+                  recordLlmUsage: recordLlmUsageForFile(deps, file.id),
                 },
                 {
                   id: file.id,
@@ -941,6 +977,7 @@ async function enrichTextDocument(
           debugDumpDir: deps.debugDumpDir,
           stageReport: deps.stageReport,
           ensureFresh: () => ensureFileFresh(db, file.id, fileVersion),
+          recordLlmUsage: recordLlmUsageForFile(deps, file.id),
         },
         {
           id: file.id,

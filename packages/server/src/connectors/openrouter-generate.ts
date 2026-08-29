@@ -263,6 +263,7 @@ export function createOpenRouterGenerator(
         ...(body.usage?.prompt_tokens !== undefined && body.usage?.completion_tokens !== undefined
           ? { usage: { promptTokens: body.usage.prompt_tokens, completionTokens: body.usage.completion_tokens } }
           : {}),
+        ...(body.usage?.cost !== undefined ? { costUsd: body.usage.cost } : {}),
       });
 
       if (opts?.dumpDir) {

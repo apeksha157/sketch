@@ -55,6 +55,7 @@ export interface GenerateMeta {
   durationMs: number;
   model: string;
   usage?: { promptTokens: number; completionTokens: number };
+  costUsd?: number;
 }
 
 export interface GenerateOptions {

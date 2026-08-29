@@ -30,7 +30,7 @@ import * as outlookCalendarProviderFileScopeMigration from "./164-outlook-calend
 import * as entityMergeGroupsMigration from "./186-entity-merge-groups";
 import * as entityNameProposalsMigration from "./187-entity-name-proposals";
 
-const EXPECTED_MIGRATION_COUNT = 212;
+const EXPECTED_MIGRATION_COUNT = 213;
 
 function createBlankDb(): Kysely<DB> {
   return new Kysely<DB>({
@@ -1973,9 +1973,8 @@ describe("runMigrations — incremental upgrade", () => {
     // Running again should be a no-op.
     await runMigrations(db, { quiet: true });
 
-    const users = await db.selectFrom("users").selectAll().execute();
-    expect(users).toHaveLength(1);
-    expect(users[0].id).toBe("existing-user");
+    const users = await db.selectFrom("users").select("id").orderBy("id", "asc").execute();
+    expect(users.map((user) => user.id)).toEqual(["existing-user", "sketch-machine"]);
 
     const rows = await sql<{ name: string }>`
       SELECT name FROM kysely_migration ORDER BY name ASC

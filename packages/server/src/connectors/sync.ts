@@ -15,7 +15,7 @@ import { createEntityRepository } from "../db/repositories/entities";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import { createSettingsRepository } from "../db/repositories/settings";
-import { createUserRepository } from "../db/repositories/users";
+import { MACHINE_PRINCIPAL_USER_ID, createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { inferAffiliationFromEmail } from "../entities/affiliations";
 import { sweepCoMentionContributesTo } from "../entities/co-mention-sweep";
@@ -75,7 +75,12 @@ export async function seedTeamDirectoryEntities(db: Kysely<DB>, logger: Logger):
   try {
     const entityRepo = createEntityRepository(db);
     const domainsRepo = createEntityDomainsRepository(db);
-    const users = await db.selectFrom("users").selectAll().where("type", "!=", "external").execute();
+    const users = await db
+      .selectFrom("users")
+      .selectAll()
+      .where("type", "!=", "external")
+      .where("id", "!=", MACHINE_PRINCIPAL_USER_ID)
+      .execute();
     for (const user of users) {
       const entity = await entityRepo.upsertPersonEntity({
         name: user.name,

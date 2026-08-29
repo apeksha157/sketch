@@ -125,6 +125,18 @@ interface ResolveTxnCtx {
   logger?: Logger;
 }
 
+function createResolveTxnCtx(ctx: ResolveCtx, db: Kysely<DB>): ResolveTxnCtx {
+  return {
+    db,
+    repo: createEntityReviewRepo(db),
+    entityRepo: createEntityRepository(db),
+    userId: ctx.userId,
+    machineActor: ctx.machineActor,
+    now: ctx.now ?? new Date().toISOString(),
+    logger: ctx.logger,
+  };
+}
+
 export interface ConfirmOptions {
   /** Pick-a-different-existing target. Omitted → use row.candidate_entity_id. */
   mergeIntoEntityId?: string;
@@ -250,6 +262,76 @@ async function fetchEntity(ctx: ResolveTxnCtx, entityId: string): Promise<Entity
     .where("id", "=", entityId)
     .where(whereLiveEntity())
     .executeTakeFirst();
+}
+
+type ConfirmableReview =
+  | { kind: "pending"; row: QueueRow }
+  | { kind: "idempotent"; row: QueueRow; targetEntityId: string };
+
+async function fetchConfirmableReview(
+  ctx: ResolveTxnCtx,
+  reviewId: string,
+  candidateGeneratedAt?: string,
+): Promise<ConfirmableReview> {
+  const row = await fetchRow(ctx, reviewId);
+
+  if (row.status === "confirmed") {
+    const target = row.resolved_entity_id;
+    if (!target) throw new ResolveError("ROW_NOT_FOUND", "confirmed row missing resolved_entity_id");
+    return { kind: "idempotent", row, targetEntityId: target };
+  }
+  if (row.status === "rejected") {
+    throw new ResolveError("CANDIDATE_DRIFT", "row already rejected", {
+      currentStatus: row.status,
+      currentRow: row,
+    });
+  }
+  if (row.status === "dismissed") {
+    throw new ResolveError("CANDIDATE_DRIFT", "row already dismissed", {
+      currentStatus: row.status,
+      currentRow: row,
+    });
+  }
+  if (row.status === "confirming") {
+    throw new ResolveError("ALREADY_CONFIRMING", "row is mid-confirm (chunked backfill in progress)");
+  }
+
+  if (candidateGeneratedAt !== undefined && row.candidate_generated_at !== candidateGeneratedAt) {
+    throw new ResolveError("CANDIDATE_DRIFT", "candidate_generated_at mismatch", {
+      actual: row.candidate_generated_at,
+      provided: candidateGeneratedAt,
+      currentRow: row,
+    });
+  }
+
+  return { kind: "pending", row };
+}
+
+async function fetchLiveTargetForReview(ctx: ResolveTxnCtx, row: QueueRow, entityId: string): Promise<Entity> {
+  const fetchedTarget = await fetchEntity(ctx, entityId);
+  if (!fetchedTarget) {
+    throw new ResolveError("TARGET_DELETED", "target entity deleted between candidate-gen and confirm", {
+      currentRow: row,
+    });
+  }
+  if (fetchedTarget.source_type !== row.entity_type) {
+    throw new ResolveError("TYPE_MISMATCH", "mergeIntoEntityId entity_type does not match queue row", {
+      target: fetchedTarget.source_type,
+      row: row.entity_type,
+    });
+  }
+  return fetchedTarget;
+}
+
+async function listResolveEvidenceOrThrow(ctx: ResolveTxnCtx, reviewId: string): Promise<EvidenceRow[]> {
+  const evidence = await ctx.repo.listEvidenceForResolve(reviewId);
+  if (evidence.length > MAX_EVIDENCE_PER_RESOLVE) {
+    throw new ResolveError("EVIDENCE_TOO_LARGE", "too many evidence rows; chunked backfill not yet supported", {
+      count: evidence.length,
+      cap: MAX_EVIDENCE_PER_RESOLVE,
+    });
+  }
+  return evidence;
 }
 
 /**
@@ -699,47 +781,18 @@ async function upsertTransferredContactPoint(ctx: ResolveTxnCtx, targetId: strin
 
 export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: ConfirmOptions): Promise<ConfirmResult> {
   return ctx.db.transaction().execute(async (trx) => {
-    const trxCtx: ResolveTxnCtx = {
-      db: trx,
-      repo: createEntityReviewRepo(trx),
-      entityRepo: createEntityRepository(trx),
-      userId: ctx.userId,
-      machineActor: ctx.machineActor,
-      now: ctx.now ?? new Date().toISOString(),
-      logger: ctx.logger,
-    };
-    const row = await fetchRow(trxCtx, reviewId);
-
-    // Idempotent replay against an already-terminal row.
-    if (row.status === "confirmed") {
-      const target = row.resolved_entity_id;
-      if (!target) throw new ResolveError("ROW_NOT_FOUND", "confirmed row missing resolved_entity_id");
-      return { row, targetEntityId: target, shortCircuited: false, mergedStaleEntityId: null, idempotent: true };
+    const trxCtx = createResolveTxnCtx(ctx, trx);
+    const loaded = await fetchConfirmableReview(trxCtx, reviewId, opts.candidateGeneratedAt);
+    if (loaded.kind === "idempotent") {
+      return {
+        row: loaded.row,
+        targetEntityId: loaded.targetEntityId,
+        shortCircuited: false,
+        mergedStaleEntityId: null,
+        idempotent: true,
+      };
     }
-    if (row.status === "rejected") {
-      throw new ResolveError("CANDIDATE_DRIFT", "row already rejected", {
-        currentStatus: row.status,
-        currentRow: row,
-      });
-    }
-    if (row.status === "dismissed") {
-      throw new ResolveError("CANDIDATE_DRIFT", "row already dismissed", {
-        currentStatus: row.status,
-        currentRow: row,
-      });
-    }
-    if (row.status === "confirming") {
-      throw new ResolveError("ALREADY_CONFIRMING", "row is mid-confirm (chunked backfill in progress)");
-    }
-
-    // 1. Compare-and-swap.
-    if (row.candidate_generated_at !== opts.candidateGeneratedAt) {
-      throw new ResolveError("CANDIDATE_DRIFT", "candidate_generated_at mismatch", {
-        actual: row.candidate_generated_at,
-        provided: opts.candidateGeneratedAt,
-        currentRow: row,
-      });
-    }
+    const row = loaded.row;
 
     if (row.source === "user_entity_link") {
       try {
@@ -811,19 +864,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
       }
       if (renamed) await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
     } else {
-      const fetchedTarget = await fetchEntity(trxCtx, targetId);
-      if (!fetchedTarget) {
-        throw new ResolveError("TARGET_DELETED", "target entity deleted between candidate-gen and confirm", {
-          currentRow: row,
-        });
-      }
-      if (fetchedTarget.source_type !== row.entity_type) {
-        throw new ResolveError("TYPE_MISMATCH", "mergeIntoEntityId entity_type does not match queue row", {
-          target: fetchedTarget.source_type,
-          row: row.entity_type,
-        });
-      }
-      target = fetchedTarget;
+      target = await fetchLiveTargetForReview(trxCtx, row, targetId);
     }
     if (row.seed_source && row.seed_source_id) {
       await trxCtx.entityRepo.upsertSourceRef({
@@ -837,13 +878,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     }
 
     // Evidence cap (chunking deferred).
-    const evidence = await trxCtx.repo.listEvidenceForResolve(reviewId);
-    if (evidence.length > MAX_EVIDENCE_PER_RESOLVE) {
-      throw new ResolveError("EVIDENCE_TOO_LARGE", "too many evidence rows; chunked backfill not yet supported", {
-        count: evidence.length,
-        cap: MAX_EVIDENCE_PER_RESOLVE,
-      });
-    }
+    const evidence = await listResolveEvidenceOrThrow(trxCtx, reviewId);
 
     // 3. Auto-resolution short-circuit.
     const shortCircuited = await autoResolutionShortCircuit(trxCtx, target, row.proposed_name);
@@ -918,6 +953,50 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     const refreshedRow = await markResolvedOrThrow(trxCtx, row, "confirmed", target.id);
 
     return { row: refreshedRow, targetEntityId: target.id, shortCircuited, mergedStaleEntityId, idempotent: false };
+  });
+}
+
+/**
+ * Machine-safe existing-entity link path for a pending review row.
+ *
+ * Explicit non-goals: alias teach, birth-time rename, stale-entity merge
+ * collapse, auto-resolution short-circuit, picked-different rejection
+ * bookkeeping, held-email attach plus affiliation inference, and linked-domain
+ * candidate finalization.
+ */
+export async function linkReviewRowToExistingEntity(
+  ctx: ResolveCtx,
+  opts: { reviewId: string; entityId: string },
+): Promise<ConfirmResult> {
+  return ctx.db.transaction().execute(async (trx) => {
+    const trxCtx = createResolveTxnCtx(ctx, trx);
+    const loaded = await fetchConfirmableReview(trxCtx, opts.reviewId);
+    if (loaded.kind === "idempotent") {
+      return {
+        row: loaded.row,
+        targetEntityId: loaded.targetEntityId,
+        shortCircuited: false,
+        mergedStaleEntityId: null,
+        idempotent: true,
+      };
+    }
+    const row = loaded.row;
+    const target = await fetchLiveTargetForReview(trxCtx, row, opts.entityId);
+    const evidence = await listResolveEvidenceOrThrow(trxCtx, row.id);
+
+    await materializeEvidence(trxCtx, target, evidence, "confirmed");
+    await rematerializeHeldLlmEvidence(trxCtx, row, evidence);
+    await writeReviewSourceRef(trxCtx, row, target.id);
+    await reviveDeferredRelationsForEntity(trxCtx, target);
+
+    const refreshedRow = await markResolvedOrThrow(trxCtx, row, "confirmed", target.id);
+    return {
+      row: refreshedRow,
+      targetEntityId: target.id,
+      shortCircuited: false,
+      mergedStaleEntityId: null,
+      idempotent: false,
+    };
   });
 }
 

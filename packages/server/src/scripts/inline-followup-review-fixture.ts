@@ -188,6 +188,7 @@ export async function isolateFollowupReviewQaDatabase(
     const disconnectedUsers = await trx
       .updateTable("users")
       .set({ slack_user_id: null, whatsapp_number: null })
+      .where("type", "!=", "agent")
       .executeTakeFirst();
     const connectors = await trx
       .updateTable("connector_configs")
@@ -201,7 +202,7 @@ export async function isolateFollowupReviewQaDatabase(
       .updateTable("agent_user_configs")
       .set({ enabled: 0, updated_at: now })
       .executeTakeFirst();
-    const users = await trx.selectFrom("users").select("id").execute();
+    const users = await trx.selectFrom("users").select("id").where("type", "!=", "agent").execute();
     for (const user of users) {
       await trx
         .insertInto("agent_user_configs")
