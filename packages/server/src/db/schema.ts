@@ -1183,6 +1183,18 @@ export interface EntityNameProposalsTable {
   resolved_at: string | null;
 }
 
+export type EntityAliasProvenance = "human_confirmed" | "judge" | "merge" | "mint_model" | "roster" | "legacy";
+
+export interface EntityAliasesTable {
+  id: string;
+  entity_id: string;
+  alias: string;
+  normalized_alias: string;
+  provenance: EntityAliasProvenance;
+  created_by: string | null;
+  created_at: Generated<string>;
+}
+
 export interface EntityMergesTable {
   id: string;
   survivor_entity_id: string;
@@ -2071,6 +2083,7 @@ export interface DB {
   agent_user_configs: AgentUserConfigsTable;
   inbox_messages: InboxMessagesTable;
   entities: EntitiesTable;
+  entity_aliases: EntityAliasesTable;
   entity_name_proposals: EntityNameProposalsTable;
   entity_merges: EntityMergesTable;
   entity_share_emails: EntityShareEmailsTable;

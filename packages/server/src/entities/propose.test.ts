@@ -867,7 +867,7 @@ describe("proposeEntity", () => {
       source: "seed",
       sourceId: "seed:simran",
     });
-    await entityRepo.appendAlias(ss.id, "Simran Suri Neeli");
+    await entityRepo.appendAlias(ss.id, "Simran Suri Neeli", "human_confirmed", "test");
 
     const before = await fetchPersonEntities(db);
     const deps = {

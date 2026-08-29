@@ -167,7 +167,7 @@ export async function projectWhatsAppRosterPerson(
   }
   const displayName = input.displayName?.trim();
   if (displayName) {
-    await mergeEntityAliases(db, entity.id, [displayName]);
+    await mergeEntityAliases(db, entity.id, [displayName], "roster", input.observedAt, "whatsapp_roster_projection");
     await upsertEntityNameProposal(db, entity.id, "whatsapp_pushname", displayName, input.observedAt);
   }
   return created ? "created" : "linked";

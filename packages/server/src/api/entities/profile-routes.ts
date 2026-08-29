@@ -366,14 +366,17 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
       return c.json({ error: { code: "BAD_REQUEST", message: "person subtype must be internal or external" } }, 400);
     }
 
-    const entity = await repo.upsertEntity({
-      name: body.name.trim(),
-      sourceType,
-      subtype,
-      aliases: body.aliases,
-      status: "confirmed",
-      provenanceTier: "declared",
-    });
+    const entity = await repo.upsertEntity(
+      {
+        name: body.name.trim(),
+        sourceType,
+        subtype,
+        aliases: body.aliases,
+        status: "confirmed",
+        provenanceTier: "declared",
+      },
+      "human_confirmed",
+    );
 
     return c.json({
       entity: {
@@ -1278,7 +1281,7 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
     if (namingAPlaceholder) updates.name_status = "confirmed";
 
     if (Object.keys(updates).length > 0) {
-      await repo.updateEntity(entity.id, updates);
+      await repo.updateEntity(entity.id, updates, body.aliases === undefined ? "mint_model" : "human_confirmed");
     }
     if (namingAPlaceholder) {
       /**

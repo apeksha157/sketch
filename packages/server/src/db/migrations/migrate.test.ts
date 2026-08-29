@@ -30,7 +30,7 @@ import * as outlookCalendarProviderFileScopeMigration from "./164-outlook-calend
 import * as entityMergeGroupsMigration from "./186-entity-merge-groups";
 import * as entityNameProposalsMigration from "./187-entity-name-proposals";
 
-const EXPECTED_MIGRATION_COUNT = 211;
+const EXPECTED_MIGRATION_COUNT = 212;
 
 function createBlankDb(): Kysely<DB> {
   return new Kysely<DB>({
@@ -415,6 +415,7 @@ describe("runMigrations — full sequence", () => {
     expect(names[208]).toBe("213-containers");
     expect(names[209]).toBe("214-container-verdicts");
     expect(names[210]).toBe("215-membership-suppressions");
+    expect(names[211]).toBe("216-entity-aliases");
   });
 
   it("adds portable session fencing columns with safe legacy defaults", async () => {
