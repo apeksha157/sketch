@@ -61,7 +61,7 @@ import type { EmbeddingProvider } from "./embeddings/types";
 import { isGenericEngagementName } from "./engagement-name-filter";
 import type { MintContextBlock, StageOutcome, StageReporter } from "./enrichment-stage-report";
 import type { KnownEntityForPrompt } from "./file-scope-context";
-import type { GeminiGenerator } from "./gemini-generate";
+import type { GeminiGenerator, GenerateMeta } from "./gemini-generate";
 import {
   type FactSelectionCache,
   type FactSelectionContext,
@@ -185,6 +185,8 @@ interface ExtractionOrgContext {
   disambiguationGuidance?: string;
 }
 
+export type SmartEnrichmentUsageRecorder = (context: string, meta: GenerateMeta) => void;
+
 interface SmartEnrichmentDeps {
   db: Kysely<DB>;
   logger: Logger;
@@ -209,6 +211,7 @@ interface SmartEnrichmentDeps {
   debugDumpDir?: string;
   stageReport?: StageReporter;
   ensureFresh?: () => Promise<void>;
+  recordLlmUsage?: SmartEnrichmentUsageRecorder;
 }
 
 interface FileContext {
@@ -380,6 +383,7 @@ export async function extractEntities(
   personCandidateBlock?: string,
   dumpDir?: string,
   allowedTypes = extractionValidTypes(file.fileType),
+  onMeta?: (meta: GenerateMeta) => void,
 ): Promise<EntityExtractionResult> {
   const truncatedContent = file.content.slice(0, MAX_CONTENT_CHARS);
 
@@ -509,6 +513,7 @@ ${truncatedContent}
     maxTokens: 8192,
     label: `extractEntities:${file.id}`,
     dumpDir,
+    onMeta,
   });
   const mentions = Array.isArray(parsed) ? parsed : Array.isArray(parsed.mentions) ? parsed.mentions : [];
   const relations = Array.isArray(parsed) ? [] : Array.isArray(parsed.relations) ? parsed.relations : [];
@@ -521,6 +526,7 @@ interface AdjudicateKnownMatchesOptions {
   logger?: Logger;
   rejectedKnownMatchPairs?: Set<string>;
   anchorNames?: string[];
+  onMeta?: (meta: GenerateMeta) => void;
 }
 
 type DedupAdjudicationRow = {
@@ -649,6 +655,7 @@ export async function adjudicateKnownMatches(
       maxTokens: 1024,
       label: `dedupAdjudicate:${opts.fileId}`,
       dumpDir: opts.debugDumpDir,
+      onMeta: opts.onMeta,
     });
     if (!Array.isArray(rows)) throw new Error("dedup adjudication response was not an array");
 
@@ -835,6 +842,7 @@ export async function generateSummary(
   file: FileContext,
   matchedEntities: MatchedEntity[],
   dumpDir?: string,
+  onMeta?: (meta: GenerateMeta) => void,
 ): Promise<string> {
   const truncatedContent = file.content.slice(0, MAX_CONTENT_CHARS);
   const entityContext = matchedEntities
@@ -859,7 +867,7 @@ Write a 2-3 sentence summary focusing on: what this document is about, key decis
 ${truncatedContent}
 </content>`;
 
-  return generator.generate(prompt, { maxTokens: 256, label: `generateSummary:${file.id}`, dumpDir });
+  return generator.generate(prompt, { maxTokens: 256, label: `generateSummary:${file.id}`, dumpDir, onMeta });
 }
 
 // ── Entity Fact Extraction ───────────────────────────────────────────────
@@ -999,7 +1007,13 @@ async function readConversationalSliceState(db: Kysely<DB>, file: FileContext): 
  * Returns a map of entity ID → new facts.
  */
 export async function extractEntityFacts(
-  deps: { db: Kysely<DB>; logger?: Logger; generator: GeminiGenerator; now?: () => number },
+  deps: {
+    db: Kysely<DB>;
+    logger?: Logger;
+    generator: GeminiGenerator;
+    now?: () => number;
+    onMeta?: (meta: GenerateMeta) => void;
+  },
   file: FileContext,
   matchedEntities: MatchedEntity[],
   context: FactSelectionContext,
@@ -1082,6 +1096,7 @@ ${truncatedContent}
       maxTokens: 8192,
       label: `extractEntityFacts:${file.id}`,
       dumpDir,
+      onMeta: deps.onMeta,
     }),
     existingFacts,
   );
@@ -1126,6 +1141,7 @@ export async function smartEnrichFile(deps: SmartEnrichmentDeps, file: FileConte
       deps.personCandidateBlock,
       deps.debugDumpDir,
       validExtractionTypes,
+      (meta) => deps.recordLlmUsage?.("enrichment:extractEntities", meta),
     );
   } catch (err) {
     deps.stageReport?.({
@@ -1171,6 +1187,7 @@ export async function smartEnrichFile(deps: SmartEnrichmentDeps, file: FileConte
     debugDumpDir: deps.debugDumpDir,
     logger,
     rejectedKnownMatchPairs,
+    onMeta: (meta) => deps.recordLlmUsage?.("enrichment:dedupAdjudicate", meta),
   });
   deps.stageReport?.({
     stage: "dedupAdjudicate",
@@ -1239,9 +1256,11 @@ export async function smartEnrichFile(deps: SmartEnrichmentDeps, file: FileConte
   );
   const factSelectionCache = createFactSelectionCache();
   const [summaryResult, factsResult] = await Promise.allSettled([
-    generateSummary(generator, file, allMatched, deps.debugDumpDir),
+    generateSummary(generator, file, allMatched, deps.debugDumpDir, (meta) =>
+      deps.recordLlmUsage?.("enrichment:generateSummary", meta),
+    ),
     extractEntityFacts(
-      { db, logger, generator },
+      { db, logger, generator, onMeta: (meta) => deps.recordLlmUsage?.("enrichment:extractEntityFacts", meta) },
       file,
       allMatched,
       factSelectionContext,

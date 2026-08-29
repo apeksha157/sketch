@@ -221,6 +221,19 @@ export interface FileEmbeddingsTable {
   embedding: string;
 }
 
+export interface LlmUsageEventsTable {
+  id: string;
+  created_at: Generated<string>;
+  context: string;
+  indexed_file_id: string | null;
+  model: string;
+  outcome: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  duration_ms: number;
+  cost_usd: number | null;
+}
+
 export interface EntityNameEmbeddingsTable {
   entity_id: string;
   embedding: string;
@@ -2025,6 +2038,7 @@ export interface DB {
   document_timeframes: DocumentTimeframesTable;
   chunk_embeddings: ChunkEmbeddingsTable;
   file_embeddings: FileEmbeddingsTable;
+  llm_usage_events: LlmUsageEventsTable;
   entity_name_embeddings: EntityNameEmbeddingsTable;
   entity_review_queue_embeddings: EntityReviewQueueEmbeddingsTable;
   user_provider_identities: UserProviderIdentitiesTable;
