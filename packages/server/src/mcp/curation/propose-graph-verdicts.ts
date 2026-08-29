@@ -64,6 +64,7 @@ type ProposalResult = {
   verdictId: string;
   action: CleanupAction;
   subjectEntityId: string;
+  targetName: string | null;
   validationStatus: GraphVerdictValidationStatus;
   validationReason: string | null;
   wouldChange: Record<string, number> | null;
@@ -323,6 +324,7 @@ export async function handleProposeGraphVerdicts(
           verdictId: stored.ids[index] ?? "",
           action: row.action as CleanupAction,
           subjectEntityId: row.subjectEntityId,
+          targetName: args.verdicts[index]?.targetName ?? null,
           validationStatus: row.validationStatus,
           validationReason: row.validationReason,
           wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
