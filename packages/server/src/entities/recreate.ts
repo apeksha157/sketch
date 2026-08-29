@@ -152,16 +152,44 @@ async function deleteRecreatableRelationships(db: Kysely<DB>, logger?: Logger): 
   }
 }
 
+/**
+ * `entity_merges` is a durable decision ledger, not derived graph state: it
+ * powers `unmergeEntities`, which restores the exact soft-deleted loser row,
+ * and both of its entity FKs are ON DELETE RESTRICT. Entities referenced by a
+ * merge — survivors and soft-deleted losers alike — therefore survive reset
+ * regardless of provenance tier. Deleting a loser would both violate the FK
+ * and destroy the row unmerge needs back.
+ */
 async function deleteRecreatableEntities(db: Kysely<DB>): Promise<number> {
   try {
+    const mergeReferenced = (eb: ExpressionBuilder<DB, "entities">) =>
+      eb.or([
+        eb.exists(
+          eb
+            .selectFrom("entity_merges")
+            .select(sql`1`.as("x"))
+            .whereRef("entity_merges.survivor_entity_id", "=", "entities.id"),
+        ),
+        eb.exists(
+          eb
+            .selectFrom("entity_merges")
+            .select(sql`1`.as("x"))
+            .whereRef("entity_merges.merged_entity_id", "=", "entities.id"),
+        ),
+      ]);
     const before = await db
       .selectFrom("entities")
       .select(db.fn.countAll<number>().as("count"))
       .where("provenance_tier", "not in", PRESERVED_RESET_TIERS)
+      .where((eb) => eb.not(mergeReferenced(eb)))
       .executeTakeFirst();
     const count = Number(before?.count ?? 0);
     if (count === 0) return 0;
-    await db.deleteFrom("entities").where("provenance_tier", "not in", PRESERVED_RESET_TIERS).execute();
+    await db
+      .deleteFrom("entities")
+      .where("provenance_tier", "not in", PRESERVED_RESET_TIERS)
+      .where((eb) => eb.not(mergeReferenced(eb)))
+      .execute();
     return count;
   } catch (err) {
     if (isMissingTableError(err)) return 0;
