@@ -23,7 +23,7 @@ import * as slackRosterEvidenceMigration from "./161-slack-roster-evidence";
 import * as slackFileAccessBackfillCleanupMigration from "./163-slack-file-access-backfill-cleanup";
 import * as typedAccessPrincipalsMigration from "./165-typed-access-principals";
 
-const EXPECTED_MIGRATION_COUNT = 210;
+const EXPECTED_MIGRATION_COUNT = 211;
 
 describe("runMigrations on Postgres — full sequence", () => {
   let db!: Kysely<DB>;
@@ -243,6 +243,7 @@ describe("runMigrations on Postgres — full sequence", () => {
     expect(names[207]).toBe("212-cli-integration-user-org-access");
     expect(names[208]).toBe("213-containers");
     expect(names[209]).toBe("214-container-verdicts");
+    expect(names[210]).toBe("215-membership-suppressions");
   });
   it("keeps the automation-sharing migration ledger in order", async () => {
     await runMigrations(db, { quiet: true });

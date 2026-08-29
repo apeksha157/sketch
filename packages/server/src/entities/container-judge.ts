@@ -5,6 +5,12 @@ import { readHierarchyMappingConfig } from "../connectors/hierarchy-mapping";
 import type { AgenticOptions, AgenticOutcome } from "../connectors/openrouter-generate";
 import { type StoreGraphVerdictInput, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
 import type { ConnectorConfigsTable, ContainersTable, DB, IndexedFilesTable } from "../db/schema";
+import {
+  filesForContainer,
+  parseJsonArray,
+  pathForContainer,
+  prepareFilesForContainerMatching,
+} from "./container-file-matcher";
 import { containerVerdictFingerprint } from "./verdict-fingerprint";
 
 export type ContainerJudgeClassification = "team" | "project" | "time_box" | "account" | "ignore";
@@ -88,15 +94,6 @@ export type ContainerJudgeVerdict = {
 const CLASSIFICATIONS = new Set<ContainerJudgeClassification>(["team", "project", "time_box", "account", "ignore"]);
 const ENTITY_STATUSES = new Set<ContainerJudgeEntityStatus>(["active", "historical"]);
 
-function parseJsonArray(raw: string): string[] {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 function parseScopeConfig(row: ConnectorConfigRow): Record<string, unknown> {
   try {
     const parsed = JSON.parse(row.scope_config) as unknown;
@@ -107,7 +104,7 @@ function parseScopeConfig(row: ConnectorConfigRow): Record<string, unknown> {
 }
 
 function pathFor(container: ContainerRow): string[] {
-  return [...parseJsonArray(container.path_names), container.name];
+  return pathForContainer(container);
 }
 
 function parentGroupKey(parentContainerId: string | null): string {
@@ -150,53 +147,6 @@ function sampleTitles(files: IndexedFileRow[], limit = 12): string[] {
     .sort((left, right) => left - right)
     .map((index) => sorted[index]?.file_name)
     .filter((title): title is string => typeof title === "string" && title.length > 0);
-}
-
-/**
- * Meta values are collected once per file rather than re-parsed per container:
- * the judge cross-checks every container against every file, and repeating the
- * JSON deep-scan per pair blocks the event loop for minutes on large tenants.
- * Only string values are kept because external ids are always strings.
- */
-function collectMetaStringValues(raw: string | null): Set<string> {
-  const values = new Set<string>();
-  if (!raw) return values;
-  try {
-    const stack: unknown[] = [JSON.parse(raw) as unknown];
-    while (stack.length > 0) {
-      const item = stack.pop();
-      if (typeof item === "string") {
-        values.add(item);
-      } else if (Array.isArray(item)) {
-        stack.push(...item);
-      } else if (item && typeof item === "object") {
-        stack.push(...Object.values(item as Record<string, unknown>));
-      }
-    }
-  } catch {
-    return values;
-  }
-  return values;
-}
-
-function sourcePathMatches(sourcePath: string | null, path: string[]): boolean {
-  if (!sourcePath || path.length === 0) return false;
-  const joined = path.join(" / ");
-  return sourcePath === joined || sourcePath.startsWith(`${joined} / `);
-}
-
-type FileWithMeta = { row: IndexedFileRow; metaValues: Set<string> };
-
-function filesForContainer(container: ContainerRow, files: FileWithMeta[]): IndexedFileRow[] {
-  const exact = files.filter(
-    (file) =>
-      file.row.provider_file_id === container.external_id ||
-      file.row.rollup_group_id === container.external_id ||
-      file.metaValues.has(container.external_id),
-  );
-  if (exact.length > 0) return exact.map((file) => file.row);
-  const path = pathFor(container);
-  return files.filter((file) => sourcePathMatches(file.row.source_path, path)).map((file) => file.row);
 }
 
 function levelPriorFor(container: ContainerRow, connector: ConnectorConfigRow): string | null {
@@ -287,10 +237,7 @@ function buildStatsContexts(params: {
     const key = parentGroupKey(container.parent_container_id);
     siblingsByParent.set(key, [...(siblingsByParent.get(key) ?? []), container]);
   }
-  const filesWithMeta: FileWithMeta[] = params.files.map((row) => ({
-    row,
-    metaValues: collectMetaStringValues(row.source_meta),
-  }));
+  const filesWithMeta = prepareFilesForContainerMatching(params.files);
   const contexts = new Map<string, ContainerStatsContext>();
   for (const container of params.containers) {
     const siblings = (siblingsByParent.get(parentGroupKey(container.parent_container_id)) ?? []).filter(

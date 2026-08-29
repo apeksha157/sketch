@@ -1472,6 +1472,13 @@ export interface EntityCreationSuppressionsTable {
   created_at: Generated<string>;
 }
 
+export interface MembershipSuppressionsTable {
+  id: string;
+  connector_config_id: string;
+  suppressed_email: string;
+  created_at: Generated<string>;
+}
+
 export interface EntityRelationshipsTable {
   id: string;
   source_entity_id: string;
@@ -2102,6 +2109,7 @@ export interface DB {
   entity_project_bindings: EntityProjectBindingsTable;
   entity_project_member_overrides: EntityProjectMemberOverridesTable;
   entity_creation_suppressions: EntityCreationSuppressionsTable;
+  membership_suppressions: MembershipSuppressionsTable;
   entity_relationships: EntityRelationshipsTable;
   entity_relationship_evidence: EntityRelationshipEvidenceTable;
 }
