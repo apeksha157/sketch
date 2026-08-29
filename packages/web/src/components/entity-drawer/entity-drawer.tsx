@@ -380,7 +380,7 @@ function DeleteEntityDialog({
             {deleteMutation.isPending ? (
               <>
                 <SpinnerGapIcon size={14} className="animate-spin" />
-                Deleting...
+                Deleting…
               </>
             ) : (
               "Delete"
@@ -563,6 +563,7 @@ function IdentityRowForm({
             type="checkbox"
             checked={form.isPrimary}
             onChange={(event) => onChange({ ...form, isPrimary: event.target.checked })}
+            className="size-3.5 accent-foreground"
           />
           Primary
         </label>
@@ -1047,9 +1048,7 @@ function TasksPanel({ entityId, tasksQuery }: TasksPanelProps) {
 
   return (
     <div className="space-y-2">
-      <p className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-        {formatTasksSummaryLine(tasks)}
-      </p>
+      <SectionLabel>{formatTasksSummaryLine(tasks)}</SectionLabel>
       <div>
         {tasks.map((task) => (
           <TaskRow

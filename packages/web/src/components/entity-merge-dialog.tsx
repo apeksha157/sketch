@@ -1,3 +1,4 @@
+import { SectionLabel } from "@/components/entity-drawer/drawer-kit";
 /**
  * EntityMergeDialog — the generic dedup surface. Combine two same-type entities:
  * pick the other side, preview what moves onto the survivor and what collapses,
@@ -211,9 +212,7 @@ export function MergePreviewPane({
   return (
     <div className="space-y-3">
       <div>
-        <div className="mb-1.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-          Keep as survivor
-        </div>
+        <SectionLabel className="mb-1.5">Keep as survivor</SectionLabel>
         <div className="inline-flex w-full rounded-lg border-[0.5px] border-border bg-card p-0.5">
           {sides.map((s) => (
             <button
@@ -319,7 +318,7 @@ function MergeHistory({ entityId }: { entityId: string }) {
 
   return (
     <div className="border-t pt-3">
-      <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Merge history</div>
+      <SectionLabel className="mb-2">Merge history</SectionLabel>
       <div className="flex flex-col">
         {merges.map((m) => (
           <MergeHistoryRow

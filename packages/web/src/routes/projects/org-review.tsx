@@ -1,4 +1,5 @@
 import { CompactAction } from "@/components/compact-action";
+import { SourceTag } from "@/components/entity-drawer/drawer-kit";
 /**
  * The review surface for Your Org: each type tab's band, expanding in place
  * to the full type-scoped list (the standalone Review tab is gone — triage
@@ -35,7 +36,7 @@ import {
 } from "@sketch/ui/components/dialog";
 import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 /** Shared 300ms debounce for the org search inputs (band + tab lists). */
@@ -290,12 +291,9 @@ function PoolingSummary({
               <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
               <span className="min-w-0 flex-1 truncate text-[12px]">{row.proposed_name}</span>
               {isExpiringSoon(row) ? (
-                <span
-                  className="shrink-0 rounded-sm bg-muted px-1 py-px text-[9.5px] uppercase tracking-wide text-muted-foreground"
-                  data-testid="review-band-expiring-chip"
-                >
+                <SourceTag className="tracking-wide" data-testid="review-band-expiring-chip">
                   expiring
-                </span>
+                </SourceTag>
               ) : null}
               <span className="shrink-0 text-[10.5px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
             </div>
@@ -603,14 +601,5 @@ export function ReviewBandCapped({
         onResolve={wa.resolve}
       />
     </section>
-  );
-}
-
-/** Shared empty/teach frame for a review surface. */
-export function ReviewEmpty({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-xl border border-dashed border-border py-10 text-center text-[12.5px] text-muted-foreground">
-      {children}
-    </p>
   );
 }

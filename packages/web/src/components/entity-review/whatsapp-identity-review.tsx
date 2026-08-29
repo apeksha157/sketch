@@ -31,7 +31,7 @@ import { cn } from "@sketch/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { EntryList, SectionLabel } from "../entity-drawer/drawer-kit";
+import { EntryList, SectionLabel, SourceTag } from "../entity-drawer/drawer-kit";
 
 export type { WhatsAppGroupSighting, WhatsAppIdentitySuggestion, WhatsAppIdentityReviewItem } from "@/lib/api";
 
@@ -440,10 +440,10 @@ function WhatsAppIdentityBody({
             {item.groups.map((group) => (
               <li key={group.groupJid} className="px-3 py-2.5">
                 <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+                  <SourceTag className="inline-flex items-center gap-1">
                     <WhatsappLogoIcon size={9} weight="fill" />
                     Group
-                  </span>
+                  </SourceTag>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.groupName}</span>
                   <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                     {group.messageCount} msgs · {formatRelativeTime(group.lastMessageAt)}

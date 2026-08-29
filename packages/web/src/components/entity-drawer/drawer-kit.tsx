@@ -4,7 +4,7 @@
  * identical — same tokens, same borders, same spacing.
  */
 import { cn } from "@sketch/ui/lib/utils";
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 
 /** Compact relative date ("3d ago") shared by the drawer, popover, and panels. */
 export function formatRelative(iso: string | null): string {
@@ -51,10 +51,24 @@ export function EntryList({ children }: { children: ReactNode }) {
   return <ul className="flex flex-col divide-y rounded-md border bg-background">{children}</ul>;
 }
 
-/** The muted mono source tag shown at the start of an entry row. */
-export function SourceTag({ children }: { children: ReactNode }) {
+/**
+ * The muted mono provenance tag — entry-row source labels, the AI chip, the
+ * expiring chip. One primitive so every surface's "quiet metadata tag" is the
+ * same 9px mono treatment.
+ */
+export function SourceTag({
+  children,
+  className,
+  ...rest
+}: { children: ReactNode; className?: string } & HTMLAttributes<HTMLSpanElement>) {
   return (
-    <span className="shrink-0 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+    <span
+      className={cn(
+        "shrink-0 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground",
+        className,
+      )}
+      {...rest}
+    >
       {children}
     </span>
   );
