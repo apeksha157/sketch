@@ -19,6 +19,7 @@ import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { inferAffiliationFromEmail } from "../entities/affiliations";
 import { sweepCoMentionContributesTo } from "../entities/co-mention-sweep";
+import { judgeUnclassifiedContainers } from "../entities/container-judge";
 import { settleContainersFromProviderFacts } from "../entities/container-settlement";
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
@@ -39,6 +40,7 @@ import {
 } from "./enrichment-providers";
 import { createGeminiGenerator } from "./gemini-generate";
 import { applyMicrosoftOAuthConfig, resolveMicrosoftOAuthConfig } from "./microsoft-graph";
+import { createOpenRouterGenerator } from "./openrouter-generate";
 import { type PostSyncGraphInputCollector, createPostSyncGraphInputCollector } from "./post-sync";
 import { getPostSyncCoordinator } from "./post-sync-coordinator";
 import { getConnector } from "./registry";
@@ -332,6 +334,16 @@ export async function runConnectorSync(
           })
         : undefined;
     const salienceOpenRouterConfig = resolveOpenRouterEnrichmentConfig(settings, appConfig?.OPENROUTER_API_KEY);
+    const containerJudgeOpenRouterGenerator =
+      appConfig?.CONTAINER_CLASSIFICATION_MODE &&
+      appConfig.CONTAINER_CLASSIFICATION_MODE !== "off" &&
+      salienceOpenRouterConfig.openRouterApiKey
+        ? createOpenRouterGenerator(salienceOpenRouterConfig.openRouterApiKey, {
+            model: salienceOpenRouterConfig.openRouterModel,
+            reasoningEffort: "medium",
+            timeoutMs: 300_000,
+          })
+        : null;
     const salienceGenerator =
       settings?.enrichment_enabled !== 0
         ? createEnrichmentGenerator({
@@ -548,6 +560,23 @@ export async function runConnectorSync(
 
     if (appConfig?.CONTAINER_CLASSIFICATION_MODE && appConfig.CONTAINER_CLASSIFICATION_MODE !== "off") {
       await settleContainersFromProviderFacts(db, config.id);
+      try {
+        await judgeUnclassifiedContainers(
+          {
+            db,
+            logger: syncLogger,
+            generator: containerJudgeOpenRouterGenerator ?? salienceGenerator ?? llmTaskGenerator ?? null,
+            agenticGenerator: containerJudgeOpenRouterGenerator,
+            model: salienceOpenRouterConfig.openRouterModel,
+          },
+          config.id,
+        );
+      } catch (err) {
+        syncLogger.warn(
+          { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
+          "Container judge failed after settlement",
+        );
+      }
     }
 
     result.newCursor = await connector.getCursor({
