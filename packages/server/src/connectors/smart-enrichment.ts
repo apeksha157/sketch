@@ -74,7 +74,7 @@ import {
 import { SLACK_CONVERSATION_SLICE_FILE_TYPE, WHATSAPP_CONVERSATION_SLICE_FILE_TYPE } from "./types";
 
 /** Max content length (chars) to send to Gemini for entity extraction. ~8k tokens. */
-const MAX_CONTENT_CHARS = 32000;
+export const MAX_CONTENT_CHARS = 32000;
 
 /**
  * Minimum distinct people sharing an email domain before a
@@ -137,7 +137,7 @@ function proposableEntityTypes(fileType?: string | null): Set<ProposeEntityType>
   return set;
 }
 
-function extractionValidTypes(fileType?: string | null): Set<string> {
+export function extractionValidTypes(fileType?: string | null): Set<string> {
   return new Set<string>(proposableEntityTypes(fileType));
 }
 
@@ -151,13 +151,13 @@ interface ExtractedMention {
   matchesKnown?: string;
 }
 
-interface ExtractedRelationEndpoint {
+export interface ExtractedRelationEndpoint {
   name: string;
   type: string;
   variations?: string[];
 }
 
-interface ExtractedRelation {
+export interface ExtractedRelation {
   type: string;
   source: ExtractedRelationEndpoint;
   target: ExtractedRelationEndpoint;
@@ -178,7 +178,7 @@ interface MatchedEntity {
   learnedFacts: LearnedFactStored[];
 }
 
-interface ExtractionOrgContext {
+export interface ExtractionOrgContext {
   orgName?: string;
   description?: string;
   industry?: string;
@@ -214,7 +214,7 @@ interface SmartEnrichmentDeps {
   recordLlmUsage?: SmartEnrichmentUsageRecorder;
 }
 
-interface FileContext {
+export interface FileContext {
   id: string;
   fileName: string;
   content: string;

@@ -25,6 +25,7 @@ import { PRODUCT_MATCH_TARGET_PROVENANCE_TIERS } from "../entities/provenance";
 import { yieldToEventLoop } from "../lib/event-loop";
 import { heapStats, heapUsedMb } from "../lib/heap";
 import { chunkText } from "./chunking";
+import { type ConsolidatedLoopAgenticGenerator, runConsolidatedLoopShadow } from "./consolidated-loop";
 import { type DocumentFactContext, emitDocumentDerivedFacts, sortDocumentParentRefs } from "./document-facts";
 import { ensureEmailThreadSummary, rebuildEmailThreadSummary } from "./email/thread-summary";
 import type { EmbeddingProvider } from "./embeddings/types";
@@ -34,7 +35,7 @@ import { type KnownEntityForPrompt, buildFileScopedKnownEntities } from "./file-
 import { type GeminiGenerator, createGeminiGenerator } from "./gemini-generate";
 import { buildParticipantBlock } from "./participant-block";
 import { type PersonCandidateScan, buildPersonCandidateBlock, buildPersonCandidateScan } from "./person-candidate-scan";
-import { type SmartEnrichmentUsageRecorder, smartEnrichFile } from "./smart-enrichment";
+import { type FileContext, type SmartEnrichmentUsageRecorder, smartEnrichFile } from "./smart-enrichment";
 import { extractDatesFromText } from "./tagging";
 
 /** Max files to enrich for explicit/manual runs. */
@@ -176,6 +177,35 @@ function recordLlmUsageForFile(
       }
     })();
   };
+}
+
+async function runConsolidatedLoopShadowIfEnabled(
+  deps: EnrichmentDeps,
+  file: FileContext,
+  knownEntities: KnownEntityForPrompt[],
+  participantBlock: string,
+  personCandidateBlock: string,
+): Promise<void> {
+  if (deps.consolidatedLoopMode !== "shadow" || !deps.consolidatedLoopAgenticGenerator) return;
+  try {
+    await runConsolidatedLoopShadow(
+      {
+        db: deps.db,
+        logger: deps.logger,
+        agenticGenerator: deps.consolidatedLoopAgenticGenerator,
+        orgContext: deps.orgContext,
+        knownEntities,
+        participantBlock,
+        personCandidateBlock,
+        threadContext: file.threadContext,
+        recordLlmUsage: recordLlmUsageForFile(deps, file.id),
+        now: deps.now,
+      },
+      file,
+    );
+  } catch (err) {
+    deps.logger.warn({ err, fileId: file.id }, "Consolidated loop shadow failed");
+  }
 }
 
 /**
@@ -401,6 +431,8 @@ export interface EnrichmentDeps {
   logger: Logger;
   embeddingProvider: EmbeddingProvider | null;
   generator?: GeminiGenerator | null;
+  consolidatedLoopMode?: "off" | "shadow";
+  consolidatedLoopAgenticGenerator?: ConsolidatedLoopAgenticGenerator | null;
   /** Gemini API key for AI-powered enrichment when a generator is not supplied. */
   geminiApiKey?: string | null;
   geminiMaxRpm?: number;
@@ -964,6 +996,20 @@ async function enrichTextDocument(
       const personCandidateBlock = buildPersonCandidateBlock(deps.personCandidateScan, file.content, {
         participantBlock,
       });
+      const smartFile = {
+        id: file.id,
+        fileName: file.file_name,
+        content: file.content,
+        threadContext,
+        contentCategory: file.content_category,
+        fileType: file.file_type,
+        source: file.source_path?.split("/")[0] ?? "unknown",
+        sourcePath: file.source_path,
+        contentHash: file.content_hash,
+        connectorConfigId: file.connector_config_id,
+        sourceCreatedAt: file.source_created_at,
+        sourceUpdatedAt: file.source_updated_at,
+      };
       await smartEnrichFile(
         {
           db,
@@ -979,22 +1025,10 @@ async function enrichTextDocument(
           ensureFresh: () => ensureFileFresh(db, file.id, fileVersion),
           recordLlmUsage: recordLlmUsageForFile(deps, file.id),
         },
-        {
-          id: file.id,
-          fileName: file.file_name,
-          content: file.content,
-          threadContext,
-          contentCategory: file.content_category,
-          fileType: file.file_type,
-          source: file.source_path?.split("/")[0] ?? "unknown",
-          sourcePath: file.source_path,
-          contentHash: file.content_hash,
-          connectorConfigId: file.connector_config_id,
-          sourceCreatedAt: file.source_created_at,
-          sourceUpdatedAt: file.source_updated_at,
-        },
+        smartFile,
       );
       await ensureFileFresh(db, file.id, fileVersion);
+      await runConsolidatedLoopShadowIfEnabled(deps, smartFile, knownEntities, participantBlock, personCandidateBlock);
       const floor = await applyEngagementFloor(
         { db, logger },
         {
