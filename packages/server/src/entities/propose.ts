@@ -394,7 +394,7 @@ function isPrefixMatch(proposed: string[], existing: string[]): boolean {
  * match — multi-candidate at that tier signals "human pick" rather than
  * falling through to a weaker rule.
  */
-function rank(entityType: ProposeEntityType, name: string, candidates: IndexEntityRow[]): RankedCandidate[] {
+export function rank(entityType: ProposeEntityType, name: string, candidates: IndexEntityRow[]): RankedCandidate[] {
   const proposedTokens = tokenize(normalizeEntityMatchName(entityType, name));
   if (proposedTokens.length === 0) return [];
 

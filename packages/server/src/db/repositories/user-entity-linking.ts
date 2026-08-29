@@ -7,7 +7,7 @@ import { createEntityReviewRepo } from "./entity-review";
 import { MACHINE_PRINCIPAL_USER_ID } from "./machine-principal";
 import { projectUserWhatsAppIdentityToEntity } from "./user-whatsapp-entity-projection";
 
-type LinkDb = Kysely<DB> | Transaction<DB>;
+export type LinkDb = Kysely<DB> | Transaction<DB>;
 type Entity = Selectable<EntitiesTable>;
 type User = Selectable<UsersTable>;
 
@@ -124,7 +124,7 @@ type EntityLinkBatchContext = {
   triggeredByUserId: string;
 };
 
-async function findActorUserId(db: LinkDb): Promise<string> {
+export async function findActorUserId(db: LinkDb): Promise<string> {
   const machine = await db
     .selectFrom("users")
     .select("id")
