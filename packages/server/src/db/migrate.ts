@@ -213,6 +213,7 @@ import * as m210 from "./migrations/210-graph-verdicts";
 import * as m211 from "./migrations/211-graph-verdicts-approved-active";
 import * as m212 from "./migrations/212-cli-integration-user-org-access";
 import * as m213 from "./migrations/213-containers";
+import * as m214 from "./migrations/214-container-verdicts";
 import type { DB } from "./schema";
 
 /**
@@ -435,6 +436,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "211-graph-verdicts-approved-active": m211,
           "212-cli-integration-user-org-access": m212,
           "213-containers": m213,
+          "214-container-verdicts": m214,
         };
       },
     },

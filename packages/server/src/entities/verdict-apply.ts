@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { Kysely, Selectable } from "kysely";
+import { whereLiveEntity } from "../db/repositories/entities";
 import { type GraphVerdictRow, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
-import type { DB, EntitiesTable } from "../db/schema";
+import type { ContainersTable, DB, EntitiesTable } from "../db/schema";
 import type { CleanupAction, CleanupVerdict } from "./cleanup-adjudication";
 import {
   type CleanupApplyEffect,
@@ -13,7 +15,7 @@ import {
   planProjectCleanup,
 } from "./cleanup-apply";
 import { unmergeEntitiesInTransaction } from "./merge";
-import { type VerdictFingerprintEvidence, fingerprintFor } from "./verdict-fingerprint";
+import { type VerdictFingerprintEvidence, containerVerdictFingerprint, fingerprintFor } from "./verdict-fingerprint";
 
 export type GraphVerdictApplyErrorCode =
   | "NOT_FOUND"
@@ -41,7 +43,7 @@ export type GraphVerdictApplyResult = {
   status: "approved" | "awaiting_human" | "applied";
   ledgerRef: string | null;
   wouldChange: Record<string, number>;
-  plan: CleanupApplyPlanRow;
+  plan: CleanupApplyPlanRow | ContainerApplyPlanRow;
 };
 
 export type GraphVerdictReversionResult = {
@@ -51,6 +53,29 @@ export type GraphVerdictReversionResult = {
 };
 
 type EntityRow = Selectable<EntitiesTable>;
+type ContainerRow = Selectable<ContainersTable>;
+
+type ContainerClassification = "team" | "project" | "time_box" | "account" | "ignore";
+type ContainerEntityStatus = "active" | "historical";
+
+type ContainerVerdictEvidence = {
+  classification: ContainerClassification;
+  entityStatus: ContainerEntityStatus;
+};
+
+type ContainerApplyPlanRow = {
+  entityId: string | null;
+  containerId: string;
+  name: string;
+  action: "classify_container";
+  state: "applied";
+  targetEntityId: string | null;
+  resolvedTargetEntityId: string | null;
+  reason: string | null;
+  classification: ContainerClassification;
+  entityStatus: ContainerEntityStatus;
+  wouldChange: Record<string, number>;
+};
 
 function updatedCount(
   result: { numUpdatedRows?: bigint | number | string; numDeletedRows?: bigint | number | string } | undefined,
@@ -75,6 +100,25 @@ function parseEvidence(raw: string): VerdictFingerprintEvidence {
   }
 }
 
+function parseContainerEvidence(raw: string): ContainerVerdictEvidence {
+  try {
+    const parsed = JSON.parse(raw) as { classification?: unknown; entityStatus?: unknown };
+    const classification = parsed.classification;
+    const entityStatus = parsed.entityStatus;
+    if (
+      (classification === "team" ||
+        classification === "project" ||
+        classification === "time_box" ||
+        classification === "account" ||
+        classification === "ignore") &&
+      (entityStatus === "active" || entityStatus === "historical")
+    ) {
+      return { classification, entityStatus };
+    }
+  } catch {}
+  throw new GraphVerdictApplyError("PLAN_BLOCKED", "Container classification evidence is invalid");
+}
+
 async function loadEntities(
   db: Kysely<DB>,
   verdict: GraphVerdictRow,
@@ -86,12 +130,17 @@ async function loadEntities(
   const rows = await db.selectFrom("entities").selectAll().where("id", "in", ids).execute();
   const byId = new Map(rows.map((row) => [row.id, row]));
   return {
-    subject: byId.get(verdict.subject_entity_id) ?? null,
+    subject: verdict.subject_entity_id ? (byId.get(verdict.subject_entity_id) ?? null) : null,
     target: verdict.target_entity_id ? (byId.get(verdict.target_entity_id) ?? null) : null,
   };
 }
 
 function toCleanupVerdict(verdict: GraphVerdictRow): CleanupVerdict {
+  if (!verdict.subject_entity_id) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Cleanup verdict subject entity is missing", {
+      verdictId: verdict.id,
+    });
+  }
   return {
     entityId: verdict.subject_entity_id,
     name: verdict.subject_name ?? verdict.subject_entity_id,
@@ -108,6 +157,11 @@ function toCleanupVerdict(verdict: GraphVerdictRow): CleanupVerdict {
 }
 
 async function verifiedPlan(db: Kysely<DB>, verdict: GraphVerdictRow): Promise<CleanupApplyPlanRow> {
+  if (!verdict.subject_entity_id) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Cleanup verdict subject entity is missing", {
+      verdictId: verdict.id,
+    });
+  }
   const { subject, target } = await loadEntities(db, verdict);
   const fingerprint = fingerprintFor({
     action: verdict.action,
@@ -175,6 +229,39 @@ function appliedResult(verdict: GraphVerdictRow, plan: CleanupApplyPlanRow): Gra
   };
 }
 
+function containerPlan(
+  verdict: GraphVerdictRow,
+  container: ContainerRow,
+  evidence: ContainerVerdictEvidence,
+  entityId: string | null,
+  wouldChange: Record<string, number>,
+): ContainerApplyPlanRow {
+  return {
+    entityId,
+    containerId: container.id,
+    name: container.name,
+    action: "classify_container",
+    state: "applied",
+    targetEntityId: null,
+    resolvedTargetEntityId: entityId,
+    reason: verdict.reason,
+    classification: evidence.classification,
+    entityStatus: evidence.entityStatus,
+    wouldChange,
+  };
+}
+
+function containerAppliedResult(verdict: GraphVerdictRow, plan: ContainerApplyPlanRow): GraphVerdictApplyResult {
+  return {
+    verdictId: verdict.id,
+    dryRun: false,
+    status: "applied",
+    ledgerRef: verdict.applied_ledger_ref,
+    wouldChange: plan.wouldChange,
+    plan,
+  };
+}
+
 function storedWouldChange(verdict: GraphVerdictRow): Record<string, number> {
   if (!verdict.would_change_json) return {};
   try {
@@ -188,6 +275,20 @@ function storedWouldChange(verdict: GraphVerdictRow): Record<string, number> {
 async function loadAppliedResult(db: Kysely<DB>, verdictId: string): Promise<GraphVerdictApplyResult | null> {
   const verdict = await createGraphVerdictRepository(db).findById(verdictId);
   if (!verdict || verdict.status !== "applied") return null;
+  if (verdict.action === "classify_container" && verdict.subject_container_id) {
+    const container = await db
+      .selectFrom("containers")
+      .selectAll()
+      .where("id", "=", verdict.subject_container_id)
+      .executeTakeFirst();
+    if (!container) return null;
+    const evidence = parseContainerEvidence(verdict.evidence_json);
+    return containerAppliedResult(
+      verdict,
+      containerPlan(verdict, container, evidence, container.classified_entity_id, storedWouldChange(verdict)),
+    );
+  }
+  if (!verdict.subject_entity_id) return null;
   return appliedResult(verdict, {
     entityId: verdict.subject_entity_id,
     name: verdict.subject_name ?? verdict.subject_entity_id,
@@ -198,6 +299,209 @@ async function loadAppliedResult(db: Kysely<DB>, verdictId: string): Promise<Gra
     reason: null,
     wouldChange: storedWouldChange(verdict),
   });
+}
+
+async function loadContainerForVerdict(db: Kysely<DB>, verdict: GraphVerdictRow): Promise<ContainerRow> {
+  if (!verdict.subject_container_id) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Container verdict subject is missing", { verdictId: verdict.id });
+  }
+  const container = await db
+    .selectFrom("containers")
+    .selectAll()
+    .where("id", "=", verdict.subject_container_id)
+    .executeTakeFirst();
+  if (!container) {
+    throw new GraphVerdictApplyError("PLAN_BLOCKED", "Container subject was not found", { verdictId: verdict.id });
+  }
+  if (containerVerdictFingerprint({ action: verdict.action, container }) !== verdict.evidence_fingerprint) {
+    throw new GraphVerdictApplyError("STALE_VERDICT", "Container evidence changed since proposal", {
+      verdictId: verdict.id,
+    });
+  }
+  return container;
+}
+
+async function resolveContainerEntity(db: Kysely<DB>, container: ContainerRow): Promise<EntityRow | null> {
+  if (container.classified_entity_id) {
+    const linked = await db
+      .selectFrom("entities")
+      .selectAll()
+      .where("id", "=", container.classified_entity_id)
+      .where(whereLiveEntity())
+      .executeTakeFirst();
+    if (linked) return linked;
+  }
+  const byRef = await db
+    .selectFrom("entity_source_refs")
+    .innerJoin("entities", "entities.id", "entity_source_refs.entity_id")
+    .selectAll("entities")
+    .where("entity_source_refs.source", "=", container.connector_type)
+    .where("entity_source_refs.source_id", "=", container.external_id)
+    .where(whereLiveEntity())
+    .executeTakeFirst();
+  return byRef ?? null;
+}
+
+async function mintContainerEntity(
+  db: Kysely<DB>,
+  container: ContainerRow,
+  classification: "team" | "project",
+): Promise<string> {
+  const now = new Date().toISOString();
+  const entityId = randomUUID();
+  await db
+    .insertInto("entities")
+    .values({
+      id: entityId,
+      name: container.name,
+      source_type: classification,
+      subtype: null,
+      aliases: null,
+      metadata: null,
+      source_ref_id: null,
+      status: "confirmed",
+      hotness: 0,
+      created_at: now,
+      updated_at: now,
+    })
+    .execute();
+  await db
+    .insertInto("entity_source_refs")
+    .values({
+      id: randomUUID(),
+      entity_id: entityId,
+      source: container.connector_type,
+      source_id: container.external_id,
+      source_url: null,
+      last_seen_at: now,
+    })
+    .execute();
+  return entityId;
+}
+
+async function archiveContainerEntity(db: Kysely<DB>, entityId: string): Promise<string> {
+  const effect = await applyArchive(
+    db,
+    {
+      entityId,
+      name: entityId,
+      action: "archive",
+      state: "applied",
+      targetEntityId: null,
+      resolvedTargetEntityId: null,
+      reason: null,
+      wouldChange: { entities: 1 },
+    },
+    [],
+  );
+  return `archived-at:${effect.archivedAt}`;
+}
+
+async function applyContainerVerdict(
+  trx: Kysely<DB>,
+  verdict: GraphVerdictRow,
+  dryRun: boolean | undefined,
+): Promise<GraphVerdictApplyResult> {
+  const evidence = parseContainerEvidence(verdict.evidence_json);
+  const repo = createGraphVerdictRepository(trx);
+  if (!dryRun) {
+    const claimed = await repo.markApplied({ id: verdict.id, ledgerRef: null });
+    if (!claimed) {
+      throw new GraphVerdictApplyError("APPLY_CONFLICT", "Graph verdict apply claim lost", { verdictId: verdict.id });
+    }
+  }
+  const container = await loadContainerForVerdict(trx, verdict);
+  const labelOnly =
+    evidence.classification === "time_box" ||
+    evidence.classification === "account" ||
+    evidence.classification === "ignore";
+  const existingEntity = labelOnly ? null : await resolveContainerEntity(trx, container);
+  const wouldChange: Record<string, number> = labelOnly
+    ? { containers: 1 }
+    : { containers: 1, entities: 1, entity_source_refs: existingEntity ? 0 : 1 };
+  const plan = containerPlan(
+    verdict,
+    container,
+    evidence,
+    existingEntity?.id ?? container.classified_entity_id,
+    wouldChange,
+  );
+  if (dryRun) {
+    return {
+      verdictId: verdict.id,
+      dryRun: true,
+      status: verdict.status as "approved" | "awaiting_human",
+      ledgerRef: verdict.applied_ledger_ref,
+      wouldChange,
+      plan,
+    };
+  }
+
+  let ledgerRef: string;
+  let entityId: string | null = null;
+  if (labelOnly) {
+    ledgerRef = `label:${evidence.classification}`;
+  } else {
+    const classification = evidence.classification;
+    if (classification !== "team" && classification !== "project") {
+      throw new GraphVerdictApplyError("PLAN_BLOCKED", "Container classification cannot create an entity", {
+        verdictId: verdict.id,
+      });
+    }
+    if (existingEntity) {
+      entityId = existingEntity.id;
+      ledgerRef = `retyped:${existingEntity.id}:${existingEntity.source_type}`;
+      const retyped = await trx
+        .updateTable("entities")
+        .set({ source_type: classification, updated_at: new Date().toISOString() })
+        .where("id", "=", existingEntity.id)
+        .where(whereLiveEntity())
+        .executeTakeFirst();
+      if (updatedCount(retyped) !== 1) {
+        throw new GraphVerdictApplyError("APPLY_CONFLICT", "Container entity retype target changed", {
+          verdictId: verdict.id,
+        });
+      }
+    } else {
+      entityId = await mintContainerEntity(trx, container, classification);
+      ledgerRef = `entity:${entityId}`;
+    }
+    if (evidence.entityStatus === "historical") {
+      ledgerRef = `${ledgerRef};${await archiveContainerEntity(trx, entityId)}`;
+    }
+  }
+
+  /**
+   * CAS on the verdict link as read in this transaction: a prior applied verdict is
+   * legal to overwrite (re-classification after a reopen), a concurrent change is not.
+   */
+  const updated = await trx
+    .updateTable("containers")
+    .set({
+      classification: evidence.classification,
+      classification_status: evidence.entityStatus,
+      classified_entity_id: entityId,
+      verdict_id: verdict.id,
+      last_reviewed_fingerprint: verdict.evidence_fingerprint,
+      updated_at: new Date().toISOString(),
+    })
+    .where("id", "=", container.id)
+    .where("verdict_id", container.verdict_id === null ? "is" : "=", container.verdict_id)
+    .executeTakeFirst();
+  if (updatedCount(updated) !== 1) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Container classification changed during apply", {
+      verdictId: verdict.id,
+    });
+  }
+  await repo.setAppliedLedgerRef({ id: verdict.id, ledgerRef });
+  const appliedPlan = containerPlan(
+    verdict,
+    { ...container, classified_entity_id: entityId },
+    evidence,
+    entityId,
+    wouldChange,
+  );
+  return containerAppliedResult({ ...verdict, status: "applied", applied_ledger_ref: ledgerRef }, appliedPlan);
 }
 
 export async function applyGraphVerdict(
@@ -232,6 +536,9 @@ export async function applyGraphVerdict(
           verdictId: input.verdictId,
           status: verdict.status,
         });
+      }
+      if (verdict.action === "classify_container") {
+        return applyContainerVerdict(trx, verdict, input.dryRun);
       }
       const plan = await verifiedPlan(trx, verdict);
       if (input.dryRun) {
@@ -277,6 +584,129 @@ function parseLedgerRef(
   throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Unknown graph verdict ledger ref");
 }
 
+function parseContainerLedgerRef(
+  ref: string,
+):
+  | { kind: "label"; classification: ContainerClassification }
+  | { kind: "entity"; entityId: string; archivedAt: string | null }
+  | { kind: "retyped"; entityId: string; oldType: string; archivedAt: string | null } {
+  const [primary, archive] = ref.split(";");
+  const archivedAt = archive?.startsWith("archived-at:") ? archive.slice("archived-at:".length) : null;
+  if (primary?.startsWith("label:")) {
+    const classification = primary.slice("label:".length);
+    if (
+      classification === "team" ||
+      classification === "project" ||
+      classification === "time_box" ||
+      classification === "account" ||
+      classification === "ignore"
+    ) {
+      return { kind: "label", classification };
+    }
+  }
+  if (primary?.startsWith("entity:")) return { kind: "entity", entityId: primary.slice("entity:".length), archivedAt };
+  if (primary?.startsWith("retyped:")) {
+    const parts = primary.split(":");
+    const entityId = parts[1];
+    const oldType = parts.slice(2).join(":");
+    if (entityId && oldType) return { kind: "retyped", entityId, oldType, archivedAt };
+  }
+  throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Unknown container verdict ledger ref");
+}
+
+async function assertMintedEntityHasNoRelationships(db: Kysely<DB>, entityId: string): Promise<void> {
+  const relationship = await db
+    .selectFrom("entity_relationships")
+    .select("id")
+    .where((eb) => eb.or([eb("source_entity_id", "=", entityId), eb("target_entity_id", "=", entityId)]))
+    .executeTakeFirst();
+  if (relationship) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Minted entity gained relationships");
+  }
+  const task = await db
+    .selectFrom("tasks")
+    .select("id")
+    .where((eb) =>
+      eb.or([
+        eb("parent_entity_id", "=", entityId),
+        eb("assignee_entity_id", "=", entityId),
+        eb("client_entity_id", "=", entityId),
+      ]),
+    )
+    .executeTakeFirst();
+  if (task) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Minted entity gained task references");
+  }
+}
+
+async function clearContainerVerdictLink(db: Kysely<DB>, row: GraphVerdictRow, entityId: string | null): Promise<void> {
+  if (!row.subject_container_id) {
+    throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Container verdict subject is missing");
+  }
+  let query = db
+    .updateTable("containers")
+    .set({
+      classification: null,
+      classification_status: null,
+      classified_entity_id: null,
+      verdict_id: null,
+      last_reviewed_fingerprint: null,
+      updated_at: new Date().toISOString(),
+    })
+    .where("id", "=", row.subject_container_id)
+    .where("verdict_id", "=", row.id);
+  query = entityId
+    ? query.where("classified_entity_id", "=", entityId)
+    : query.where("classified_entity_id", "is", null);
+  const cleared = await query.executeTakeFirst();
+  if (updatedCount(cleared) !== 1) {
+    throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Container row no longer matches ledger");
+  }
+}
+
+async function revertContainerVerdict(trx: Kysely<DB>, row: GraphVerdictRow, ledgerRef: string): Promise<void> {
+  const ledger = parseContainerLedgerRef(ledgerRef);
+  const repo = createGraphVerdictRepository(trx);
+  const won = await repo.markReverted({ id: row.id });
+  if (!won) {
+    throw new GraphVerdictApplyError("APPLY_CONFLICT", "Graph verdict reversion claim lost", { verdictId: row.id });
+  }
+  if (ledger.kind === "label") {
+    await clearContainerVerdictLink(trx, row, null);
+    return;
+  }
+  if (ledger.kind === "retyped") {
+    const result = await trx
+      .updateTable("entities")
+      .set({ source_type: ledger.oldType, deleted_at: null, updated_at: new Date().toISOString() })
+      .where("id", "=", ledger.entityId)
+      .where("deleted_at", ledger.archivedAt ? "=" : "is", ledger.archivedAt)
+      .where("merged_into_entity_id", "is", null)
+      .executeTakeFirst();
+    if (updatedCount(result) !== 1) {
+      throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Retyped entity no longer matches ledger");
+    }
+    await clearContainerVerdictLink(trx, row, ledger.entityId);
+    return;
+  }
+  await assertMintedEntityHasNoRelationships(trx, ledger.entityId);
+  if (ledger.archivedAt) {
+    const existing = await trx
+      .selectFrom("entities")
+      .select("id")
+      .where("id", "=", ledger.entityId)
+      .where("deleted_at", "=", ledger.archivedAt)
+      .where("merged_into_entity_id", "is", null)
+      .executeTakeFirst();
+    if (!existing) {
+      throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Minted archived entity no longer matches ledger");
+    }
+  } else {
+    await archiveContainerEntity(trx, ledger.entityId);
+  }
+  await clearContainerVerdictLink(trx, row, ledger.entityId);
+}
+
 export async function revertGraphVerdict(
   db: Kysely<DB>,
   input: { verdictId: string; actorUserId: string },
@@ -292,6 +722,16 @@ export async function revertGraphVerdict(
     });
   }
   const appliedLedgerRef = row.applied_ledger_ref;
+  if (row.action === "classify_container") {
+    return db.transaction().execute(async (trx) => {
+      await revertContainerVerdict(trx, row, appliedLedgerRef);
+      return { verdictId: row.id, status: "reverted", ledgerRef: appliedLedgerRef };
+    });
+  }
+  const subjectEntityId = row.subject_entity_id;
+  if (!subjectEntityId) {
+    throw new GraphVerdictApplyError("NOTHING_TO_REVERT", "Graph verdict subject entity is missing");
+  }
   const ledger = parseLedgerRef(appliedLedgerRef);
   return db.transaction().execute(async (trx) => {
     const repo = createGraphVerdictRepository(trx);
@@ -317,7 +757,7 @@ export async function revertGraphVerdict(
       const result = await trx
         .updateTable("entities")
         .set({ deleted_at: null, updated_at: new Date().toISOString() })
-        .where("id", "=", row.subject_entity_id)
+        .where("id", "=", subjectEntityId)
         .where("deleted_at", "=", ledger.at)
         .where("merged_into_entity_id", "is", null)
         .executeTakeFirst();

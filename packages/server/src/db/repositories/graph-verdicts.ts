@@ -22,7 +22,8 @@ export interface CreateGraphVerdictRunInput {
 export interface StoreGraphVerdictInput {
   runId: string;
   action: string;
-  subjectEntityId: string;
+  subjectEntityId: string | null;
+  subjectContainerId?: string | null;
   subjectName: string | null;
   subjectEntityType: string | null;
   targetEntityId: string | null;
@@ -55,6 +56,7 @@ function toInsert(input: StoreGraphVerdictInput, id: string, now: string): Inser
     run_id: input.runId,
     action: input.action,
     subject_entity_id: input.subjectEntityId,
+    subject_container_id: input.subjectContainerId ?? null,
     subject_name: input.subjectName,
     subject_entity_type: input.subjectEntityType,
     target_entity_id: input.targetEntityId,
@@ -84,6 +86,28 @@ function approvedPendingBounce(input: StoreGraphVerdictInput): StoreGraphVerdict
     wouldChangeJson: null,
     status: "bounced",
   };
+}
+
+function activeSubject(verdict: StoreGraphVerdictInput): {
+  column: "subject_container_id" | "subject_entity_id";
+  id: string;
+} {
+  if (verdict.subjectContainerId) return { column: "subject_container_id", id: verdict.subjectContainerId };
+  if (verdict.subjectEntityId) return { column: "subject_entity_id", id: verdict.subjectEntityId };
+  throw new Error("Graph verdict subject is missing.");
+}
+
+async function withContainerSubjectEntity(
+  db: Kysely<DB>,
+  verdict: StoreGraphVerdictInput,
+): Promise<StoreGraphVerdictInput> {
+  if (!verdict.subjectContainerId || verdict.subjectEntityId) return verdict;
+  const container = await db
+    .selectFrom("containers")
+    .select("classified_entity_id")
+    .where("id", "=", verdict.subjectContainerId)
+    .executeTakeFirst();
+  return container?.classified_entity_id ? { ...verdict, subjectEntityId: container.classified_entity_id } : verdict;
 }
 
 /**
@@ -117,15 +141,17 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
     ): Promise<{ ids: string[]; rows: StoreGraphVerdictInput[] }> {
       const now = new Date().toISOString();
       const rows: StoreGraphVerdictInput[] = [];
-      for (const verdict of verdicts) {
+      for (const input of verdicts) {
+        const verdict = await withContainerSubjectEntity(db, input);
         if (verdict.status !== "awaiting_human") {
           rows.push(verdict);
           continue;
         }
+        const subject = activeSubject(verdict);
         const approved = await db
           .selectFrom("graph_verdicts")
           .select("id")
-          .where("subject_entity_id", "=", verdict.subjectEntityId)
+          .where(subject.column, "=", subject.id)
           .where("action", "=", verdict.action)
           .where("status", "=", "approved")
           .where("superseded_at", "is", null)
@@ -135,10 +161,11 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
       const ids = rows.map(() => randomUUID());
       const awaiting = rows.filter((verdict) => verdict.status === "awaiting_human");
       for (const verdict of awaiting) {
+        const subject = activeSubject(verdict);
         await db
           .updateTable("graph_verdicts")
           .set({ superseded_at: now, updated_at: now })
-          .where("subject_entity_id", "=", verdict.subjectEntityId)
+          .where(subject.column, "=", subject.id)
           .where("action", "=", verdict.action)
           .where("status", "=", "awaiting_human")
           .where("superseded_at", "is", null)
