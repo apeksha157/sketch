@@ -9,19 +9,11 @@ import {
 import type { DB } from "../db/schema";
 import { GraphVerdictApplyError, applyGraphVerdict, revertGraphVerdict } from "../entities/verdict-apply";
 
-export interface GraphVerdictRouteConfig {
-  enabled: boolean;
-}
-
 function requireAdmin(c: Context) {
   if (c.get("role") !== "admin") {
     return { error: { code: "FORBIDDEN", message: "Admin access required" } };
   }
   return null;
-}
-
-function notEnabled(c: Context) {
-  return c.json({ error: { code: "NOT_FOUND", message: "Graph verdicts are not enabled" } }, 404);
 }
 
 function parseJson(raw: string | null) {
@@ -94,18 +86,38 @@ function errorResponse(c: Context, err: unknown) {
   throw err;
 }
 
-export function graphVerdictRoutes(
-  db: Kysely<DB>,
-  logger: Logger,
-  routeConfig: GraphVerdictRouteConfig = { enabled: false },
-) {
+/**
+ * Admin-gated with no dev-tools flag: graph verdicts are the product review
+ * surface (Your Org), matching the project-minting verdict routes' posture.
+ */
+export function graphVerdictRoutes(db: Kysely<DB>, logger: Logger) {
   const routes = new Hono();
   const verdicts = createGraphVerdictRepository(db);
+
+  routes.get("/", async (c) => {
+    const forbidden = requireAdmin(c);
+    if (forbidden) return c.json(forbidden, 403);
+
+    const statuses = (c.req.query("status") ?? "").split(",").filter(Boolean);
+    const allowed = new Set(["awaiting_human", "approved"]);
+    if (statuses.length === 0 || statuses.some((status) => !allowed.has(status))) {
+      return c.json(
+        {
+          error: {
+            code: "UNSUPPORTED_FILTER",
+            message: "status must be a comma-separated subset of: awaiting_human, approved",
+          },
+        },
+        400,
+      );
+    }
+    const rows = await verdicts.listByStatuses(statuses as ("awaiting_human" | "approved")[]);
+    return c.json({ verdicts: rows.map(serializeVerdict) });
+  });
 
   routes.get("/runs", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);
-    if (!routeConfig.enabled) return notEnabled(c);
 
     return c.json({ runs: (await verdicts.listRunsWithRollups()).map(serializeRun) });
   });
@@ -113,7 +125,6 @@ export function graphVerdictRoutes(
   routes.get("/runs/:id/verdicts", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);
-    if (!routeConfig.enabled) return notEnabled(c);
 
     return c.json({ verdicts: (await verdicts.listByRun(c.req.param("id"))).map(serializeVerdict) });
   });
@@ -121,7 +132,6 @@ export function graphVerdictRoutes(
   routes.post("/:id/approval", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);
-    if (!routeConfig.enabled) return notEnabled(c);
 
     const id = c.req.param("id");
     const won = await verdicts.markApproved({ id, actorUserId: c.get("sub") });
@@ -136,7 +146,6 @@ export function graphVerdictRoutes(
   routes.post("/:id/rejection", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);
-    if (!routeConfig.enabled) return notEnabled(c);
 
     const id = c.req.param("id");
     const won = await verdicts.markRejected({ id, actorUserId: c.get("sub") });
@@ -151,7 +160,6 @@ export function graphVerdictRoutes(
   routes.post("/:id/application", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);
-    if (!routeConfig.enabled) return notEnabled(c);
 
     try {
       const body = await readJsonObject(c);
@@ -170,7 +178,6 @@ export function graphVerdictRoutes(
   routes.post("/:id/reversion", async (c) => {
     const forbidden = requireAdmin(c);
     if (forbidden) return c.json(forbidden, 403);
-    if (!routeConfig.enabled) return notEnabled(c);
 
     try {
       const reversion = await revertGraphVerdict(db, { verdictId: c.req.param("id"), actorUserId: c.get("sub") });
