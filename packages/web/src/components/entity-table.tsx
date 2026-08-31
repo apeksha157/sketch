@@ -13,7 +13,7 @@ import { humanSourceType } from "@/components/entity-review/entity-format";
 import { AiBadge, OrgListHeader, OrgRow } from "@/components/org-row";
 import type { EntityListItem } from "@/lib/api";
 import { EntityAvatar, entityDisplayLabel } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
+import { formatRelativeTime } from "@/lib/time";
 import { Badge } from "@sketch/ui/components/badge";
 import { cn } from "@sketch/ui/lib/utils";
 import type { HTMLAttributes, ReactNode } from "react";

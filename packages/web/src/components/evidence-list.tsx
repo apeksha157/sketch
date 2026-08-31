@@ -4,7 +4,8 @@
  * file name drops to the attribution line — same inversion as the drawer
  * timeline, so evidence reads identically wherever a decision is made.
  */
-import { EntryList, formatRelative } from "@/components/entity-drawer/drawer-kit";
+import { EntryList } from "@/components/entity-drawer/drawer-kit";
+import { formatRelativeTime } from "@/lib/time";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 
@@ -21,7 +22,7 @@ function attribution(item: EvidenceListItem): string {
   const parts: string[] = [];
   if (item.snippet) parts.push(item.fileName);
   if (item.source) parts.push(item.source.replace(/_/g, " "));
-  if (item.occurredAt) parts.push(formatRelative(item.occurredAt));
+  if (item.occurredAt) parts.push(formatRelativeTime(item.occurredAt));
   return parts.join(" · ");
 }
 

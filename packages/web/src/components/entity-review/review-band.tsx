@@ -1,23 +1,17 @@
 import { EntryList, SectionCard, SectionLabel, SourceTag } from "@/components/entity-drawer/drawer-kit";
 import { TimelineStrip, usefulSnippet } from "@/components/entity-drawer/timeline-strip";
 /**
- * Shared entity-review band + reconcile sheet.
- *
- * Extracted from Files → Entities so the same reconcile UI is reused verbatim
- * on the Your Org surface. Two consumers:
- *   - {@link GhostReviewRow} + {@link ReviewDetailSheet} — the explorer renders
- *     ghost rows inline inside its own table, then opens the sheet.
- *   - {@link ReviewBand} — a self-contained band (used by Your Org) that fetches
- *     a type-scoped slice of the queue, splits it into "Confirm new" (no
- *     candidate) vs "Possible duplicates" (a match was suggested), and owns the
- *     sheet.
- *
- * Clicking a row opens a reconcile drawer with two side-by-side columns —
- * Proposed | Suggested existing — and inline ✓/✗ icon-buttons on the candidate
- * card. ✗ flips the right column to a "What instead?" chooser (search +
- * create-as-new). Orphan rows (no suggested candidate) open directly in chooser
- * mode.
+ * The two review sheets behind Your Org's review band (the band itself is
+ * {@link ReviewBandCapped} in routes/projects/org-review):
+ *   - {@link BirthInspectSheet} — read-only inspect for a birth row (origin,
+ *     linked files, tasks, rename-then-confirm, merge escape hatch).
+ *   - {@link ReviewDetailSheet} — the reconcile drawer for rows with a
+ *     suggested match: two side-by-side columns (Proposed | Suggested
+ *     existing) with inline ✓/✗ on the candidate card. ✗ flips the right
+ *     column to a "What instead?" chooser (search + create-as-new); orphan
+ *     rows open directly in chooser mode.
  */
+import { MergeDialog, MergePreview } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
 import { detailKey, useReviewMutations } from "@/components/review-actions";
 import type {
@@ -31,17 +25,14 @@ import type {
 } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, displayAliases, entityAccent } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
 import {
   ArrowLeftIcon,
   ArrowSquareOutIcon,
   ArrowsLeftRightIcon,
   CheckIcon,
-  CubeIcon,
   PlugsConnectedIcon,
   PlusIcon,
   SparkleIcon,
-  UserIcon,
   XIcon,
 } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
@@ -115,93 +106,6 @@ function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[]
 }
 
 /**
- * Self-contained review band scoped to a set of entity types. Fetches the
- * type-scoped queue slice, partitions it into births vs possible-duplicates,
- * and owns the reconcile sheet. Renders nothing when the scoped queue is empty.
- */
-export function ReviewBand({ types, title = "Needs your review" }: { types: string[]; title?: string }) {
-  const queryClient = useQueryClient();
-  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
-  const [inspectBirthId, setInspectBirthId] = useState<string | null>(null);
-  const { data } = useQuery({
-    queryKey: ["entity-review", "band", types.join(",")],
-    queryFn: () => api.entityReview.list({ limit: 200, types }),
-  });
-  const rows = data?.rows ?? [];
-  const total = data?.total ?? rows.length;
-
-  /**
-   * Births resolve inline, so refreshing the band, sidebar badge, and Files
-   * band together means invalidating the whole `["entity-review"]` prefix: the
-   * band key is NOT under `LIST_KEY`, so the mutation hook's list-scoped
-   * invalidation alone would miss it.
-   */
-  const refreshAfterResolve = () => {
-    queryClient.invalidateQueries({ queryKey: ["entity-review"] });
-    queryClient.invalidateQueries({ queryKey: ["entities"] });
-  };
-
-  if (rows.length === 0) return null;
-
-  const births = rows.filter((r) => !hasReviewCandidate(r));
-  const duplicates = rows.filter(hasReviewCandidate);
-
-  return (
-    <section className="mb-9 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
-      <div className="flex items-baseline justify-between border-b border-amber-300/50 px-3 py-2 dark:border-amber-700/40">
-        <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700 dark:text-amber-400">
-          {title} · {total}
-        </span>
-      </div>
-      {births.length > 0 ? (
-        <>
-          <GroupHeader label="Confirm new" count={births.length} />
-          {births.map((row) => (
-            <BirthRow
-              key={`review-${row.id}`}
-              row={row}
-              onResolved={refreshAfterResolve}
-              onInspect={setInspectBirthId}
-            />
-          ))}
-        </>
-      ) : null}
-      {duplicates.length > 0 ? (
-        <>
-          <GroupHeader label="Possible duplicates" count={duplicates.length} />
-          {duplicates.map((row) => (
-            <GhostReviewRow key={`review-${row.id}`} row={row} onSelect={setSelectedReviewId} />
-          ))}
-        </>
-      ) : null}
-      <ReviewDetailSheet reviewId={selectedReviewId} onClose={() => setSelectedReviewId(null)} />
-      <BirthInspectSheet
-        reviewId={inspectBirthId}
-        onResolved={refreshAfterResolve}
-        onClose={() => setInspectBirthId(null)}
-      />
-    </section>
-  );
-}
-
-function hasReviewCandidate(row: EntityReviewQueueRow): boolean {
-  return Boolean(row.candidate || (row.candidates?.length ?? 0) > 0);
-}
-
-function reviewCandidateNames(row: EntityReviewQueueRow): string[] {
-  const candidates = row.candidates ?? (row.candidate ? [row.candidate] : []);
-  return candidates.map((candidate) => candidate.name);
-}
-
-function GroupHeader({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="border-b border-amber-300/40 px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] text-amber-700/80 dark:border-amber-700/30 dark:text-amber-400/70">
-      {label} · {count}
-    </div>
-  );
-}
-
-/**
  * A small chip naming where a birth row came from: a tracker pull (ClickUp /
  * Linear) or an AI extraction from a connector's documents (Fireflies / Gmail).
  */
@@ -213,110 +117,6 @@ function OriginChip({ row }: { row: EntityReviewQueueRow }) {
       {origin.kind === "ai" ? <SparkleIcon size={9} weight="fill" /> : <PlugsConnectedIcon size={9} />}
       {origin.label}
     </Badge>
-  );
-}
-
-/**
- * A birth row (proposed entity with no candidate match). It resolves inline —
- * Confirm creates the entity from its seed, Dismiss drops it without creating
- * anything, Merge opens a search-only picker for the "actually a duplicate"
- * escape hatch. The actions only appear on hover/focus to keep the list calm;
- * clicking the row body opens a read-only inspect sheet (origin + linked files).
- * No reconcile drawer: a birth is not a merge, so there's nothing to compare.
- */
-function BirthRow({
-  row,
-  onResolved,
-  onInspect,
-}: {
-  row: EntityReviewQueueRow;
-  onResolved: () => void;
-  onInspect: (id: string) => void;
-}) {
-  const isPerson = row.entity_type === "person";
-  const [mergeOpen, setMergeOpen] = useState(false);
-  const mutations = useReviewMutations(row, onResolved);
-
-  return (
-    <div
-      className="group border-b border-border bg-amber-50/40 last:border-b-0 dark:bg-amber-950/20"
-      data-testid={`review-row-${row.id}`}
-    >
-      <div className="flex items-center gap-3 px-3 py-2.5 text-sm">
-        <button
-          type="button"
-          onClick={() => onInspect(row.id)}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left hover:opacity-80"
-          data-testid="birth-inspect"
-        >
-          {isPerson ? (
-            <UserIcon size={14} className="shrink-0 text-muted-foreground" />
-          ) : (
-            <CubeIcon size={14} className="shrink-0 text-muted-foreground" />
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{row.proposed_name}</p>
-            <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Badge variant="outline" className="text-[9px]">
-                {humanSourceType(row.entity_type)}
-              </Badge>
-              <OriginChip row={row} />
-              {row.evidenceCount > 0 ? <span>· {row.evidenceCount} linked</span> : null}
-            </span>
-          </div>
-        </button>
-
-        <div className="flex shrink-0 items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => mutations.confirm()}
-            disabled={mutations.isPending}
-            className="h-7 gap-1 border-emerald-400 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-600 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
-            data-testid="birth-confirm"
-          >
-            <CheckIcon size={13} weight="bold" />
-            Confirm
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setMergeOpen(true)}
-            disabled={mutations.isPending}
-            className="h-7 gap-1"
-            data-testid="birth-merge"
-          >
-            <ArrowsLeftRightIcon size={12} />
-            Merge
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => mutations.dismiss()}
-            disabled={mutations.isPending}
-            className="h-7 gap-1 text-muted-foreground hover:text-foreground"
-            data-testid="birth-dismiss"
-          >
-            <XIcon size={13} />
-            Dismiss
-          </Button>
-        </div>
-      </div>
-
-      {mutations.errorCopy ? (
-        <p className="px-3 pb-2 text-[11px] text-destructive">{mutations.errorCopy.message}</p>
-      ) : null}
-
-      <MergePickerDialog
-        open={mergeOpen}
-        onOpenChange={setMergeOpen}
-        row={row}
-        onPick={(entityId) => {
-          setMergeOpen(false);
-          mutations.mergeInto(entityId);
-        }}
-      />
-    </div>
   );
 }
 
@@ -565,11 +365,10 @@ function BirthInspectBody({
 }
 
 /**
- * Two-step picker for the birth-row "Merge" escape hatch. Step one is the
- * shared {@link EntityPicker}; picking does NOT merge — step two shows the
- * target the way the entity drawer does (header anatomy + recent timeline) so
- * the admin can look before committing. Only the explicit Merge button calls
- * `onPick`.
+ * The birth-row "Merge" escape hatch, on the shared {@link MergeDialog} +
+ * {@link MergePreview} surface. Picking does NOT merge — the preview shows
+ * the target with the drawer's anatomy first, and only the explicit Merge
+ * button calls `onPick`.
  */
 function MergePickerDialog({
   open,
@@ -582,189 +381,31 @@ function MergePickerDialog({
   row: EntityReviewQueueRow;
   onPick: (entityId: string) => void;
 }) {
-  const [picked, setPicked] = useState<EntityListItem | null>(null);
   return (
-    <Dialog
+    <MergeDialog
       open={open}
-      onOpenChange={(next) => {
-        if (!next) setPicked(null);
-        onOpenChange(next);
-      }}
-    >
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle className="text-base">
-            {picked ? `Merge "${row.proposed_name}" into ${picked.name}` : `Merge "${row.proposed_name}" into…`}
-          </DialogTitle>
-          <DialogDescription>
-            {picked
-              ? "Check this is the right one — the proposed entity and its evidence fold in here."
-              : `Pick an existing ${humanSourceType(row.entity_type).toLowerCase()} this is a duplicate of. No new entity is created.`}
-          </DialogDescription>
-        </DialogHeader>
-        {picked ? (
-          <MergeTargetPreview
-            row={row}
-            target={picked}
-            onBack={() => setPicked(null)}
-            onMerge={() => {
-              setPicked(null);
-              onPick(picked.id);
-            }}
-          />
-        ) : (
-          <EntityPicker entityType={row.entity_type} onPick={(_, entity) => setPicked(entity)} />
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
- * The look-before-merge pane: the target rendered with the entity drawer's
- * header anatomy and its recent timeline, so a bare name like "Rahul" is
- * checkable against real activity before anything commits.
- */
-function MergeTargetPreview({
-  row,
-  target,
-  onBack,
-  onMerge,
-}: {
-  row: EntityReviewQueueRow;
-  target: EntityListItem;
-  onBack: () => void;
-  onMerge: () => void;
-}) {
-  const timelineQuery = useQuery({
-    queryKey: ["entity-drawer", "timeline", target.id],
-    queryFn: () => api.entities.timeline(target.id),
-  });
-  const recentItems = (timelineQuery.data?.groups ?? []).flatMap((group) => group.items).slice(0, 6);
-  const email =
-    (target.contactPoints ?? []).find((point) => point.kind === "email" && point.isPrimary)?.value ??
-    (target.contactPoints ?? []).find((point) => point.kind === "email")?.value;
-  const aka = displayAliases(target.aliases ?? [], [target.name, email]);
-  const accent = entityAccent({ id: target.id, name: target.name, sourceType: target.sourceType });
-
-  return (
-    <div className="flex min-h-0 min-w-0 flex-col gap-3" data-testid="merge-target-preview">
-      <div
-        className="min-w-0 overflow-hidden rounded-lg border bg-muted/20"
-        style={{ borderTopColor: accent, borderTopWidth: 3 }}
-      >
-        <div className="flex items-start gap-3 px-4 py-3">
-          <EntityAvatar entity={{ id: target.id, name: target.name, sourceType: target.sourceType }} size="lg" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate font-serif text-[18px] leading-tight">{target.name}</p>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
-                {humanSourceType(target.sourceType)}
-              </Badge>
-              {email ? <span className="font-mono text-[11px] text-muted-foreground">{email}</span> : null}
-              {target.mentionCount > 0 ? (
-                <span className="text-[11px] text-muted-foreground">
-                  {target.mentionCount} {target.mentionCount === 1 ? "mention" : "mentions"}
-                </span>
-              ) : null}
-            </div>
-            {aka.length > 0 ? (
-              <p className="mt-1 truncate text-[11px] text-muted-foreground">aka {aka.slice(0, 4).join(", ")}</p>
-            ) : null}
-          </div>
-        </div>
-        <div className="max-h-56 overflow-y-auto border-t px-4 py-3">
-          {timelineQuery.isLoading ? (
-            <p className="text-[11px] text-muted-foreground">Loading recent activity…</p>
-          ) : recentItems.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">No recent activity.</p>
-          ) : (
-            <TimelineStrip groups={[{ month: "recent", items: recentItems }]} entityId={target.id} />
-          )}
-        </div>
-      </div>
-      <p className="text-[11px] text-muted-foreground">
-        "{row.proposed_name}"
-        {row.evidenceCount > 0
-          ? ` and its ${row.evidenceCount} linked ${row.evidenceCount === 1 ? "file" : "files"}`
-          : ""}{" "}
-        fold into this {humanSourceType(target.sourceType).toLowerCase()}.
-      </p>
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={onBack}>
-          <ArrowLeftIcon size={12} />
-          Back
-        </Button>
-        <Button
-          size="sm"
-          onClick={onMerge}
-          className="ml-auto h-7 gap-1 bg-emerald-600 text-[11px] text-white hover:bg-emerald-700"
-          data-testid="merge-target-confirm"
-        >
-          <ArrowsLeftRightIcon size={12} />
-          Merge into {target.name}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * "Ghost" row representing a pending entity_review_queue row. Subtle styling
- * (amber tint + Under-review label). Click opens the reconcile drawer.
- */
-export function GhostReviewRow({ row, onSelect }: { row: EntityReviewQueueRow; onSelect: (id: string) => void }) {
-  const isPerson = row.entity_type === "person";
-  return (
-    <div className="border-b border-border last:border-b-0" data-testid={`review-row-${row.id}`}>
-      <button
-        type="button"
-        onClick={() => onSelect(row.id)}
-        className="flex w-full cursor-pointer items-center gap-3 bg-amber-50/40 px-3 py-2.5 text-left text-sm hover:bg-amber-50 dark:bg-amber-950/20 dark:hover:bg-amber-950/30"
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-2">
-          {isPerson ? (
-            <UserIcon size={14} className="shrink-0 text-muted-foreground" />
-          ) : (
-            <CubeIcon size={14} className="shrink-0 text-muted-foreground" />
-          )}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{row.proposed_name}</p>
-            <p className="truncate text-[11px] text-muted-foreground">
-              <span className="font-medium text-amber-700 dark:text-amber-400">Under review</span>
-              {hasReviewCandidate(row) ? (
-                <> · suggests {reviewCandidateNames(row).join(", ")}</>
-              ) : (
-                <> · no suggested match</>
-              )}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex w-32 items-center justify-center gap-1.5">
-          <Badge variant="outline" className="text-[10px]">
-            {humanSourceType(row.entity_type)}
-          </Badge>
-        </div>
-
-        <span className="w-16 text-center font-mono text-xs text-muted-foreground">
-          {row.evidenceCount > 0 ? row.evidenceCount : "-"}
-        </span>
-
-        <div className="flex w-20 items-center justify-center gap-1">
-          <Badge
-            variant="outline"
-            className="border-amber-300 text-[10px] text-amber-700 dark:border-amber-700 dark:text-amber-400"
-          >
-            review
-          </Badge>
-        </div>
-
-        <div className="w-24 text-right">
-          <span className="text-xs text-muted-foreground">{formatRelativeTime(row.last_seen_at)}</span>
-        </div>
-      </button>
-    </div>
+      onOpenChange={onOpenChange}
+      entityType={row.entity_type}
+      title={(picked) =>
+        picked ? `Merge "${row.proposed_name}" into ${picked.name}` : `Merge "${row.proposed_name}" into…`
+      }
+      description={(picked) =>
+        picked
+          ? "Check this is the right one — the proposed entity and its evidence fold in here."
+          : `Pick an existing ${humanSourceType(row.entity_type).toLowerCase()} this is a duplicate of. No new entity is created.`
+      }
+      renderPreview={(picked, reset) => (
+        <MergePreview
+          subject={{ kind: "proposal", row }}
+          target={picked}
+          onBack={reset}
+          onMerge={(targetId) => {
+            reset();
+            onPick(targetId);
+          }}
+        />
+      )}
+    />
   );
 }
 

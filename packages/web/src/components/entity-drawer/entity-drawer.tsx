@@ -33,6 +33,7 @@ import {
   entityDisplayLabel,
   useEntityUi,
 } from "@/lib/entity-ui";
+import { formatRelativeTime } from "@/lib/time";
 import {
   ArrowLeftIcon,
   ArrowsLeftRightIcon,
@@ -74,7 +75,7 @@ import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { SectionCard, SectionLabel, formatRelative } from "./drawer-kit";
+import { SectionCard, SectionLabel } from "./drawer-kit";
 import { RelationshipsPanel } from "./relationships-panel";
 import { ScopePanel } from "./scope-panel";
 import { TimelineStrip } from "./timeline-strip";
@@ -243,7 +244,7 @@ function DrawerHeader({ entity, stackDepth, previousName, onBack, accent, onOpen
               ) : null}
               {lastSeen ? (
                 <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Last seen {formatRelative(lastSeen)}
+                  Last seen {formatRelativeTime(lastSeen)}
                 </span>
               ) : null}
               {isAdmin ? (

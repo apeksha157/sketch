@@ -14,6 +14,7 @@ import {
   containerClassificationOf,
   relatedOpenVerdicts,
 } from "@/components/graph-verdict-sheet";
+import { OrgRow } from "@/components/org-row";
 import { type GraphVerdict, api } from "@/lib/api";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -62,52 +63,55 @@ export function GraphVerdictsSection({ verdicts, allOpen }: { verdicts: GraphVer
           Agent proposals · {verdicts.length}
         </span>
       </div>
-      <div className="divide-y divide-border/60">
-        {verdicts.map((verdict) => (
-          <div key={verdict.id} className="flex w-full items-center transition-colors hover:bg-foreground/10">
-            <button
-              type="button"
-              data-testid={`graph-verdict-band-row-${verdict.id}`}
-              onClick={() => setOpenId(verdict.id)}
-              className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
-            >
-              <span className="shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
-                {GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[12.5px]">
-                <span className="font-medium">
-                  {verdict.subjectName ?? verdict.subjectEntityId ?? verdict.subjectContainerId}
+      <div>
+        {verdicts.map((verdict) => {
+          const target = verdict.targetEntityId
+            ? (verdict.targetName ?? verdict.targetEntityId)
+            : verdict.action === "remove_alias" && verdict.targetName
+              ? verdict.targetName
+              : containerClassificationOf(verdict);
+          return (
+            <OrgRow
+              key={verdict.id}
+              buttonTestId={`graph-verdict-band-row-${verdict.id}`}
+              onOpen={() => setOpenId(verdict.id)}
+              avatar={
+                <span className="shrink-0 font-mono text-[10px] uppercase text-muted-foreground">
+                  {GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action}
                 </span>
-                <span className="text-muted-foreground">
-                  {verdict.targetEntityId ? ` → ${verdict.targetName ?? verdict.targetEntityId}` : ""}
-                  {verdict.action === "remove_alias" && verdict.targetName ? ` → ${verdict.targetName}` : ""}
-                  {containerClassificationOf(verdict) ? ` → ${containerClassificationOf(verdict)}` : ""}
-                </span>
-              </span>
-              {relatedOpenVerdicts(verdict, allOpen ?? verdicts).length > 0 ? (
-                <span
-                  className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
-                  data-testid={`graph-verdict-related-chip-${verdict.id}`}
-                >
-                  ⛓ related
-                </span>
-              ) : null}
-              {verdict.status === "approved" ? (
-                <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wide text-muted-foreground">
-                  approved — apply pending
-                </span>
-              ) : null}
-            </button>
-            {verdict.status === "awaiting_human" ? (
-              <CompactAction
-                label="Dismiss"
-                className="shrink-0 pr-3"
-                disabled={dismiss.isPending}
-                onClick={() => dismiss.mutate(verdict.id)}
-              />
-            ) : null}
-          </div>
-        ))}
+              }
+              primary={verdict.subjectName ?? verdict.subjectEntityId ?? verdict.subjectContainerId}
+              inlineSuffix={target ? `→ ${target}` : undefined}
+              meta={
+                <>
+                  {relatedOpenVerdicts(verdict, allOpen ?? verdicts).length > 0 ? (
+                    <span
+                      className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
+                      data-testid={`graph-verdict-related-chip-${verdict.id}`}
+                    >
+                      ⛓ related
+                    </span>
+                  ) : null}
+                  {verdict.status === "approved" ? (
+                    <span className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-muted-foreground">
+                      approved — apply pending
+                    </span>
+                  ) : null}
+                </>
+              }
+              actions={
+                verdict.status === "awaiting_human" ? (
+                  <CompactAction
+                    label="Dismiss"
+                    className="shrink-0 pr-3"
+                    disabled={dismiss.isPending}
+                    onClick={() => dismiss.mutate(verdict.id)}
+                  />
+                ) : null
+              }
+            />
+          );
+        })}
       </div>
       <GraphVerdictSheet verdict={open} onClose={() => setOpenId(null)} />
     </section>

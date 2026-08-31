@@ -595,6 +595,10 @@ export const handlers = [
     return HttpResponse.json({ quotes: [] });
   }),
 
+  http.get("/api/entities/:id/timeline", () => {
+    return HttpResponse.json({ groups: [] });
+  }),
+
   http.get("/api/entity-review", () => {
     return HttpResponse.json({ rows: [], total: 0 });
   }),

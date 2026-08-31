@@ -370,7 +370,7 @@ function WireField({
       <div className="flex items-center gap-1.5">
         <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">{label}</span>
         {comingSoon ? (
-          <Badge variant="outline" className="text-[8px] uppercase tracking-wider text-muted-foreground/70">
+          <Badge variant="outline" className="text-[9px] uppercase tracking-wider text-muted-foreground/70">
             Soon
           </Badge>
         ) : null}

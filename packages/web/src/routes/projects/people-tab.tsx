@@ -17,7 +17,7 @@ import { AiBadge, OrgListHeader, OrgRow } from "@/components/org-row";
 import type { EntityListItem } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
+import { formatRelativeTime } from "@/lib/time";
 import { CaretDownIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Skeleton } from "@sketch/ui/components/skeleton";

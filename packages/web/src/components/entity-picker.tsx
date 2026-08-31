@@ -11,7 +11,7 @@ import { OrgRow } from "@/components/org-row";
 import { api } from "@/lib/api";
 import type { EntityListItem } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
+import { formatRelativeTime } from "@/lib/time";
 import { Input } from "@sketch/ui/components/input";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";

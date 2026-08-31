@@ -257,7 +257,7 @@ function OrgSearchResults({
   return (
     <div className="space-y-2" data-testid="org-search-results">
       {reviewBand}
-      <p className="text-[11.5px] text-muted-foreground">
+      <p className="text-[11px] text-muted-foreground">
         {total} match{total === 1 ? "" : "es"} across your whole org
         {total > entities.length ? ` — showing the ${entities.length} most active` : ""}
       </p>

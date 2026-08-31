@@ -20,6 +20,7 @@ import {
   useWhatsAppIdentityReview,
 } from "@/components/entity-review/whatsapp-identity-review";
 import { GraphVerdictsSection, graphVerdictBandType } from "@/components/graph-verdicts-section";
+import { OrgRow } from "@/components/org-row";
 import { ProjectSuggestionsSection } from "@/components/project-suggestions";
 import { useReviewMutations } from "@/components/review-actions";
 import type { EntityReviewQueueRow } from "@/lib/api";
@@ -134,19 +135,13 @@ export function ReviewRowCompact({
   const linkOnly = guardedProject && row.candidate_entity_id !== null;
   const sheetOnly = guardedProject && row.candidate_entity_id === null;
   return (
-    <div className="border-b border-border/60 last:border-b-0" data-testid={`org-review-row-${row.id}`}>
-      <div
-        className={cn(
-          "flex w-full items-center transition-colors hover:bg-foreground/10",
-          selectMode && !selectable && "opacity-45",
-        )}
-      >
-        <button
-          type="button"
-          disabled={selectMode && !selectable}
-          onClick={() => (selectMode ? onToggleSelect?.(row) : onOpen(row))}
-          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
-        >
+    <OrgRow
+      testId={`org-review-row-${row.id}`}
+      rowClassName={selectMode && !selectable ? "opacity-45" : undefined}
+      disabled={selectMode && !selectable}
+      onOpen={() => (selectMode ? onToggleSelect?.(row) : onOpen(row))}
+      avatar={
+        <>
           {selectMode ? (
             <input
               type="checkbox"
@@ -159,13 +154,17 @@ export function ReviewRowCompact({
             />
           ) : null}
           <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
-          <span className="shrink-0 truncate text-[12.5px] font-medium">{row.proposed_name}</span>
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">{suggestion}</span>
-          {evidence ? (
-            <span className="hidden shrink-0 text-[10.5px] text-muted-foreground/70 sm:inline">{evidence}</span>
-          ) : null}
-        </button>
-        {sheetOnly || selectMode ? null : (
+        </>
+      }
+      primary={row.proposed_name}
+      inlineSuffix={suggestion}
+      meta={
+        evidence ? (
+          <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline">{evidence}</span>
+        ) : null
+      }
+      actions={
+        sheetOnly || selectMode ? null : (
           <span className="flex shrink-0 items-center gap-0.5 pr-3">
             <CompactAction
               label={linkOnly ? "Link" : hasCandidate ? "Confirm" : "Add"}
@@ -180,12 +179,14 @@ export function ReviewRowCompact({
               </>
             )}
           </span>
-        )}
-      </div>
-      {mutations.errorCopy ? (
-        <p className="px-3 pb-1.5 text-[11px] text-destructive">{mutations.errorCopy.message}</p>
-      ) : null}
-    </div>
+        )
+      }
+      footer={
+        mutations.errorCopy ? (
+          <p className="px-3 pb-1.5 text-[11px] text-destructive">{mutations.errorCopy.message}</p>
+        ) : null
+      }
+    />
   );
 }
 
@@ -252,7 +253,7 @@ function PoolingSummary({
         <button
           type="button"
           onClick={() => setListOpen((v) => !v)}
-          className="min-w-0 truncate text-left text-[11.5px] text-muted-foreground hover:text-foreground"
+          className="min-w-0 truncate text-left text-[11px] text-muted-foreground hover:text-foreground"
           data-testid="review-band-pooling-toggle"
         >
           {listOpen ? "▾" : "▸"} {rows.length} new {rows.length === 1 ? "name" : "names"} pooling for the weekly pass ·
@@ -289,13 +290,13 @@ function PoolingSummary({
               data-testid={`review-band-pooling-row-${row.id}`}
             >
               <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
-              <span className="min-w-0 flex-1 truncate text-[12px]">{row.proposed_name}</span>
+              <span className="min-w-0 flex-1 truncate text-xs">{row.proposed_name}</span>
               {isExpiringSoon(row) ? (
                 <SourceTag className="tracking-wide" data-testid="review-band-expiring-chip">
                   expiring
                 </SourceTag>
               ) : null}
-              <span className="shrink-0 text-[10.5px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
             </div>
           ))}
         </div>
@@ -553,7 +554,7 @@ export function ReviewBandCapped({
           />
         ))}
         {realTotal > rows.length ? (
-          <p className="border-t border-amber-300/40 px-3 py-2 text-[10.5px] text-muted-foreground dark:border-amber-700/30">
+          <p className="border-t border-amber-300/40 px-3 py-2 text-[10px] text-muted-foreground dark:border-amber-700/30">
             Showing {rows.length} of {realTotal}. Use the org search above to narrow the rest.
           </p>
         ) : null}
@@ -563,7 +564,7 @@ export function ReviewBandCapped({
           className="flex flex-wrap items-center gap-2 border-t border-amber-300/50 px-3 py-2 dark:border-amber-700/40"
           data-testid="review-band-bulk-bar"
         >
-          <span className="text-[11.5px] text-muted-foreground">{selectedRows.length} selected</span>
+          <span className="text-[11px] text-muted-foreground">{selectedRows.length} selected</span>
           <span className="flex-1" />
           <Button
             size="sm"
