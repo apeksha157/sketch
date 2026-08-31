@@ -1739,6 +1739,52 @@ describe("web chat API", () => {
     });
   });
 
+  it("allows a valid builder turn to exceed the former 20-call budget", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-builder-budget",
+      conversationId: "builder-budget",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      for (let index = 0; index < 21; index += 1) {
+        await params.onProgressEvent({
+          kind: "tool_use",
+          toolName: "mcp__sketch__ManageScheduledTasks",
+          input: { action: "get", task_id: "task-builder-budget", cursor: index },
+        });
+      }
+      expect(params.abortController?.signal.aborted).toBe(false);
+      return makeAgentResult("Completed after the expanded tool budget.");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      buildMcpServers: vi.fn().mockResolvedValue({}),
+      scheduler: makeBuilderScheduler("task-builder-budget", admin.id),
+    });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/web-chat?conversationId=builder-budget", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Continue configuring this automation",
+        automationTaskId: "task-builder-budget",
+        clientSessionId: "builder-budget-session",
+        generation: 1,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const streamText = await res.text();
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(streamText).toContain("Completed after the expanded tool budget.");
+    expect(streamText).not.toContain("I paused this turn before it could continue.");
+    expect(webChatStreamChunks(streamText)).not.toContainEqual(expect.objectContaining({ type: "data-interruption" }));
+  });
+
   it("persists a resumable response when a builder turn returns no final message", async () => {
     const admin = await seedAdmin(db);
     await createScheduledTaskConversationRepository(db).upsert({
