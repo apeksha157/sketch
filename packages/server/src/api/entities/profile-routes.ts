@@ -25,6 +25,7 @@ import {
   declareRelationship,
   removeDeclaredRelationship,
 } from "../../entities/declare-relationship";
+import { snippetsInFile } from "../../entities/evidence-snippets";
 import { normalizeEntityMatchName } from "../../entities/name-keys";
 import {
   type EntityProfileFacts,
@@ -1426,6 +1427,31 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
     });
 
     return c.json({ success: true });
+  });
+
+  /**
+   * GET /api/entities/:id/snippets?fileId=…
+   * Every quote of the entity's name inside one file, read from the indexed
+   * chunks at request time. Backs the drawer timeline expansion: stored
+   * mention snippets are capped at extraction time, so drilling into a file
+   * re-reads the content instead of replaying the stored snippet.
+   */
+  routes.get("/:id/snippets", async (c) => {
+    const entityId = c.req.param("id");
+    const fileId = c.req.query("fileId");
+    if (!fileId) return c.json({ error: { code: "BAD_REQUEST", message: "fileId query param is required" } }, 400);
+    const viewer = getFileViewer(c);
+    const contentViewer = getContentViewer(c);
+    const entity = await repo.getEntity(entityId, viewer);
+    if (!entity) return c.json({ error: { code: "NOT_FOUND", message: "Entity not found" } }, 404);
+    let fileQuery = db.selectFrom("indexed_files").select(["id"]).where("id", "=", fileId);
+    if (!contentViewer.isAdmin) {
+      fileQuery = fileQuery.where(fileVisibilityPredicate(contentViewer));
+    }
+    const file = await fileQuery.executeTakeFirst();
+    if (!file) return c.json({ error: { code: "NOT_FOUND", message: "File not found" } }, 404);
+    const quotes = await snippetsInFile(db, fileId, entity.name);
+    return c.json({ quotes });
   });
 
   /**

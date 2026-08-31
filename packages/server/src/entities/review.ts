@@ -371,6 +371,57 @@ export function entityReviewRoutes(db: Kysely<DB>, deps: { logger: Logger }) {
     return c.json({ results });
   });
 
+  /**
+   * POST /dismiss-batch — bulk-drop birth proposals. Mirrors reject-batch
+   * (per-item CAS + auth + partial results) around dismissReview(): dismiss is
+   * the verb for rows with no candidate, so bulk queue triage of the "new — no
+   * suggested match" long tail doesn't fan out into N single requests.
+   */
+  app.post("/dismiss-batch", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as {
+      items?: Array<{ reviewId?: string; candidateGeneratedAt?: string }>;
+    };
+    if (!Array.isArray(body.items)) {
+      return c.json({ error: { code: "BAD_REQUEST", message: "items is required" } }, 400);
+    }
+    const repo = createEntityReviewRepo(db);
+    const results: Array<{ reviewId: string; ok: boolean; error?: { code: string; message: string } }> = [];
+    for (const item of body.items) {
+      const reviewId = item.reviewId ?? "";
+      if (!item.reviewId || !item.candidateGeneratedAt) {
+        results.push({
+          reviewId,
+          ok: false,
+          error: { code: "BAD_REQUEST", message: "reviewId and candidateGeneratedAt are required" },
+        });
+        continue;
+      }
+      const row = await repo.getById(item.reviewId);
+      if (!row) {
+        results.push({
+          reviewId: item.reviewId,
+          ok: false,
+          error: { code: "ROW_NOT_FOUND", message: "review row not found" },
+        });
+        continue;
+      }
+      const denied = await denyIfNotOwnerOrAdmin(c, repo, row);
+      if (denied) {
+        results.push({ reviewId: item.reviewId, ok: false, error: await readErrorResponse(denied) });
+        continue;
+      }
+      try {
+        await dismissReview({ db, userId: c.get("sub") }, item.reviewId, {
+          candidateGeneratedAt: item.candidateGeneratedAt,
+        });
+        results.push({ reviewId: item.reviewId, ok: true });
+      } catch (err) {
+        results.push({ reviewId: item.reviewId, ok: false, error: batchError(err) });
+      }
+    }
+    return c.json({ results });
+  });
+
   app.post("/:id/reclassify-type", async (c) => {
     const id = c.req.param("id");
     const body = (await c.req.json().catch(() => ({}))) as {

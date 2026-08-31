@@ -128,6 +128,48 @@ describe("review evidence snippets", () => {
     expect(body.quotes[1]).toContain("Shashank owns the follow-up");
   });
 
+  it("serves the same read-time quotes for a confirmed entity via /api/entities/:id/snippets", async () => {
+    const { fileId } = await seedReviewWithChunks("Shashank", [
+      "Notes from training. Shashank walked the team through the demo funnel numbers.",
+      "Next steps: Shashank owns the follow-up report for Thursday.",
+    ]);
+    const entityId = randomUUID();
+    const now = new Date().toISOString();
+    await db
+      .insertInto("entities")
+      .values({
+        id: entityId,
+        name: "Shashank",
+        source_type: "person",
+        subtype: "external",
+        aliases: null,
+        metadata: null,
+        source_ref_id: null,
+        status: "confirmed",
+        hotness: 0,
+        created_at: now,
+        updated_at: now,
+      })
+      .execute();
+
+    const res = await app.request(`/api/entities/${entityId}/snippets?fileId=${fileId}`, {
+      headers: { Cookie: adminCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { quotes: string[] };
+    expect(body.quotes).toHaveLength(2);
+    expect(body.quotes[0]).toContain("Shashank walked the team");
+
+    const missingParam = await app.request(`/api/entities/${entityId}/snippets`, {
+      headers: { Cookie: adminCookie },
+    });
+    expect(missingParam.status).toBe(400);
+    const unknownFile = await app.request(`/api/entities/${entityId}/snippets?fileId=${randomUUID()}`, {
+      headers: { Cookie: adminCookie },
+    });
+    expect(unknownFile.status).toBe(404);
+  });
+
   it("requires fileId and 404s for unknown review rows", async () => {
     const { reviewId, fileId } = await seedReviewWithChunks("Shashank", ["Shashank said hi."]);
     const missingParam = await app.request(`/api/entity-review/${reviewId}/snippets`, {

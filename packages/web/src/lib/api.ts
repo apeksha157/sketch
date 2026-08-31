@@ -726,6 +726,15 @@ export interface EntityReviewListResponse {
   total: number;
 }
 
+export interface EntityReviewBatchResponse {
+  results: Array<{
+    reviewId: string;
+    ok: boolean;
+    targetEntityId?: string;
+    error?: { code: string; message: string };
+  }>;
+}
+
 /** A product on the curated closed list (declared or human_confirmed). */
 export interface CuratedProduct {
   id: string;
@@ -3710,6 +3719,9 @@ export const api = {
         hiddenCount: number;
       }>(`/api/entities/${id}/mentions${qs ? `?${qs}` : ""}`);
     },
+    snippets(id: string, fileId: string) {
+      return request<{ quotes: string[] }>(`/api/entities/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
+    },
     create(data: { name: string; sourceType: string; subtype?: string; aliases?: string[] }) {
       return request<{ entity: EntityListItem }>("/api/entities", {
         method: "POST",
@@ -3937,6 +3949,24 @@ export const api = {
     },
     snippets(id: string, fileId: string) {
       return request<{ quotes: string[] }>(`/api/entity-review/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
+    },
+    confirmBatch(items: Array<{ reviewId: string; candidateGeneratedAt: string; mergeIntoEntityId?: string }>) {
+      return request<EntityReviewBatchResponse>("/api/entity-review/confirm-batch", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
+    },
+    rejectBatch(items: Array<{ reviewId: string; candidateGeneratedAt: string }>) {
+      return request<EntityReviewBatchResponse>("/api/entity-review/reject-batch", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
+    },
+    dismissBatch(items: Array<{ reviewId: string; candidateGeneratedAt: string }>) {
+      return request<EntityReviewBatchResponse>("/api/entity-review/dismiss-batch", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
     },
     confirm(id: string, body: { candidateGeneratedAt: string; mergeIntoEntityId?: string; nameOverride?: string }) {
       return request<EntityReviewConfirmResult>(`/api/entity-review/${id}/confirm`, {

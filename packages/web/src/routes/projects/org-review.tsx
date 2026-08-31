@@ -1,3 +1,5 @@
+import { CompactAction } from "@/components/compact-action";
+import { SourceTag } from "@/components/entity-drawer/drawer-kit";
 /**
  * The review surface for Your Org: each type tab's band, expanding in place
  * to the full type-scoped list (the standalone Review tab is gone — triage
@@ -34,7 +36,8 @@ import {
 } from "@sketch/ui/components/dialog";
 import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 /** Shared 300ms debounce for the org search inputs (band + tab lists). */
 export function useDebouncedSearch(delay = 300) {
@@ -83,35 +86,6 @@ export function useReviewRowSheets() {
   return { openRow, sheets, refresh };
 }
 
-function CompactAction({
-  label,
-  emphasis,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  emphasis?: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        "px-1.5 py-0.5 text-[11px] disabled:opacity-40",
-        emphasis ? "font-medium text-foreground hover:underline" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
 /**
  * One-line review row: name, muted suggested-match, quiet Confirm/Dismiss
  * text actions. Everything else (evidence detail, match reason, pick
@@ -124,11 +98,19 @@ export function ReviewRowCompact({
   onOpen,
   onResolved,
   detail,
+  selectMode,
+  selectable,
+  isSelected,
+  onToggleSelect,
 }: {
   row: EntityReviewQueueRow;
   onOpen: (row: EntityReviewQueueRow) => void;
   onResolved: () => void;
   detail?: boolean;
+  selectMode?: boolean;
+  selectable?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (row: EntityReviewQueueRow) => void;
 }) {
   const mutations = useReviewMutations(row, onResolved);
   const candidates = row.candidates ?? (row.candidate ? [row.candidate] : []);
@@ -153,12 +135,29 @@ export function ReviewRowCompact({
   const sheetOnly = guardedProject && row.candidate_entity_id === null;
   return (
     <div className="border-b border-border/60 last:border-b-0" data-testid={`org-review-row-${row.id}`}>
-      <div className="flex w-full items-center transition-colors hover:bg-foreground/10">
+      <div
+        className={cn(
+          "flex w-full items-center transition-colors hover:bg-foreground/10",
+          selectMode && !selectable && "opacity-45",
+        )}
+      >
         <button
           type="button"
-          onClick={() => onOpen(row)}
+          disabled={selectMode && !selectable}
+          onClick={() => (selectMode ? onToggleSelect?.(row) : onOpen(row))}
           className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
         >
+          {selectMode ? (
+            <input
+              type="checkbox"
+              readOnly
+              tabIndex={-1}
+              checked={isSelected ?? false}
+              disabled={!selectable}
+              className="pointer-events-none size-3.5 shrink-0 accent-foreground"
+              data-testid={`org-review-select-${row.id}`}
+            />
+          ) : null}
           <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
           <span className="shrink-0 truncate text-[12.5px] font-medium">{row.proposed_name}</span>
           <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">{suggestion}</span>
@@ -166,7 +165,7 @@ export function ReviewRowCompact({
             <span className="hidden shrink-0 text-[10.5px] text-muted-foreground/70 sm:inline">{evidence}</span>
           ) : null}
         </button>
-        {sheetOnly ? null : (
+        {sheetOnly || selectMode ? null : (
           <span className="flex shrink-0 items-center gap-0.5 pr-3">
             <CompactAction
               label={linkOnly ? "Link" : hasCandidate ? "Confirm" : "Add"}
@@ -188,6 +187,23 @@ export function ReviewRowCompact({
       ) : null}
     </div>
   );
+}
+
+/** A birth proposal — no suggested match at all; bulk verb is Dismiss. */
+function isBirthRow(row: EntityReviewQueueRow): boolean {
+  return row.candidate_entity_id === null && (row.candidates?.length ?? 0) === 0;
+}
+
+/** The origin shown in the bulk source filter — LLM origin first, structural seed as fallback. */
+function bulkSource(row: EntityReviewQueueRow): string {
+  return row.source ?? row.seed_source ?? "unknown";
+}
+
+/** Whether the row was last seen more than `days` ago (missing timestamps never match). */
+function olderThan(row: EntityReviewQueueRow, days: number): boolean {
+  const seen = row.last_seen_at ?? row.first_seen_at;
+  if (!seen) return false;
+  return Date.now() - new Date(seen).getTime() > days * 24 * 60 * 60 * 1000;
 }
 
 /** Label for the next natural weekly pass — the Monday after today. */
@@ -247,14 +263,13 @@ function PoolingSummary({
           started ? (
             <span className="shrink-0 text-[11px] text-muted-foreground">pass running — check back shortly</span>
           ) : (
-            <button
-              type="button"
+            <CompactAction
+              label="Run now"
+              emphasis
+              className="shrink-0"
               onClick={() => setConfirmOpen(true)}
-              className="shrink-0 px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:underline"
               data-testid="review-band-run-now"
-            >
-              Run now
-            </button>
+            />
           )
         ) : null}
       </div>
@@ -276,12 +291,9 @@ function PoolingSummary({
               <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
               <span className="min-w-0 flex-1 truncate text-[12px]">{row.proposed_name}</span>
               {isExpiringSoon(row) ? (
-                <span
-                  className="shrink-0 rounded-sm bg-muted px-1 py-px text-[9.5px] uppercase tracking-wide text-muted-foreground"
-                  data-testid="review-band-expiring-chip"
-                >
+                <SourceTag className="tracking-wide" data-testid="review-band-expiring-chip">
                   expiring
-                </span>
+                </SourceTag>
               ) : null}
               <span className="shrink-0 text-[10.5px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
             </div>
@@ -322,6 +334,12 @@ function PoolingSummary({
  * also get the graph-curation verdict lane ({@link GraphVerdictsSection}) —
  * open verdicts filtered to this tab's subject types. `null` when there is
  * nothing to review keeps the entity list flush to the top.
+ *
+ * Select mode (the header toggle) turns the list into bulk triage: client-side
+ * source/age/births filters over the fetched page, checkboxes on rows, and a
+ * footer that splits the selection by verb — Dismiss for births (drops the
+ * proposal), Confirm for rows with a suggested match. Weekly-pass project rows
+ * are never selectable: bulk-dismiss silently starves sub-project minting.
  */
 export function ReviewBandCapped({
   types,
@@ -335,6 +353,12 @@ export function ReviewBandCapped({
   const activeSearch = search.trim();
   const matchesSearch = (...names: (string | null | undefined)[]) =>
     activeSearch.length === 0 || names.some((n) => n?.toLowerCase().includes(activeSearch.toLowerCase()));
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [ageFilter, setAgeFilter] = useState("any");
+  const [birthsOnly, setBirthsOnly] = useState(false);
 
   const { data } = useQuery({
     queryKey: ["entity-review", "band-capped", types.join(","), activeSearch],
@@ -381,9 +405,61 @@ export function ReviewBandCapped({
   const poolingIds = new Set(poolingRows.map((row) => row.id));
   const actionableRows = rows.filter((row) => !poolingIds.has(row.id));
 
+  /**
+   * Weekly-pass project rows never join a bulk action (dismiss starves future
+   * sub-project minting; confirm can birth a bare entity), and rows without a
+   * CAS timestamp can't clear the server's per-item check.
+   */
+  const isSelectable = (row: EntityReviewQueueRow) =>
+    !isWeeklyPassProjectRow(row) && row.candidate_generated_at !== null;
+  const passesBulkFilters = (row: EntityReviewQueueRow) =>
+    (sourceFilter === "all" || bulkSource(row) === sourceFilter) &&
+    (ageFilter === "any" || olderThan(row, Number(ageFilter))) &&
+    (!birthsOnly || isBirthRow(row));
+  const visibleRows = selectMode ? actionableRows.filter(passesBulkFilters) : actionableRows;
+  const selectableVisible = visibleRows.filter(isSelectable);
+  const sourceOptions = [...new Set(actionableRows.map(bulkSource))].sort();
+  const selectedRows = actionableRows.filter((row) => selected.has(row.id) && isSelectable(row));
+  const selectedBirths = selectedRows.filter(isBirthRow);
+  const selectedMatches = selectedRows.filter((row) => !isBirthRow(row));
+
+  const toggleSelect = (row: EntityReviewQueueRow) => {
+    if (!isSelectable(row)) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.add(row.id);
+      return next;
+    });
+  };
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
   const wa = useWhatsAppIdentityReview(types);
   const waItems = wa.items.filter((item) => matchesSearch(item.phoneE164, item.lid));
   const [waSelected, setWaSelected] = useState<string | null>(null);
+
+  const bulk = useMutation({
+    mutationFn: ({ verb, items }: { verb: "dismiss" | "confirm"; items: EntityReviewQueueRow[] }) => {
+      const payload = items.map((row) => ({
+        reviewId: row.id,
+        candidateGeneratedAt: row.candidate_generated_at ?? "",
+      }));
+      return verb === "dismiss" ? api.entityReview.dismissBatch(payload) : api.entityReview.confirmBatch(payload);
+    },
+    onSuccess: (res, { verb }) => {
+      const okIds = new Set(res.results.filter((r) => r.ok).map((r) => r.reviewId));
+      const failed = res.results.length - okIds.size;
+      const label = verb === "dismiss" ? "Dismissed" : "Confirmed";
+      if (failed === 0) toast.success(`${label} ${okIds.size} ${okIds.size === 1 ? "row" : "rows"}.`);
+      else toast.warning(`${label} ${okIds.size}, ${failed} failed — failed rows stay selected in the queue.`);
+      setSelected((prev) => new Set([...prev].filter((id) => !okIds.has(id))));
+      refresh();
+    },
+    onError: () => toast.error("Bulk action failed. Try again."),
+  });
 
   if (rows.length === 0 && waItems.length === 0 && verdicts.length === 0 && graphVerdicts.length === 0) return null;
 
@@ -395,14 +471,78 @@ export function ReviewBandCapped({
         <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700 dark:text-amber-400">
           Needs your review · {headerCount}
         </span>
+        {actionableRows.length > 0 ? (
+          <CompactAction
+            label={selectMode ? "Done" : "Select"}
+            emphasis
+            className="shrink-0"
+            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            data-testid="review-band-select-toggle"
+          />
+        ) : null}
       </div>
+      {selectMode ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-300/40 px-3 py-1.5 dark:border-amber-700/30">
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className="h-6 rounded-md border border-border bg-background px-1.5 text-[11px]"
+            data-testid="review-band-source-filter"
+          >
+            <option value="all">All sources</option>
+            {sourceOptions.map((source) => (
+              <option key={source} value={source}>
+                {source}
+              </option>
+            ))}
+          </select>
+          <select
+            value={ageFilter}
+            onChange={(e) => setAgeFilter(e.target.value)}
+            className="h-6 rounded-md border border-border bg-background px-1.5 text-[11px]"
+            data-testid="review-band-age-filter"
+          >
+            <option value="any">Any age</option>
+            <option value="7">Older than 7 days</option>
+            <option value="30">Older than 30 days</option>
+          </select>
+          <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={birthsOnly}
+              onChange={(e) => setBirthsOnly(e.target.checked)}
+              className="size-3 accent-foreground"
+              data-testid="review-band-births-only"
+            />
+            Births only
+          </label>
+          <span className="flex-1" />
+          <CompactAction
+            label={`Select all ${selectableVisible.length}`}
+            onClick={() => setSelected(new Set(selectableVisible.map((row) => row.id)))}
+            data-testid="review-band-select-all"
+          />
+          <span className="text-muted-foreground/40">·</span>
+          <CompactAction label="Clear" onClick={() => setSelected(new Set())} />
+        </div>
+      ) : null}
       {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}
       {graphVerdicts.length > 0 ? (
         <GraphVerdictsSection verdicts={graphVerdicts} allOpen={graphVerdictsQuery.data?.verdicts ?? graphVerdicts} />
       ) : null}
       <div className="max-h-[60vh] overflow-y-auto">
-        {actionableRows.map((row) => (
-          <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} detail />
+        {visibleRows.map((row) => (
+          <ReviewRowCompact
+            key={row.id}
+            row={row}
+            onOpen={openRow}
+            onResolved={refresh}
+            detail
+            selectMode={selectMode}
+            selectable={isSelectable(row)}
+            isSelected={selected.has(row.id)}
+            onToggleSelect={toggleSelect}
+          />
         ))}
         {waItems.map((item) => (
           <WhatsAppIdentityRow
@@ -418,6 +558,34 @@ export function ReviewBandCapped({
           </p>
         ) : null}
       </div>
+      {selectMode ? (
+        <div
+          className="flex flex-wrap items-center gap-2 border-t border-amber-300/50 px-3 py-2 dark:border-amber-700/40"
+          data-testid="review-band-bulk-bar"
+        >
+          <span className="text-[11.5px] text-muted-foreground">{selectedRows.length} selected</span>
+          <span className="flex-1" />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 text-[11px]"
+            disabled={selectedBirths.length === 0 || bulk.isPending}
+            onClick={() => bulk.mutate({ verb: "dismiss", items: selectedBirths })}
+            data-testid="review-band-bulk-dismiss"
+          >
+            Dismiss {selectedBirths.length} {selectedBirths.length === 1 ? "birth" : "births"}
+          </Button>
+          <Button
+            size="sm"
+            className="h-6 text-[11px]"
+            disabled={selectedMatches.length === 0 || bulk.isPending}
+            onClick={() => bulk.mutate({ verb: "confirm", items: selectedMatches })}
+            data-testid="review-band-bulk-confirm"
+          >
+            Confirm {selectedMatches.length} {selectedMatches.length === 1 ? "match" : "matches"}
+          </Button>
+        </div>
+      ) : null}
       <PoolingSummary
         rows={poolingRows}
         isAdmin={isAdmin}
@@ -433,14 +601,5 @@ export function ReviewBandCapped({
         onResolve={wa.resolve}
       />
     </section>
-  );
-}
-
-/** Shared empty/teach frame for a review surface. */
-export function ReviewEmpty({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-xl border border-dashed border-border py-10 text-center text-[12.5px] text-muted-foreground">
-      {children}
-    </p>
   );
 }

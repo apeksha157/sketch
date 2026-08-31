@@ -15,6 +15,7 @@
  * endpoints: Save is a rename plus optional contact points, Merge folds the
  * placeholder into a person you already know, Dismiss retires it unnamed.
  */
+import { CompactAction } from "@/components/compact-action";
 import { MergePreviewPane } from "@/components/entity-merge-dialog";
 import { EntityPicker } from "@/components/entity-picker";
 import { type WhatsAppContextMessage, type WhatsAppIdentityReviewItem, api } from "@/lib/api";
@@ -30,7 +31,7 @@ import { cn } from "@sketch/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { EntryList, SectionLabel } from "../entity-drawer/drawer-kit";
+import { EntryList, SectionLabel, SourceTag } from "../entity-drawer/drawer-kit";
 
 export type { WhatsAppGroupSighting, WhatsAppIdentitySuggestion, WhatsAppIdentityReviewItem } from "@/lib/api";
 
@@ -215,27 +216,14 @@ export function WhatsAppIdentityRow({
           </div>
         </button>
         <span className="flex shrink-0 items-center gap-0.5 py-2 pr-3">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen();
-            }}
-            className="px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:underline"
-          >
-            {primaryLabel}
-          </button>
+          <CompactAction label={primaryLabel} emphasis onClick={onOpen} />
           <span className="text-muted-foreground/40">·</span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void runIdentityAction(() => api.entities.dismissWhatsAppIdentity(item.entityId), onResolve, "Dismissed");
-            }}
-            className="px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            Dismiss
-          </button>
+          <CompactAction
+            label="Dismiss"
+            onClick={() =>
+              void runIdentityAction(() => api.entities.dismissWhatsAppIdentity(item.entityId), onResolve, "Dismissed")
+            }
+          />
         </span>
       </div>
     </div>
@@ -452,10 +440,10 @@ function WhatsAppIdentityBody({
             {item.groups.map((group) => (
               <li key={group.groupJid} className="px-3 py-2.5">
                 <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+                  <SourceTag className="inline-flex items-center gap-1">
                     <WhatsappLogoIcon size={9} weight="fill" />
                     Group
-                  </span>
+                  </SourceTag>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.groupName}</span>
                   <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                     {group.messageCount} msgs · {formatRelativeTime(group.lastMessageAt)}

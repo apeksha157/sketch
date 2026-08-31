@@ -21,6 +21,7 @@
  * - `containerProps` — spread onto the outer cell (drag-and-drop handlers,
  *   indent padding).
  */
+import { SourceTag } from "@/components/entity-drawer/drawer-kit";
 import { CaretRightIcon, SparkleIcon } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import type { HTMLAttributes, ReactNode } from "react";
@@ -32,13 +33,10 @@ import type { HTMLAttributes, ReactNode } from "react";
  */
 export function AiBadge() {
   return (
-    <span
-      title="AI discovered"
-      className="inline-flex shrink-0 items-center gap-0.5 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
-    >
+    <SourceTag title="AI discovered" className="inline-flex items-center gap-0.5 tracking-wide">
       <SparkleIcon size={8} weight="fill" />
       AI
-    </span>
+    </SourceTag>
   );
 }
 

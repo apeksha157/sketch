@@ -591,6 +591,10 @@ export const handlers = [
     return HttpResponse.json({ mentions: [], total: 0, hiddenCount: 0 });
   }),
 
+  http.get("/api/entities/:id/snippets", () => {
+    return HttpResponse.json({ quotes: [] });
+  }),
+
   http.get("/api/entity-review", () => {
     return HttpResponse.json({ rows: [], total: 0 });
   }),

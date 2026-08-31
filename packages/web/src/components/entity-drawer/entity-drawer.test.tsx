@@ -219,16 +219,19 @@ describe("EntityDrawer", () => {
 
     await screen.findByRole("heading", { name: /Sarah Chen/ });
 
-    // Role remains in the header; contact points live in the identity strip.
+    // Role remains in the header; contact points read as quiet lines in the
+    // unified Identity card — every point, plus one aka line for aliases.
     expect(screen.getByText("Engineer")).toBeInTheDocument();
     expect(screen.getByText("sarah@stripe.com")).toBeInTheDocument();
+    expect(screen.getByText("sarah.chen@example.com")).toBeInTheDocument();
     expect(screen.queryByText("legacy-wrong@example.com")).not.toBeInTheDocument();
     expect(screen.getByText("+14155550123")).toBeInTheDocument();
-    expect(screen.getByText("+1")).toBeInTheDocument();
-    // Aliases moved from the header blob into the managed Aliases section.
     expect(screen.queryByText(/Also:/)).not.toBeInTheDocument();
-    expect(screen.getByText("Aliases")).toBeInTheDocument();
-    expect(screen.getByText("S. Chen")).toBeInTheDocument();
+    expect(screen.getByText(/aka S\. Chen/)).toBeInTheDocument();
+    // Read mode carries no edit chrome — CRUD sits behind the admin Edit toggle.
+    expect(screen.queryByText("Aliases")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Delete alias/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("identity-edit-toggle")).not.toBeInTheDocument();
 
     // Summary renders identity + activity sentences directly (no LLM, no shimmer).
     expect(screen.getByText("Summary")).toBeInTheDocument();
@@ -276,12 +279,37 @@ describe("EntityDrawer", () => {
 
     renderWithProviders(<DrawerHarness initialId="e-sarah" />);
     await screen.findByRole("heading", { name: /Sarah Chen/ });
-    await user.click(screen.getByRole("button", { name: /Identity/ }));
-    await user.click(await screen.findByRole("button", { name: "Add email" }));
+    await user.click(await screen.findByTestId("identity-edit-toggle"));
+    await user.click(screen.getByTestId("identity-add"));
+    await user.click(await screen.findByRole("menuitem", { name: "Email" }));
     await user.type(screen.getByPlaceholderText("name@example.com"), "shared@example.com");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(created).toEqual({ kind: "email", value: "shared@example.com", makePrimary: false }));
+  });
+
+  it("edit mode deletes an alias through the alias API so the pipeline can't re-mint it", async () => {
+    const user = userEvent.setup();
+    let deletedAlias: string | null = null;
+    server.use(
+      http.get("/api/auth/session", () =>
+        HttpResponse.json({ authenticated: true, email: "admin@test.com", role: "admin" }),
+      ),
+      http.delete("/api/entities/e-sarah/aliases", ({ request }) => {
+        deletedAlias = new URL(request.url).searchParams.get("value");
+        return HttpResponse.json({ removed: ["S. Chen"], aliases: [] });
+      }),
+    );
+
+    renderWithProviders(<DrawerHarness initialId="e-sarah" />);
+    await screen.findByRole("heading", { name: /Sarah Chen/ });
+    await user.click(await screen.findByTestId("identity-edit-toggle"));
+
+    const aliasRow = await screen.findByTestId("alias-row-S. Chen");
+    expect(screen.getByText("name")).toBeInTheDocument();
+    await user.click(within(aliasRow).getByLabelText("Delete alias S. Chen"));
+
+    await waitFor(() => expect(deletedAlias).toBe("S. Chen"));
   });
 
   it("switches to the Relationships tab and pins AMBIGUOUS to the top", async () => {

@@ -172,6 +172,10 @@ function ExpandedQuotes({
     quotes.push(snippet);
   }
   if (quotes.length === 0) {
+    // The primary snippet un-clamps on expand, so text WAS found and is
+    // already showing — claiming otherwise reads as a bug. Only say it
+    // when there is truly nothing to show.
+    if (primarySnippet) return null;
     return <p className="mt-1 text-[11px] italic text-muted-foreground/70">No quotable text found in this file.</p>;
   }
   return (
@@ -204,10 +208,12 @@ function TimelineRow({
   const load =
     loadQuotes ??
     (entityId
-      ? (target: EntityTimelineItem) =>
-          api.entities
-            .mentions(entityId, { fileId: target.fileId, limit: 25 })
-            .then((res) => res.mentions.map((mention) => mention.contextSnippet))
+      ? async (target: EntityTimelineItem) => {
+          const { quotes } = await api.entities.snippets(entityId, target.fileId);
+          if (quotes.length > 0) return quotes;
+          const res = await api.entities.mentions(entityId, { fileId: target.fileId, limit: 25 });
+          return res.mentions.map((mention) => mention.contextSnippet);
+        }
       : undefined);
   const scope = loadQuotes ? (quotesScope ?? "custom") : (entityId ?? "none");
   const expandable = !item.crmActivity && (snippet !== null || !!loadQuotes || (item.mentionCount > 1 && !!entityId));

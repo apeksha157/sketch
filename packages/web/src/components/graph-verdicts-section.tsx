@@ -1,3 +1,4 @@
+import { CompactAction } from "@/components/compact-action";
 /**
  * "Agent proposals" — open graph-curation verdicts (awaiting a decision, or
  * approved but not yet applied), rendered as a section of each type tab's
@@ -98,14 +99,12 @@ export function GraphVerdictsSection({ verdicts, allOpen }: { verdicts: GraphVer
               ) : null}
             </button>
             {verdict.status === "awaiting_human" ? (
-              <button
-                type="button"
+              <CompactAction
+                label="Dismiss"
+                className="shrink-0 pr-3"
                 disabled={dismiss.isPending}
                 onClick={() => dismiss.mutate(verdict.id)}
-                className="shrink-0 px-3 py-0.5 text-[11px] text-muted-foreground hover:text-foreground disabled:opacity-40"
-              >
-                Dismiss
-              </button>
+              />
             ) : null}
           </div>
         ))}
