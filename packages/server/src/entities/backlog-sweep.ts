@@ -11,11 +11,11 @@ import { buildLookupIndex, createEntityLookupFromIndex } from "./materialize-dep
 import { readPersonEmailFromMetadata } from "./materialize-json";
 import type { IndexEntityRow } from "./materialize-types";
 import { normalizeName } from "./name-keys";
-import { type EntityLookup, rank } from "./propose";
+import { type EntityLookup, type ProposeEntityType, rank } from "./propose";
 import { canUseEntityAsMatchTarget } from "./provenance";
 import { linkReviewRowToExistingEntity } from "./resolve";
 
-type QueueRow = Selectable<EntityReviewQueueTable>;
+export type BacklogSweepQueueRow = Selectable<EntityReviewQueueTable>;
 
 export type BacklogSweepRung = "ledger" | "exact" | "adjacency";
 
@@ -40,7 +40,7 @@ export interface BacklogSweepResult {
   multiMatch: number;
 }
 
-type PendingDecision =
+export type BacklogSweepPendingDecision =
   | { kind: "link"; reviewId: string; targetEntityId: string; rung: BacklogSweepRung }
   | {
       kind:
@@ -51,6 +51,7 @@ type PendingDecision =
         | "adjacencyVetoed"
         | "unmatched"
         | "multiMatch";
+      candidateIds?: string[];
     };
 
 interface LedgerState {
@@ -65,7 +66,7 @@ interface LedgerState {
  * pre-filtering), so every rung here sees exactly the candidates
  * proposeEntity's rungs would see against today's graph.
  */
-interface SweepContext {
+export interface BacklogSweepContext {
   db: Kysely<DB>;
   lookup: EntityLookup;
   isNameRejectedForEntity: (entityId: string, rejectionKey: string) => Promise<boolean>;
@@ -85,7 +86,7 @@ function emptyResult(scanned: number): BacklogSweepResult {
   };
 }
 
-function addDecision(result: BacklogSweepResult, decision: PendingDecision): void {
+function addDecision(result: BacklogSweepResult, decision: BacklogSweepPendingDecision): void {
   if (decision.kind === "link") {
     result.linked.push({
       reviewId: decision.reviewId,
@@ -97,11 +98,11 @@ function addDecision(result: BacklogSweepResult, decision: PendingDecision): voi
   result[decision.kind] += 1;
 }
 
-function isSingleTokenPerson(row: QueueRow): boolean {
+function isSingleTokenPerson(row: BacklogSweepQueueRow): boolean {
   return row.entity_type === "person" && normalizeName(row.proposed_name).split(" ").filter(Boolean).length === 1;
 }
 
-async function evidenceFileIds(db: Kysely<DB>, reviewId: string): Promise<string[]> {
+export async function backlogSweepEvidenceFileIds(db: Kysely<DB>, reviewId: string): Promise<string[]> {
   const rows = await db
     .selectFrom("entity_review_evidence")
     .select("indexed_file_id")
@@ -112,7 +113,7 @@ async function evidenceFileIds(db: Kysely<DB>, reviewId: string): Promise<string
   return [...new Set(rows.map((row) => row.indexed_file_id))];
 }
 
-async function loadLiveLedgerTarget(db: Kysely<DB>, row: QueueRow, entityId: string | null) {
+async function loadLiveLedgerTarget(db: Kysely<DB>, row: BacklogSweepQueueRow, entityId: string | null) {
   if (!entityId) return null;
   const target = await db
     .selectFrom("entities")
@@ -125,7 +126,11 @@ async function loadLiveLedgerTarget(db: Kysely<DB>, row: QueueRow, entityId: str
   return canUseEntityAsMatchTarget(target.source_type, target.provenance_tier) ? target : null;
 }
 
-async function loadLedgerState(db: Kysely<DB>, row: QueueRow, fileIds: readonly string[]): Promise<LedgerState> {
+async function loadLedgerState(
+  db: Kysely<DB>,
+  row: BacklogSweepQueueRow,
+  fileIds: readonly string[],
+): Promise<LedgerState> {
   const ledger = createResolutionDecisionRepository(db);
   const scopes = ["global", ...fileIds.map((fileId) => `file:${fileId}`)];
   const links: ResolutionDecision[] = [];
@@ -144,7 +149,7 @@ async function loadLedgerState(db: Kysely<DB>, row: QueueRow, fileIds: readonly 
   return { links, blockedTargetIds, dismissed };
 }
 
-function exactMatches(ctx: SweepContext, row: QueueRow): IndexEntityRow[] {
+function exactMatches(ctx: BacklogSweepContext, row: BacklogSweepQueueRow): IndexEntityRow[] {
   const byId = new Map<string, IndexEntityRow>();
   for (const entity of ctx.lookup.getByNormalizedName(row.normalized_name)) {
     if (entity.source_type === row.entity_type) byId.set(entity.id, entity);
@@ -162,17 +167,29 @@ function exactMatches(ctx: SweepContext, row: QueueRow): IndexEntityRow[] {
  * live person — so rivals like "Rahul Naidu" contest a bare "rahul" instead
  * of the lone exact hit winning by default.
  */
-async function adjacencyCandidateIds(
-  ctx: SweepContext,
-  row: QueueRow,
+function isProposeEntityType(value: string): value is ProposeEntityType {
+  return (
+    value === "person" ||
+    value === "company" ||
+    value === "product" ||
+    value === "project" ||
+    value === "team" ||
+    value === "deal" ||
+    value === "tool"
+  );
+}
+
+export async function buildBacklogSweepCandidateIds(
+  ctx: BacklogSweepContext,
+  row: BacklogSweepQueueRow,
   exact: readonly IndexEntityRow[],
   ledger: LedgerState,
   rejectionKey: string,
 ): Promise<string[]> {
-  if (row.entity_type !== "person") return [];
+  if (!isProposeEntityType(row.entity_type)) return exact.map((entity) => entity.id).sort();
   const byId = new Map<string, IndexEntityRow>();
   for (const entity of exact) byId.set(entity.id, entity);
-  for (const candidate of ctx.lookup.findNameDedupCandidates?.("person", row.proposed_name) ?? []) {
+  for (const candidate of ctx.lookup.findNameDedupCandidates?.(row.entity_type, row.proposed_name) ?? []) {
     byId.set(candidate.entity.id, candidate.entity);
   }
   if (isSingleTokenPerson(row)) {
@@ -191,7 +208,7 @@ async function adjacencyCandidateIds(
 
 async function hasEmailConflict(
   db: Kysely<DB>,
-  row: QueueRow,
+  row: BacklogSweepQueueRow,
   target: Pick<IndexEntityRow, "id" | "metadata">,
 ): Promise<boolean> {
   if (row.entity_type !== "person" || !row.proposed_email) return false;
@@ -251,31 +268,33 @@ async function decideAdjacencyForRow(
   return "abstain";
 }
 
-async function decideRow(ctx: SweepContext, row: QueueRow): Promise<PendingDecision> {
-  const fileIds = await evidenceFileIds(ctx.db, row.id);
+export async function decideBacklogSweepRow(
+  ctx: BacklogSweepContext,
+  row: BacklogSweepQueueRow,
+): Promise<BacklogSweepPendingDecision> {
+  const fileIds = await backlogSweepEvidenceFileIds(ctx.db, row.id);
   const ledger = await loadLedgerState(ctx.db, row, fileIds);
   const rejectionKey = normalizeName(row.proposed_name);
+  const matches = exactMatches(ctx, row);
+  const candidateIds = await buildBacklogSweepCandidateIds(ctx, row, matches, ledger, rejectionKey);
 
   for (const link of ledger.links) {
-    if (ledger.blockedTargetIds.has(link.target_entity_id ?? "")) return { kind: "blockedByDistinct" };
+    if (ledger.blockedTargetIds.has(link.target_entity_id ?? "")) return { kind: "blockedByDistinct", candidateIds };
     const target = await loadLiveLedgerTarget(ctx.db, row, link.target_entity_id);
     if (target) return { kind: "link", reviewId: row.id, targetEntityId: target.id, rung: "ledger" };
   }
-  if (ledger.dismissed) return { kind: "blockedByDistinct" };
-
-  const matches = exactMatches(ctx, row);
+  if (ledger.dismissed) return { kind: "blockedByDistinct", candidateIds };
   if (matches.length === 0 && row.entity_type !== "person") return { kind: "unmatched" };
 
   if (matches.length === 1) {
     const target = matches[0];
-    if (ledger.blockedTargetIds.has(target.id)) return { kind: "blockedByDistinct" };
-    if (await ctx.isNameRejectedForEntity(target.id, rejectionKey)) return { kind: "blockedByDistinct" };
+    if (ledger.blockedTargetIds.has(target.id)) return { kind: "blockedByDistinct", candidateIds };
+    if (await ctx.isNameRejectedForEntity(target.id, rejectionKey)) return { kind: "blockedByDistinct", candidateIds };
     if (await hasEmailConflict(ctx.db, row, target)) return { kind: "skippedEmailConflict" };
     if (!isSingleTokenPerson(row)) return { kind: "link", reviewId: row.id, targetEntityId: target.id, rung: "exact" };
   }
 
   if (row.entity_type === "person") {
-    const candidateIds = await adjacencyCandidateIds(ctx, row, matches, ledger, rejectionKey);
     if (candidateIds.length > 0) {
       const adjacency = await decideAdjacencyForRow(ctx.db, candidateIds, fileIds);
       if (typeof adjacency === "object") {
@@ -289,14 +308,34 @@ async function decideRow(ctx: SweepContext, row: QueueRow): Promise<PendingDecis
         if (winner && (await hasEmailConflict(ctx.db, row, winner))) return { kind: "skippedEmailConflict" };
         return { kind: "link", reviewId: row.id, targetEntityId: adjacency.targetEntityId, rung: "adjacency" };
       }
-      if (adjacency === "contested") return { kind: "adjacencyContested" };
-      if (adjacency === "vetoed") return { kind: "adjacencyVetoed" };
+      if (adjacency === "contested") return { kind: "adjacencyContested", candidateIds };
+      if (adjacency === "vetoed") return { kind: "adjacencyVetoed", candidateIds };
     }
   }
 
   if (matches.length === 0) return { kind: "unmatched" };
-  if (matches.length === 1 && isSingleTokenPerson(row)) return { kind: "skippedSingleTokenExact" };
-  return { kind: "multiMatch" };
+  if (matches.length === 1 && isSingleTokenPerson(row)) return { kind: "skippedSingleTokenExact", candidateIds };
+  return { kind: "multiMatch", candidateIds };
+}
+
+export async function createBacklogSweepContext(db: Kysely<DB>): Promise<BacklogSweepContext> {
+  const index = await buildLookupIndex(db);
+  const lookup = createEntityLookupFromIndex({ db, index, normalizationBackfillComplete: true });
+  const reviewRepo = createEntityReviewRepo(db);
+  const rejectedByEntityId = new Map<string, Set<string>>();
+  return {
+    db,
+    lookup,
+    isNameRejectedForEntity: async (entityId, rejectionKey) => {
+      let keys = rejectedByEntityId.get(entityId);
+      if (!keys) {
+        const rejected = await reviewRepo.listRejectedNamesForEntities([entityId]);
+        keys = new Set([...rejected].map((value) => value.slice(entityId.length + 1)));
+        rejectedByEntityId.set(entityId, keys);
+      }
+      return keys.has(rejectionKey);
+    },
+  };
 }
 
 export async function runBacklogSweep(
@@ -313,27 +352,11 @@ export async function runBacklogSweep(
   const result = emptyResult(rows.length);
   if (rows.length === 0) return result;
 
-  const index = await buildLookupIndex(deps.db);
-  const lookup = createEntityLookupFromIndex({ db: deps.db, index, normalizationBackfillComplete: true });
-  const reviewRepo = createEntityReviewRepo(deps.db);
-  const rejectedByEntityId = new Map<string, Set<string>>();
-  const ctx: SweepContext = {
-    db: deps.db,
-    lookup,
-    isNameRejectedForEntity: async (entityId, rejectionKey) => {
-      let keys = rejectedByEntityId.get(entityId);
-      if (!keys) {
-        const rejected = await reviewRepo.listRejectedNamesForEntities([entityId]);
-        keys = new Set([...rejected].map((value) => value.slice(entityId.length + 1)));
-        rejectedByEntityId.set(entityId, keys);
-      }
-      return keys.has(rejectionKey);
-    },
-  };
-  const decisions: PendingDecision[] = [];
+  const ctx = await createBacklogSweepContext(deps.db);
+  const decisions: BacklogSweepPendingDecision[] = [];
 
   for (let i = 0; i < rows.length; i += 1) {
-    decisions.push(await decideRow(ctx, rows[i]));
+    decisions.push(await decideBacklogSweepRow(ctx, rows[i]));
     if ((i + 1) % 50 === 0) await yieldToEventLoop();
   }
 
