@@ -34,6 +34,7 @@ import { createManagedLoginUrl } from "../../managed-url";
 import { createTokenBucketRateLimiter } from "../server/rate-limit";
 
 const MCP_SCOPE = "mcp:read";
+const MCP_SCOPE_DESCRIPTION = "Read Sketch MCP context and send messages to channels or groups you belong to.";
 const ACCESS_TOKEN_TTL_SECONDS = 3600;
 const PLATFORM_COOKIE = "sketch_platform_session";
 const registerLimiter = createTokenBucketRateLimiter({ capacity: 30, refillPerMinute: 30 });
@@ -177,7 +178,7 @@ function consentPage(params: {
   <body>
     <main>
       <h1>Connect ${clientName} to Sketch</h1>
-      <p>Allow this connector to read Sketch MCP context available to your verified email addresses.</p>
+      <p>Allow this connector to read Sketch MCP context available to your verified email addresses and send messages as you to channels or groups you belong to.</p>
       <form method="post" action="/oauth/authorize">
         ${hidden}
         <div class="actions">
@@ -210,6 +211,7 @@ export function mcpOAuthRoutes(params: {
       bearer_methods_supported: ["header"],
       resource_name: "Sketch MCP",
       scopes_supported: [MCP_SCOPE],
+      scope_descriptions: { [MCP_SCOPE]: MCP_SCOPE_DESCRIPTION },
     });
   });
 
@@ -226,6 +228,7 @@ export function mcpOAuthRoutes(params: {
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
       scopes_supported: [MCP_SCOPE],
+      scope_descriptions: { [MCP_SCOPE]: MCP_SCOPE_DESCRIPTION },
     });
   });
 

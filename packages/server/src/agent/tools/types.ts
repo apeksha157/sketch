@@ -222,4 +222,4 @@ export interface SketchMcpDeps {
   };
 }
 
-export type ToolResult = { content: { type: "text"; text: string }[] };
+export type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
