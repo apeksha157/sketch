@@ -715,6 +715,9 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
     workspaceDir: join(config.DATA_DIR, "external-mcp"),
     logger,
     baseUrl: config.BASE_URL,
+    getSlack: deps?.getSlack,
+    whatsappRuntime: deps?.whatsappRuntime,
+    sendTargetMessage: deps?.sendTargetMessage,
   });
   if (config.GRAPH_CURATION_TOOLS_ENABLED) {
     mountMcpServer({

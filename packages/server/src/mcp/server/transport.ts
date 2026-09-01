@@ -3,10 +3,13 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Context, Hono } from "hono";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
+import type { SendTargetMessage } from "../../agent/tools/types";
 import { createApiTokenRepository } from "../../db/repositories/api-tokens";
 import { createExternalMcpToolCallRepository } from "../../db/repositories/external-mcp-tool-calls";
 import type { createUserRepository } from "../../db/repositories/users";
 import type { DB } from "../../db/schema";
+import type { SlackBot } from "../../slack/bot";
+import type { WhatsAppRuntime } from "../../whatsapp/runtime";
 import { type McpAuthContext, createMcpAuthMiddleware } from "./auth";
 import { createPublicSketchMcpServer } from "./public-server";
 
@@ -60,6 +63,9 @@ export function mountPublicMcpServer(params: {
   workspaceDir: string;
   logger: Logger;
   baseUrl?: string;
+  getSlack?: () => SlackBot | null;
+  whatsappRuntime?: WhatsAppRuntime;
+  sendTargetMessage?: SendTargetMessage;
 }) {
   mountMcpServer({
     app: params.app,
@@ -76,6 +82,10 @@ export function mountPublicMcpServer(params: {
         tokenId: authContext.tokenId,
         workspaceDir: params.workspaceDir,
         auditRepo,
+        getSlack: params.getSlack,
+        whatsappRuntime: params.whatsappRuntime,
+        sendTargetMessage: params.sendTargetMessage,
+        logger: params.logger,
       }),
   });
 }

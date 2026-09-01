@@ -260,7 +260,7 @@ export interface SendMessageTargetAccess {
 }
 
 function toolError(message: string): ToolResult {
-  return { content: [{ type: "text" as const, text: `Error: ${message}` }] };
+  return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
 }
 
 const THREAD_TS_SCOPE_ERROR = "threadTs can only be used with a Slack channel target.";
