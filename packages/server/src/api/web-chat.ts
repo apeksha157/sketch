@@ -271,12 +271,16 @@ type WebChatUiChunk =
 type WebChatUiWriter = (chunk: WebChatUiChunk) => void;
 type WebChatUiCancelRegistrar = (handler: () => void) => void;
 
-function webChatUiStreamResponse(
+export function webChatUiStreamResponse(
   execute: (write: WebChatUiWriter, setOnCancel: WebChatUiCancelRegistrar) => Promise<void>,
 ): Response {
   const encoder = new TextEncoder();
   let cancelled = false;
   let onCancel: (() => void) | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  };
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const write = (chunk: WebChatUiChunk) => {
@@ -285,14 +289,26 @@ function webChatUiStreamResponse(
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
         } catch {
           cancelled = true;
+          stopHeartbeat();
         }
       };
+
+      heartbeatTimer = setInterval(() => {
+        if (cancelled) return;
+        try {
+          controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        } catch {
+          cancelled = true;
+          stopHeartbeat();
+        }
+      }, 15_000);
 
       try {
         await execute(write, (handler) => {
           onCancel = handler;
         });
       } finally {
+        stopHeartbeat();
         if (!cancelled) {
           try {
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -305,6 +321,7 @@ function webChatUiStreamResponse(
     },
     cancel() {
       cancelled = true;
+      stopHeartbeat();
       onCancel?.();
     },
   });
