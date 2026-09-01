@@ -1,7 +1,12 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SendTargetMessage } from "../../agent/tools/types";
-import { generateApiToken, getApiTokenDisplayPrefix, hashApiToken } from "../../auth/api-token";
+import {
+  generateOAuthAccessToken,
+  generateOAuthRefreshToken,
+  getApiTokenDisplayPrefix,
+  hashApiToken,
+} from "../../auth/api-token";
 import { createApiTokenRepository } from "../../db/repositories/api-tokens";
 import { createSettingsRepository } from "../../db/repositories/settings";
 import { createUserRepository } from "../../db/repositories/users";
@@ -21,7 +26,7 @@ afterEach(async () => {
   await db.destroy();
 });
 
-async function createPatForUser(
+async function createOAuthTokenForUser(
   input: {
     name?: string;
     email?: string;
@@ -38,18 +43,23 @@ async function createPatForUser(
     emailVerified: true,
     ...(input.whatsappNumber ? { whatsappNumber: input.whatsappNumber } : {}),
   });
-  const plaintext = generateApiToken();
-  await createApiTokenRepository(db).create({
+  const plaintext = generateOAuthAccessToken();
+  const refreshToken = generateOAuthRefreshToken();
+  await createApiTokenRepository(db).createOAuth({
     userId: user.id,
     name: "Claude Code",
     tokenHash: hashApiToken(plaintext),
     prefix: getApiTokenDisplayPrefix(plaintext),
+    clientId: "test-client",
+    scopes: ["mcp:read"],
+    refreshTokenHash: hashApiToken(refreshToken),
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
   });
   return { token: plaintext, user };
 }
 
-async function createPat() {
-  return (await createPatForUser()).token;
+async function createOAuthToken() {
+  return (await createOAuthTokenForUser()).token;
 }
 
 function mcpHeaders(token: string) {
@@ -119,7 +129,7 @@ describe("public MCP server", () => {
     expect(res.headers.get("www-authenticate")).toContain("/.well-known/oauth-protected-resource");
   });
 
-  it("rejects non-Sketch PAT bearer tokens", async () => {
+  it("rejects non-OAuth bearer tokens", async () => {
     const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
     const res = await app.request("/mcp", {
       method: "POST",
@@ -129,9 +139,28 @@ describe("public MCP server", () => {
     expect(res.status).toBe(401);
   });
 
-  it("lists the public sketch tools for a valid PAT", async () => {
-    const token = await createPat();
+  it("rejects a stored PAT and lists the public sketch tools for a valid OAuth token", async () => {
+    const { token, user } = await createOAuthTokenForUser();
+    const pat = "skp_stored_pat";
+    await db
+      .insertInto("api_tokens")
+      .values({
+        id: "stored-pat",
+        user_id: user.id,
+        name: "Legacy PAT",
+        token_hash: hashApiToken(pat),
+        prefix: getApiTokenDisplayPrefix(pat),
+        kind: "pat",
+      })
+      .execute();
     const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
+
+    const patRes = await app.request("/mcp", {
+      method: "POST",
+      headers: mcpHeaders(pat),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    expect(patRes.status).toBe(401);
 
     const res = await app.request("/mcp", {
       method: "POST",
@@ -152,7 +181,7 @@ describe("public MCP server", () => {
   });
 
   it("sends a Slack channel message when the token user is a verified member", async () => {
-    const { token } = await createPatForUser({ email: "mcp@example.com" });
+    const { token } = await createOAuthTokenForUser({ email: "mcp@example.com" });
     await seedSlackMembership("C-MCP", "U-MCP", "mcp@example.com");
     const sendTargetMessage = vi.fn<SendTargetMessage>(async () => ({ messageRef: "1700000000.000100" }));
     const slack = { listChannels: async () => [] } as unknown as SlackBot;
@@ -196,7 +225,7 @@ describe("public MCP server", () => {
   });
 
   it("fails closed when sending to a target without known membership", async () => {
-    const { token } = await createPatForUser({ email: "mcp@example.com" });
+    const { token } = await createOAuthTokenForUser({ email: "mcp@example.com" });
     const sendTargetMessage = vi.fn<SendTargetMessage>(async () => ({ messageRef: "1700000000.000100" }));
     const app = createApp(db, createTestConfig({}), { logger: createTestLogger(), sendTargetMessage });
 
@@ -220,7 +249,7 @@ describe("public MCP server", () => {
   });
 
   it("sends a WhatsApp group message using full token-user principals", async () => {
-    const { token, user } = await createPatForUser({
+    const { token, user } = await createOAuthTokenForUser({
       email: "mcp@example.com",
       whatsappNumber: "+15550001111",
     });
@@ -257,7 +286,7 @@ describe("public MCP server", () => {
   });
 
   it("rate limits by token even when the forwarded IP changes", async () => {
-    const token = await createPat();
+    const token = await createOAuthToken();
     const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
     const statuses: number[] = [];
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(0);

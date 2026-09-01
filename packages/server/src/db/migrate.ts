@@ -219,6 +219,7 @@ import * as m216 from "./migrations/216-entity-aliases";
 import * as m217 from "./migrations/217-machine-principal";
 import * as m218 from "./migrations/218-resolution-decisions";
 import * as m219 from "./migrations/219-mention-verdicts";
+import * as m220 from "./migrations/220-retire-pats";
 import type { DB } from "./schema";
 
 /**
@@ -447,6 +448,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "217-machine-principal": m217,
           "218-resolution-decisions": m218,
           "219-mention-verdicts": m219,
+          "220-retire-pats": m220,
         };
       },
     },

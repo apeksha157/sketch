@@ -1,13 +1,7 @@
 import { Hono } from "hono";
 import type { Kysely } from "kysely";
-import { z } from "zod";
-import { generateApiToken, getApiTokenDisplayPrefix, hashApiToken } from "../auth/api-token";
 import { createApiTokenRepository } from "../db/repositories/api-tokens";
 import type { DB } from "../db/schema";
-
-const createTokenSchema = z.object({
-  name: z.string().trim().min(1).max(120),
-});
 
 function toResponseToken(row: {
   id: string;
@@ -42,29 +36,6 @@ export function apiTokenRoutes(db: Kysely<DB>, opts: { baseUrl?: string }) {
     const rows = await apiTokens.listForUser(c.get("sub"));
     return c.json({
       tokens: rows.map(toResponseToken),
-      mcpUrl: getMcpUrl(c, opts.baseUrl),
-    });
-  });
-
-  routes.post("/", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const parsed = createTokenSchema.safeParse(body);
-    if (!parsed.success) {
-      const message = parsed.error.issues[0]?.message ?? "Invalid request";
-      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
-    }
-
-    const token = generateApiToken();
-    const row = await apiTokens.create({
-      userId: c.get("sub"),
-      name: parsed.data.name,
-      tokenHash: hashApiToken(token),
-      prefix: getApiTokenDisplayPrefix(token),
-    });
-
-    return c.json({
-      token: toResponseToken(row),
-      plaintext: token,
       mcpUrl: getMcpUrl(c, opts.baseUrl),
     });
   });
