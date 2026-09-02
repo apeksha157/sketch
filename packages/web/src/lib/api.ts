@@ -2509,12 +2509,6 @@ export const api = {
     list() {
       return request<{ tokens: ApiTokenRecord[]; mcpUrl: string | null }>("/api/api-tokens");
     },
-    create(data: { name: string }) {
-      return request<{ token: ApiTokenRecord; plaintext: string; mcpUrl: string | null }>("/api/api-tokens", {
-        method: "POST",
-        body: JSON.stringify(data),
-      });
-    },
     revoke(id: string) {
       return request<{ success: true }>(`/api/api-tokens/${id}`, { method: "DELETE" });
     },

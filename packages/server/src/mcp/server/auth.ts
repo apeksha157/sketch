@@ -1,6 +1,6 @@
 import type { Context, Next } from "hono";
 import type { Logger } from "pino";
-import { hashApiToken, isSketchOAuthAccessToken, isSketchPat } from "../../auth/api-token";
+import { hashApiToken, isSketchOAuthAccessToken } from "../../auth/api-token";
 import type { createApiTokenRepository } from "../../db/repositories/api-tokens";
 import type { createUserRepository } from "../../db/repositories/users";
 import { createTokenBucketRateLimiter } from "./rate-limit";
@@ -51,7 +51,7 @@ export function createMcpAuthMiddleware(params: {
     }
 
     const token = authHeader.slice("Bearer ".length).trim();
-    if (!isSketchPat(token) && !isSketchOAuthAccessToken(token)) {
+    if (!isSketchOAuthAccessToken(token)) {
       return unauthorized(c, "Invalid token", params.baseUrl);
     }
 
@@ -59,10 +59,7 @@ export function createMcpAuthMiddleware(params: {
     if (!row) {
       return unauthorized(c, "Invalid token", params.baseUrl);
     }
-    if (isSketchPat(token) && row.kind !== "pat") {
-      return unauthorized(c, "Invalid token", params.baseUrl);
-    }
-    if (isSketchOAuthAccessToken(token) && row.kind !== "oauth") {
+    if (row.kind !== "oauth") {
       return unauthorized(c, "Invalid token", params.baseUrl);
     }
 

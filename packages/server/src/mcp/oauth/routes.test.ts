@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { generateApiToken, getApiTokenDisplayPrefix, hashApiToken } from "../../auth/api-token";
+import { getApiTokenDisplayPrefix, hashApiToken } from "../../auth/api-token";
 import { signJwt } from "../../auth/jwt";
 import { hashPassword } from "../../auth/password";
-import { createApiTokenRepository } from "../../db/repositories/api-tokens";
 import { createSettingsRepository } from "../../db/repositories/settings";
 import { createUserRepository } from "../../db/repositories/users";
 import type { DB } from "../../db/schema";
@@ -341,23 +340,29 @@ describe("MCP OAuth routes", () => {
     expect(reuse.status).toBe(400);
   });
 
-  it("keeps PAT access working and rejects non-Sketch tokens with OAuth discovery", async () => {
+  it("rejects stored PATs and non-Sketch tokens with OAuth discovery", async () => {
     const { user } = await setupSession();
     const app = createTestApp();
-    const plaintext = generateApiToken();
-    await createApiTokenRepository(db).create({
-      userId: user.id,
-      name: "Claude Code",
-      tokenHash: hashApiToken(plaintext),
-      prefix: getApiTokenDisplayPrefix(plaintext),
-    });
+    const plaintext = "skp_legacyPatWithEnoughLengthForShape";
+    await db
+      .insertInto("api_tokens")
+      .values({
+        id: "stored-pat",
+        user_id: user.id,
+        name: "Claude Code",
+        token_hash: hashApiToken(plaintext),
+        prefix: getApiTokenDisplayPrefix(plaintext),
+        kind: "pat",
+      })
+      .execute();
 
     const patRes = await app.request("/mcp", {
       method: "POST",
       headers: mcpHeaders(plaintext),
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
-    expect(patRes.status).toBe(200);
+    expect(patRes.status).toBe(401);
+    expect(patRes.headers.get("www-authenticate")).toContain("/.well-known/oauth-protected-resource");
 
     const invalid = await app.request("/mcp", {
       method: "POST",

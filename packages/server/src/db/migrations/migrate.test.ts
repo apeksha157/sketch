@@ -30,7 +30,7 @@ import * as outlookCalendarProviderFileScopeMigration from "./164-outlook-calend
 import * as entityMergeGroupsMigration from "./186-entity-merge-groups";
 import * as entityNameProposalsMigration from "./187-entity-name-proposals";
 
-const EXPECTED_MIGRATION_COUNT = 215;
+const EXPECTED_MIGRATION_COUNT = 216;
 
 function createBlankDb(): Kysely<DB> {
   return new Kysely<DB>({
@@ -416,6 +416,10 @@ describe("runMigrations — full sequence", () => {
     expect(names[209]).toBe("214-container-verdicts");
     expect(names[210]).toBe("215-membership-suppressions");
     expect(names[211]).toBe("216-entity-aliases");
+    expect(names[212]).toBe("217-machine-principal");
+    expect(names[213]).toBe("218-resolution-decisions");
+    expect(names[214]).toBe("219-mention-verdicts");
+    expect(names[215]).toBe("220-retire-pats");
   });
 
   it("adds portable session fencing columns with safe legacy defaults", async () => {
@@ -1618,6 +1622,68 @@ describe("runMigrations — full sequence", () => {
     expect(columns.rows.map((row) => row.name)).toEqual(
       expect.arrayContaining(["kind", "client_id", "scopes", "refresh_token_hash"]),
     );
+  });
+
+  it("revokes live PATs while preserving external MCP audit rows", async () => {
+    const migrator = createMigrator(db);
+    await migrator.migrateTo("219-mention-verdicts");
+    await db.insertInto("users").values({ id: "pat-user", name: "PAT User" }).execute();
+    await db
+      .insertInto("api_tokens")
+      .values([
+        {
+          id: "live-pat",
+          user_id: "pat-user",
+          name: "Legacy PAT",
+          token_hash: "live-pat-hash",
+          prefix: "skp_live",
+          kind: "pat",
+          client_id: null,
+          scopes: null,
+          refresh_token_hash: null,
+          expires_at: null,
+        },
+        {
+          id: "live-oauth",
+          user_id: "pat-user",
+          name: "OAuth Client",
+          token_hash: "live-oauth-hash",
+          prefix: "sko_live",
+          kind: "oauth",
+          client_id: "client",
+          scopes: '["mcp:read"]',
+          refresh_token_hash: "refresh-hash",
+          expires_at: "2026-09-01T00:00:00.000Z",
+        },
+      ])
+      .execute();
+    await db
+      .insertInto("external_mcp_tool_calls")
+      .values({
+        id: "audit-row",
+        token_id: "live-pat",
+        user_id: "pat-user",
+        tool_name: "sketch_search",
+        success: 1,
+        duration_ms: 12,
+      })
+      .execute();
+
+    await runMigrations(db, { quiet: true });
+
+    const tokens = await db
+      .selectFrom("api_tokens")
+      .select(["id", "revoked_at"])
+      .where("id", "in", ["live-pat", "live-oauth"])
+      .orderBy("id", "asc")
+      .execute();
+    expect(tokens).toEqual([
+      { id: "live-oauth", revoked_at: null },
+      { id: "live-pat", revoked_at: expect.any(String) },
+    ]);
+    await expect(
+      db.selectFrom("external_mcp_tool_calls").selectAll().where("id", "=", "audit-row").executeTakeFirst(),
+    ).resolves.toMatchObject({ token_id: "live-pat", user_id: "pat-user" });
   });
 
   it("creates fact-aware relationship evidence columns and unique index", async () => {
