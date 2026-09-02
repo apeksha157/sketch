@@ -152,11 +152,14 @@ export function dedupeIntegrationCards(cards: WebChatIntegrationConnectionData[]
 }
 
 function connectionForApp(connections: IntegrationConnection[], app: IntegrationApp): IntegrationConnection | null {
-  return (
-    connections.find(
-      (connection) => connectionMatchesApp(connection, app) && isActiveIntegrationConnection(connection),
-    ) ?? null
+  const matching = connections.filter((connection) => connectionMatchesApp(connection, app));
+  const personal = matching.filter((connection) => connection.isOwnedByViewer !== false);
+  if (personal.length === 1) return personal[0] ?? null;
+  if (personal.length > 1) return null;
+  const shared = matching.filter(
+    (connection) => connection.isOwnedByViewer === false && isActiveIntegrationConnection(connection),
   );
+  return shared.length === 1 ? (shared[0] ?? null) : null;
 }
 
 function bestRenderableApps(apps: IntegrationApp[], query: string): IntegrationApp[] {
@@ -603,10 +606,17 @@ async function resolveComponentKeyCard(
     if (provider.type === "canvas" && isCanvasBlockedCliAppId(candidate)) continue;
     const exactConnections = connections.filter((connection) => connectionMatchesCandidateSlug(connection, candidate));
     if (exactConnections.length > 0) {
-      const healthyConnection = exactConnections.find(isActiveIntegrationConnection);
-      return healthyConnection
+      const personal = exactConnections.filter((connection) => connection.isOwnedByViewer !== false);
+      const firstPersonal = personal[0];
+      const firstExact = exactConnections[0];
+      if (!firstExact) continue;
+      if (firstPersonal && personal.some((connection) => !isActiveIntegrationConnection(connection))) {
+        return cardFromApp(appFromConnection(firstPersonal), null, undefined, provider.providerId);
+      }
+      const selected = connectionForApp(exactConnections, appFromConnection(firstExact));
+      return selected && isActiveIntegrationConnection(selected)
         ? null
-        : cardFromApp(appFromConnection(exactConnections[0]), null, undefined, provider.providerId);
+        : cardFromApp(appFromConnection(firstExact), null, undefined, provider.providerId);
     }
 
     const candidateKey = normalizeExactIntegrationSlug(candidate);

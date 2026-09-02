@@ -1058,6 +1058,7 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
         workspaceDir,
         loadIntegrationProvider: async () => integrationProvider,
         logger,
+        trustedCanvasAccountBindings: step.accountIdentityBindings ?? {},
       })
     : null;
 
@@ -1135,10 +1136,35 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
           workspaceDir,
           trustedLocalFileRoot: params.trustedLocalFileRoot,
         });
+        const canvasAccountId = Object.values(configuredProps).flatMap((value) => {
+          if (typeof value === "string" && value.startsWith("secrets:")) return [value];
+          if (value && typeof value === "object" && "authProvisionId" in value) {
+            const id = (value as { authProvisionId?: unknown }).authProvisionId;
+            return typeof id === "string" && id.startsWith("secrets:") ? [id] : [];
+          }
+          return [];
+        })[0];
+        const isMicrosoftAction = request.componentKey.toLowerCase().includes("microsoft");
+        const admittedBindings = Object.values(step.accountIdentityBindings ?? {});
+        const accountIdentityBinding = canvasAccountId
+          ? step.accountIdentityBindings?.[canvasAccountId]
+          : isMicrosoftAction && admittedBindings.length === 1
+            ? admittedBindings[0]
+            : undefined;
+        if (isMicrosoftAction && !accountIdentityBinding) {
+          throw new Error("This saved Microsoft automation needs one admitted account identity before execution");
+        }
+        if (
+          accountIdentityBinding?.providerId &&
+          accountIdentityBinding.providerId !== integrationProvider.providerId
+        ) {
+          throw new Error("Microsoft automation provider changed; rebind explicitly before execution");
+        }
         const actionRequest = {
           userEmail: creatorEmail,
           componentKey: request.componentKey,
           configuredProps,
+          accountIdentityBinding,
         };
         return integrationProvider.executeAction(actionRequest, controller.signal);
       },
@@ -1350,6 +1376,17 @@ interface AgentStepParams {
  */
 async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
   const { prompt, step, input, task, logger, workspaceDir, outputPlatform, recordWorkflowStep } = params;
+  if (step.accountIdentityBindings && Object.keys(step.accountIdentityBindings).length > 0) {
+    const provider = await params.loadIntegrationProvider();
+    if (!provider) throw new Error("Microsoft automation identity cannot be verified");
+    if (
+      Object.values(step.accountIdentityBindings).some(
+        (binding) => binding.providerId && binding.providerId !== provider.providerId,
+      )
+    ) {
+      throw new Error("Microsoft automation provider changed; rebind explicitly before running this agent step");
+    }
+  }
   const recorder = new AutomationAgentTraceRecorder(
     step.agentMode !== "light" ? "sketch" : params.config.AGENT_RUNTIME === "aisdk" ? "aisdk-light" : "sdk-light",
   );
@@ -1748,6 +1785,7 @@ async function executeSketchAgentStep(
       integrationMcpServers,
       getSlack: params.getSlack,
       loadIntegrationProvider: params.loadIntegrationProvider,
+      trustedCanvasAccountBindings: step.accountIdentityBindings ?? {},
       cliIntegrations: params.cliIntegrations,
       agentEnv: params.listAgentEnvForRuntime
         ? await params.listAgentEnvForRuntime({

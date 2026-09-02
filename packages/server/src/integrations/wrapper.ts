@@ -14,6 +14,7 @@ import { chmod, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { type Socket, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AccountIdentityBinding } from "@sketch/shared";
 import type { Logger } from "../logger";
 import type { IntegrationProvider } from "./types";
 
@@ -49,6 +50,7 @@ export async function startIntegrationAccess(params: {
   workspaceDir: string;
   loadIntegrationProvider: () => Promise<IntegrationProvider | null>;
   logger: Logger;
+  trustedCanvasAccountBindings?: Record<string, AccountIdentityBinding>;
 }): Promise<IntegrationAccessResult> {
   const { userEmail, logger, claudeConfigDir, workspaceDir } = params;
 
@@ -57,6 +59,19 @@ export async function startIntegrationAccess(params: {
 
   const spec = provider.getBrokerSpec({ userEmail, claudeConfigDir });
   if (!spec) return EMPTY_ACCESS;
+  const blocked = new Set(
+    (spec.credentialEnv.CANVAS_BLOCKED_APP_IDS ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  const credentialEnv = {
+    ...spec.credentialEnv,
+    ...(blocked.size ? { CANVAS_BLOCKED_APP_IDS: [...blocked].join(",") } : {}),
+    ...(params.trustedCanvasAccountBindings
+      ? { CANVAS_ACCOUNT_BINDINGS: JSON.stringify(params.trustedCanvasAccountBindings) }
+      : {}),
+  };
 
   const runtimeDir = await mkdtemp(join(tmpdir(), "sk-int-"));
   await chmod(runtimeDir, 0o700);
@@ -75,7 +90,7 @@ export async function startIntegrationAccess(params: {
       socketPath,
       token,
       cliPath: spec.cliPath,
-      credentialEnv: spec.credentialEnv,
+      credentialEnv,
       argvPolicy: spec.argvPolicy,
       workspaceDir,
       logger,

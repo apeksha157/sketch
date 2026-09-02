@@ -33,6 +33,12 @@ type CanvasAccountResponse = {
   dead?: boolean;
   status?: "active" | "error" | "expired";
   accessLevel?: "personal" | "organization";
+  memberUserIds?: string[];
+  accessRevision?: number;
+  capabilityStatus?: "ready" | "additional_permission_required" | "unknown";
+  capabilityMessages?: string[];
+  externalAccountId?: string;
+  externalTenantId?: string;
   ownerUserId?: string;
   ownerName?: string;
   isOwnedByViewer?: boolean;
@@ -167,6 +173,7 @@ export class CanvasProvider implements IntegrationProvider {
       body: JSON.stringify({
         componentKey: request.componentKey,
         configuredProps: request.configuredProps,
+        accountIdentityBinding: request.accountIdentityBinding,
       }),
       signal: combinedSignal,
     });
@@ -389,6 +396,12 @@ export class CanvasProvider implements IntegrationProvider {
           healthy: account.healthy,
           status: account.status ?? (account.dead ? "error" : account.healthy ? "active" : "error"),
           accessLevel: account.accessLevel,
+          memberUserIds: account.memberUserIds,
+          accessRevision: account.accessRevision,
+          capabilityStatus: account.capabilityStatus,
+          capabilityMessages: account.capabilityMessages,
+          externalAccountId: account.externalAccountId,
+          externalTenantId: account.externalTenantId,
           ownerUserId: account.ownerUserId,
           ownerName: account.ownerName,
           isOwnedByViewer: account.isOwnedByViewer,
@@ -414,6 +427,33 @@ export class CanvasProvider implements IntegrationProvider {
     if (!res.ok) {
       throw await this.parseError(res, `Canvas removeConnection failed: ${res.status} ${res.statusText}`);
     }
+  }
+
+  async listOrganizationMembers(userEmail: string, userName?: string) {
+    const res = await fetch(`${this.apiUrl}/api/org/members?limit=500`, {
+      headers: this.headers(userEmail, true, userName),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) throw await this.parseError(res, `Canvas member listing failed: ${res.status}`);
+    const body = (await res.json()) as { data?: Array<{ id: string; name?: string; email?: string }> };
+    return body.data ?? [];
+  }
+
+  async updateConnectionMembers(
+    userEmail: string,
+    connectionId: string,
+    expectedRevision: number,
+    memberUserIds: string[],
+    userName?: string,
+  ): Promise<IntegrationConnection | null> {
+    const res = await fetch(`${this.apiUrl}/api/canvas-accounts/${encodeURIComponent(connectionId)}/members`, {
+      method: "PUT",
+      headers: this.headers(userEmail, true, userName),
+      body: JSON.stringify({ expectedRevision, memberUserIds }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) throw await this.parseError(res, `Canvas selected-member update failed: ${res.status}`);
+    return null;
   }
 
   async updateConnectionAccess(

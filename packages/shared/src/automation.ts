@@ -66,6 +66,14 @@ export const automationActionCapabilitiesSchema = z
 
 export type AutomationActionCapabilities = z.infer<typeof automationActionCapabilitiesSchema>;
 
+export const accountIdentityBindingSchema = z.object({
+  canvasAccountId: z.string().default(""),
+  accountId: z.string().default(""),
+  tenantId: z.string().default(""),
+  providerId: z.string().optional(),
+});
+export type AccountIdentityBinding = z.infer<typeof accountIdentityBindingSchema>;
+
 export const workflowStepSchema = z.object({
   id: z.string().trim().min(1),
   type: z.enum(["trigger", "action", "agent"]),
@@ -77,6 +85,11 @@ export const workflowStepSchema = z.object({
   agentModel: z.string().optional(),
   agentMcpServers: z.array(z.string()).optional(),
   actionCapabilities: automationActionCapabilitiesSchema.optional(),
+  rebindAccountIds: z.array(z.string()).optional(),
+  accountIdentityBindings: z
+    .record(z.string(), accountIdentityBindingSchema)
+    .describe("Selected Canvas accounts keyed by canonical account ID; server-resolved as the automation creator.")
+    .optional(),
   timeout: z.number().int().positive().optional(),
   triggerConfig: workflowTriggerConfigSchema.optional(),
 });

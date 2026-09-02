@@ -97,23 +97,20 @@ function nativeCanvasConnectionForIntegration(
   const mapping = canvasConnectorMappingForType(definition.type);
   if (!mapping) return null;
 
-  return (
-    connections.find((connection) => {
-      if (
-        connection.status !== "active" ||
-        !isNativeCanvasAppConnection(connection) ||
-        canvasConnectorTypeFromAppId(connection.appId) !== definition.type
-      ) {
-        return false;
-      }
-      if (mapping.credentialScope === "organization") {
-        if (!isAdmin) return false;
-        if (connection.accessLevel === "organization") return connection.canUse !== false;
-        return connection.isOwnedByViewer !== false;
-      }
-      return isOwnedOrPersonalAppConnection(connection);
-    }) ?? null
-  );
+  const eligible = connections.filter((connection) => {
+    if (
+      connection.status !== "active" ||
+      !isNativeCanvasAppConnection(connection) ||
+      canvasConnectorTypeFromAppId(connection.appId) !== definition.type ||
+      connection.canUse === false
+    ) {
+      return false;
+    }
+    if (mapping.credentialScope === "organization") return isAdmin;
+    return true;
+  });
+  const personal = eligible.filter((connection) => connection.isOwnedByViewer !== false);
+  return personal.length === 1 ? (personal[0] ?? null) : null;
 }
 import {
   ArrowSquareOutIcon,

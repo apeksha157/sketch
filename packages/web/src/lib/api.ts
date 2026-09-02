@@ -3478,6 +3478,23 @@ export const api = {
         method: "DELETE",
       });
     },
+    async listConnectionMembers(providerId: string) {
+      const res = await request<{ members: Array<{ id: string; name?: string; email?: string }> }>(
+        `/api/mcp-servers/${providerId}/members`,
+      );
+      return res.members;
+    },
+    updateConnectionMembers(
+      providerId: string,
+      connectionId: string,
+      expectedRevision: number,
+      memberUserIds: string[],
+    ) {
+      return request<{ success: true; connection: IntegrationConnection | null }>(
+        `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/members`,
+        { method: "PUT", body: JSON.stringify({ expectedRevision, memberUserIds }) },
+      );
+    },
     updateConnectionAccess(providerId: string, connectionId: string, accessLevel: "personal" | "organization") {
       return request<{ success: true; connection: IntegrationConnection | null }>(
         `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/access`,

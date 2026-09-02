@@ -43,6 +43,12 @@ export interface IntegrationConnection {
   healthy?: boolean;
   status: "active" | "error" | "expired";
   accessLevel?: "personal" | "organization";
+  memberUserIds?: string[];
+  accessRevision?: number;
+  capabilityStatus?: "ready" | "additional_permission_required" | "unknown";
+  capabilityMessages?: string[];
+  externalAccountId?: string;
+  externalTenantId?: string;
   ownerUserId?: string;
   ownerName?: string;
   isOwnedByViewer?: boolean;

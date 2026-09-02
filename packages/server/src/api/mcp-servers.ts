@@ -100,6 +100,10 @@ const createConnectionIntentSchema = z
 const updateConnectionAccessSchema = z.object({
   accessLevel: z.enum(["personal", "organization"]),
 });
+const updateConnectionMembersSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  memberUserIds: z.array(z.string().min(1)).max(500),
+});
 
 const CONNECTION_INTENT_APP_LIMIT = 50;
 const CONNECTION_INTENT_MAX_PAGES = 20;
@@ -939,6 +943,51 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
       if (err instanceof CanvasProviderRequestError) {
         return c.json({ error: { code: err.code, message: err.message } }, err.status as 400 | 401 | 403 | 404 | 500);
       }
+      throw err;
+    }
+  });
+
+  routes.get("/:id/members", async (c) => {
+    const resolved = await resolveProvider(c, mcpServers);
+    if (!resolved.ok) return resolved.response;
+    const userResult = await resolveUserIdentity(c, users);
+    if (!userResult.ok) return userResult.response;
+    const provider = createProvider(resolved.row.type, resolved.row.api_url, resolved.row.credentials, resolved.row.id);
+    if (!provider.listOrganizationMembers)
+      return c.json({ error: { code: "BAD_REQUEST", message: "Provider does not support member listing" } }, 400);
+    const members = await provider.listOrganizationMembers(userResult.email, userResult.name);
+    return c.json({ members });
+  });
+
+  routes.put("/:id/connections/:connectionId/members", async (c) => {
+    const resolved = await resolveProvider(c, mcpServers);
+    if (!resolved.ok) return resolved.response;
+    const parsed = updateConnectionMembersSchema.safeParse(await c.req.json());
+    if (!parsed.success)
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request" } },
+        400,
+      );
+    const userResult = await resolveUserIdentity(c, users);
+    if (!userResult.ok) return userResult.response;
+    const provider = createProvider(resolved.row.type, resolved.row.api_url, resolved.row.credentials, resolved.row.id);
+    if (!provider.updateConnectionMembers)
+      return c.json(
+        { error: { code: "BAD_REQUEST", message: "Provider does not support selected-member access" } },
+        400,
+      );
+    try {
+      const connection = await provider.updateConnectionMembers(
+        userResult.email,
+        c.req.param("connectionId"),
+        parsed.data.expectedRevision,
+        parsed.data.memberUserIds,
+        userResult.name,
+      );
+      return c.json({ success: true, connection });
+    } catch (err) {
+      if (err instanceof CanvasProviderRequestError)
+        return c.json({ error: { code: err.code, message: err.message } }, err.status as JsonErrorStatus);
       throw err;
     }
   });

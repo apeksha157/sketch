@@ -186,13 +186,16 @@ describe("IntegrationsSection", () => {
     expect(screen.getByRole("button", { name: "Disconnect GitHub" })).toBeDisabled();
   });
 
-  it("saves org sharing only for manageable Canvas-owned accounts", async () => {
+  it("saves selected members only for manageable Canvas-owned accounts", async () => {
     const user = userEvent.setup();
     const onDisconnect = vi.fn();
     let requestBody: unknown;
 
     server.use(
-      http.patch("/api/mcp-servers/provider-1/connections/:connectionId/access", async ({ request }) => {
+      http.get("/api/mcp-servers/provider-1/members", () =>
+        HttpResponse.json({ members: [{ id: "member-1", name: "Alex" }] }),
+      ),
+      http.put("/api/mcp-servers/provider-1/connections/:connectionId/members", async ({ request }) => {
         requestBody = await request.json();
         return HttpResponse.json({ success: true, connection: null });
       }),
@@ -210,6 +213,8 @@ describe("IntegrationsSection", () => {
           isOwnedByViewer: true,
           canManageAccess: true,
           canDelete: true,
+          accessRevision: 2,
+          memberUserIds: [],
         },
       ],
       onDisconnect,
@@ -218,14 +223,14 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("Only you can use this connection.")).toBeInTheDocument();
+    expect(screen.getByText(/Choose organization members/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
-    await user.click(screen.getByRole("switch", { name: "Share with organization" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Alex" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(requestBody).toEqual({ accessLevel: "organization" });
+      expect(requestBody).toEqual({ expectedRevision: 2, memberUserIds: ["member-1"] });
       expect(onDisconnect).toHaveBeenCalled();
     });
   });
@@ -249,15 +254,11 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Owned by:/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Tara").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/Tara shared this account with you/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Owner: Tara")).not.toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "Tara shared this connection with the organization. You can use it, but only the owner can manage access or credentials.",
-      ),
+      within(dialog).getByText("Tara shared this account with you. Only the owner can manage access."),
     ).toBeInTheDocument();
-    expect(within(dialog).getByRole("switch", { name: "Share with organization" })).toBeDisabled();
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
@@ -283,8 +284,7 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for Aimfox" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Owned by:/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Tanush Yadav").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/Tanush Yadav shared this account with you/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/gmail\.com/)).not.toBeInTheDocument();
     expect(within(dialog).queryByText(/Aimfox Connection/)).not.toBeInTheDocument();
   });
@@ -314,13 +314,10 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Owned by:/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("teammate").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/teammate shared this account with you/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Owner: .")).not.toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "teammate shared this connection with the organization. You can use it, but only the owner can manage access or credentials.",
-      ),
+      within(dialog).getByText("teammate shared this account with you. Only the owner can manage access."),
     ).toBeInTheDocument();
   });
 });

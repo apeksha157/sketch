@@ -1,4 +1,4 @@
-import type { IntegrationApp, IntegrationConnection, PageInfo } from "@sketch/shared";
+import type { AccountIdentityBinding, IntegrationApp, IntegrationConnection, PageInfo } from "@sketch/shared";
 /**
  * Server-side integration types.
  * Shared types (IntegrationApp, IntegrationConnection, PageInfo) are imported
@@ -26,6 +26,7 @@ export interface IntegrationActionRequest {
   userEmail: string;
   componentKey: string;
   configuredProps: Record<string, unknown>;
+  accountIdentityBinding?: AccountIdentityBinding;
 }
 
 export interface IntegrationProvider {
@@ -43,6 +44,17 @@ export interface IntegrationProvider {
   ): Promise<{ redirectUrl: string }>;
   listConnections(userEmail: string, userName?: string): Promise<IntegrationConnection[]>;
   removeConnection(userEmail: string, connectionId: string, userName?: string): Promise<void>;
+  listOrganizationMembers?(
+    userEmail: string,
+    userName?: string,
+  ): Promise<Array<{ id: string; name?: string; email?: string }>>;
+  updateConnectionMembers?(
+    userEmail: string,
+    connectionId: string,
+    expectedRevision: number,
+    memberUserIds: string[],
+    userName?: string,
+  ): Promise<IntegrationConnection | null>;
   updateConnectionAccess?(
     userEmail: string,
     connectionId: string,

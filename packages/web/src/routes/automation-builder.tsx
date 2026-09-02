@@ -1593,6 +1593,39 @@ export function AutomationBuilderPage() {
         readOnly={builderReadOnly}
         onClose={() => setSelectedStepId(null)}
         onTest={(stepId) => testMutation.mutate(stepId)}
+        onSelectAccount={(stepId, canvasAccountId) =>
+          saveDraftPatch(
+            (current) => ({
+              ...current,
+              steps: current.steps.map((candidate) =>
+                candidate.id === stepId
+                  ? {
+                      ...candidate,
+                      accountIdentityBindings: {
+                        ...candidate.accountIdentityBindings,
+                        [canvasAccountId]: { canvasAccountId, accountId: "", tenantId: "" },
+                      },
+                      rebindAccountIds: [canvasAccountId],
+                    }
+                  : candidate,
+              ),
+            }),
+            { message: "Account saved" },
+          )
+        }
+        onRebindAccounts={(stepId) =>
+          saveDraftPatch(
+            (current) => ({
+              ...current,
+              steps: current.steps.map((candidate) =>
+                candidate.id === stepId
+                  ? { ...candidate, rebindAccountIds: Object.keys(candidate.accountIdentityBindings ?? {}) }
+                  : candidate,
+              ),
+            }),
+            { message: "Accounts rebound" },
+          )
+        }
         testingStepId={testingStepId}
         onUpdateAgentPrompt={updateAgentPrompt}
         savingPromptStepId={savingPromptStepId}
@@ -4581,6 +4614,8 @@ function NodeDrawer({
   readOnly,
   onClose,
   onTest,
+  onRebindAccounts,
+  onSelectAccount,
   testingStepId,
   onUpdateAgentPrompt,
   savingPromptStepId,
@@ -4595,11 +4630,34 @@ function NodeDrawer({
   readOnly: boolean;
   onClose: () => void;
   onTest: (stepId: string) => void;
+  onRebindAccounts: (stepId: string) => void;
+  onSelectAccount: (stepId: string, accountId: string) => void;
   testingStepId: string | null;
   onUpdateAgentPrompt: (stepId: string, content: string) => void;
   savingPromptStepId: string | null;
 }) {
   const [tab, setTab] = useState<"input" | "reasoning" | "output">("input");
+
+  const [choosingAccount, setChoosingAccount] = useState(false);
+  const accountsQuery = useQuery({
+    queryKey: ["automation-microsoft-accounts"],
+    enabled: choosingAccount,
+    queryFn: async () => {
+      const servers = await api.mcpServers.list();
+      const connections = await Promise.all(
+        servers.filter((server) => server.type === "canvas").map((server) => api.mcpServers.listConnections(server.id)),
+      );
+      return connections
+        .flat()
+        .filter(
+          (account) =>
+            account.canUse !== false &&
+            account.externalAccountId &&
+            account.externalTenantId &&
+            (account.app?.nameSlug ?? account.appId).startsWith("microsoft-"),
+        );
+    },
+  });
 
   if (!step) return null;
   const content = draft.stepContent[step.id];
@@ -4633,6 +4691,38 @@ function NodeDrawer({
           </Button>
         </div>
         <NodeRunSummary run={run} output={output} status={status} executionActivity={executionActivity} />
+        {step.type !== "trigger" && !readOnly ? (
+          <div className="mt-3">
+            <Button size="sm" variant="secondary" onClick={() => setChoosingAccount(true)}>
+              Choose Microsoft account
+            </Button>
+            {choosingAccount ? (
+              <select
+                aria-label="Microsoft account"
+                className="mt-2 w-full rounded border border-border bg-background p-2"
+                value=""
+                disabled={accountsQuery.isPending}
+                onChange={(event) => {
+                  if (event.target.value) onSelectAccount(step.id, event.target.value);
+                  setChoosingAccount(false);
+                }}
+              >
+                <option value="">{accountsQuery.isPending ? "Loading accounts…" : "Select an account"}</option>
+                {accountsQuery.data?.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.appName} — {account.accountName ?? account.id}
+                    {account.isOwnedByViewer === false ? " (shared)" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {choosingAccount && accountsQuery.isError ? <p role="alert">Could not load accounts. Try again.</p> : null}
+            {choosingAccount && accountsQuery.isSuccess && accountsQuery.data.length === 0 ? (
+              <p>No Microsoft accounts available. Connect one in Integrations.</p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="mt-4 flex items-center justify-between border-t border-border/80 pt-3">
           <div role="tablist" aria-label="Node details" className="flex gap-5">
             <TabButton active={tab === "input"} onClick={() => setTab("input")}>
@@ -4647,6 +4737,11 @@ function NodeDrawer({
               Output
             </TabButton>
           </div>
+          {Object.keys(step.accountIdentityBindings ?? {}).length > 0 ? (
+            <Button size="sm" variant="secondary" disabled={readOnly} onClick={() => onRebindAccounts(step.id)}>
+              Rebind accounts
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="secondary"

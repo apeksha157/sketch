@@ -156,7 +156,7 @@ function ConnectionRow({
   const ownerDisplayName = getOwnerDisplayName(connection);
   const connectedAt = connection.connectedAt ?? connection.createdAt;
   const isOrgShared = connection.accessLevel === "organization";
-  const isSharedByAnotherUser = isOrgShared && connection.isOwnedByViewer === false;
+  const isSharedByAnotherUser = connection.isOwnedByViewer === false;
   const canDelete = connection.canDelete !== false && connection.isOwnedByViewer !== false;
   const metadata = [
     isSharedByAnotherUser ? `Owned by ${ownerDisplayName}` : accountLabel,
@@ -187,12 +187,12 @@ function ConnectionRow({
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[15px] font-semibold">{connection.appName}</span>
-          {isOrgShared && (
+          {(isOrgShared || isSharedByAnotherUser || (connection.memberUserIds?.length ?? 0) > 0) && (
             <Badge
               variant="outline"
               className="h-5 shrink-0 rounded-[4px] border-[#5A4F00] bg-brand-accent/15 px-2 py-0 text-[11px] font-semibold text-brand-accent"
             >
-              Org shared
+              {isOrgShared ? "Org shared" : isSharedByAnotherUser ? "Shared with you" : "Selected members"}
             </Badge>
           )}
         </div>
@@ -206,6 +206,11 @@ function ConnectionRow({
             </Fragment>
           ))}
         </span>
+        {connection.capabilityMessages?.map((message) => (
+          <span key={message} className="mt-1 text-xs text-amber-600">
+            {message}
+          </span>
+        ))}
       </div>
 
       <div className="ml-auto grid shrink-0 grid-cols-[5rem_1.75rem_1.75rem] items-center gap-2">
@@ -268,7 +273,6 @@ function ConnectionRow({
 function AccessSettingsDialog({
   connection,
   providerId,
-  orgName,
   onOpenChange,
   onSaved,
 }: {
@@ -278,41 +282,41 @@ function AccessSettingsDialog({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
-  const [shareWithOrg, setShareWithOrg] = useState(false);
+  const [members, setMembers] = useState<Array<{ id: string; name?: string; email?: string }>>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    setShareWithOrg(connection?.accessLevel === "organization");
-  }, [connection]);
+    setSelected(connection?.memberUserIds ?? []);
+    if (connection?.canManageAccess) {
+      void api.mcpServers
+        .listConnectionMembers(providerId)
+        .then(setMembers)
+        .catch((error) => toast.error(error instanceof Error ? error.message : "Failed to load members"));
+    }
+  }, [connection, providerId]);
 
-  if (!connection) {
-    return <Dialog open={false} onOpenChange={onOpenChange} />;
-  }
-
-  const canManageAccess = connection.canManageAccess === true;
-  const desiredAccess = shareWithOrg ? "organization" : "personal";
-  const hasChanged = desiredAccess !== (connection.accessLevel ?? "personal");
-  const ownerDisplayName = getOwnerDisplayName(connection);
-  const isOrgShared = connection.accessLevel === "organization";
-  const isSharedByAnotherUser = isOrgShared && connection.isOwnedByViewer === false;
-  const accountLabel = isSharedByAnotherUser ? null : getAccountDisplayName(connection);
-  const accessCopy =
-    connection.isOwnedByViewer === false
-      ? `${ownerDisplayName} shared this connection with the organization. You can use it, but only the owner can manage access or credentials.`
-      : shareWithOrg
-        ? `Everyone in ${orgName ?? "the organization"} can select and run this connection.`
-        : "Only you can use this connection.";
-
+  if (!connection) return <Dialog open={false} onOpenChange={onOpenChange} />;
+  const canManage = connection.canManageAccess === true;
+  const visible = members.filter((member) => {
+    const query = search.trim().toLowerCase();
+    return (
+      member.id !== connection.ownerUserId &&
+      (!query || member.name?.toLowerCase().includes(query) || member.email?.toLowerCase().includes(query))
+    );
+  });
+  const changed = JSON.stringify([...selected].sort()) !== JSON.stringify([...(connection.memberUserIds ?? [])].sort());
   const save = async () => {
-    if (!canManageAccess || !hasChanged) return;
+    if (!canManage || !changed) return;
     setSaving(true);
     try {
-      await api.mcpServers.updateConnectionAccess(providerId, connection.id, desiredAccess);
-      toast.success("Connection access updated");
+      await api.mcpServers.updateConnectionMembers(providerId, connection.id, connection.accessRevision ?? 0, selected);
+      toast.success("Selected members updated");
       onSaved();
       onOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update connection access");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update selected members");
     } finally {
       setSaving(false);
     }
@@ -322,47 +326,49 @@ function AccessSettingsDialog({
     <Dialog open={!!connection} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <div className="flex items-start gap-3 pr-8">
-            <ConnectionIcon connection={connection} size="lg" />
-            <div className="min-w-0">
-              <DialogTitle className="truncate">{connection.appName}</DialogTitle>
-              <DialogDescription className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                {accountLabel && <span className="max-w-[18rem] truncate">{accountLabel}</span>}
-                {isOrgShared && (
-                  <>
-                    {accountLabel && <span aria-hidden="true">·</span>}
-                    <span>
-                      Owned by: <span className="font-medium text-foreground/80">{ownerDisplayName}</span>
-                    </span>
-                  </>
-                )}
-              </DialogDescription>
-            </div>
-          </div>
+          <DialogTitle>{connection.appName}</DialogTitle>
+          <DialogDescription>
+            {connection.isOwnedByViewer === false
+              ? `${getOwnerDisplayName(connection)} shared this account with you. Only the owner can manage access.`
+              : "Choose organization members who may run actions with this account. Empty is private."}
+          </DialogDescription>
         </DialogHeader>
-
-        <div className="rounded-lg border border-border p-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-sm font-medium">Share with organization</p>
-              <p className="mt-1 text-sm text-muted-foreground">{accessCopy}</p>
-            </div>
-            <Switch
-              aria-label="Share with organization"
-              checked={shareWithOrg}
-              onCheckedChange={setShareWithOrg}
-              disabled={!canManageAccess || saving}
+        {canManage ? (
+          <div className="space-y-3">
+            <input
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search members"
             />
+            <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-border p-3">
+              {visible.map((member) => (
+                <label key={member.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(member.id)}
+                    onChange={(event) =>
+                      setSelected((current) =>
+                        event.target.checked
+                          ? [...new Set([...current, member.id])]
+                          : current.filter((id) => id !== member.id),
+                      )
+                    }
+                  />
+                  <span>{member.name || member.email || member.id}</span>
+                </label>
+              ))}
+              {visible.length === 0 && <p className="text-sm text-muted-foreground">No members found.</p>}
+            </div>
+            <p className="text-xs text-muted-foreground">{selected.length} selected</p>
           </div>
-        </div>
-
+        ) : null}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={!canManageAccess || !hasChanged || saving}>
-            {saving ? <SpinnerGapIcon size={14} className="animate-spin" /> : null}
-            Save
+          <Button onClick={save} disabled={!canManage || !changed || saving}>
+            {saving ? <SpinnerGapIcon size={14} className="animate-spin" /> : null} Save
           </Button>
         </DialogFooter>
       </DialogContent>

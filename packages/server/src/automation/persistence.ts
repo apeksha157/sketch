@@ -24,6 +24,7 @@ import {
 import { createWebhookDeliveryRepository } from "../db/repositories/webhook-deliveries";
 import { createWebhookEndpointRepository } from "../db/repositories/webhook-endpoints";
 import type { DB } from "../db/schema";
+import type { IntegrationProvider } from "../integrations/types";
 import { normalizeScheduleTriggerSteps } from "../scheduler/trigger-metadata";
 import {
   buildAutomationDefinition,
@@ -514,6 +515,85 @@ export async function deleteAutomation(params: {
   return databaseResult;
 }
 
+async function admitAccountBindings(params: {
+  db: Kysely<DB>;
+  request: AutomationBuilderSaveRequest;
+  createdBy: string | null;
+  current?: AutomationDefinition;
+  loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+}): Promise<AutomationBuilderSaveRequest> {
+  const requestWithPreservedBindings: AutomationBuilderSaveRequest = {
+    ...params.request,
+    steps: params.request.steps.map((step) => {
+      if (step.accountIdentityBindings !== undefined || !params.current) return step;
+      const previous = params.current.steps.find((candidate) => candidate.id === step.id);
+      return previous?.accountIdentityBindings
+        ? { ...step, accountIdentityBindings: previous.accountIdentityBindings }
+        : step;
+    }),
+  };
+  const requestedIds = new Set(
+    requestWithPreservedBindings.steps.flatMap((step) => Object.keys(step.accountIdentityBindings ?? {})),
+  );
+  if (requestedIds.size === 0) return requestWithPreservedBindings;
+  if (!params.loadIntegrationProvider) throw new Error("Integration provider is required to admit account bindings");
+  const provider = await params.loadIntegrationProvider();
+  if (!provider) throw new Error("Automation creator integration identity is unavailable");
+  const needsResolution = requestWithPreservedBindings.steps.some((step) => {
+    const previous = params.current?.steps.find((candidate) => candidate.id === step.id)?.accountIdentityBindings ?? {};
+    const rebind = new Set(step.rebindAccountIds ?? []);
+    return Object.keys(step.accountIdentityBindings ?? {}).some((id) => !previous[id] || rebind.has(id));
+  });
+  let connections: Awaited<ReturnType<IntegrationProvider["listConnections"]>> = [];
+  if (needsResolution) {
+    if (!params.createdBy) throw new Error("Automation creator is required to admit account bindings");
+    const user = await params.db
+      .selectFrom("users")
+      .select("email")
+      .where("id", "=", params.createdBy)
+      .executeTakeFirst();
+    if (!user?.email) throw new Error("Automation creator integration identity is unavailable");
+    connections = await provider.listConnections(user.email);
+  }
+  return {
+    ...requestWithPreservedBindings,
+    steps: requestWithPreservedBindings.steps.map((step) => {
+      const previous =
+        params.current?.steps.find((candidate) => candidate.id === step.id)?.accountIdentityBindings ?? {};
+      const rebind = new Set(step.rebindAccountIds ?? []);
+      const accountIdentityBindings = Object.fromEntries(
+        Object.keys(step.accountIdentityBindings ?? {}).map((canvasAccountId) => {
+          const existing = previous[canvasAccountId];
+          if (!rebind.has(canvasAccountId) && existing) {
+            if (existing.providerId && existing.providerId !== provider.providerId) {
+              throw new Error(`Microsoft account ${canvasAccountId} belongs to a different provider`);
+            }
+            return [canvasAccountId, existing];
+          }
+          const connection = connections.find(
+            (candidate) => candidate.id === canvasAccountId && candidate.canUse !== false,
+          );
+          if (!connection?.externalAccountId || !connection.externalTenantId) {
+            throw new Error(`Microsoft account ${canvasAccountId} is unavailable for the automation creator`);
+          }
+          return [
+            canvasAccountId,
+            {
+              canvasAccountId,
+              accountId: connection.externalAccountId,
+              tenantId: connection.externalTenantId,
+              providerId: provider.providerId,
+            },
+          ];
+        }),
+      );
+      const { rebindAccountIds, ...persistedStep } = step;
+      void rebindAccountIds;
+      return { ...persistedStep, accountIdentityBindings };
+    }),
+  };
+}
+
 export async function updateAutomationDefinition(params: {
   db: Kysely<DB>;
   taskId: string;
@@ -523,6 +603,7 @@ export async function updateAutomationDefinition(params: {
   supportedTriggerTypes?: readonly WorkflowTriggerConfig["type"][];
   taskConversationAssociation?: AutomationTaskConversationAssociation;
   encryptionKey?: string;
+  loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
 }): Promise<AutomationMutationResult> {
   return params.db.transaction().execute(async (trx) => {
     const current = await trx
@@ -549,11 +630,18 @@ export async function updateAutomationDefinition(params: {
     if (current.revision !== expectedRevision) {
       return { kind: "revision_conflict" as const, currentRevision: current.revision };
     }
-    const request = validatedRequest(
+    const validated = validatedRequest(
       applyDefinitionPatch(currentDefinition, params.patch, expectedRevision),
       params.brokerCapable,
       params.supportedTriggerTypes,
     );
+    const request = await admitAccountBindings({
+      db: trx,
+      request: validated,
+      createdBy: current.created_by,
+      current: currentDefinition,
+      loadIntegrationProvider: params.loadIntegrationProvider,
+    });
 
     const updateResult = await trx
       .updateTable("scheduled_tasks")
@@ -601,8 +689,15 @@ export async function createAutomationDefinition(params: {
   supportedTriggerTypes?: readonly WorkflowTriggerConfig["type"][];
   taskConversationAssociation?: AutomationTaskConversationAssociation;
   encryptionKey?: string;
+  loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
 }): Promise<AutomationCreateResult> {
-  const request = validatedRequest(params.request, params.brokerCapable, params.supportedTriggerTypes);
+  const validated = validatedRequest(params.request, params.brokerCapable, params.supportedTriggerTypes);
+  const request = await admitAccountBindings({
+    db: params.db,
+    request: validated,
+    createdBy: params.context.createdBy,
+    loadIntegrationProvider: params.loadIntegrationProvider,
+  });
   const id = params.context.id ?? randomUUID();
 
   const row = await params.db.transaction().execute(async (trx) => {
@@ -798,61 +893,13 @@ export async function replaceAutomationDefinition(params: {
   supportedTriggerTypes?: readonly WorkflowTriggerConfig["type"][];
   taskConversationAssociation?: AutomationTaskConversationAssociation;
   encryptionKey?: string;
+  loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
 }): Promise<AutomationReplaceResult> {
-  const request = validatedRequest(params.request, params.brokerCapable, params.supportedTriggerTypes);
-
-  return params.db.transaction().execute(async (trx) => {
-    const current = await trx
-      .selectFrom("scheduled_tasks")
-      .selectAll()
-      .where("id", "=", params.taskId)
-      .executeTakeFirst();
-    if (!current) return { kind: "not_found" as const };
-    if (!params.actor.userId) return { kind: "not_found" as const };
-    if (!(await isTaskEditor(trx, current.id, current.created_by, params.actor.userId, params.actor.role))) {
-      return { kind: "not_found" as const };
-    }
-    const lease = await authorizePersistenceMutation(trx, params.taskId, params.actor);
-    if (lease.kind !== "allowed") return lease;
-    const expectedRevision = request.expectedRevision ?? current.revision;
-    if (current.revision !== expectedRevision) {
-      return { kind: "revision_conflict" as const, currentRevision: current.revision };
-    }
-
-    let update = trx
-      .updateTable("scheduled_tasks")
-      .set({
-        ...scheduledTaskFieldsFromSaveRequest(request),
-        revision: sql<number>`revision + 1`,
-        updated_at: sql<string>`CURRENT_TIMESTAMP`,
-        last_edited_by: params.actor.userId,
-      })
-      .where("id", "=", params.taskId);
-    update = update.where("revision", "=", expectedRevision);
-    const updateResult = await update.executeTakeFirst();
-    if (Number(updateResult.numUpdatedRows ?? 0) === 0) {
-      const latest = await trx
-        .selectFrom("scheduled_tasks")
-        .select("revision")
-        .where("id", "=", params.taskId)
-        .executeTakeFirst();
-      if (!latest) return { kind: "not_found" as const };
-      return { kind: "revision_conflict" as const, currentRevision: latest.revision };
-    }
-
-    await replaceStepContent(trx, params.taskId, request);
-    await ensureWebhookEndpoint(trx, params.taskId, request);
-    if (params.taskConversationAssociation) {
-      await upsertAutomationTaskConversationAssociation(trx, {
-        taskId: params.taskId,
-        ...params.taskConversationAssociation,
-      });
-    }
-    const row = await trx
-      .selectFrom("scheduled_tasks")
-      .selectAll()
-      .where("id", "=", params.taskId)
-      .executeTakeFirstOrThrow();
-    return { kind: "saved" as const, row };
+  const result = await updateAutomationDefinition({
+    ...params,
+    patch: params.request,
   });
+  if (result.kind === "access_denied") return { kind: "not_found" };
+  if (result.kind === "saved") return { kind: "saved", row: result.row };
+  return result;
 }

@@ -20,6 +20,11 @@ if (mode === 'env') {
   process.exit(0);
 }
 
+if (mode === 'bindings') {
+  process.stdout.write(process.env.CANVAS_ACCOUNT_BINDINGS ?? 'missing');
+  process.exit(0);
+}
+
 if (mode === 'stdin') {
   let body = '';
   process.stdin.setEncoding('utf8');
@@ -85,7 +90,9 @@ describe("startIntegrationAccess", () => {
     }
   });
 
-  async function createAccess() {
+  async function createAccess(
+    trustedCanvasAccountBindings?: Record<string, { canvasAccountId: string; accountId: string; tenantId: string }>,
+  ) {
     const claudeDir = mkdtempSync(join(tmpdir(), "claude-test-"));
     const workspaceDir = mkdtempSync(join(tmpdir(), "workspace-test-"));
     tempDirs.push(claudeDir);
@@ -100,6 +107,7 @@ describe("startIntegrationAccess", () => {
       workspaceDir,
       loadIntegrationProvider: async () => new CanvasProvider("https://canvas.example.com", "secret-api-key-123", "p1"),
       logger: createTestLogger(),
+      trustedCanvasAccountBindings,
     });
 
     return { access, workspaceDir };
@@ -121,6 +129,25 @@ describe("startIntegrationAccess", () => {
     }
 
     await cleanupIntegrationAccess(access);
+  });
+
+  it("preserves missing versus explicit scheduled bindings inside the trusted broker", async () => {
+    const unrestricted = await createAccess();
+    const unrestrictedResult = await spawnText(unrestricted.access.envVars.CANVAS_CLI, ["bindings"], {
+      env: { ...process.env, ...unrestricted.access.envVars },
+      cwd: tmpdir(),
+    });
+    expect(unrestrictedResult.stdout).toBe("missing");
+    await cleanupIntegrationAccess(unrestricted.access);
+
+    const restricted = await createAccess({});
+    const restrictedResult = await spawnText(restricted.access.envVars.CANVAS_CLI, ["bindings"], {
+      env: { ...process.env, ...restricted.access.envVars },
+      cwd: tmpdir(),
+    });
+    expect(restrictedResult.stdout).toBe("{}");
+    expect(restricted.access.envVars.CANVAS_ACCOUNT_BINDINGS).toBeUndefined();
+    await cleanupIntegrationAccess(restricted.access);
   });
 
   it("forwards argv and injects credentials only inside the brokered CLI child", async () => {

@@ -3,9 +3,8 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import {
   type AutomationBuilderSaveRequest,
   type AutomationExecutionMode,
-  automationActionCapabilitiesSchema,
   automationExecutionModeSchema,
-  canvasWebhookEndpointSchema,
+  workflowStepSchema as persistedWorkflowStepSchema,
   workflowStepUsesIntegrationActions,
 } from "@sketch/shared";
 import type { Kysely } from "kysely";
@@ -49,68 +48,10 @@ import type { CurrentAutomation, ScheduledTask, TaskContext } from "../../schedu
 import type { WorkflowStep } from "../../workflows/types";
 import type { AutomationArtifactCollector, SearchableUserRepo } from "./types";
 
-const workflowStepSchema = z.object({
-  id: z.string(),
-  type: z.enum(["trigger", "action", "agent"]),
-  label: z.string(),
-  icon: z.string(),
-  position: z.object({ x: z.number(), y: z.number() }),
-  script: z
-    .string()
-    .optional()
-    .describe(
-      "Script content for deterministic action steps. Use for fixed mapping, filtering, normalization, calculations, bounded JSON transformations, routing, or known integration operations. Action scripts receive (input, ctx, signal), must return JSON-serializable output, and must call known Canvas integration operations through ctx.integrations.executeAction. Never invoke CANVAS_CLI or INTEGRATION_CLI from an action script. Stored in automation_step_content, not in steps JSON.",
-    ),
-  agentPrompt: z
-    .string()
-    .optional()
-    .describe(
-      "Prompt content for explicit agent steps. Use only when the workflow needs interpretation, classification, planning, summarization, or natural-language generation. Stored in automation_step_content, not in steps JSON.",
-    ),
-  apps: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "MCP server slugs associated with this step (for example, ['clickup', 'slack']). This does not turn an action step into an agent step; action scripts use ctx.integrations.executeAction for known integration operations.",
-    ),
-  agentMode: z
-    .enum(["light", "sketch"])
-    .optional()
-    .describe("Execution mode for agent steps. Not used by action steps."),
-  agentSkills: z.array(z.string()).optional().describe("Skills available to an agent step. Not used by action steps."),
-  agentModel: z.string().optional().describe("Model override for an agent step. Not used by action steps."),
-  agentMcpServers: z
-    .array(z.string())
-    .optional()
-    .describe("MCP servers available to an agent step. Not used by action steps."),
-  actionCapabilities: automationActionCapabilitiesSchema
-    .describe(
-      "Capabilities available to action scripts. Sketch tools are creator-scoped and read-only. Set usesIntegrationActions to true only when the script calls ctx.integrations.executeAction. For managed GitHub CLI access, declare cliIntegrations: ['github'] with usesIntegrationActions: false; any gh subcommand, including write operations, is allowed once declared.",
-    )
-    .optional(),
-  timeout: z.number().optional().describe("Step timeout in seconds. Default: 1800 (30 min)."),
-  triggerConfig: z
-    .object({
-      type: z.enum(["webhook", "schedule", "canvas", "slack_channel_message"]),
-      channelId: z.string().trim().min(1).optional(),
-      scheduleType: z.enum(["cron", "interval", "once"]).optional(),
-      scheduleValue: z.string().optional(),
-      timezone: z.string().optional(),
-      app: z.string().optional().describe("Source app for Canvas-managed triggers, e.g. 'clickup'."),
-      eventDescription: z.string().optional().describe("Human-readable event description, e.g. 'new issue created'."),
-      componentKey: z.string().optional().describe("Canvas trigger component ID/key found through search_components."),
-      configuredProps: z.record(z.string(), z.unknown()).optional(),
-      status: z.enum(["pending_canvas_setup", "active", "error"]).optional(),
-      canvasWorkflowId: z.string().optional(),
-      canvasTriggerNodeId: z.string().optional(),
-      canvasActionNodeId: z.string().optional(),
-      canvasEndpoint: canvasWebhookEndpointSchema.optional(),
-      errorMessage: z.string().optional(),
-    })
-    .describe(
-      "Use type 'webhook' for generic inbound webhooks; this is the Sketch-native trigger and requires schedule_type='external' with schedule_value='webhook'. Canvas-managed webhook triggers are unsupported. Use type 'canvas' only for explicitly requested provider events after Canvas search_components selects a non-webhook trigger component.",
-    )
-    .optional(),
+const workflowStepSchema = persistedWorkflowStepSchema.extend({
+  script: z.string().optional().describe("Script for deterministic action steps, stored as step content."),
+  agentPrompt: z.string().optional().describe("Prompt for explicit agent steps, stored as step content."),
+  apps: z.array(z.string()).optional().describe("MCP server slugs associated with this step."),
 });
 
 const deliverySchema = z.object({
@@ -1507,6 +1448,7 @@ export async function handleManageScheduledTasks(
           brokerCapable: await getBrokerCapabilitySnapshot(),
           encryptionKey: deps.encryptionKey,
           ...(taskConversationAssociation ? { taskConversationAssociation } : {}),
+          loadIntegrationProvider: deps.loadIntegrationProvider,
         });
       } catch (error) {
         const message = automationPersistenceError(error);
@@ -1608,6 +1550,7 @@ export async function handleManageScheduledTasks(
           brokerCapable: await getBrokerCapabilitySnapshot(),
           encryptionKey: deps.encryptionKey,
           ...(taskConversationAssociation ? { taskConversationAssociation } : {}),
+          loadIntegrationProvider: deps.loadIntegrationProvider,
         });
       } catch (error) {
         const message = automationPersistenceError(error);
@@ -1953,6 +1896,7 @@ export async function handleManageScheduledTasks(
           brokerCapable: await getBrokerCapabilitySnapshot(),
           encryptionKey: deps.encryptionKey,
           ...(taskConversationAssociation ? { taskConversationAssociation } : {}),
+          loadIntegrationProvider: deps.loadIntegrationProvider,
         });
       } catch (error) {
         const message = automationPersistenceError(error);
