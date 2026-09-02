@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { type Kysely, sql } from "kysely";
+import { filterAliasWritesForEntityName } from "../../entities/alias-write-gate";
 import { parseAliasesString } from "../../entities/materialize-json";
 import { normalizeName } from "../../entities/name-keys";
 import type { DB } from "../schema";
+import { type EntityAliasProvenance, recordAliases } from "./entity-alias-rows";
+import { createEntityReviewRepo } from "./entity-review";
 
 const MAX_ALIAS_MERGE_ATTEMPTS = 8;
 
@@ -93,7 +96,9 @@ export async function mergeEntityAliases(
   db: Kysely<DB>,
   entityId: string,
   candidates: Array<string | null | undefined>,
+  provenance: EntityAliasProvenance,
   now = new Date().toISOString(),
+  createdBy?: string | null,
 ): Promise<string[]> {
   for (let attempt = 0; attempt < MAX_ALIAS_MERGE_ATTEMPTS; attempt += 1) {
     const entity = await db
@@ -109,13 +114,20 @@ export async function mergeEntityAliases(
 
     const aliases = parseAliasesString(entity.aliases);
     const seen = new Set([entity.name, ...aliases].map((value) => value.trim().toLowerCase()).filter(Boolean));
-    for (const candidate of candidates) {
+    const ledgerBlocked = await createEntityReviewRepo(db).listRejectedNamesForEntities([entity.id]);
+    const added: string[] = [];
+    for (const candidate of filterAliasWritesForEntityName(
+      candidates.filter((value): value is string => typeof value === "string"),
+      entity.name,
+    )) {
       const value = candidate?.trim();
       if (!value) continue;
+      if (ledgerBlocked.has(`${entity.id}:${normalizeName(value)}`)) continue;
       const key = value.toLowerCase();
       if (seen.has(key)) continue;
       aliases.push(value);
       seen.add(key);
+      added.push(value);
     }
     if (aliases.length === parseAliasesString(entity.aliases).length) return aliases;
 
@@ -126,7 +138,10 @@ export async function mergeEntityAliases(
     update =
       entity.aliases === null ? update.where("aliases", "is", null) : update.where("aliases", "=", entity.aliases);
     const result = await update.executeTakeFirst();
-    if (result.numUpdatedRows > 0n) return aliases;
+    if (result.numUpdatedRows > 0n) {
+      await recordAliases(db, entity.id, added, provenance, createdBy);
+      return aliases;
+    }
   }
 
   throw new Error(`Entity alias merge remained contended for ${entityId}`);
@@ -143,7 +158,7 @@ export async function enrichWhatsAppRosterPersonName(
     .map((candidate) => candidate?.trim())
     .filter((candidate): candidate is string => Boolean(candidate));
   if (names.length === 0) return;
-  await mergeEntityAliases(db, entityId, names, now);
+  await mergeEntityAliases(db, entityId, names, "roster", now, "whatsapp_roster");
   for (const name of proposalCandidates
     .map((candidate) => candidate?.trim())
     .filter((candidate): candidate is string => Boolean(candidate))) {

@@ -541,6 +541,66 @@ describe("executeAutomation agent steps", () => {
     expect(params.sendMessage).toHaveBeenCalledWith("sketch result");
   });
 
+  it("persists reasoning and tool timing for sketch-mode agent steps", async () => {
+    const runAgent = vi.fn(async (call: { onProgressEvent: (event: unknown) => Promise<void> }) => {
+      await call.onProgressEvent({ kind: "intermediate_text", text: "Inspecting the workspace before summarizing." });
+      await call.onProgressEvent({
+        kind: "tool_use",
+        toolName: "Read",
+        input: { file_path: "notes.md", api_token: "secret-value" },
+      });
+      return {
+        pendingUploads: [],
+        costUsd: 0.0042,
+        trace: { finalText: "sketch result", progressEvents: [], automationArtifacts: [] },
+        rawUsage: {
+          model: "claude-test-model",
+          inputTokens: 120,
+          outputTokens: 30,
+          cacheReadTokens: 10,
+          cacheCreationTokens: 4,
+          numTurns: 2,
+          stopReason: "end_turn",
+          toolCalls: [
+            {
+              toolName: "Read",
+              skillName: null,
+              startedAt: 1_000,
+              endedAt: 1_250,
+              success: true,
+            },
+          ],
+        },
+      };
+    });
+    const params = makeParams({ runAgent });
+
+    const result = await executeAutomation(params as never);
+
+    expect(result.stepOutputs.step1?.agentTrace).toMatchObject({
+      runtime: "sketch",
+      model: "claude-test-model",
+      stopReason: "end_turn",
+      turns: 2,
+      usage: { inputTokens: 120, outputTokens: 30, costUsd: 0.0042 },
+    });
+    expect(result.stepOutputs.step1?.agentTrace?.events).toEqual([
+      expect.objectContaining({
+        type: "reasoning",
+        source: "assistant",
+        text: "Inspecting the workspace before summarizing.\n",
+      }),
+      expect.objectContaining({
+        type: "tool_call",
+        toolName: "Read",
+        input: { file_path: "notes.md", api_token: "[redacted]" },
+        status: "completed",
+        durationMs: 250,
+        outputCaptured: false,
+      }),
+    ]);
+  });
+
   it("passes the resolved CLI environment to sketch-mode agent steps", async () => {
     const runAgent = vi.fn().mockResolvedValue({
       pendingUploads: [],
@@ -633,6 +693,86 @@ describe("executeAutomation agent steps", () => {
     expect(options).not.toHaveProperty("tools");
     expect(options).not.toHaveProperty("canUseTool");
     expect(params.sendMessage).toHaveBeenCalledWith("light result");
+  });
+
+  it("persists provider reasoning and tool results for SDK light agent steps", async () => {
+    const queryMock = vi.mocked(query);
+    queryMock.mockImplementationOnce(
+      () =>
+        (async function* () {
+          yield {
+            type: "assistant",
+            message: {
+              content: [
+                { type: "thinking", thinking: "I should inspect the source notes first." },
+                { type: "text", text: "I’ll inspect the notes." },
+                { type: "tool_use", id: "tool-read", name: "Read", input: { file_path: "notes.md" } },
+              ],
+            },
+          };
+          yield {
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tool-read",
+                  content: { text: "Quarterly numbers are up." },
+                },
+              ],
+            },
+          };
+          yield { type: "assistant", message: { content: [{ type: "text", text: "Quarterly numbers are up." }] } };
+          yield {
+            type: "result",
+            stop_reason: "end_turn",
+            num_turns: 2,
+            usage: { input_tokens: 30, output_tokens: 8, cache_read_input_tokens: 2 },
+            modelUsage: { "claude-test-model": {} },
+            total_cost_usd: 0.002,
+          };
+        })() as never,
+    );
+    const params = makeParams({
+      task: makeTask({
+        steps: JSON.stringify([
+          { id: "trigger", type: "trigger", label: "Schedule", icon: "clock", position: { x: 0, y: 0 } },
+          {
+            id: "step1",
+            type: "agent",
+            label: "Summarize Linear issues",
+            icon: "sketch-ai",
+            position: { x: 0, y: 100 },
+            agentMode: "light",
+          },
+        ]),
+      }),
+    });
+
+    const result = await executeAutomation(params as never);
+
+    expect(result.stepOutputs.step1?.agentTrace).toMatchObject({
+      runtime: "sdk-light",
+      model: "claude-test-model",
+      stopReason: "end_turn",
+      turns: 2,
+      usage: { inputTokens: 30, outputTokens: 8, cacheReadTokens: 2, costUsd: 0.002 },
+    });
+    expect(result.stepOutputs.step1?.agentTrace?.events).toEqual([
+      expect.objectContaining({
+        type: "reasoning",
+        source: "provider",
+        text: "I should inspect the source notes first.",
+      }),
+      expect.objectContaining({ type: "reasoning", source: "assistant", text: "I’ll inspect the notes.\n" }),
+      expect.objectContaining({
+        type: "tool_call",
+        toolName: "Read",
+        status: "completed",
+        output: { text: "Quarterly numbers are up." },
+        outputCaptured: true,
+      }),
+    ]);
   });
 
   it("routes light-mode agent steps through the AI SDK runtime when flagged", async () => {

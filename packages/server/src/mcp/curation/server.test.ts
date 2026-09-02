@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SESSION_COOKIE } from "../../api/auth";
-import { generateApiToken, getApiTokenDisplayPrefix, hashApiToken } from "../../auth/api-token";
+import {
+  generateOAuthAccessToken,
+  generateOAuthRefreshToken,
+  getApiTokenDisplayPrefix,
+  hashApiToken,
+} from "../../auth/api-token";
 import { signJwt } from "../../auth/jwt";
 import { createApiTokenRepository } from "../../db/repositories/api-tokens";
 import { createSettingsRepository } from "../../db/repositories/settings";
@@ -21,18 +26,23 @@ afterEach(async () => {
   await db.destroy();
 });
 
-async function createPat(authRole: "admin" | "member" = "member", email = `${randomUUID()}@example.com`) {
+async function createOAuthToken(authRole: "admin" | "member" = "member", email = `${randomUUID()}@example.com`) {
   const settings = createSettingsRepository(db);
   await settings.ensure();
   await settings.update({ onboardingCompletedAt: new Date().toISOString() });
   const users = createUserRepository(db);
   const user = await users.create({ name: `MCP ${authRole}`, email, emailVerified: true, authRole });
-  const plaintext = generateApiToken();
-  await createApiTokenRepository(db).create({
+  const plaintext = generateOAuthAccessToken();
+  const refreshToken = generateOAuthRefreshToken();
+  await createApiTokenRepository(db).createOAuth({
     userId: user.id,
     name: "Claude Code",
     tokenHash: hashApiToken(plaintext),
     prefix: getApiTokenDisplayPrefix(plaintext),
+    clientId: `test-client-${randomUUID()}`,
+    scopes: ["mcp:read"],
+    refreshTokenHash: hashApiToken(refreshToken),
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
   });
   const row = await settings.get();
   if (!row?.jwt_secret) throw new Error("test settings missing jwt secret");
@@ -219,8 +229,8 @@ describe("curation MCP server", () => {
     });
     expect(disabledRes.status).toBe(404);
 
-    const member = await createPat("member", "member@example.com");
-    const admin = await createPat("admin", "admin@example.com");
+    const member = await createOAuthToken("member", "member@example.com");
+    const admin = await createOAuthToken("admin", "admin@example.com");
     const app = createApp(db, createTestConfig({ GRAPH_CURATION_TOOLS_ENABLED: true }), {
       logger: createTestLogger(),
     });
@@ -239,6 +249,7 @@ describe("curation MCP server", () => {
       "curation_find_entities",
       "curation_graph_overview",
       "curation_list_affiliations",
+      "curation_list_aliases",
       "curation_list_candidates",
       "curation_shared_evidence",
       "propose_graph_verdicts",
@@ -246,7 +257,7 @@ describe("curation MCP server", () => {
   });
 
   it("returns unfiltered live evidence and tombstone redirect evidence", async () => {
-    const admin = await createPat("admin", "curator@example.com");
+    const admin = await createOAuthToken("admin", "curator@example.com");
     const other = await createUserRepository(db).create({
       name: "Other User",
       email: "other@example.com",
@@ -314,7 +325,7 @@ describe("curation MCP server", () => {
   });
 
   it("keeps sharedFiles as the all-entity intersection while pairwiseSharedFiles reports pair overlap", async () => {
-    const admin = await createPat("admin", "shared-overlap@example.com");
+    const admin = await createOAuthToken("admin", "shared-overlap@example.com");
     await seedConnector("shared-overlap-connector", admin.user.id);
     await seedEntity({ id: "shared-a", name: "Shared A", sourceType: "project" });
     await seedEntity({ id: "shared-b", name: "Shared B", sourceType: "project" });
@@ -341,7 +352,7 @@ describe("curation MCP server", () => {
   });
 
   it("returns exactly one pairwiseSharedFiles entry per unordered pair", async () => {
-    const admin = await createPat("admin", "pairwise-coverage@example.com");
+    const admin = await createOAuthToken("admin", "pairwise-coverage@example.com");
     await seedEntity({ id: "pairwise-a", name: "Pairwise A", sourceType: "project" });
     await seedEntity({ id: "pairwise-b", name: "Pairwise B", sourceType: "project" });
     await seedEntity({ id: "pairwise-c", name: "Pairwise C", sourceType: "project" });
@@ -360,7 +371,7 @@ describe("curation MCP server", () => {
   });
 
   it("gates shared evidence person and domain fields by homogeneous input types", async () => {
-    const admin = await createPat("admin", "shared-gating@example.com");
+    const admin = await createOAuthToken("admin", "shared-gating@example.com");
     await seedEntity({ id: "gate-person-a", name: "Gate Person A", sourceType: "person" });
     await seedEntity({ id: "gate-person-b", name: "Gate Person B", sourceType: "person" });
     await seedEntity({ id: "gate-project-a", name: "Gate Project A", sourceType: "project" });
@@ -399,7 +410,7 @@ describe("curation MCP server", () => {
   });
 
   it("computes company dominance from exact mention and participant-affiliation file counts", async () => {
-    const admin = await createPat("admin", "dominance@example.com");
+    const admin = await createOAuthToken("admin", "dominance@example.com");
     await seedConnector("dominance-connector", admin.user.id);
     await seedEntity({ id: "project", name: "Project X", sourceType: "project" });
     await seedEntity({ id: "company-a", name: "Company A", sourceType: "company" });
@@ -458,7 +469,7 @@ describe("curation MCP server", () => {
   });
 
   it("stores a valid proposal as validated without applying graph changes", async () => {
-    const admin = await createPat("admin", "proposal-valid@example.com");
+    const admin = await createOAuthToken("admin", "proposal-valid@example.com");
     await seedEntity({ id: "project-source", name: "Project Source", sourceType: "project" });
     await seedEntity({ id: "project-target", name: "Project Target", sourceType: "project" });
     const before = await db.selectFrom("entities").selectAll().where("id", "=", "project-source").executeTakeFirst();
@@ -510,7 +521,7 @@ describe("curation MCP server", () => {
   });
 
   it("stores bad subject proposals as bounced fail-closed rows", async () => {
-    const admin = await createPat("admin", "proposal-bounce@example.com");
+    const admin = await createOAuthToken("admin", "proposal-bounce@example.com");
     await seedEntity({ id: "merged-target", name: "Merged Target", sourceType: "project" });
     await seedEntity({
       id: "merged-source",
@@ -542,7 +553,7 @@ describe("curation MCP server", () => {
     };
 
     expect(result).toMatchObject({ stored: 0, bounced: 2 });
-    expect(result.results.map((row) => row.validationReason)).toEqual(["source_not_live_project", "subject_not_found"]);
+    expect(result.results.map((row) => row.validationReason)).toEqual(["source_not_live", "subject_not_found"]);
     const rows = await db
       .selectFrom("graph_verdicts")
       .selectAll()
@@ -559,7 +570,7 @@ describe("curation MCP server", () => {
         expect.objectContaining({
           subject_entity_id: "merged-source",
           validation_status: "failed",
-          validation_reason: "source_not_live_project",
+          validation_reason: "source_not_live",
           status: "bounced",
         }),
         expect.objectContaining({
@@ -575,7 +586,7 @@ describe("curation MCP server", () => {
   });
 
   it("supersedes awaiting verdicts only for the same subject and action pair", async () => {
-    const admin = await createPat("admin", "proposal-supersede@example.com");
+    const admin = await createOAuthToken("admin", "proposal-supersede@example.com");
     await seedEntity({ id: "scope-source", name: "Scope Source", sourceType: "project" });
     await seedEntity({ id: "scope-target", name: "Scope Target", sourceType: "project" });
 
@@ -657,7 +668,7 @@ describe("curation MCP server", () => {
   });
 
   it("approves and applies graph verdicts with ledgered idempotent effects", async () => {
-    const admin = await createPat("admin", "proposal-apply@example.com");
+    const admin = await createOAuthToken("admin", "proposal-apply@example.com");
     await seedEntity({ id: "apply-source", name: "Apply Source", sourceType: "project" });
     await seedEntity({ id: "apply-target", name: "Apply Target", sourceType: "project" });
     await seedEntity({ id: "keep-project", name: "Keep Project", sourceType: "project" });
@@ -744,7 +755,7 @@ describe("curation MCP server", () => {
   });
 
   it("refuses stale fingerprints and resolved-target drift while preserving approved verdicts", async () => {
-    const admin = await createPat("admin", "proposal-drift@example.com");
+    const admin = await createOAuthToken("admin", "proposal-drift@example.com");
     await seedEntity({ id: "stale-source", name: "Stale Source", sourceType: "project" });
     await seedEntity({ id: "stale-target", name: "Stale Target", sourceType: "project" });
     await seedEntity({ id: "drift-source", name: "Drift Source", sourceType: "project" });
@@ -803,7 +814,7 @@ describe("curation MCP server", () => {
   });
 
   it("reverts nest and archive verdicts by ledger and fails closed for non-owned effects", async () => {
-    const admin = await createPat("admin", "proposal-undo@example.com");
+    const admin = await createOAuthToken("admin", "proposal-undo@example.com");
     await seedEntity({ id: "nest-child", name: "Nest Child", sourceType: "project" });
     await seedEntity({ id: "nest-parent", name: "Nest Parent", sourceType: "project" });
     await seedEntity({ id: "existing-child", name: "Existing Child", sourceType: "project" });

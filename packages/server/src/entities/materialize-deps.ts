@@ -12,6 +12,7 @@ import { createEntityRepository, whereLiveEntity } from "../db/repositories/enti
 import { createEntityDomainsRepository, domainMatchesName } from "../db/repositories/entity-domains";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
 import { createEntitySuppressionRepository } from "../db/repositories/entity-suppressions";
+import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { DB } from "../db/schema";
 import { personScopeKeyForDomain, personScopeKeyId } from "./affiliations";
 import { DEFAULT_FACT_BATCH_SIZE, forEachFactBatch } from "./fact-batches";
@@ -29,7 +30,7 @@ import {
   type CandidatePoolEntry,
   addToCandidatePool,
   buildCandidatePool,
-  findFuzzyMatches,
+  findEditDistanceMatches,
   findStrictMatches,
   findTokenSetMatches,
   removeFromCandidatePool,
@@ -589,6 +590,7 @@ export interface BuildMaterializeDepsOptions {
   structuralAutoBirthTypes?: Set<ProposeEntityType>;
   birthGateDryRun?: boolean;
   embeddingProvider?: EmbeddingProvider | null;
+  suppressContextLinking?: boolean;
 }
 
 export function createEntityLookupFromIndex(opts: {
@@ -614,23 +616,23 @@ export function createEntityLookupFromIndex(opts: {
       const strictEntityIds = new Set(strict.map((match) => match.entityId));
       const tokenSet = findTokenSetMatches(name, pool);
       const tokenSetEntityIds = new Set(tokenSet.map((match) => match.entityId));
-      const fuzzy = findFuzzyMatches(name, pool);
+      const editDistance = findEditDistanceMatches(name, pool);
       const byEntity = new Map<
         string,
         {
           entity: IndexEntityRow;
           score: number;
-          reason: "strict-normalized" | "token-set" | "minhash";
+          reason: "strict-normalized" | "token-set" | "edit-distance";
         }
       >();
-      for (const match of [...strict, ...tokenSet, ...fuzzy]) {
+      for (const match of [...strict, ...tokenSet, ...editDistance]) {
         const entity = entitiesById.get(match.entityId);
         if (!entity) continue;
         const reason = strictEntityIds.has(match.entityId)
           ? "strict-normalized"
           : tokenSetEntityIds.has(match.entityId)
             ? "token-set"
-            : "minhash";
+            : "edit-distance";
         const existing = byEntity.get(match.entityId);
         if (!existing || match.score > existing.score)
           byEntity.set(match.entityId, { entity, score: match.score, reason });
@@ -696,6 +698,7 @@ export async function buildMaterializeDeps(
 ): Promise<MaterializeDeps> {
   const entityRepo = createEntityRepository(db);
   const reviewRepo = createEntityReviewRepo(db);
+  const resolutionLedger = createResolutionDecisionRepository(db);
   const suppressionRepo = createEntitySuppressionRepository(db);
   const domainsRepo = createEntityDomainsRepository(db);
   const index = await buildLookupIndex(db);
@@ -737,6 +740,7 @@ export async function buildMaterializeDeps(
     logger: opts.logger,
     entityRepo,
     reviewRepo,
+    resolutionLedger,
     suppressionRepo,
     domainsRepo,
     lookup,
@@ -787,6 +791,7 @@ export async function buildMaterializeDeps(
       return null;
     },
     normalizationBackfillComplete,
+    suppressContextLinking: opts.suppressContextLinking ?? false,
     countActiveLlmFilesForName: async (normalizedName, mentionType) => {
       if (normalizationBackfillComplete) {
         return countActiveLlmFilesIndexed(db, normalizedName, mentionType);

@@ -305,6 +305,8 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
       if (part.type === "text-delta") {
         finalText += part.text;
         await params.events?.onTextDelta?.(part.text);
+      } else if (part.type === "reasoning-delta") {
+        await params.events?.onReasoningDelta?.(part.text);
       } else if (part.type === "abort") {
         sawAbort = true;
       } else if (part.type === "error") {

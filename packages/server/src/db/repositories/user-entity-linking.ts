@@ -4,6 +4,7 @@ import { normalizeName } from "../../entities/name-keys";
 import type { DB, EntitiesTable, UsersTable } from "../schema";
 import { isHumanSubtypeOverride, normalizeContactPointValue } from "./entities";
 import { createEntityReviewRepo } from "./entity-review";
+import { MACHINE_PRINCIPAL_USER_ID } from "./machine-principal";
 import { projectUserWhatsAppIdentityToEntity } from "./user-whatsapp-entity-projection";
 
 type LinkDb = Kysely<DB> | Transaction<DB>;
@@ -124,6 +125,18 @@ type EntityLinkBatchContext = {
 };
 
 async function findActorUserId(db: LinkDb): Promise<string> {
+  const machine = await db
+    .selectFrom("users")
+    .select("id")
+    .where("id", "=", MACHINE_PRINCIPAL_USER_ID)
+    .where("type", "=", "agent")
+    .executeTakeFirst();
+  if (machine) return machine.id;
+
+  /**
+   * Pre-migration safety: code that runs before migration 217 exists still
+   * needs a valid trigger actor for queued reviews.
+   */
   const admin = await db
     .selectFrom("users")
     .select("id")

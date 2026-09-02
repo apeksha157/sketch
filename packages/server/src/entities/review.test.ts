@@ -836,6 +836,72 @@ describe("entity-review A4 backend", () => {
     expect(rejectReplayBody.results.every((result) => result.ok)).toBe(true);
   });
 
+  it("bulk dismiss drops rows without creating entities, isolating drift and owner failures per item", async () => {
+    const dropOne = await seedReviewRow(db, {
+      proposedName: "A4 Dismiss One",
+      entityType: "person",
+      triggeredBy: ownerId,
+      evidenceFileIds: ["a4-owner-file"],
+    });
+    const dropStale = await seedReviewRow(db, {
+      proposedName: "A4 Dismiss Stale",
+      entityType: "person",
+      triggeredBy: ownerId,
+      evidenceFileIds: ["a4-owner-file"],
+    });
+    const dropDenied = await seedReviewRow(db, {
+      proposedName: "A4 Dismiss Denied",
+      entityType: "person",
+      triggeredBy: ownerId,
+      evidenceFileIds: ["a4-owner-file", "a4-other-file"],
+    });
+
+    const res = await app.request("/api/entity-review/dismiss-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+      body: JSON.stringify({
+        items: [
+          { reviewId: dropOne.id, candidateGeneratedAt: dropOne.candidateGeneratedAt },
+          { reviewId: dropStale.id, candidateGeneratedAt: "2020-01-01T00:00:00.000Z" },
+          { reviewId: dropDenied.id, candidateGeneratedAt: dropDenied.candidateGeneratedAt },
+          { reviewId: dropOne.id },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      results: Array<{ reviewId: string; ok: boolean; error?: { code: string } }>;
+    };
+    expect(body.results.filter((result) => result.ok).map((result) => result.reviewId)).toEqual([dropOne.id]);
+    expect(body.results.find((result) => result.reviewId === dropStale.id)?.error?.code).toBe("CANDIDATE_DRIFT");
+    expect(body.results.find((result) => result.reviewId === dropDenied.id)?.error?.code).toBe("OWNER_SCOPE_DENIED");
+    expect(body.results[3]?.error?.code).toBe("BAD_REQUEST");
+
+    const dismissedRow = await db
+      .selectFrom("entity_review_queue")
+      .select(["status"])
+      .where("id", "=", dropOne.id)
+      .executeTakeFirstOrThrow();
+    expect(dismissedRow.status).toBe("dismissed");
+    const created = await db
+      .selectFrom("entities")
+      .select(db.fn.countAll<number>().as("c"))
+      .where("name", "=", "A4 Dismiss One")
+      .executeTakeFirstOrThrow();
+    expect(Number(created.c)).toBe(0);
+
+    const replay = await app.request("/api/entity-review/dismiss-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: ownerCookie },
+      body: JSON.stringify({
+        items: [{ reviewId: dropOne.id, candidateGeneratedAt: dropOne.candidateGeneratedAt }],
+      }),
+    });
+    expect(replay.status).toBe(200);
+    const replayBody = (await replay.json()) as { results: Array<{ ok: boolean }> };
+    expect(replayBody.results.every((result) => result.ok)).toBe(true);
+  });
+
   it("batch confirm backfills structural assignee contributes_to for confirmed project tasks", async () => {
     const projectName = "A4 Batch Backfill Project";
     const personId = await seedEntity(db, { name: "A4 Batch Person", sourceType: "person" });

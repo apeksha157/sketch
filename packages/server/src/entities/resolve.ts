@@ -31,7 +31,9 @@ import {
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { type EvidenceRow, type QueueRow, createEntityReviewRepo } from "../db/repositories/entity-review";
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
+import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import { confirmUserEntityLink } from "../db/repositories/user-entity-linking";
+import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/users";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../db/schema";
 import { inferAffiliationFromEmail } from "./affiliations";
 import { finalizeLinkedDomainCandidates } from "./domain-promotion";
@@ -41,6 +43,7 @@ import {
   materializeFromFact,
   shouldMarkMaterialized,
 } from "./materialize";
+import { parseAliasesString, readPersonEmailFromMetadata } from "./materialize-json";
 import { mergeEntitiesInTransaction } from "./merge";
 import { normalizeEntityMatchName, normalizeName } from "./name-keys";
 
@@ -118,10 +121,24 @@ interface ResolveTxnCtx {
   db: Kysely<DB>;
   repo: ReturnType<typeof createEntityReviewRepo>;
   entityRepo: ReturnType<typeof createEntityRepository>;
+  resolutionLedger: ReturnType<typeof createResolutionDecisionRepository>;
   userId: string;
   machineActor?: boolean;
   now: string;
   logger?: Logger;
+}
+
+function createResolveTxnCtx(ctx: ResolveCtx, db: Kysely<DB>): ResolveTxnCtx {
+  return {
+    db,
+    repo: createEntityReviewRepo(db),
+    entityRepo: createEntityRepository(db),
+    resolutionLedger: createResolutionDecisionRepository(db),
+    userId: ctx.userId,
+    machineActor: ctx.machineActor,
+    now: ctx.now ?? new Date().toISOString(),
+    logger: ctx.logger,
+  };
 }
 
 export interface ConfirmOptions {
@@ -222,16 +239,6 @@ function readJsonObject(raw: string | null): Record<string, unknown> {
   }
 }
 
-function parseAliases(raw: string | null): string[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 function shouldMarkHeldFactMaterialized(result: MaterializeResult): boolean {
   if (result.kind === "entity_created" || result.kind === "entity_linked" || result.kind === "structural") return true;
   if (result.kind === "queued" || result.kind === "queued_held") return false;
@@ -261,6 +268,76 @@ async function fetchEntity(ctx: ResolveTxnCtx, entityId: string): Promise<Entity
     .executeTakeFirst();
 }
 
+type ConfirmableReview =
+  | { kind: "pending"; row: QueueRow }
+  | { kind: "idempotent"; row: QueueRow; targetEntityId: string };
+
+async function fetchConfirmableReview(
+  ctx: ResolveTxnCtx,
+  reviewId: string,
+  candidateGeneratedAt?: string,
+): Promise<ConfirmableReview> {
+  const row = await fetchRow(ctx, reviewId);
+
+  if (row.status === "confirmed") {
+    const target = row.resolved_entity_id;
+    if (!target) throw new ResolveError("ROW_NOT_FOUND", "confirmed row missing resolved_entity_id");
+    return { kind: "idempotent", row, targetEntityId: target };
+  }
+  if (row.status === "rejected") {
+    throw new ResolveError("CANDIDATE_DRIFT", "row already rejected", {
+      currentStatus: row.status,
+      currentRow: row,
+    });
+  }
+  if (row.status === "dismissed") {
+    throw new ResolveError("CANDIDATE_DRIFT", "row already dismissed", {
+      currentStatus: row.status,
+      currentRow: row,
+    });
+  }
+  if (row.status === "confirming") {
+    throw new ResolveError("ALREADY_CONFIRMING", "row is mid-confirm (chunked backfill in progress)");
+  }
+
+  if (candidateGeneratedAt !== undefined && row.candidate_generated_at !== candidateGeneratedAt) {
+    throw new ResolveError("CANDIDATE_DRIFT", "candidate_generated_at mismatch", {
+      actual: row.candidate_generated_at,
+      provided: candidateGeneratedAt,
+      currentRow: row,
+    });
+  }
+
+  return { kind: "pending", row };
+}
+
+async function fetchLiveTargetForReview(ctx: ResolveTxnCtx, row: QueueRow, entityId: string): Promise<Entity> {
+  const fetchedTarget = await fetchEntity(ctx, entityId);
+  if (!fetchedTarget) {
+    throw new ResolveError("TARGET_DELETED", "target entity deleted between candidate-gen and confirm", {
+      currentRow: row,
+    });
+  }
+  if (fetchedTarget.source_type !== row.entity_type) {
+    throw new ResolveError("TYPE_MISMATCH", "mergeIntoEntityId entity_type does not match queue row", {
+      target: fetchedTarget.source_type,
+      row: row.entity_type,
+    });
+  }
+  return fetchedTarget;
+}
+
+async function listResolveEvidenceOrThrow(ctx: ResolveTxnCtx, reviewId: string): Promise<EvidenceRow[]> {
+  const evidence = await ctx.repo.listEvidenceForResolve(reviewId);
+  if (evidence.length > MAX_EVIDENCE_PER_RESOLVE) {
+    throw new ResolveError("EVIDENCE_TOO_LARGE", "too many evidence rows; chunked backfill not yet supported", {
+      count: evidence.length,
+      cap: MAX_EVIDENCE_PER_RESOLVE,
+    });
+  }
+  return evidence;
+}
+
 /**
  * Complete the terminal transition only if the queue row is still pending at
  * the candidate snapshot this transaction validated. A lost CAS throws so the
@@ -272,11 +349,19 @@ async function markResolvedOrThrow(
   row: QueueRow,
   status: "confirmed" | "rejected",
   resolvedEntityId: string,
+  opts: { resolvedBy?: string; allowedStatuses?: string[] } = {},
 ): Promise<QueueRow> {
   if (!row.candidate_generated_at) {
     throw new ResolveError("CANDIDATE_DRIFT", "row missing candidate_generated_at", { currentRow: row });
   }
-  const won = await ctx.repo.markResolved(row.id, status, resolvedEntityId, ctx.userId, row.candidate_generated_at);
+  const won = await ctx.repo.markResolved(
+    row.id,
+    status,
+    resolvedEntityId,
+    opts.resolvedBy ?? ctx.userId,
+    row.candidate_generated_at,
+    opts.allowedStatuses,
+  );
   if (!won) {
     const currentRow = await fetchRow(ctx, row.id);
     throw new ResolveError("CANDIDATE_DRIFT", "row was resolved or refreshed by another request", {
@@ -397,7 +482,7 @@ async function reviveDeferredRelationsForEntity(
 ): Promise<{ revived: number; overflowed: boolean }> {
   const candidates = [
     normalizeName(resolvedEntity.name),
-    ...parseAliases(resolvedEntity.aliases).map((alias) => normalizeName(alias)),
+    ...parseAliasesString(resolvedEntity.aliases).map((alias) => normalizeName(alias)),
   ].filter((name) => name.length > 0);
   const names = [...new Set(candidates)];
   if (names.length === 0) return { revived: 0, overflowed: false };
@@ -461,7 +546,7 @@ async function autoResolutionShortCircuit(ctx: ResolveTxnCtx, target: Entity, pr
   const fresh = await fetchEntity(ctx, target.id);
   if (!fresh) return false;
   if (normalizeName(fresh.name) === normalized) return true;
-  const aliases: string[] = fresh.aliases ? JSON.parse(fresh.aliases) : [];
+  const aliases = parseAliasesString(fresh.aliases);
   return aliases.some((a) => normalizeName(a) === normalized);
 }
 
@@ -708,47 +793,18 @@ async function upsertTransferredContactPoint(ctx: ResolveTxnCtx, targetId: strin
 
 export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: ConfirmOptions): Promise<ConfirmResult> {
   return ctx.db.transaction().execute(async (trx) => {
-    const trxCtx: ResolveTxnCtx = {
-      db: trx,
-      repo: createEntityReviewRepo(trx),
-      entityRepo: createEntityRepository(trx),
-      userId: ctx.userId,
-      machineActor: ctx.machineActor,
-      now: ctx.now ?? new Date().toISOString(),
-      logger: ctx.logger,
-    };
-    const row = await fetchRow(trxCtx, reviewId);
-
-    // Idempotent replay against an already-terminal row.
-    if (row.status === "confirmed") {
-      const target = row.resolved_entity_id;
-      if (!target) throw new ResolveError("ROW_NOT_FOUND", "confirmed row missing resolved_entity_id");
-      return { row, targetEntityId: target, shortCircuited: false, mergedStaleEntityId: null, idempotent: true };
+    const trxCtx = createResolveTxnCtx(ctx, trx);
+    const loaded = await fetchConfirmableReview(trxCtx, reviewId, opts.candidateGeneratedAt);
+    if (loaded.kind === "idempotent") {
+      return {
+        row: loaded.row,
+        targetEntityId: loaded.targetEntityId,
+        shortCircuited: false,
+        mergedStaleEntityId: null,
+        idempotent: true,
+      };
     }
-    if (row.status === "rejected") {
-      throw new ResolveError("CANDIDATE_DRIFT", "row already rejected", {
-        currentStatus: row.status,
-        currentRow: row,
-      });
-    }
-    if (row.status === "dismissed") {
-      throw new ResolveError("CANDIDATE_DRIFT", "row already dismissed", {
-        currentStatus: row.status,
-        currentRow: row,
-      });
-    }
-    if (row.status === "confirming") {
-      throw new ResolveError("ALREADY_CONFIRMING", "row is mid-confirm (chunked backfill in progress)");
-    }
-
-    // 1. Compare-and-swap.
-    if (row.candidate_generated_at !== opts.candidateGeneratedAt) {
-      throw new ResolveError("CANDIDATE_DRIFT", "candidate_generated_at mismatch", {
-        actual: row.candidate_generated_at,
-        provided: opts.candidateGeneratedAt,
-        currentRow: row,
-      });
-    }
+    const row = loaded.row;
 
     if (row.source === "user_entity_link") {
       try {
@@ -818,21 +874,10 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
           provenanceTier: "human_confirmed",
         });
       }
-      if (renamed) await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name);
+      if (renamed) await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
     } else {
-      const fetchedTarget = await fetchEntity(trxCtx, targetId);
-      if (!fetchedTarget) {
-        throw new ResolveError("TARGET_DELETED", "target entity deleted between candidate-gen and confirm", {
-          currentRow: row,
-        });
-      }
-      if (fetchedTarget.source_type !== row.entity_type) {
-        throw new ResolveError("TYPE_MISMATCH", "mergeIntoEntityId entity_type does not match queue row", {
-          target: fetchedTarget.source_type,
-          row: row.entity_type,
-        });
-      }
-      target = fetchedTarget;
+      target = await fetchLiveTargetForReview(trxCtx, row, targetId);
+      await trxCtx.entityRepo.promoteProvenanceTier(target.id, "human_confirmed");
     }
     if (row.seed_source && row.seed_source_id) {
       await trxCtx.entityRepo.upsertSourceRef({
@@ -842,17 +887,11 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
       });
     }
     for (const alias of parseSeedAliases(row.seed_aliases)) {
-      await trxCtx.entityRepo.appendAlias(target.id, alias);
+      await trxCtx.entityRepo.appendAlias(target.id, alias, "mint_model", row.seed_source ?? "review_seed");
     }
 
     // Evidence cap (chunking deferred).
-    const evidence = await trxCtx.repo.listEvidenceForResolve(reviewId);
-    if (evidence.length > MAX_EVIDENCE_PER_RESOLVE) {
-      throw new ResolveError("EVIDENCE_TOO_LARGE", "too many evidence rows; chunked backfill not yet supported", {
-        count: evidence.length,
-        cap: MAX_EVIDENCE_PER_RESOLVE,
-      });
-    }
+    const evidence = await listResolveEvidenceOrThrow(trxCtx, reviewId);
 
     // 3. Auto-resolution short-circuit.
     const shortCircuited = await autoResolutionShortCircuit(trxCtx, target, row.proposed_name);
@@ -860,7 +899,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     let mergedStaleEntityId: string | null = null;
     if (!shortCircuited) {
       // 4. Alias append.
-      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name);
+      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
 
       // 5. Stale-entity merge.
       const stales = await findStaleCandidates(trxCtx, target, row.proposed_name);
@@ -913,6 +952,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
     }
     await writeReviewSourceRef(trxCtx, row, target.id);
     await reviveDeferredRelationsForEntity(trxCtx, target);
+    await recordResolutionLink(trxCtx, row, target, evidence, { decider: "human" });
 
     // Pick-different: write rejection against original candidate so it isn't re-suggested.
     if (pickedDifferent && row.candidate_entity_id) {
@@ -921,6 +961,7 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
         rejectedName: row.proposed_name,
         rejectedBy: trxCtx.userId,
       });
+      await recordResolutionDistinct(trxCtx, row, row.candidate_entity_id, evidence);
     }
 
     // 7. Mark resolved.
@@ -928,6 +969,73 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
 
     return { row: refreshedRow, targetEntityId: target.id, shortCircuited, mergedStaleEntityId, idempotent: false };
   });
+}
+
+/**
+ * Machine-safe existing-entity link path for a pending review row.
+ *
+ * Explicit non-goals: alias teach, birth-time rename, stale-entity merge
+ * collapse, auto-resolution short-circuit, picked-different rejection
+ * bookkeeping, held-email attach plus affiliation inference, and linked-domain
+ * candidate finalization. Promotion to `machine_confirmed` and durable
+ * resolution-ledger writes are in scope.
+ */
+export async function linkReviewRowToExistingEntity(
+  ctx: ResolveCtx,
+  opts: { reviewId: string; entityId: string },
+  decision: {
+    decider?: "human" | "judge";
+    decidedBy?: string;
+    provenanceTier?: "human_confirmed" | "machine_confirmed";
+    verdictRef?: string | null;
+    allowedStatuses?: string[];
+    useExistingTransaction?: boolean;
+  } = {},
+): Promise<ConfirmResult> {
+  const run = async (trx: Kysely<DB>) => {
+    const trxCtx = createResolveTxnCtx(ctx, trx);
+    const loaded = await fetchConfirmableReview(trxCtx, opts.reviewId);
+    if (loaded.kind === "idempotent") {
+      return {
+        row: loaded.row,
+        targetEntityId: loaded.targetEntityId,
+        shortCircuited: false,
+        mergedStaleEntityId: null,
+        idempotent: true,
+      };
+    }
+    const row = loaded.row;
+    const target = await fetchLiveTargetForReview(trxCtx, row, opts.entityId);
+    const evidence = await listResolveEvidenceOrThrow(trxCtx, row.id);
+    const decider = decision.decider ?? "judge";
+    const decidedBy = decision.decidedBy ?? MACHINE_PRINCIPAL_USER_ID;
+    const provenanceTier = decision.provenanceTier ?? "machine_confirmed";
+
+    await trxCtx.entityRepo.promoteProvenanceTier(target.id, provenanceTier);
+    const promotedTarget = (await trxCtx.entityRepo.getEntity(target.id)) ?? target;
+    await recordResolutionLink(trxCtx, row, promotedTarget, evidence, {
+      decider,
+      decidedBy,
+      verdictRef: decision.verdictRef ?? null,
+    });
+    await materializeEvidence(trxCtx, target, evidence, "confirmed");
+    await rematerializeHeldLlmEvidence(trxCtx, row, evidence);
+    await writeReviewSourceRef(trxCtx, row, target.id);
+    await reviveDeferredRelationsForEntity(trxCtx, target);
+
+    const refreshedRow = await markResolvedOrThrow(trxCtx, row, "confirmed", target.id, {
+      resolvedBy: decidedBy,
+      allowedStatuses: decision.allowedStatuses,
+    });
+    return {
+      row: refreshedRow,
+      targetEntityId: target.id,
+      shortCircuited: false,
+      mergedStaleEntityId: null,
+      idempotent: false,
+    };
+  };
+  return decision.useExistingTransaction ? run(ctx.db) : ctx.db.transaction().execute(run);
 }
 
 /**
@@ -952,7 +1060,7 @@ async function findReResolveMatches(ctx: ResolveTxnCtx, row: QueueRow, excludeEn
       out.push(c);
       continue;
     }
-    const aliases: string[] = c.aliases ? JSON.parse(c.aliases) : [];
+    const aliases = parseAliasesString(c.aliases);
     if (aliases.some((a) => normalizeName(a) === normalized)) out.push(c);
   }
   return out;
@@ -967,16 +1075,71 @@ async function writeReviewSourceRef(ctx: ResolveTxnCtx, row: QueueRow, entityId:
   });
 }
 
+function resolutionSource(
+  row: QueueRow,
+  evidence: EvidenceRow[],
+  reviewId: string,
+): { source: string; sourceId: string } {
+  return {
+    source: row.source ?? evidence[0]?.source ?? "entity-review",
+    sourceId: row.source_id ?? `review:${reviewId}`,
+  };
+}
+
+function evidenceFileIds(evidence: EvidenceRow[]): string[] {
+  return [...new Set(evidence.map((row) => row.indexed_file_id))];
+}
+
+async function recordResolutionLink(
+  ctx: ResolveTxnCtx,
+  row: QueueRow,
+  target: Entity,
+  evidence: EvidenceRow[],
+  opts: { decider: "human" | "judge"; decidedBy?: string; verdictRef?: string | null },
+): Promise<void> {
+  const { source, sourceId } = resolutionSource(row, evidence, row.id);
+  await ctx.resolutionLedger.recordLink({
+    normalizedMentionName: row.normalized_name,
+    entityType: row.entity_type,
+    targetEntityId: target.id,
+    targetName: target.name,
+    targetEmail: readPersonEmailFromMetadata(target.metadata) ?? row.proposed_email,
+    decider: opts.decider,
+    decidedBy: opts.decidedBy ?? ctx.userId,
+    source,
+    sourceId,
+    evidenceFileIds: evidenceFileIds(evidence),
+    verdictRef: opts.verdictRef ?? null,
+  });
+}
+
+async function recordResolutionDistinct(
+  ctx: ResolveTxnCtx,
+  row: QueueRow,
+  targetEntityId: string,
+  evidence: EvidenceRow[],
+): Promise<void> {
+  const target = await ctx.entityRepo.getEntity(targetEntityId);
+  const { source, sourceId } = resolutionSource(row, evidence, row.id);
+  await ctx.resolutionLedger.recordDistinct({
+    normalizedMentionName: row.normalized_name,
+    entityType: row.entity_type,
+    targetEntityId,
+    targetName: target?.name ?? null,
+    targetEmail: target
+      ? (readPersonEmailFromMetadata(target.metadata) ?? row.proposed_email)
+      : (row.proposed_email ?? null),
+    decider: "human",
+    decidedBy: ctx.userId,
+    source,
+    sourceId,
+    evidenceFileIds: evidenceFileIds(evidence),
+  });
+}
+
 export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: RejectOptions): Promise<RejectResult> {
   return ctx.db.transaction().execute(async (trx) => {
-    const trxCtx: ResolveTxnCtx = {
-      db: trx,
-      repo: createEntityReviewRepo(trx),
-      entityRepo: createEntityRepository(trx),
-      userId: ctx.userId,
-      now: ctx.now ?? new Date().toISOString(),
-      logger: ctx.logger,
-    };
+    const trxCtx = createResolveTxnCtx(ctx, trx);
     const row = await fetchRow(trxCtx, reviewId);
 
     if (row.status === "rejected") {
@@ -1091,7 +1254,7 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
       }
       createdEntityId = target.id;
       // Self-alias so a future identical proposal hits the exact-name fast-path.
-      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name);
+      await trxCtx.entityRepo.appendAlias(target.id, row.proposed_name, "human_confirmed", trxCtx.userId);
       // Re-fetch so we have the alias-bearing entity below.
       const refreshed = await fetchEntity(trxCtx, target.id);
       if (refreshed) target = refreshed;
@@ -1108,6 +1271,7 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
         rejectedName: row.proposed_name,
         rejectedBy: trxCtx.userId,
       });
+      await recordResolutionDistinct(trxCtx, row, row.candidate_entity_id, evidence);
     }
     if (opts.rejectAgainstEntityId && opts.rejectAgainstEntityId !== row.candidate_entity_id) {
       await trxCtx.repo.addRejection({
@@ -1115,6 +1279,7 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
         rejectedName: row.proposed_name,
         rejectedBy: trxCtx.userId,
       });
+      await recordResolutionDistinct(trxCtx, row, opts.rejectAgainstEntityId, evidence);
     }
 
     if (row.entity_type === "company") {
@@ -1140,17 +1305,15 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
 export async function dismissReview(
   ctx: ResolveCtx,
   reviewId: string,
-  opts: { candidateGeneratedAt: string },
+  opts: {
+    candidateGeneratedAt: string;
+    decidedBy?: string;
+    allowedStatuses?: string[];
+    useExistingTransaction?: boolean;
+  },
 ): Promise<DismissResult> {
-  return ctx.db.transaction().execute(async (trx) => {
-    const trxCtx: ResolveTxnCtx = {
-      db: trx,
-      repo: createEntityReviewRepo(trx),
-      entityRepo: createEntityRepository(trx),
-      userId: ctx.userId,
-      now: ctx.now ?? new Date().toISOString(),
-      logger: ctx.logger,
-    };
+  const run = async (trx: Kysely<DB>) => {
+    const trxCtx = createResolveTxnCtx(ctx, trx);
     const row = await fetchRow(trxCtx, reviewId);
 
     // Idempotent replay against an already-dismissed row.
@@ -1180,7 +1343,12 @@ export async function dismissReview(
       throw new ResolveError("CANDIDATE_DRIFT", "row missing candidate_generated_at", { currentRow: row });
     }
 
-    const won = await trxCtx.repo.markDismissed(row.id, ctx.userId, row.candidate_generated_at);
+    const won = await trxCtx.repo.markDismissed(
+      row.id,
+      opts.decidedBy ?? ctx.userId,
+      row.candidate_generated_at,
+      opts.allowedStatuses,
+    );
     if (!won) {
       const currentRow = await fetchRow(trxCtx, row.id);
       throw new ResolveError("CANDIDATE_DRIFT", "row was resolved or refreshed by another request", {
@@ -1189,7 +1357,8 @@ export async function dismissReview(
       });
     }
     return { row: await fetchRow(trxCtx, row.id), idempotent: false };
-  });
+  };
+  return opts.useExistingTransaction ? run(ctx.db) : ctx.db.transaction().execute(run);
 }
 
 export async function reclassifyReview(

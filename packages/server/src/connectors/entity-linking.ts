@@ -10,6 +10,7 @@ import type { Kysely, Selectable } from "kysely";
 import jaroWinklerModule from "talisman/metrics/jaro-winkler";
 import { createEntityRepository } from "../db/repositories/entities";
 import type { DB, EntitiesTable } from "../db/schema";
+import { parseAliasesString } from "../entities/materialize-json";
 import { HIDDEN_ENTITY_SOURCE_TYPES } from "../entities/profile-facts";
 
 /** talisman is CJS — handle both default and named export shapes */
@@ -35,7 +36,7 @@ export async function getHotEntitiesForPrompt(db: Kysely<DB>, content: string): 
   const contentLower = content.toLowerCase();
 
   const matched = allEntities.filter((e) => {
-    const names = [e.name, ...(JSON.parse(e.aliases || "[]") as string[])];
+    const names = [e.name, ...parseAliasesString(e.aliases)];
     return names.some((name) => contentLower.includes(name.toLowerCase()));
   });
 
@@ -53,7 +54,7 @@ export function formatEntitiesForPrompt(entities: Entity[]): string {
   if (entities.length === 0) return "";
 
   const lines = entities.map((e) => {
-    const aliases = JSON.parse(e.aliases || "[]") as string[];
+    const aliases = parseAliasesString(e.aliases);
     const aliasStr = aliases.length > 0 ? ` (aliases: ${aliases.join(", ")})` : "";
     const subtypeStr = e.subtype ? `, ${e.subtype}` : "";
     return `- ${e.id}: ${e.name}${aliasStr} [${e.source_type}${subtypeStr}]`;
@@ -81,10 +82,10 @@ export async function resolveNewPerson(db: Kysely<DB>, name: string): Promise<En
 
   const candidates = await entityRepo.getEntitiesBySourceType("person");
   for (const candidate of candidates) {
-    const names = [candidate.name, ...(JSON.parse(candidate.aliases || "[]") as string[])];
+    const names = [candidate.name, ...parseAliasesString(candidate.aliases)];
     for (const n of names) {
       if (jaroWinkler(name.toLowerCase(), n.toLowerCase()) >= JARO_WINKLER_THRESHOLD) {
-        const aliases: string[] = JSON.parse(candidate.aliases || "[]");
+        const aliases = parseAliasesString(candidate.aliases);
         if (!aliases.some((a) => a.toLowerCase() === name.toLowerCase())) {
           aliases.push(name);
           await entityRepo.updateEntity(candidate.id, { aliases: JSON.stringify(aliases) });

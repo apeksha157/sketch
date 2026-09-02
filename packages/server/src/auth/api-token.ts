@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
 
-const TOKEN_PREFIX = "skp_";
 const OAUTH_ACCESS_TOKEN_PREFIX = "sko_";
 const OAUTH_REFRESH_TOKEN_PREFIX = "skr_";
 const TOKEN_BYTES = 32;
@@ -20,10 +19,6 @@ function toBase62(bytes: Buffer): string {
   return output;
 }
 
-export function generateApiToken(): string {
-  return `${TOKEN_PREFIX}${toBase62(randomBytes(TOKEN_BYTES)).padStart(43, BASE62_ALPHABET[0])}`;
-}
-
 export function generatePrefixedToken(prefix: string): string {
   return `${prefix}${toBase62(randomBytes(TOKEN_BYTES)).padStart(43, BASE62_ALPHABET[0])}`;
 }
@@ -38,10 +33,6 @@ export function generateOAuthRefreshToken(): string {
 
 export function hashApiToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
-}
-
-export function isSketchPat(token: string): boolean {
-  return token.startsWith(TOKEN_PREFIX);
 }
 
 export function isSketchOAuthAccessToken(token: string): boolean {

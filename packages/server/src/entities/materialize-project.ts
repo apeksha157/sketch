@@ -30,8 +30,10 @@ export async function materializeProjectSeed(
 
   const result = await proposeEntity(
     {
+      db: deps.db,
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
+      resolutionLedger: deps.resolutionLedger,
       domainsRepo: deps.domainsRepo,
       lookup: deps.lookup,
       logger: deps.logger,
@@ -48,9 +50,11 @@ export async function materializeProjectSeed(
       source: subjectSource,
       sourceId: subjectSourceId,
       evidence: fact.indexed_file_id ? [{ indexedFileId: fact.indexed_file_id }] : [],
+      contextFileId: fact.indexed_file_id,
       triggeredByUserId,
       metadata,
       provenanceTier: "structural",
+      suppressContextLinking: deps.suppressContextLinking,
     },
   );
 
@@ -84,7 +88,7 @@ async function applySeedAliases(
 ): Promise<IndexEntityRow> {
   let refreshed = entity;
   for (const alias of aliases) {
-    await deps.entityRepo.appendAlias(refreshed.id, alias);
+    await deps.entityRepo.appendAlias(refreshed.id, alias, "mint_model", "structural_seed");
   }
   if (aliases.length > 0) {
     refreshed = (await deps.entityRepo.getEntity(refreshed.id)) ?? refreshed;

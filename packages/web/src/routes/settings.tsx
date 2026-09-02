@@ -711,9 +711,6 @@ function ApiKeySection() {
 
 function ApiTokensSection() {
   const queryClient = useQueryClient();
-  const [name, setName] = useState("Claude Code");
-  const [createdToken, setCreatedToken] = useState<{ plaintext: string; mcpUrl: string | null } | null>(null);
-  const [setupToken, setSetupToken] = useState<{ plaintext?: string; mcpUrl: string | null } | null>(null);
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
 
   const tokensQuery = useQuery({
@@ -721,28 +718,16 @@ function ApiTokensSection() {
     queryFn: () => api.apiTokens.list(),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (payload: { name: string }) => api.apiTokens.create(payload),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
-      setCreatedToken({ plaintext: result.plaintext, mcpUrl: result.mcpUrl });
-      setSetupToken({ plaintext: result.plaintext, mcpUrl: result.mcpUrl });
-      toast.success("Token created");
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
-
   const revokeMutation = useMutation({
     mutationFn: (id: string) => api.apiTokens.revoke(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
       setConfirmRevokeId(null);
-      toast.success("Token revoked");
+      toast.success("Client disconnected");
     },
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const trimmedName = name.trim();
   const tokens = tokensQuery.data?.tokens ?? [];
   const activeTokens = tokens.filter((token) => !token.revokedAt);
   const mcpUrl =
@@ -771,52 +756,16 @@ function ApiTokensSection() {
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            Use this URL in Claude app connectors; use PATs below for clients that require a manual Bearer header.
+            Use this URL in Claude app connectors — connecting signs in with your Sketch account and appears below.
           </p>
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <Input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            className="h-9"
-            maxLength={120}
-            aria-label="Token name"
-          />
-          <Button
-            size="sm"
-            className="shrink-0"
-            onClick={() => createMutation.mutate({ name: trimmedName })}
-            disabled={trimmedName.length === 0 || createMutation.isPending}
-          >
-            {createMutation.isPending ? <SpinnerGapIcon size={14} className="animate-spin" /> : <KeyIcon size={14} />}
-            Create token
-          </Button>
-        </div>
-
-        {createdToken ? (
-          <div className="mt-4 rounded-md border border-brand-accent bg-brand-accent/[0.05] p-3">
-            <p className="text-sm font-medium">New token</p>
-            <div className="mt-2 flex items-center gap-2">
-              <Input value={createdToken.plaintext} readOnly className="h-9 font-mono text-xs" aria-label="New token" />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => copyTextToClipboard(createdToken.plaintext).then(() => toast.success("Token copied"))}
-                aria-label="Copy token"
-              >
-                <CopySimpleIcon size={16} />
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="mt-4 overflow-hidden rounded-md border border-border">
+        <p className="text-sm font-medium">Connected clients</p>
+        <div className="mt-2 overflow-hidden rounded-md border border-border">
           {tokensQuery.isLoading ? (
             <Skeleton className="h-28 rounded-none" />
           ) : activeTokens.length === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">No active tokens</div>
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">No connected clients</div>
           ) : (
             <div className="divide-y divide-border">
               {activeTokens.map((token) => (
@@ -824,21 +773,18 @@ function ApiTokensSection() {
                   <div className="min-w-0">
                     <p className="truncate text-sm font-medium">{token.name}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {token.prefix}... · Created {formatDate(token.createdAt)}
+                      Connected {formatDate(token.createdAt)}
                       {token.lastUsedAt ? ` · Last used ${formatDate(token.lastUsedAt)}` : ""}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setSetupToken({ mcpUrl })}>
-                      Setup
-                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon-sm"
                       className="hover:text-destructive"
                       onClick={() => setConfirmRevokeId(token.id)}
-                      aria-label={`Revoke ${token.name}`}
+                      aria-label={`Disconnect ${token.name}`}
                     >
                       <TrashIcon size={16} />
                     </Button>
@@ -850,62 +796,11 @@ function ApiTokensSection() {
         </div>
       </div>
 
-      <AlertDialog open={setupToken !== null} onOpenChange={(open) => !open && setSetupToken(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Claude Code setup</AlertDialogTitle>
-            <AlertDialogDescription>
-              Use this server entry for clients that support custom Authorization headers.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">
-            {JSON.stringify(
-              {
-                mcpServers: {
-                  sketch: {
-                    type: "http",
-                    url: setupToken?.mcpUrl ?? mcpUrl,
-                    headers: { Authorization: `Bearer ${setupToken?.plaintext ?? "skp_..."}` },
-                  },
-                },
-              },
-              null,
-              2,
-            )}
-          </pre>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Close</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() =>
-                copyTextToClipboard(
-                  JSON.stringify(
-                    {
-                      mcpServers: {
-                        sketch: {
-                          type: "http",
-                          url: setupToken?.mcpUrl ?? mcpUrl,
-                          headers: { Authorization: `Bearer ${setupToken?.plaintext ?? "skp_..."}` },
-                        },
-                      },
-                    },
-                    null,
-                    2,
-                  ),
-                ).then(() => toast.success("Setup copied"))
-              }
-            >
-              <CopySimpleIcon size={14} />
-              Copy
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       <AlertDialog open={confirmRevokeId !== null} onOpenChange={(open) => !open && setConfirmRevokeId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Revoke API token?</AlertDialogTitle>
-            <AlertDialogDescription>This token will stop working immediately.</AlertDialogDescription>
+            <AlertDialogTitle>Disconnect this client?</AlertDialogTitle>
+            <AlertDialogDescription>Its access stops working immediately.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={revokeMutation.isPending}>Cancel</AlertDialogCancel>

@@ -86,9 +86,9 @@ export function AutomationLockBanner({
       <div
         data-testid="automation-lock-banner"
         data-lock-state="held-by-me"
-        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[8px] border border-emerald-500/30 bg-emerald-500/[0.07] px-3 py-1.5 text-[11px] font-medium text-foreground/85 shadow-md backdrop-blur"
+        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[8px] border border-brand-accent/40 bg-brand-accent/10 px-3 py-1.5 text-[11px] font-medium text-foreground/85 shadow-md backdrop-blur"
       >
-        <LockSimpleIcon size={13} weight="fill" className="shrink-0 text-emerald-700 dark:text-emerald-300" />
+        <LockSimpleIcon size={13} weight="fill" className="shrink-0 text-brand-accent" />
         <span>You're editing</span>
         {stealPending ? (
           <>

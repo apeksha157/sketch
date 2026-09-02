@@ -7,6 +7,7 @@ import type { EntityDomainsRepository } from "../db/repositories/entity-domains"
 import type { createEntityReviewRepo } from "../db/repositories/entity-review";
 import type { EntitySuppressionRepository } from "../db/repositories/entity-suppressions";
 import type { IndexedFileFactType } from "../db/repositories/indexed-file-facts";
+import type { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { DB, EntitiesTable, IndexedFileFactsTable } from "../db/schema";
 import type { MentionType } from "./graph";
 import type { CandidatePool, CandidatePoolEntry } from "./name-dedup";
@@ -89,6 +90,7 @@ export interface MaterializeDeps {
   logger?: Logger;
   entityRepo: ReturnType<typeof createEntityRepository>;
   reviewRepo: ReturnType<typeof createEntityReviewRepo>;
+  resolutionLedger: ReturnType<typeof createResolutionDecisionRepository>;
   suppressionRepo: EntitySuppressionRepository;
   domainsRepo: EntityDomainsRepository;
   lookup: EntityLookup;
@@ -123,6 +125,7 @@ export interface MaterializeDeps {
    * reads switch from legacy `raw`-parsing scans to indexed SQL only when set.
    */
   normalizationBackfillComplete: boolean;
+  suppressContextLinking: boolean;
 }
 
 export type MaterializeResult =
@@ -160,6 +163,7 @@ export interface ReplaySourceFactsOptions {
    * `DEFAULT_FACT_BATCH_SIZE`.
    */
   batchSize?: number;
+  suppressContextLinking?: boolean;
 }
 
 export interface MaterializeProgress {
@@ -192,6 +196,7 @@ export interface MaterializeUnmaterializedOptions {
   onProgress?: (progress: MaterializeProgress) => void;
   shouldCancel?: () => boolean;
   stageReport?: StageReporter;
+  suppressContextLinking?: boolean;
 }
 
 export const MAX_MATERIALIZE_INDEXED_FILE_ID_FILTER = 1000;

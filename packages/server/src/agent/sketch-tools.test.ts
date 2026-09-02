@@ -1212,6 +1212,7 @@ describe("registered messaging tools", () => {
 
     expect(result).toEqual({
       content: [{ type: "text", text: "Error: channel and group posting requires SendMessageToTarget." }],
+      isError: true,
     });
   });
 

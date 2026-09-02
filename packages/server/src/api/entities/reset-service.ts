@@ -59,6 +59,7 @@ export async function computeResetCounts(
   reviewQueueCleared: number;
   reviewEvidenceCleared: number;
   rejectionsCleared: number;
+  resolutionDecisionsCleared: number;
 }> {
   const toDelete = await selectEntitiesForCategories(db, flags, orgSourceTypes).execute();
   const candidates =
@@ -77,12 +78,17 @@ export async function computeResetCounts(
     flags.includeConnectors || flags.includeAi
       ? await db.selectFrom("entity_alias_rejections").select(db.fn.countAll<number>().as("c")).executeTakeFirst()
       : null;
+  const resolutionDecisions =
+    flags.includeConnectors || flags.includeAi
+      ? await db.selectFrom("resolution_decisions").select(db.fn.countAll<number>().as("c")).executeTakeFirst()
+      : null;
   return {
     entitiesDeleted: toDelete.length,
     candidatesCleared: Number(candidates?.c ?? 0),
     reviewQueueCleared: Number(queue?.c ?? 0),
     reviewEvidenceCleared: Number(evidence?.c ?? 0),
     rejectionsCleared: Number(rejections?.c ?? 0),
+    resolutionDecisionsCleared: Number(resolutionDecisions?.c ?? 0),
   };
 }
 
@@ -179,6 +185,7 @@ export async function performReset(db: Kysely<DB>, opts: ResetExecutionOptions):
   let reviewQueueCleared = 0;
   let reviewEvidenceCleared = 0;
   let rejectionsCleared = 0;
+  let resolutionDecisionsCleared = 0;
 
   if (opts.includeConnectors || opts.includeAi) {
     const candidatesResult = await db.deleteFrom("entity_candidates").execute();
@@ -196,6 +203,9 @@ export async function performReset(db: Kysely<DB>, opts: ResetExecutionOptions):
 
       const rejectionsResult = await db.deleteFrom("entity_alias_rejections").execute();
       rejectionsCleared = Number(rejectionsResult[0]?.numDeletedRows ?? 0);
+
+      const resolutionDecisionsResult = await db.deleteFrom("resolution_decisions").execute();
+      resolutionDecisionsCleared = Number(resolutionDecisionsResult[0]?.numDeletedRows ?? 0);
     } else if (opts.includeAi) {
       const evidenceDeleted = await db
         .deleteFrom("entity_review_evidence")
@@ -272,6 +282,7 @@ export async function performReset(db: Kysely<DB>, opts: ResetExecutionOptions):
       entity_review_queue: reviewQueueCleared,
       entity_review_evidence: reviewEvidenceCleared,
       entity_alias_rejections: rejectionsCleared,
+      resolution_decisions: resolutionDecisionsCleared,
     },
     filesMarkedPending: 0,
     factsMarkedUnmaterialized,

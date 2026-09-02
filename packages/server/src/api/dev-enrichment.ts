@@ -43,6 +43,7 @@ import {
   startTraceRun,
 } from "../dev/enrichment-trace";
 import { listLlmDumpHeaders, readLlmDumpBody } from "../dev/llm-dump-reader";
+import { candidateLookupView, entitySummaryView, fileContextView, pairwiseEvidenceView } from "../entities/judge-views";
 import { getFileViewer } from "./auth-helpers";
 import { resolveTaskAccessContext } from "./task-access";
 
@@ -86,6 +87,46 @@ export function devEnrichmentRoutes(
   deps: { enrichmentGenerator?: GeminiGenerator; taskMintingGenerator?: GeminiGenerator } = {},
 ) {
   const routes = new Hono();
+
+  routes.get("/judge-views/entity/:id", async (c) => {
+    const forbidden = requireAdmin(c);
+    if (forbidden) return c.json(forbidden, 403);
+    const view = await entitySummaryView(db, c.req.param("id"));
+    return c.json({ view, chars: view.length });
+  });
+
+  routes.get("/judge-views/candidates", async (c) => {
+    const forbidden = requireAdmin(c);
+    if (forbidden) return c.json(forbidden, 403);
+    const name = c.req.query("name")?.trim();
+    const entityType = c.req.query("type")?.trim();
+    if (!name || !entityType) {
+      return c.json({ error: { code: "INVALID_QUERY", message: "name and type are required" } }, 400);
+    }
+    const view = await candidateLookupView(db, { name, entityType });
+    return c.json({ view, chars: view.length });
+  });
+
+  routes.get("/judge-views/pairwise", async (c) => {
+    const forbidden = requireAdmin(c);
+    if (forbidden) return c.json(forbidden, 403);
+    const ids = (c.req.query("ids") ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (ids.length < 2 || ids.length > 5) {
+      return c.json({ error: { code: "INVALID_QUERY", message: "ids must contain 2 to 5 comma-separated ids" } }, 400);
+    }
+    const view = await pairwiseEvidenceView(db, ids);
+    return c.json({ view, chars: view.length });
+  });
+
+  routes.get("/judge-views/file/:id", async (c) => {
+    const forbidden = requireAdmin(c);
+    if (forbidden) return c.json(forbidden, 403);
+    const view = await fileContextView(db, c.req.param("id"));
+    return c.json({ view, chars: view.length });
+  });
 
   /** Starts one traced run of a single file through either pipeline, and returns immediately. */
   routes.post("/runs", async (c) => {

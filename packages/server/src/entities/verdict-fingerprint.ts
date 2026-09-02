@@ -20,7 +20,22 @@ export type VerdictFingerprintInput = {
   action: string;
   subject: VerdictFingerprintEntity | null;
   target: VerdictFingerprintEntity | null;
+  targetName?: string | null;
   evidence: VerdictFingerprintEvidence;
+};
+
+export type ContainerVerdictFingerprintRow = {
+  id: string;
+  name: string;
+  path_ids: string;
+  provider_archived: number;
+  provider_typed_kind: string | null;
+  has_dates: number;
+};
+
+export type MentionVerdictFingerprintRow = {
+  id: string;
+  candidate_generated_at: string | null;
 };
 
 function sortedValues(values: string[]): string[] {
@@ -44,6 +59,9 @@ export function graphVerdictFingerprint(input: VerdictFingerprintInput): string 
     action: input.action.toLowerCase(),
     subject: canonicalEntity(input.subject),
     target: canonicalEntity(input.target),
+    ...(input.targetName === undefined
+      ? {}
+      : { targetName: input.targetName ? normalizeName(input.targetName) : null }),
     evidence: {
       fileIds: sortedValues(input.evidence.fileIds),
       reviewIds: sortedValues(input.evidence.reviewIds),
@@ -77,12 +95,60 @@ export function fingerprintFor(input: {
   action: string;
   subject: Parameters<typeof fingerprintEntity>[0];
   target: Parameters<typeof fingerprintEntity>[0];
+  targetName?: string | null;
   evidence: VerdictFingerprintEvidence;
 }): string {
   return graphVerdictFingerprint({
     action: input.action,
     subject: fingerprintEntity(input.subject),
     target: fingerprintEntity(input.target),
+    ...(input.targetName === undefined ? {} : { targetName: input.targetName }),
     evidence: input.evidence,
   });
+}
+
+function parsePathIds(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function containerVerdictFingerprint(input: {
+  action: string;
+  container: ContainerVerdictFingerprintRow;
+}): string {
+  const canonical = {
+    action: input.action.toLowerCase(),
+    container: {
+      id: input.container.id.toLowerCase(),
+      name: normalizeName(input.container.name),
+      pathIds: parsePathIds(input.container.path_ids).map((id) => id.toLowerCase()),
+      providerArchived: input.container.provider_archived === 1,
+      providerTypedKind: input.container.provider_typed_kind?.toLowerCase() ?? null,
+      hasDates: input.container.has_dates === 1,
+    },
+  };
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
+}
+
+export function mentionVerdictFingerprint(input: {
+  action: string;
+  mentionName: string;
+  entityType: string;
+  rows: MentionVerdictFingerprintRow[];
+  target: Parameters<typeof fingerprintEntity>[0];
+}): string {
+  const canonical = {
+    action: input.action.toLowerCase(),
+    mentionName: input.mentionName,
+    entityType: input.entityType.toLowerCase(),
+    rows: [...input.rows]
+      .map((row) => ({ id: row.id.toLowerCase(), candidateGeneratedAt: row.candidate_generated_at }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    target: fingerprintEntity(input.target),
+  };
+  return createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex");
 }

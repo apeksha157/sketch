@@ -10,7 +10,6 @@
  */
 import { api } from "@/lib/api";
 import { useEntityUiOptional } from "@/lib/entity-ui";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods, type LinkObject, type NodeObject } from "react-force-graph-2d";
@@ -59,13 +58,16 @@ function endpointId(end: string | number | NodeObject | undefined): string {
   return String(end);
 }
 
-export function KnowledgeGraphView() {
+/**
+ * `search` comes from the org-wide search box — the graph has no input of its
+ * own; matching nodes light up in the canvas as the one search's result here.
+ */
+export function KnowledgeGraphView({ search = "" }: { search?: string }) {
   const ui = useEntityUiOptional();
   const [containerRef, size] = useSize();
   const fgRef = useRef<ForceGraphMethods<GraphNode> | undefined>(undefined);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
 
   const { data, isLoading } = useQuery({
     queryKey: ["entity-graph"],
@@ -224,18 +226,14 @@ export function KnowledgeGraphView() {
       <div ref={containerRef} className="relative h-full w-full">
         {/* Toolbar */}
         <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
-          <div className="relative">
-            <MagnifyingGlassIcon size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/40" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search the graph…"
-              className="w-56 rounded-full border border-white/10 bg-white/5 py-1.5 pl-8 pr-3 text-xs text-white shadow-sm outline-none backdrop-blur placeholder:text-white/35 focus:border-[#FEED01]/40"
-            />
-          </div>
           <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.06em] text-white/55 shadow-sm backdrop-blur">
             {nodes.length} entities · {links.length} links
           </span>
+          {matches ? (
+            <span className="rounded-full border border-[#FEED01]/30 bg-[#FEED01]/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.06em] text-[#FEED01]/80 shadow-sm backdrop-blur">
+              {matches.size} match{matches.size === 1 ? "" : "es"}
+            </span>
+          ) : null}
         </div>
 
         {isLoading && (

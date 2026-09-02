@@ -5,6 +5,7 @@ import { normalizeName } from "../../entities/name-keys";
 import { upsertSlackIdentity } from "../../slack/upsert-identity";
 import type { DB, EntitiesTable, SlackUserSyncStateTable, UsersTable } from "../schema";
 import { createEntityRepository, isHumanSubtypeOverride, normalizeContactPointValue } from "./entities";
+import { recordAlias } from "./entity-alias-rows";
 import { mergeEntityAliases } from "./entity-aliases";
 import { createEntityReviewRepo } from "./entity-review";
 import { ensureUserEntityLinkForEntity } from "./user-entity-linking";
@@ -260,7 +261,7 @@ async function updateEntityFromSlackProfile(
   if (slackOwned && email) updates.metadata = JSON.stringify(metadata);
 
   await trx.updateTable("entities").set(updates).where("id", "=", entity.id).execute();
-  await mergeEntityAliases(trx, entity.id, [profile.realName, profile.displayName], now);
+  await mergeEntityAliases(trx, entity.id, [profile.realName, profile.displayName], "roster", now, "slack_entity_sync");
   if (email) {
     await updateSlackContactPoint(trx, entity.id, "email", email, connectorConfigId, slackOwned, now);
   }
@@ -661,6 +662,13 @@ async function runUpsertBody(
         updated_at: now,
       })
       .execute();
+    if (email)
+      await recordAlias(trx, {
+        entityId: candidateId,
+        alias: email,
+        provenance: "roster",
+        createdBy: "slack_entity_sync",
+      });
     entity = await trx.selectFrom("entities").selectAll().where("id", "=", candidateId).executeTakeFirstOrThrow();
     slackOwned = true;
     createdInThisTransaction = true;

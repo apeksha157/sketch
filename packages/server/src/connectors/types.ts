@@ -281,6 +281,21 @@ export interface PersonEntitySeed {
   sourceId: string;
 }
 
+export interface ContainerObservation {
+  externalId: string;
+  levelKey: string;
+  name: string;
+  pathIds: string[];
+  pathNames: string[];
+  parentExternalId?: string | null;
+  itemCount?: number;
+  firstItemAt?: string | null;
+  lastItemAt?: string | null;
+  providerArchived?: boolean;
+  providerTypedKind?: string | null;
+  hasDates?: boolean;
+}
+
 export interface ContactPointSeed {
   subjectName: string;
   subjectEmail?: string;
@@ -357,6 +372,7 @@ export interface LlmTaskFactRaw {
 
 export type EntitySeedCallback = (seed: EntitySeed) => Promise<void>;
 export type PersonEntitySeedCallback = (seed: PersonEntitySeed) => Promise<void>;
+export type ContainerObservationCallback = (observation: ContainerObservation) => Promise<void>;
 
 export type IndexedFileFactRaw =
   | { providerFileId: string; attendee: { name?: string; email?: string } }
@@ -551,6 +567,8 @@ export interface Connector {
     appConfig?: { SLACK_ENTITY_SYNC?: boolean };
     onEntitySeed?: EntitySeedCallback;
     onPersonSeed?: PersonEntitySeedCallback;
+    onContainerObservation?: ContainerObservationCallback;
+    containerTargetOverrides?: Record<string, ContainerTarget>;
     onEmailSuppressed?: (record: SuppressedEmailRecord) => Promise<void>;
     onSourceItemRemoved?: (record: SourceItemRemovalRecord) => Promise<void>;
   }): AsyncGenerator<SyncedItem>;

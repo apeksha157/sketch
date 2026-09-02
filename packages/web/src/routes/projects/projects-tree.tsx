@@ -1,20 +1,22 @@
+import { EntityRow } from "@/components/entity-table";
 /**
  * ProjectsTree — the Your Org → Projects tab rendered as a part_of tree,
  * grouped into client sections plus Internal.
  *
  * A section comes from the ROOT ancestor's engagement_for company: acceptance
  * writes engagement_for only on top-level projects (nested children get
- * part_of instead), so a child inherits its root's section. Admins drag a row
- * onto another project to nest it, or onto a section's "top level" strip:
- * the row's own strip un-nests (the server re-anchors the section company),
- * any other section's strip un-nests AND reassigns the client company in the
- * same PATCH.
+ * part_of instead), so a child inherits its root's section. Rearranging is
+ * behind an explicit Edit toggle so the grips don't clutter the reading view:
+ * in edit mode admins drag a row onto another project to nest it, or onto a
+ * section's "top level" strip — the row's own strip un-nests (the server
+ * re-anchors the section company), any other section's strip un-nests AND
+ * reassigns the client company in the same PATCH.
  *
  * Rows whose parent is off-page (the list caps at 200) render top-level.
  */
 import { type EntityListItem, api } from "@/lib/api";
-import { EntityRow } from "@/routes/files/entity-explorer";
-import { CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
+import { CaretDownIcon, CaretRightIcon, CheckIcon, PencilSimpleIcon } from "@phosphor-icons/react";
+import { Button } from "@sketch/ui/components/button";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -71,9 +73,11 @@ export function ProjectsTree({
   isAdmin: boolean;
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [editing, setEditing] = useState(false);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const canRearrange = isAdmin && editing;
 
   const { byId, childrenByParent, roots } = buildIndex(entities);
   const sections = buildSections(roots);
@@ -164,6 +168,35 @@ export function ProjectsTree({
 
   return (
     <div className="space-y-5">
+      {isAdmin ? (
+        <div className="flex items-center justify-end gap-2">
+          {editing ? (
+            <span className="text-[11px] text-muted-foreground">Drag rows to nest, or between clients.</span>
+          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            variant={editing ? "secondary" : "ghost"}
+            className="h-7 gap-1 text-[11px]"
+            data-testid="tree-edit-toggle"
+            onClick={() => {
+              setEditing((current) => !current);
+              setDraggedId(null);
+              setDropTargetId(null);
+            }}
+          >
+            {editing ? (
+              <>
+                <CheckIcon size={12} /> Done
+              </>
+            ) : (
+              <>
+                <PencilSimpleIcon size={12} /> Edit
+              </>
+            )}
+          </Button>
+        </div>
+      ) : null}
       {sections.map((section) => {
         const rows: FlatRow[] = [];
         flatten(section.roots, 0, rows);
@@ -202,7 +235,7 @@ export function ProjectsTree({
                   dimmed={draggedId === entity.id}
                   leading={
                     <span className="flex shrink-0 items-center gap-1 pl-3">
-                      {isAdmin ? (
+                      {canRearrange ? (
                         <span aria-hidden className="cursor-grab select-none text-[13px] text-muted-foreground/70">
                           ⠿
                         </span>
@@ -229,8 +262,9 @@ export function ProjectsTree({
                     </span>
                   }
                   containerProps={{
-                    draggable: isAdmin,
+                    draggable: canRearrange,
                     onDragStart: (e) => {
+                      if (!canRearrange) return;
                       setDraggedId(entity.id);
                       e.dataTransfer?.setData("text/plain", entity.id);
                     },

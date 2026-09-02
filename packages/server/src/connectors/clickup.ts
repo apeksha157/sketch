@@ -20,6 +20,7 @@ import {
   type HierarchyMapping,
   type HierarchyMappingConfig,
   type HierarchyNode,
+  classificationOverridesKey,
   computeStructureAwareDefault,
   hasStoredHierarchyMapping,
   readHierarchyMappingConfig,
@@ -29,6 +30,8 @@ import {
 import type {
   Connector,
   ConnectorCredentials,
+  ContainerObservation,
+  ContainerObservationCallback,
   ContainerTarget,
   EntitySeed,
   EntitySeedCallback,
@@ -70,6 +73,7 @@ interface ClickUpMember {
 export interface ClickUpSpace {
   id: string;
   name: string;
+  archived?: boolean;
   private?: boolean;
   members?: ClickUpMember[];
   features?: { sprints?: { enabled?: boolean } };
@@ -78,11 +82,13 @@ export interface ClickUpSpace {
 interface ClickUpFolder {
   id: string;
   name: string;
+  archived?: boolean;
 }
 
 export interface ClickUpList {
   id: string;
   name: string;
+  archived?: boolean;
   task_count?: number;
   start_date?: string | null;
   due_date?: string | null;
@@ -91,6 +97,7 @@ export interface ClickUpList {
 interface ClickUpDoc {
   id: string;
   name: string;
+  archived?: boolean;
   date_created?: string;
   date_updated?: string;
   parent?: { id: string; type: number };
@@ -284,6 +291,83 @@ function hasListDates(list: ClickUpList): boolean {
   return isPositiveDigitString(list.start_date) && isPositiveDigitString(list.due_date);
 }
 
+interface ObservedContainerStats {
+  itemCount: number;
+  firstItemAt: string | null;
+  lastItemAt: string | null;
+}
+
+interface ListObservationTrustedStats {
+  itemCount?: number;
+  firstItemAt?: string | null;
+  lastItemAt?: string | null;
+}
+
+function emptyObservedContainerStats(): ObservedContainerStats {
+  return { itemCount: 0, firstItemAt: null, lastItemAt: null };
+}
+
+function observeItemInContainer(stats: ObservedContainerStats, firstAt: string | null, lastAt: string | null): void {
+  stats.itemCount++;
+  const effectiveFirstAt = firstAt ?? lastAt;
+  const effectiveLastAt = lastAt ?? firstAt;
+  if (effectiveFirstAt && (!stats.firstItemAt || effectiveFirstAt < stats.firstItemAt)) {
+    stats.firstItemAt = effectiveFirstAt;
+  }
+  if (effectiveLastAt && (!stats.lastItemAt || effectiveLastAt > stats.lastItemAt)) {
+    stats.lastItemAt = effectiveLastAt;
+  }
+}
+
+/**
+ * Provider totals describe the whole list, fetched stats describe only the
+ * task page set from this sync pass. Count and first-item dates can fall back
+ * to fetched stats only on an unfiltered pass; last-item dates are safe to
+ * advance from any non-empty filtered page because incremental pages are newer
+ * than the cursor.
+ */
+function trustedListObservationStats(params: {
+  list: ClickUpList;
+  listStats: ObservedContainerStats;
+  taskFetchWasFiltered: boolean;
+}): ListObservationTrustedStats {
+  const providerItemCount = typeof params.list.task_count === "number" ? params.list.task_count : undefined;
+  const fetchedAnyTasks = params.listStats.itemCount > 0;
+  return {
+    itemCount: providerItemCount ?? (!params.taskFetchWasFiltered ? params.listStats.itemCount : undefined),
+    firstItemAt: !params.taskFetchWasFiltered ? params.listStats.firstItemAt : undefined,
+    lastItemAt: fetchedAnyTasks ? params.listStats.lastItemAt : undefined,
+  };
+}
+
+export function clickUpContainerObservation(params: {
+  levelKey: "workspace" | "space" | "folder" | "list" | "doc";
+  node: { id: string; name: string; archived?: boolean };
+  ancestors: Array<{ id: string; name: string }>;
+  itemCount?: number;
+  firstItemAt?: string | null;
+  lastItemAt?: string | null;
+  providerTypedKind?: string | null;
+  hasDates?: boolean;
+}): ContainerObservation {
+  const parent = params.ancestors[params.ancestors.length - 1];
+  /** Item stats stay undefined when this pass did not count items, so re-observation preserves earlier counts. */
+  return {
+    externalId: params.node.id,
+    levelKey: params.levelKey,
+    name: params.node.name,
+    pathIds: params.ancestors.map((ancestor) => ancestor.id),
+    pathNames: params.ancestors.map((ancestor) => ancestor.name),
+    parentExternalId: parent?.id ?? null,
+    itemCount: params.itemCount,
+    firstItemAt: params.firstItemAt,
+    lastItemAt: params.lastItemAt,
+    providerArchived: params.node.archived ?? false,
+    providerTypedKind: params.providerTypedKind ?? null,
+    hasDates: params.hasDates ?? false,
+  };
+}
+
 function effectiveTargetForNode(
   node: HierarchyNode,
   mapping: HierarchyMapping,
@@ -345,17 +429,27 @@ export function resolveListCycle(params: {
   workspaceName: string;
   workspaceId: string;
   storedMapping: unknown;
+  hierarchyMapping?: HierarchyMapping;
+  hierarchyMappingConfig?: HierarchyMappingConfig;
   logger?: Pick<Logger, "warn">;
 }): SyncedTaskCycle | null {
-  const mappingConfig = readHierarchyMappingConfig(params.storedMapping);
-  if (!hasStoredHierarchyMapping(mappingConfig, CLICKUP_HIERARCHY_LEVEL_KEYS)) {
+  const mappingConfig = params.hierarchyMappingConfig ?? readHierarchyMappingConfig(params.storedMapping);
+  const hasStoredMapping = hasStoredHierarchyMapping(mappingConfig, CLICKUP_HIERARCHY_LEVEL_KEYS);
+  const hasListOverride = Boolean(mappingConfig[classificationOverridesKey]?.[params.list.id]);
+  if (!hasStoredMapping && !hasListOverride) {
     return detectSprintCycle(params.list, params.space, params.folder);
   }
 
-  const mapping = resolveHierarchyMapping(CLICKUP_HIERARCHY_LEVELS, mappingConfig, {
-    levelContexts: [{ key: "list", hasDates: hasListDates(params.list) }],
-    logger: params.logger,
-  });
+  const mapping = hasStoredMapping
+    ? resolveHierarchyMapping(CLICKUP_HIERARCHY_LEVELS, mappingConfig, {
+        levelContexts: [{ key: "list", hasDates: hasListDates(params.list) }],
+        logger: params.logger,
+      })
+    : (params.hierarchyMapping ??
+      resolveHierarchyMapping(CLICKUP_HIERARCHY_LEVELS, mappingConfig, {
+        levelContexts: [{ key: "list", hasDates: hasListDates(params.list) }],
+        logger: params.logger,
+      }));
   const effectiveTarget = resolveContainerTarget(mappingConfig, "list", params.list.id, mapping.list);
   if (effectiveTarget !== "cycle") return null;
 
@@ -695,18 +789,32 @@ export function createClickUpConnector(): Connector {
       await clickupRequest("/user", token, pino({ level: "silent" }));
     },
 
-    async *sync({ credentials, scopeConfig, cursor, logger, onEntitySeed, onPersonSeed }) {
+    async *sync({
+      credentials,
+      scopeConfig,
+      cursor,
+      logger,
+      onEntitySeed,
+      onPersonSeed,
+      onContainerObservation,
+      containerTargetOverrides,
+    }) {
       const token = getAccessToken(credentials);
       const allowedWorkspaces = (scopeConfig.workspaces as string[] | undefined) ?? [];
       const allowedSpaces = (scopeConfig.spaces as string[] | undefined) ?? [];
       const storedHierarchyMapping = scopeConfig.hierarchyMapping;
       const hierarchyMappingConfig = readHierarchyMappingConfig(storedHierarchyMapping);
+      const activeHierarchyMappingConfig =
+        containerTargetOverrides && Object.keys(containerTargetOverrides).length > 0
+          ? { ...hierarchyMappingConfig, [classificationOverridesKey]: containerTargetOverrides }
+          : hierarchyMappingConfig;
       const hasStoredMapping = hasStoredHierarchyMapping(hierarchyMappingConfig, CLICKUP_HIERARCHY_LEVEL_KEYS);
       const seenAssignees = new Map<string, { username: string; email?: string }>();
 
       // Incremental: convert cursor to Unix ms for date_updated_gt filter
       const sinceMs = cursor ? new Date(cursor).getTime() : undefined;
-      if (sinceMs) {
+      const taskFetchWasFiltered = !!sinceMs;
+      if (taskFetchWasFiltered) {
         logger.info({ cursor, sinceMs }, "Incremental sync — filtering tasks updated after cursor");
       }
 
@@ -732,6 +840,7 @@ export function createClickUpConnector(): Connector {
         }
 
         const workspaceName = team.name.trim();
+        const workspaceObservationName = team.name;
         const workspaceEmails = extractMemberEmails(team.members);
         logger.info(
           { teamId: team.id, workspaceName, memberCount: workspaceEmails.length },
@@ -740,7 +849,7 @@ export function createClickUpConnector(): Connector {
 
         const workspaceMapping = resolveHierarchyMapping(
           CLICKUP_HIERARCHY_LEVELS,
-          hasStoredMapping ? storedHierarchyMapping : computeStructureAwareDefault(CLICKUP_HIERARCHY_LEVELS),
+          hasStoredMapping ? activeHierarchyMappingConfig : computeStructureAwareDefault(CLICKUP_HIERARCHY_LEVELS),
           { logger },
         );
 
@@ -748,7 +857,7 @@ export function createClickUpConnector(): Connector {
           await maybeSeedMappedClickUpNode({
             onEntitySeed,
             mapping: workspaceMapping,
-            mappingConfig: hierarchyMappingConfig,
+            mappingConfig: activeHierarchyMappingConfig,
             levelKey: "workspace",
             node: { id: team.id, name: workspaceName },
             workspaceName,
@@ -756,6 +865,13 @@ export function createClickUpConnector(): Connector {
             parentPath: [],
           });
         }
+        await onContainerObservation?.(
+          clickUpContainerObservation({
+            levelKey: "workspace",
+            node: { id: team.id, name: workspaceObservationName },
+            ancestors: [],
+          }),
+        );
 
         const workspaceScope: SyncedItem["accessScope"] = {
           scopeType: "workspace",
@@ -804,7 +920,7 @@ export function createClickUpConnector(): Connector {
           hierarchyMapping = resolveHierarchyMapping(
             CLICKUP_HIERARCHY_LEVELS,
             hasStoredMapping
-              ? storedHierarchyMapping
+              ? activeHierarchyMappingConfig
               : computeStructureAwareDefault(CLICKUP_HIERARCHY_LEVELS, {
                   hasFolders: foldersRes.folders.length > 0,
                   hasFolderlessLists: folderlessLists.length > 0,
@@ -815,7 +931,7 @@ export function createClickUpConnector(): Connector {
             await maybeSeedMappedClickUpNode({
               onEntitySeed,
               mapping: hierarchyMapping,
-              mappingConfig: hierarchyMappingConfig,
+              mappingConfig: activeHierarchyMappingConfig,
               levelKey: "space",
               node: space,
               workspaceName,
@@ -825,6 +941,13 @@ export function createClickUpConnector(): Connector {
               parentPath: [workspaceName],
             });
           }
+          await onContainerObservation?.(
+            clickUpContainerObservation({
+              levelKey: "space",
+              node: space,
+              ancestors: [{ id: team.id, name: workspaceObservationName }],
+            }),
+          );
 
           for (const folder of foldersRes.folders) {
             const listsRes = (await clickupRequest(`/folder/${folder.id}/list`, token, logger)) as {
@@ -835,7 +958,7 @@ export function createClickUpConnector(): Connector {
               await maybeSeedMappedClickUpNode({
                 onEntitySeed,
                 mapping: hierarchyMapping,
-                mappingConfig: hierarchyMappingConfig,
+                mappingConfig: activeHierarchyMappingConfig,
                 levelKey: "folder",
                 node: folder,
                 workspaceName,
@@ -845,12 +968,22 @@ export function createClickUpConnector(): Connector {
                 parentPath: [workspaceName, space.name],
               });
             }
+            await onContainerObservation?.(
+              clickUpContainerObservation({
+                levelKey: "folder",
+                node: folder,
+                ancestors: [
+                  { id: team.id, name: workspaceObservationName },
+                  { id: space.id, name: space.name },
+                ],
+              }),
+            );
             for (const list of lists) {
               if (hierarchyMapping) {
                 await maybeSeedMappedClickUpNode({
                   onEntitySeed,
                   mapping: hierarchyMapping,
-                  mappingConfig: hierarchyMappingConfig,
+                  mappingConfig: activeHierarchyMappingConfig,
                   levelKey: "list",
                   node: list,
                   workspaceName,
@@ -867,14 +1000,17 @@ export function createClickUpConnector(): Connector {
                 workspaceName,
                 workspaceId: team.id,
                 storedMapping: storedHierarchyMapping,
+                hierarchyMapping,
+                hierarchyMappingConfig: activeHierarchyMappingConfig,
                 logger,
               });
               const effectiveListTarget = resolveContainerTarget(
-                hierarchyMappingConfig,
+                activeHierarchyMappingConfig,
                 "list",
                 list.id,
                 hierarchyMapping.list ?? "ignore",
               );
+              const listStats = onContainerObservation ? emptyObservedContainerStats() : undefined;
               yield* fetchTasksFromList(
                 list.id,
                 workspaceName,
@@ -891,9 +1027,28 @@ export function createClickUpConnector(): Connector {
                 sinceMs,
                 cycle ?? undefined,
                 hierarchyMapping,
-                hierarchyMappingConfig,
+                activeHierarchyMappingConfig,
                 !STRUCTURAL_TASK_GATED_TARGETS.has(effectiveListTarget),
+                listStats,
               );
+              if (onContainerObservation && listStats) {
+                const trustedStats = trustedListObservationStats({ list, listStats, taskFetchWasFiltered });
+                await onContainerObservation(
+                  clickUpContainerObservation({
+                    levelKey: "list",
+                    node: list,
+                    ancestors: [
+                      { id: team.id, name: workspaceObservationName },
+                      { id: space.id, name: space.name },
+                      { id: folder.id, name: folder.name },
+                    ],
+                    itemCount: trustedStats.itemCount,
+                    firstItemAt: trustedStats.firstItemAt,
+                    lastItemAt: trustedStats.lastItemAt,
+                    hasDates: hasListDates(list),
+                  }),
+                );
+              }
             }
           }
 
@@ -902,7 +1057,7 @@ export function createClickUpConnector(): Connector {
               await maybeSeedMappedClickUpNode({
                 onEntitySeed,
                 mapping: hierarchyMapping,
-                mappingConfig: hierarchyMappingConfig,
+                mappingConfig: activeHierarchyMappingConfig,
                 levelKey: "list",
                 node: list,
                 workspaceName,
@@ -918,14 +1073,17 @@ export function createClickUpConnector(): Connector {
               workspaceName,
               workspaceId: team.id,
               storedMapping: storedHierarchyMapping,
+              hierarchyMapping,
+              hierarchyMappingConfig: activeHierarchyMappingConfig,
               logger,
             });
             const effectiveListTarget = resolveContainerTarget(
-              hierarchyMappingConfig,
+              activeHierarchyMappingConfig,
               "list",
               list.id,
               hierarchyMapping.list ?? "ignore",
             );
+            const listStats = onContainerObservation ? emptyObservedContainerStats() : undefined;
             yield* fetchTasksFromList(
               list.id,
               workspaceName,
@@ -942,9 +1100,27 @@ export function createClickUpConnector(): Connector {
               sinceMs,
               cycle ?? undefined,
               hierarchyMapping,
-              hierarchyMappingConfig,
+              activeHierarchyMappingConfig,
               !STRUCTURAL_TASK_GATED_TARGETS.has(effectiveListTarget),
+              listStats,
             );
+            if (onContainerObservation && listStats) {
+              const trustedStats = trustedListObservationStats({ list, listStats, taskFetchWasFiltered });
+              await onContainerObservation(
+                clickUpContainerObservation({
+                  levelKey: "list",
+                  node: list,
+                  ancestors: [
+                    { id: team.id, name: workspaceObservationName },
+                    { id: space.id, name: space.name },
+                  ],
+                  itemCount: trustedStats.itemCount,
+                  firstItemAt: trustedStats.firstItemAt,
+                  lastItemAt: trustedStats.lastItemAt,
+                  hasDates: hasListDates(list),
+                }),
+              );
+            }
           }
         }
 
@@ -952,7 +1128,15 @@ export function createClickUpConnector(): Connector {
           allowedWorkspaces.includes(team.id) ||
           (allowedWorkspaces.length === 0 && (allowedSpaces.length === 0 || syncedAnyAllowedSpace));
         if (workspaceInDocScope) {
-          yield* fetchDocsFromWorkspace(team.id, token, logger, workspaceScope, cursor ?? undefined);
+          yield* fetchDocsFromWorkspace(
+            team.id,
+            token,
+            logger,
+            workspaceScope,
+            cursor ?? undefined,
+            onContainerObservation,
+            workspaceObservationName,
+          );
         }
       }
 
@@ -1015,6 +1199,7 @@ async function* fetchTasksFromList(
   hierarchyMapping?: HierarchyMapping,
   hierarchyMappingConfig?: HierarchyMappingConfig,
   emitStructuralTask = true,
+  stats?: ObservedContainerStats,
 ): AsyncGenerator<SyncedItem> {
   try {
     for (let page = 0; page < MAX_TASK_PAGES; page++) {
@@ -1026,6 +1211,13 @@ async function* fetchTasksFromList(
       const tasksRes = (await clickupRequest(url, token, logger)) as { tasks: ClickUpTask[]; last_page?: boolean };
 
       for (const task of tasksRes.tasks) {
+        if (stats) {
+          observeItemInContainer(
+            stats,
+            parseClickUpTimestamp(task.date_created ?? null),
+            parseClickUpTimestamp(task.date_updated ?? null),
+          );
+        }
         if (seenAssignees) {
           for (const assignee of task.assignees) {
             if (assignee.username && !seenAssignees.has(assignee.username)) {
@@ -1063,6 +1255,8 @@ async function* fetchDocsFromWorkspace(
   logger: Logger,
   accessScope?: SyncedItem["accessScope"],
   since?: string,
+  onContainerObservation?: ContainerObservationCallback,
+  workspaceName?: string,
 ): AsyncGenerator<SyncedItem> {
   try {
     // Paginate through all docs using cursor.
@@ -1098,6 +1292,14 @@ async function* fetchDocsFromWorkspace(
         }
       }
 
+      await onContainerObservation?.(
+        clickUpContainerObservation({
+          levelKey: "doc",
+          node: doc,
+          ancestors: workspaceName ? [{ id: workspaceId, name: workspaceName }] : [],
+          providerTypedKind: "doc",
+        }),
+      );
       try {
         // v3 pages endpoint returns a flat array, not { pages: [...] }
         const pages = (await clickupRequestV3(

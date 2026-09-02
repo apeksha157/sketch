@@ -10,14 +10,18 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import type { Config } from "../config";
 import { createConnectorRepository } from "../db/repositories/connectors";
+import { createContainerRepository } from "../db/repositories/containers";
 import { createEntityRepository } from "../db/repositories/entities";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import { createSettingsRepository } from "../db/repositories/settings";
-import { createUserRepository } from "../db/repositories/users";
+import { MACHINE_PRINCIPAL_USER_ID, createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { inferAffiliationFromEmail } from "../entities/affiliations";
 import { sweepCoMentionContributesTo } from "../entities/co-mention-sweep";
+import { judgeUnclassifiedContainers } from "../entities/container-judge";
+import { deriveContainerMembership, proposeContainerMaturityReopens } from "../entities/container-membership";
+import { settleContainersFromProviderFacts } from "../entities/container-settlement";
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
@@ -36,7 +40,9 @@ import {
   resolveOpenRouterEnrichmentConfig,
 } from "./enrichment-providers";
 import { createGeminiGenerator } from "./gemini-generate";
+import { type ContainerMapping, classificationToContainerTarget } from "./hierarchy-mapping";
 import { applyMicrosoftOAuthConfig, resolveMicrosoftOAuthConfig } from "./microsoft-graph";
+import { createOpenRouterGenerator } from "./openrouter-generate";
 import { type PostSyncGraphInputCollector, createPostSyncGraphInputCollector } from "./post-sync";
 import { getPostSyncCoordinator } from "./post-sync-coordinator";
 import { getConnector } from "./registry";
@@ -69,7 +75,12 @@ export async function seedTeamDirectoryEntities(db: Kysely<DB>, logger: Logger):
   try {
     const entityRepo = createEntityRepository(db);
     const domainsRepo = createEntityDomainsRepository(db);
-    const users = await db.selectFrom("users").selectAll().where("type", "!=", "external").execute();
+    const users = await db
+      .selectFrom("users")
+      .selectAll()
+      .where("type", "!=", "external")
+      .where("id", "!=", MACHINE_PRINCIPAL_USER_ID)
+      .execute();
     for (const user of users) {
       const entity = await entityRepo.upsertPersonEntity({
         name: user.name,
@@ -106,6 +117,29 @@ export interface RunConnectorSyncOptions {
   postSyncMode?: "inline" | "deferred";
   postSyncInputCollector?: PostSyncGraphInputCollector;
   slackIndexingFacade?: SlackIndexingFacade | null;
+}
+
+/**
+ * Active mode resolves any stored classification into connector-local target overrides.
+ * `classification_status` is intentionally not filtered: archival and verdict state are
+ * enforced by verdict application, while sync consumes the applied classification value.
+ */
+async function loadActiveContainerTargetOverrides(
+  db: Kysely<DB>,
+  connectorConfigId: string,
+): Promise<ContainerMapping> {
+  const rows = await db
+    .selectFrom("containers")
+    .select(["external_id", "classification"])
+    .where("connector_config_id", "=", connectorConfigId)
+    .where("classification", "is not", null)
+    .execute();
+  const overrides: ContainerMapping = {};
+  for (const row of rows) {
+    const target = classificationToContainerTarget(row.classification);
+    if (target) overrides[row.external_id] = target;
+  }
+  return overrides;
 }
 
 /**
@@ -162,6 +196,7 @@ export async function runConnectorSync(
       | "MICROSOFT_CLIENT_SECRET"
       | "MICROSOFT_TENANT"
       | "OPENROUTER_API_KEY"
+      | "CONTAINER_CLASSIFICATION_MODE"
     >
   >,
   options: RunConnectorSyncOptions = {},
@@ -308,6 +343,14 @@ export async function runConnectorSync(
 
     const seenSyncIdentityKeys = new Set<string>();
     const dirtyCrmRollupGroupIds = new Set<string>();
+    const containerRepo =
+      appConfig?.CONTAINER_CLASSIFICATION_MODE && appConfig.CONTAINER_CLASSIFICATION_MODE !== "off"
+        ? createContainerRepository(db)
+        : null;
+    const containerTargetOverrides =
+      appConfig?.CONTAINER_CLASSIFICATION_MODE === "active"
+        ? await loadActiveContainerTargetOverrides(db, config.id)
+        : undefined;
 
     const existingHashes = await loadExistingContentHashes(db, connectorType, config.id);
     const resolveNameToEmail = await buildSyncNameResolver(db);
@@ -325,6 +368,16 @@ export async function runConnectorSync(
           })
         : undefined;
     const salienceOpenRouterConfig = resolveOpenRouterEnrichmentConfig(settings, appConfig?.OPENROUTER_API_KEY);
+    const containerJudgeOpenRouterGenerator =
+      appConfig?.CONTAINER_CLASSIFICATION_MODE &&
+      appConfig.CONTAINER_CLASSIFICATION_MODE !== "off" &&
+      salienceOpenRouterConfig.openRouterApiKey
+        ? createOpenRouterGenerator(salienceOpenRouterConfig.openRouterApiKey, {
+            model: salienceOpenRouterConfig.openRouterModel,
+            reasoningEffort: "medium",
+            timeoutMs: 300_000,
+          })
+        : null;
     const salienceGenerator =
       settings?.enrichment_enabled !== 0
         ? createEnrichmentGenerator({
@@ -382,6 +435,27 @@ export async function runConnectorSync(
           raw: seed,
         });
       },
+      onContainerObservation: containerRepo
+        ? async (observation) => {
+            await containerRepo.observeContainer({
+              connectorConfigId: config.id,
+              connectorType,
+              externalId: observation.externalId,
+              levelKey: observation.levelKey,
+              name: observation.name,
+              pathIds: observation.pathIds,
+              pathNames: observation.pathNames,
+              parentExternalId: observation.parentExternalId,
+              itemCount: observation.itemCount,
+              firstItemAt: observation.firstItemAt,
+              lastItemAt: observation.lastItemAt,
+              providerArchived: observation.providerArchived,
+              providerTypedKind: observation.providerTypedKind,
+              hasDates: observation.hasDates,
+            });
+          }
+        : undefined,
+      containerTargetOverrides,
       onEmailSuppressed: async (record) => {
         await recordSuppressedEmailRecord(db, {
           connectorConfigId: config.id,
@@ -517,6 +591,45 @@ export async function runConnectorSync(
         syncLogger,
         appConfig,
       });
+    }
+
+    if (appConfig?.CONTAINER_CLASSIFICATION_MODE && appConfig.CONTAINER_CLASSIFICATION_MODE !== "off") {
+      await settleContainersFromProviderFacts(db, config.id);
+      try {
+        await judgeUnclassifiedContainers(
+          {
+            db,
+            logger: syncLogger,
+            generator: containerJudgeOpenRouterGenerator ?? salienceGenerator ?? llmTaskGenerator ?? null,
+            agenticGenerator: containerJudgeOpenRouterGenerator,
+            model: salienceOpenRouterConfig.openRouterModel,
+          },
+          config.id,
+        );
+      } catch (err) {
+        syncLogger.warn(
+          { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
+          "Container judge failed after settlement",
+        );
+      }
+      if (appConfig.CONTAINER_CLASSIFICATION_MODE === "active") {
+        try {
+          await deriveContainerMembership({ db, logger: syncLogger }, config.id);
+        } catch (err) {
+          syncLogger.warn(
+            { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
+            "Container membership derivation failed after judge",
+          );
+        }
+        try {
+          await proposeContainerMaturityReopens({ db, logger: syncLogger }, config.id);
+        } catch (err) {
+          syncLogger.warn(
+            { connectorId: config.id, errorType: err instanceof Error ? err.name : typeof err },
+            "Container maturity validation failed after membership derivation",
+          );
+        }
+      }
     }
 
     result.newCursor = await connector.getCursor({
@@ -677,6 +790,7 @@ export interface SyncSchedulerDeps {
       | "MICROSOFT_TENANT"
       | "ENCRYPTION_KEY"
       | "OPENROUTER_API_KEY"
+      | "CONTAINER_CLASSIFICATION_MODE"
     >
   >;
 }

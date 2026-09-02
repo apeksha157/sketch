@@ -221,6 +221,19 @@ export interface FileEmbeddingsTable {
   embedding: string;
 }
 
+export interface LlmUsageEventsTable {
+  id: string;
+  created_at: Generated<string>;
+  context: string;
+  indexed_file_id: string | null;
+  model: string;
+  outcome: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  duration_ms: number;
+  cost_usd: number | null;
+}
+
 export interface EntityNameEmbeddingsTable {
   entity_id: string;
   embedding: string;
@@ -976,7 +989,9 @@ export interface GraphVerdictsTable {
   id: string;
   run_id: string;
   action: string;
-  subject_entity_id: string;
+  subject_entity_id: string | null;
+  subject_container_id: string | null;
+  subject_mention_name: string | null;
   subject_name: string | null;
   subject_entity_type: string | null;
   target_entity_id: string | null;
@@ -1182,6 +1197,18 @@ export interface EntityNameProposalsTable {
   resolved_at: string | null;
 }
 
+export type EntityAliasProvenance = "human_confirmed" | "judge" | "merge" | "mint_model" | "roster" | "legacy";
+
+export interface EntityAliasesTable {
+  id: string;
+  entity_id: string;
+  alias: string;
+  normalized_alias: string;
+  provenance: EntityAliasProvenance;
+  created_by: string | null;
+  created_at: Generated<string>;
+}
+
 export interface EntityMergesTable {
   id: string;
   survivor_entity_id: string;
@@ -1224,6 +1251,33 @@ export interface ContainerClassificationsTable {
   reasoning: string;
   digest_hash: string;
   status: Generated<string>;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+export interface ContainersTable {
+  id: string;
+  connector_config_id: string;
+  connector_type: string;
+  external_id: string;
+  level_key: string;
+  name: string;
+  path_ids: string;
+  path_names: string;
+  parent_container_id: string | null;
+  item_count: Generated<number>;
+  first_item_at: string | null;
+  last_item_at: string | null;
+  provider_archived: Generated<number>;
+  provider_typed_kind: string | null;
+  has_dates: Generated<number>;
+  discovered_at: Generated<string>;
+  last_seen_at: Generated<string>;
+  classification: string | null;
+  classification_status: string | null;
+  classified_entity_id: string | null;
+  verdict_id: string | null;
+  last_reviewed_fingerprint: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -1444,6 +1498,13 @@ export interface EntityCreationSuppressionsTable {
   created_at: Generated<string>;
 }
 
+export interface MembershipSuppressionsTable {
+  id: string;
+  connector_config_id: string;
+  suppressed_email: string;
+  created_at: Generated<string>;
+}
+
 export interface EntityRelationshipsTable {
   id: string;
   source_entity_id: string;
@@ -1523,6 +1584,26 @@ export interface EntityAliasRejectionsTable {
   normalized_rejected_name: string;
   rejected_by: string;
   rejected_at: Generated<string>;
+}
+
+export interface ResolutionDecisionsTable {
+  id: string;
+  normalized_mention_name: string;
+  entity_type: string;
+  scope: Generated<string>;
+  verdict: string;
+  target_entity_id: string | null;
+  target_name: string | null;
+  target_email: string | null;
+  decider: string;
+  decided_by: string;
+  source: string;
+  source_id: string;
+  evidence_file_ids: Generated<string>;
+  verdict_ref: string | null;
+  status: Generated<string>;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
 }
 
 export interface IndexedFileFactsTable {
@@ -1970,6 +2051,7 @@ export interface DB {
   email_thread_summaries: EmailThreadSummariesTable;
   crm_object_summaries: CrmObjectSummariesTable;
   container_classifications: ContainerClassificationsTable;
+  containers: ContainersTable;
   access_scopes: AccessScopesTable;
   access_scope_members: AccessScopeMembersTable;
   connector_files: ConnectorFilesTable;
@@ -1977,6 +2059,7 @@ export interface DB {
   document_timeframes: DocumentTimeframesTable;
   chunk_embeddings: ChunkEmbeddingsTable;
   file_embeddings: FileEmbeddingsTable;
+  llm_usage_events: LlmUsageEventsTable;
   entity_name_embeddings: EntityNameEmbeddingsTable;
   entity_review_queue_embeddings: EntityReviewQueueEmbeddingsTable;
   user_provider_identities: UserProviderIdentitiesTable;
@@ -2035,6 +2118,7 @@ export interface DB {
   agent_user_configs: AgentUserConfigsTable;
   inbox_messages: InboxMessagesTable;
   entities: EntitiesTable;
+  entity_aliases: EntityAliasesTable;
   entity_name_proposals: EntityNameProposalsTable;
   entity_merges: EntityMergesTable;
   entity_share_emails: EntityShareEmailsTable;
@@ -2054,6 +2138,7 @@ export interface DB {
   entity_review_evidence: EntityReviewEvidenceTable;
   entity_review_domain_candidates: EntityReviewDomainCandidatesTable;
   entity_alias_rejections: EntityAliasRejectionsTable;
+  resolution_decisions: ResolutionDecisionsTable;
   indexed_file_facts: IndexedFileFactsTable;
   normalization_backfill_state: NormalizationBackfillStateTable;
   tasks: TasksTable;
@@ -2073,6 +2158,7 @@ export interface DB {
   entity_project_bindings: EntityProjectBindingsTable;
   entity_project_member_overrides: EntityProjectMemberOverridesTable;
   entity_creation_suppressions: EntityCreationSuppressionsTable;
+  membership_suppressions: MembershipSuppressionsTable;
   entity_relationships: EntityRelationshipsTable;
   entity_relationship_evidence: EntityRelationshipEvidenceTable;
 }

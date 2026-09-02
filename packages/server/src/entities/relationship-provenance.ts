@@ -50,6 +50,7 @@ export function relationshipSourceVouchesForEntity(source: string | null | undef
 export function relationshipSourceOrder(source: string | null | undefined): number {
   if (source != null && HUMAN_RELATIONSHIP_SOURCES.includes(source)) return 0;
   if (source === "project_minting_acceptance" || source === "project_cleanup_apply") return 1;
+  if (source === "derived_membership") return 2;
   if (source === "structural_assignee") return 2;
   if (source === "llm_extraction") return 3;
   if (source === "co_mention") return 4;

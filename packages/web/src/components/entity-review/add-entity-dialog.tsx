@@ -180,7 +180,7 @@ export function AddEntityDialog({
             onClick={() => createMutation.mutate()}
             disabled={createMutation.isPending || !name.trim()}
           >
-            {createMutation.isPending ? "Creating..." : "Create entity"}
+            {createMutation.isPending ? "Creating…" : "Create entity"}
           </Button>
         </div>
       </DialogContent>

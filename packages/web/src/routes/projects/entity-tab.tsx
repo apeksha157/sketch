@@ -1,46 +1,23 @@
+import { EntityTable } from "@/components/entity-table";
 /**
  * Per-type entity tabs for the Your Org surface. Each mounts the Entity
  * Explorer table ({@link EntityTable}) filtered to one taxonomy type, opened by
  * a type-scoped capped review band. Companies / Teams / Projects use the
  * generic {@link OrgEntityTab}; Products has its own two-section split.
  */
+import { OrgRow } from "@/components/org-row";
 import { type CuratedProduct, type EntityListItem, api } from "@/lib/api";
-import { useEntityUi } from "@/lib/entity-ui";
-import { EntityTable } from "@/routes/files/entity-explorer";
-import { CaretRightIcon, CubeIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
+import { EntityAvatar, useEntityUi } from "@/lib/entity-ui";
 import { Badge } from "@sketch/ui/components/badge";
-import { Input } from "@sketch/ui/components/input";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
-import { ReviewBandCapped, useDebouncedSearch } from "./org-review";
+import type { ReactNode } from "react";
+import { ReviewBandCapped } from "./org-review";
 
-function SearchInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder: string;
-}) {
-  return (
-    <div className="relative">
-      <MagnifyingGlassIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        value={value}
-        onChange={(e: React.ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="pl-9 text-sm"
-      />
-    </div>
-  );
-}
-
-function useEntityList(type: string, search: string) {
+function useEntityList(type: string) {
   return useQuery({
-    queryKey: ["entities", type, search],
-    queryFn: () => api.entities.list({ type, search: search || undefined, sort: "hotness", limit: 200 }),
+    queryKey: ["entities", type],
+    queryFn: () => api.entities.list({ type, sort: "hotness", limit: 200 }),
     refetchInterval: 30000,
   });
 }
@@ -55,26 +32,17 @@ export function OrgEntityTab({
   type: string;
   typeLabel: string;
   isAdmin?: boolean;
-  /** `expandReview` opens the review band in place (the old "See all → Review" destination). */
-  renderEmpty?: (search: string, expandReview: () => void) => ReactNode;
+  renderEmpty?: () => ReactNode;
   /** Replaces the default flat EntityTable — the Projects tab renders its tree here. */
-  renderList?: (entities: EntityListItem[], search: string) => ReactNode;
+  renderList?: (entities: EntityListItem[]) => ReactNode;
 }) {
-  const { search, setSearch, debounced } = useDebouncedSearch();
   const { openEntity } = useEntityUi();
-  const { data, isLoading } = useEntityList(type, debounced);
+  const { data, isLoading } = useEntityList(type);
   const entities = data?.entities ?? [];
-  const [reviewExpanded, setReviewExpanded] = useState(false);
 
   return (
     <div className="space-y-4">
-      <ReviewBandCapped
-        types={[type]}
-        isAdmin={isAdmin}
-        expanded={reviewExpanded}
-        onExpandedChange={setReviewExpanded}
-      />
-      <SearchInput value={search} onChange={setSearch} placeholder={`Search ${typeLabel.toLowerCase()}…`} />
+      <ReviewBandCapped types={[type]} isAdmin={isAdmin} />
       {isLoading ? (
         <div className="space-y-2">
           {[1, 2, 3, 4].map((k) => (
@@ -83,14 +51,12 @@ export function OrgEntityTab({
         </div>
       ) : entities.length === 0 ? (
         renderEmpty ? (
-          renderEmpty(debounced, () => setReviewExpanded(true))
+          renderEmpty()
         ) : (
-          <OrgEmpty>
-            {debounced ? `No ${typeLabel.toLowerCase()} match your search.` : `No ${typeLabel.toLowerCase()} yet.`}
-          </OrgEmpty>
+          <OrgEmpty>{`No ${typeLabel.toLowerCase()} yet.`}</OrgEmpty>
         )
       ) : renderList ? (
-        renderList(entities, debounced)
+        renderList(entities)
       ) : (
         <EntityTable entities={entities} onSelect={openEntity} />
       )}
@@ -98,16 +64,16 @@ export function OrgEntityTab({
   );
 }
 
-export function ProductsTab({ onDeclare }: { onDeclare: () => void }) {
+export function ProductsTab({ onDeclare, isAdmin = false }: { onDeclare: () => void; isAdmin?: boolean }) {
   const { openEntity } = useEntityUi();
   const ours = useQuery({ queryKey: ["products"], queryFn: () => api.products.list() });
-  const tools = useEntityList("tool", "");
+  const tools = useEntityList("tool");
   const products = ours.data?.products ?? [];
   const toolEntities = tools.data?.entities ?? [];
 
   return (
     <div className="space-y-4">
-      <ReviewBandCapped types={["product"]} />
+      <ReviewBandCapped types={["product"]} isAdmin={isAdmin} />
 
       <section>
         <SectionLabel label="Ours" note={`${products.length} declared`} accent />
@@ -155,25 +121,14 @@ export function ProductsTab({ onDeclare }: { onDeclare: () => void }) {
 function ProductRow({ product, onSelect }: { product: CuratedProduct; onSelect: (id: string) => void }) {
   const cold = product.hotness <= 0;
   return (
-    <button
-      type="button"
-      onClick={() => onSelect(product.id)}
-      className="group flex w-full items-center gap-3 border-b border-border px-3 py-2.5 text-left last:border-b-0 hover:bg-muted/30"
-    >
-      <CubeIcon size={14} aria-hidden className="shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{product.name}</span>
-          <TierBadge tier={product.provenance_tier} />
-        </div>
-        {cold ? <p className="text-[11px] text-muted-foreground">Not seen in any source yet</p> : null}
-      </div>
-      <CaretRightIcon
-        size={12}
-        aria-hidden
-        className="shrink-0 text-muted-foreground/30 group-hover:text-muted-foreground"
-      />
-    </button>
+    <OrgRow
+      onOpen={() => onSelect(product.id)}
+      avatar={<EntityAvatar entity={{ id: product.id, name: product.name, sourceType: "product" }} size="sm" />}
+      primary={product.name}
+      primaryChips={<TierBadge tier={product.provenance_tier} />}
+      secondary={cold ? "Not seen in any source yet" : null}
+      caret
+    />
   );
 }
 
@@ -216,20 +171,14 @@ export function OrgEmpty({ children }: { children: ReactNode }) {
   );
 }
 
-export function TeamsEmpty({ pendingCount, onExpandReview }: { pendingCount: number; onExpandReview: () => void }) {
+export function TeamsEmpty({ pendingCount }: { pendingCount: number }) {
   return (
     <OrgEmpty>
       Teams appear from Linear &amp; ClickUp
       {pendingCount > 0 ? (
         <>
           {" — "}
-          <button
-            type="button"
-            onClick={onExpandReview}
-            className="font-medium text-foreground underline-offset-2 hover:underline"
-          >
-            {pendingCount} waiting for review ↑
-          </button>
+          <span className="font-medium text-foreground">{pendingCount} waiting for review ↑</span>
         </>
       ) : (
         "."

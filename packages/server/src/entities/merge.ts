@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely, Selectable } from "kysely";
 import { isPg } from "../db/dialect";
+import { deleteAliasRows, recordAliases } from "../db/repositories/entity-alias-rows";
 import type {
   DB,
   EntitiesTable,
@@ -15,6 +16,7 @@ import type {
   EntityRelationshipsTable,
   EntityReviewQueueTable,
   EntityShareEmailsTable,
+  ResolutionDecisionsTable,
   SubEntitiesTable,
   TaskEvidenceTable,
   TasksTable,
@@ -31,6 +33,7 @@ type ContactPoint = Selectable<EntityContactPointsTable>;
 type AliasRejection = Selectable<EntityAliasRejectionsTable>;
 type EntityCandidate = Selectable<EntityCandidatesTable>;
 type ReviewQueueRow = Selectable<EntityReviewQueueTable>;
+type ResolutionDecision = Selectable<ResolutionDecisionsTable>;
 type ShareEmail = Selectable<EntityShareEmailsTable>;
 type Domain = Selectable<EntityDomainsTable>;
 type NameProposal = Selectable<EntityNameProposalsTable>;
@@ -115,6 +118,7 @@ export interface MergePreview {
     contactPoints: number;
     shareEmails: number;
     aliasRejections: number;
+    resolutionDecisions: number;
     domains: number;
     tasks: number;
     taskEvidence: number;
@@ -126,6 +130,7 @@ export interface MergePreview {
     contactPoints: number;
     shareEmails: number;
     aliasRejections: number;
+    resolutionDecisions: number;
     domains: number;
     taskEvidence: number;
     relationships: number;
@@ -225,6 +230,22 @@ async function findAliasRejectionCollision(
     .select("id")
     .where("entity_id", "=", survivorId)
     .where("normalized_rejected_name", "=", row.normalized_rejected_name)
+    .executeTakeFirst();
+}
+
+async function findResolutionDecisionCollision(
+  db: Kysely<DB>,
+  survivorId: string,
+  row: ResolutionDecision,
+): Promise<{ id: string } | undefined> {
+  return db
+    .selectFrom("resolution_decisions")
+    .select("id")
+    .where("normalized_mention_name", "=", row.normalized_mention_name)
+    .where("entity_type", "=", row.entity_type)
+    .where("scope", "=", row.scope)
+    .where("verdict", "=", row.verdict)
+    .where("target_entity_id", "=", survivorId)
     .executeTakeFirst();
 }
 
@@ -530,6 +551,37 @@ async function repointAliasRejections(
     moves,
     findCollision: (row) => findAliasRejectionCollision(db, survivorId, row),
   });
+}
+
+async function repointResolutionDecisions(
+  db: Kysely<DB>,
+  loserId: string,
+  survivorId: string,
+  moves: EntityMergeMove[],
+): Promise<void> {
+  const rows = await db
+    .selectFrom("resolution_decisions")
+    .selectAll()
+    .where("target_entity_id", "=", loserId)
+    .execute();
+  for (const row of rows) {
+    const collision = await findResolutionDecisionCollision(db, survivorId, row);
+    if (collision) {
+      moves.push({ table: "resolution_decisions", collided: true, payload: rowPayload(row) });
+      await db.deleteFrom("resolution_decisions").where("id", "=", row.id).execute();
+      continue;
+    }
+    await db
+      .updateTable("resolution_decisions")
+      .set({ target_entity_id: survivorId })
+      .where("id", "=", row.id)
+      .execute();
+    moves.push({
+      table: "resolution_decisions",
+      rowId: row.id,
+      repoint: { target_entity_id: { from: loserId, to: survivorId } },
+    });
+  }
 }
 
 async function repointShareEmails(
@@ -1157,6 +1209,7 @@ async function applyMergeMoves(
   await repointContactPoints(db, loserId, survivorId, moves);
   await repointShareEmails(db, loserId, survivorId, moves);
   await repointAliasRejections(db, loserId, survivorId, moves);
+  await repointResolutionDecisions(db, loserId, survivorId, moves);
   await repointDomains(db, loserId, survivorId, moves);
   await repointProjectBindings(db, loserId, survivorId, moves);
   await repointMemberOverrides(db, loserId, survivorId, moves);
@@ -1178,6 +1231,7 @@ async function carryLoserAliasesToSurvivor(
   loser: Entity,
   survivor: Entity,
   moves: EntityMergeMove[],
+  createdBy?: string | null,
 ): Promise<void> {
   const aliases = parseAliasesString(survivor.aliases);
   const existingKeys = new Set<string>();
@@ -1207,6 +1261,7 @@ async function carryLoserAliasesToSurvivor(
     .where("deleted_at", "is", null)
     .where("merged_into_entity_id", "is", null)
     .execute();
+  await recordAliases(db, survivor.id, added, "merge", createdBy);
 }
 
 async function addAliasIfAbsent(
@@ -1215,6 +1270,7 @@ async function addAliasIfAbsent(
   aliasesRaw: string | null,
   value: string,
   moves: EntityMergeMove[],
+  createdBy?: string | null,
 ): Promise<string | null> {
   const trimmed = value.trim();
   const normalizedKey = normalizeStrict(trimmed);
@@ -1231,6 +1287,7 @@ async function addAliasIfAbsent(
     .where("deleted_at", "is", null)
     .where("merged_into_entity_id", "is", null)
     .execute();
+  await recordAliases(db, entityId, [trimmed], "merge", createdBy);
   return next;
 }
 
@@ -1252,10 +1309,11 @@ async function renameSurvivor(
   survivor: Entity,
   requestedName: string | undefined,
   moves: EntityMergeMove[],
+  createdBy?: string | null,
 ): Promise<Entity> {
   const name = requestedName?.trim();
   if (!name || name === survivor.name) return survivor;
-  const aliases = await addAliasIfAbsent(db, survivor.id, survivor.aliases, survivor.name, moves);
+  const aliases = await addAliasIfAbsent(db, survivor.id, survivor.aliases, survivor.name, moves, createdBy);
   const nameStatus = "confirmed";
   moves.push({
     table: "entities",
@@ -1292,6 +1350,7 @@ function emptyMergePreview(
       contactPoints: 0,
       shareEmails: 0,
       aliasRejections: 0,
+      resolutionDecisions: 0,
       domains: 0,
       tasks: 0,
       taskEvidence: 0,
@@ -1303,6 +1362,7 @@ function emptyMergePreview(
       contactPoints: 0,
       shareEmails: 0,
       aliasRejections: 0,
+      resolutionDecisions: 0,
       domains: 0,
       taskEvidence: 0,
       relationships: 0,
@@ -1358,6 +1418,11 @@ export async function previewMerge(
     .selectAll()
     .where("entity_id", "=", input.loserId)
     .execute();
+  const resolutionDecisions = await db
+    .selectFrom("resolution_decisions")
+    .selectAll()
+    .where("target_entity_id", "=", input.loserId)
+    .execute();
   const domains = await db.selectFrom("entity_domains").selectAll().where("entity_id", "=", input.loserId).execute();
   const tasks = await db
     .selectFrom("tasks")
@@ -1383,6 +1448,7 @@ export async function previewMerge(
   preview.counts.contactPoints = contactPoints.length;
   preview.counts.shareEmails = shareEmails.length;
   preview.counts.aliasRejections = aliasRejections.length;
+  preview.counts.resolutionDecisions = resolutionDecisions.length;
   preview.counts.domains = domains.length;
   preview.counts.tasks = tasks.length;
   preview.counts.taskEvidence = taskEvidence.length;
@@ -1406,6 +1472,9 @@ export async function previewMerge(
   );
   preview.collisions.aliasRejections = await countCollisions(aliasRejections, (row) =>
     findAliasRejectionCollision(db, input.survivorId, row),
+  );
+  preview.collisions.resolutionDecisions = await countCollisions(resolutionDecisions, (row) =>
+    findResolutionDecisionCollision(db, input.survivorId, row),
   );
   preview.collisions.domains = await countCollisions(domains, (row) => findDomainCollision(db, input.survivorId, row));
   preview.collisions.taskEvidence = await countCollisions(taskEvidence, (row) =>
@@ -1522,6 +1591,14 @@ async function reverseMove(db: Kysely<DB>, move: EntityMergeMove): Promise<void>
     await db
       .updateTable("entity_alias_rejections")
       .set({ entity_id: updates.entity_id })
+      .where("id", "=", move.rowId)
+      .execute();
+    return;
+  }
+  if (move.table === "resolution_decisions" && updates.target_entity_id) {
+    await db
+      .updateTable("resolution_decisions")
+      .set({ target_entity_id: updates.target_entity_id })
       .where("id", "=", move.rowId)
       .execute();
     return;
@@ -1684,6 +1761,11 @@ async function reverseAliasAdditions(db: Kysely<DB>, survivorId: string, moves: 
     .set({ aliases: next.length > 0 ? JSON.stringify(next) : null, updated_at: new Date().toISOString() })
     .where("id", "=", survivorId)
     .execute();
+  await deleteAliasRows(
+    db,
+    survivorId,
+    aliasMoves.map((move) => move.value),
+  );
 }
 
 export async function mergeEntitiesInTransaction(
@@ -1695,8 +1777,15 @@ export async function mergeEntitiesInTransaction(
   assertMergeable(survivor, loser, input);
 
   const moves: EntityMergeMove[] = [];
+  const aliasCreatedBy = input.userId ?? input.mergedBy ?? "merge";
   if (survivor)
-    survivor = await renameSurvivor(db, survivor, input.survivorName ?? rescuedSurvivorName(survivor, loser), moves);
+    survivor = await renameSurvivor(
+      db,
+      survivor,
+      input.survivorName ?? rescuedSurvivorName(survivor, loser),
+      moves,
+      aliasCreatedBy,
+    );
   if (survivor?.source_type === "person" && loser?.source_type === "person") {
     const internalSubtype = survivor.subtype === "internal" || loser.subtype === "internal";
     if (internalSubtype && survivor.subtype !== "internal") {
@@ -1713,7 +1802,7 @@ export async function mergeEntitiesInTransaction(
     }
   }
   await applyMergeMoves(db, input.loserId, input.survivorId, moves);
-  if (survivor && loser) await carryLoserAliasesToSurvivor(db, loser, survivor, moves);
+  if (survivor && loser) await carryLoserAliasesToSurvivor(db, loser, survivor, moves, aliasCreatedBy);
 
   const now = new Date().toISOString();
   if (survivor && loser) {

@@ -271,12 +271,16 @@ type WebChatUiChunk =
 type WebChatUiWriter = (chunk: WebChatUiChunk) => void;
 type WebChatUiCancelRegistrar = (handler: () => void) => void;
 
-function webChatUiStreamResponse(
+export function webChatUiStreamResponse(
   execute: (write: WebChatUiWriter, setOnCancel: WebChatUiCancelRegistrar) => Promise<void>,
 ): Response {
   const encoder = new TextEncoder();
   let cancelled = false;
   let onCancel: (() => void) | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+  };
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const write = (chunk: WebChatUiChunk) => {
@@ -285,14 +289,26 @@ function webChatUiStreamResponse(
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
         } catch {
           cancelled = true;
+          stopHeartbeat();
         }
       };
+
+      heartbeatTimer = setInterval(() => {
+        if (cancelled) return;
+        try {
+          controller.enqueue(encoder.encode(": keep-alive\n\n"));
+        } catch {
+          cancelled = true;
+          stopHeartbeat();
+        }
+      }, 15_000);
 
       try {
         await execute(write, (handler) => {
           onCancel = handler;
         });
       } finally {
+        stopHeartbeat();
         if (!cancelled) {
           try {
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -305,6 +321,7 @@ function webChatUiStreamResponse(
     },
     cancel() {
       cancelled = true;
+      stopHeartbeat();
       onCancel?.();
     },
   });
@@ -1014,9 +1031,8 @@ function webChatCurrentMessage(
 const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGES = 12;
 const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGE_LENGTH = 1200;
 const AUTOMATION_BUILDER_MAX_TURNS = 24;
-const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 20;
+const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 48;
 const AUTOMATION_BUILDER_MAX_REPEATED_TOOL_CALLS = 3;
-const AUTOMATION_BUILDER_MAX_ELAPSED_MS = 2 * 60_000;
 const AUTOMATION_BUILDER_MAX_PERSISTED_TEXT_BYTES = 24 * 1024;
 
 function isAutomationBuilderPlanOnlyMessage(message: string): boolean {
@@ -3063,7 +3079,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
         if (activeBuilderTaskId) {
           builderBudgetTimer = setTimeout(
             () => abortBuilderRun("elapsed_time_limit"),
-            AUTOMATION_BUILDER_MAX_ELAPSED_MS,
+            deps.config.AUTOMATION_BUILDER_MAX_ELAPSED_MS,
           );
           leaseRenewalTimer = setInterval(() => {
             void createAutomationTaskConversationService(deps.db)
@@ -3090,6 +3106,11 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
         } finally {
           if (leaseRenewalTimer) clearInterval(leaseRenewalTimer);
           if (builderBudgetTimer) clearTimeout(builderBudgetTimer);
+        }
+
+        if (automationBuilderContext && (abortController.signal.aborted || result.rawUsage.stopReason === "aborted")) {
+          if (!abortController.signal.aborted) abortBuilderRun("agent_aborted");
+          throw new Error("Automation builder run aborted");
         }
 
         const fileParts: Array<{ id: string; data: WebChatFile }> = [];

@@ -1,53 +1,44 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCandidatePool,
-  findDedupCandidates,
-  findFuzzyMatch,
+  findEditDistanceMatches,
   findStrictMatches,
   findTokenSetMatches,
-  jaccard,
-  lshBands,
-  minhashSignature,
   normalizeTokenSet,
   removeFromCandidatePool,
-  shingles,
 } from "./name-dedup";
 
 describe("name-dedup", () => {
   it("strict-normalizes whitespace, casing, and punctuation", () => {
     const pool = buildCandidatePool([{ entityId: "redseer", valueKind: "name", value: "Redseer Consulting" }]);
 
-    expect(findFuzzyMatch("RedseerConsulting", pool)).toMatchObject({ entityId: "redseer", score: 1 });
-    expect(findFuzzyMatch("REDSEER consulting", pool)).toMatchObject({ entityId: "redseer", score: 1 });
-    expect(findFuzzyMatch("Redseer  Consulting", pool)).toMatchObject({ entityId: "redseer", score: 1 });
-  });
-
-  it("uses spaces-in, no-padding 3-grams for the typo acceptance case", () => {
-    const existing = shingles("Apperture Technologies");
-    const proposed = shingles("Aperture Technologies");
-    const score = jaccard(existing, proposed);
-
-    expect(score).toBeCloseTo(18 / 21, 6);
-
-    const existingBands = new Set(lshBands(minhashSignature(existing)));
-    const proposedBands = lshBands(minhashSignature(proposed));
-    expect(proposedBands.some((band) => existingBands.has(band))).toBe(true);
-    const pinnedSharedBand = "2:012805ecd75c9f08:05afe1752c9b0fe1:1709b7f28c96be6d:117d40be1d2ccf14";
-    expect(existingBands.has(pinnedSharedBand)).toBe(true);
-    expect(proposedBands).toContain(pinnedSharedBand);
-
-    const pool = buildCandidatePool([{ entityId: "apperture", valueKind: "name", value: "Apperture Technologies" }]);
-    expect(findDedupCandidates("Aperture Technologies", pool, { threshold: 0.85 })).toEqual([
-      { entityId: "apperture", score, valueKind: "name", value: "Apperture Technologies" },
+    expect(findStrictMatches("RedseerConsulting", pool)).toEqual([
+      { entityId: "redseer", score: 1, valueKind: "name", value: "Redseer Consulting" },
+    ]);
+    expect(findStrictMatches("REDSEER consulting", pool)).toEqual([
+      { entityId: "redseer", score: 1, valueKind: "name", value: "Redseer Consulting" },
+    ]);
+    expect(findStrictMatches("Redseer  Consulting", pool)).toEqual([
+      { entityId: "redseer", score: 1, valueKind: "name", value: "Redseer Consulting" },
     ]);
   });
 
-  it("does not collide short or low-entropy names", () => {
-    const sarahPool = buildCandidatePool([{ entityId: "saran", valueKind: "name", value: "Saran" }]);
-    const initialsPool = buildCandidatePool([{ entityId: "kp", valueKind: "name", value: "KP" }]);
+  it("findEditDistanceMatches surfaces one-edit typos but skips exact, short, and identity values", () => {
+    const pool = buildCandidatePool([
+      { entityId: "akanksha", valueKind: "name", value: "Akanksha" },
+      { entityId: "sami", valueKind: "name", value: "Sami" },
+      { entityId: "iris", valueKind: "alias", value: "manual1@charlie.com" },
+      { entityId: "phone", valueKind: "name", value: "+919867353742" },
+    ]);
 
-    expect(findFuzzyMatch("Sarah", sarahPool)).toBeNull();
-    expect(findFuzzyMatch("KT", initialsPool)).toBeNull();
+    expect(findEditDistanceMatches("Akansha", pool)).toEqual([
+      { entityId: "akanksha", score: 0.9, valueKind: "name", value: "Akanksha" },
+    ]);
+    expect(findEditDistanceMatches("Akanksha", pool)).toEqual([]);
+    expect(findEditDistanceMatches("Sani", pool)).toEqual([]);
+    expect(findEditDistanceMatches("Manual Charlie", pool)).toEqual([]);
+    expect(findEditDistanceMatches("manual0@charlie.com", pool)).toEqual([]);
+    expect(findEditDistanceMatches("+919867353745", pool)).toEqual([]);
   });
 
   it("unifies a word-order permutation the strict key misses", () => {

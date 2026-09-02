@@ -4,6 +4,7 @@ import { findVerifiedUserByEmail } from "../../auth/magic-link";
 import { createTestDb, createTestPgDb } from "../../test-utils";
 import type { DB } from "../schema";
 import { upsertSlackPersonEntity } from "./slack-entity-sync";
+import { MACHINE_PRINCIPAL_USER_ID } from "./users";
 
 type SlackProfile = Parameters<typeof upsertSlackPersonEntity>[1];
 
@@ -76,7 +77,9 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         profile({ slackUserId: "U-NO-EVIDENCE", email: null, providerUpdatedAt: "102" }),
       );
 
-      await expect(db.selectFrom("users").select("id").execute()).resolves.toEqual([]);
+      await expect(
+        db.selectFrom("users").select("id").where("id", "!=", MACHINE_PRINCIPAL_USER_ID).execute(),
+      ).resolves.toEqual([]);
     });
 
     it("does not allow an unverified provisioned account to request a magic link", async () => {

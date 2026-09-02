@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import { isPg } from "../db/dialect";
-import type { DB } from "../db/schema";
+import { PROTECTED_ENTITY_SOURCES } from "../db/repositories/entities";
+import { deleteAliasRows, listAliasRows } from "../db/repositories/entity-alias-rows";
+import type { DB, EntityAliasProvenance } from "../db/schema";
 import type { CleanupAction, CleanupVerdict } from "./cleanup-adjudication";
+import { parseAliasesString } from "./materialize-json";
 import { mergeEntitiesInTransaction } from "./merge";
+import { normalizeName } from "./name-keys";
 import { NON_VOUCHING_RELATIONSHIP_SOURCES } from "./relationship-provenance";
 
 type RowState = "applied" | "skipped" | "failed";
@@ -28,6 +32,7 @@ export type CleanupApplyPlanRow = {
   state: RowState;
   targetEntityId: string | null;
   resolvedTargetEntityId: string | null;
+  targetName?: string | null;
   reason: string | null;
   wouldChange: Record<string, number>;
 };
@@ -39,9 +44,12 @@ export type CleanupApplyResult = {
   manifest: CleanupApplyManifest | null;
 };
 
-type LiveProject = {
+type LiveEntity = {
   id: string;
   name: string;
+  source_type: string;
+  provenance_tier: string;
+  aliases: string | null;
 };
 
 export type ValidPlannedRow = CleanupApplyPlanRow & {
@@ -58,9 +66,16 @@ export type CleanupApplyEffect =
   | { action: "merge_into"; mergeGroupId: string | null; mergeId: string }
   | { action: "nest_under"; relationshipId: string }
   | { action: "nest_under"; existing: true }
-  | { action: "archive"; archivedAt: string };
+  | { action: "archive"; archivedAt: string }
+  | {
+      action: "remove_alias";
+      alias: string;
+      normalizedAlias: string;
+      aliasProvenance: EntityAliasProvenance | null;
+      aliasCreatedBy: string | null;
+    };
 
-const ACTIONS: CleanupAction[] = ["keep", "merge_into", "nest_under", "archive"];
+const ACTIONS: CleanupAction[] = ["keep", "merge_into", "nest_under", "archive", "remove_alias"];
 
 function emptyCounts(): CleanupApplyResult["counts"] {
   return {
@@ -68,6 +83,7 @@ function emptyCounts(): CleanupApplyResult["counts"] {
     merge_into: { applied: 0, skipped: 0, failed: 0 },
     nest_under: { applied: 0, skipped: 0, failed: 0 },
     archive: { applied: 0, skipped: 0, failed: 0 },
+    remove_alias: { applied: 0, skipped: 0, failed: 0 },
     needs_human_fix: { applied: 0, skipped: 0, failed: 0 },
   };
 }
@@ -155,17 +171,31 @@ function parseEntityIdList(raw: string | null): string[] {
   }
 }
 
-async function liveProjects(db: Kysely<DB>, ids: string[]): Promise<Map<string, LiveProject>> {
+async function liveEntities(db: Kysely<DB>, ids: string[]): Promise<Map<string, LiveEntity>> {
   if (ids.length === 0) return new Map();
   const rows = await db
     .selectFrom("entities")
-    .select(["id", "name"])
+    .select(["id", "name", "source_type", "provenance_tier", "aliases"])
     .where("id", "in", [...new Set(ids)])
-    .where("source_type", "=", "project")
     .where("deleted_at", "is", null)
     .where("merged_into_entity_id", "is", null)
     .execute();
   return new Map(rows.map((row) => [row.id, row]));
+}
+
+async function liveEntitiesOfType(db: Kysely<DB>, sourceType: string, ids: string[]): Promise<Map<string, LiveEntity>> {
+  const live = await liveEntities(db, ids);
+  return new Map([...live].filter(([, entity]) => entity.source_type === sourceType));
+}
+
+function isProtectedSource(entity: LiveEntity | null | undefined): boolean {
+  return entity ? PROTECTED_ENTITY_SOURCES.includes(entity.source_type) : false;
+}
+
+function aliasFromBlob(entity: LiveEntity, alias: string | null): string | null {
+  const normalized = normalizeName(alias ?? "");
+  if (!normalized) return null;
+  return parseAliasesString(entity.aliases).find((value) => normalizeName(value) === normalized) ?? null;
 }
 
 /**
@@ -197,9 +227,27 @@ async function archiveReferenceCounts(
   return { tasks: tasks.length, relationships: relationships.length };
 }
 
-async function mutationCounts(db: Kysely<DB>, action: CleanupAction, entityId: string, targetId: string | null) {
+async function mutationCounts(
+  db: Kysely<DB>,
+  action: CleanupAction,
+  entityId: string,
+  targetId: string | null,
+  targetName: string | null = null,
+) {
   if (action === "keep") return {};
   if (action === "archive") return { entities: 1 };
+  if (action === "remove_alias") {
+    const normalizedAlias = normalizeName(targetName ?? "");
+    const aliasRows = normalizedAlias
+      ? await db
+          .selectFrom("entity_aliases")
+          .select("id")
+          .where("entity_id", "=", entityId)
+          .where("normalized_alias", "=", normalizedAlias)
+          .execute()
+      : [];
+    return { entities: 1, entity_aliases: aliasRows.length };
+  }
   if (action === "nest_under") {
     const existing =
       targetId === null
@@ -222,6 +270,7 @@ async function mutationCounts(db: Kysely<DB>, action: CleanupAction, entityId: s
     ["entity_contact_points", "entity_id"],
     ["entity_share_emails", "entity_id"],
     ["entity_alias_rejections", "entity_id"],
+    ["resolution_decisions", "target_entity_id"],
     ["entity_domains", "entity_id"],
     ["entity_project_bindings", "entity_id"],
     ["entity_project_member_overrides", "entity_id"],
@@ -397,6 +446,49 @@ export async function applyArchive(
   return { action: "archive", archivedAt };
 }
 
+export async function applyRemoveAlias(
+  db: Kysely<DB>,
+  row: ValidPlannedRow,
+  mutations: RollbackManifestEntry[],
+): Promise<Extract<CleanupApplyEffect, { action: "remove_alias" }>> {
+  const normalizedAlias = normalizeName(row.targetName ?? "");
+  if (!normalizedAlias) throw new Error(`alias missing for ${row.entityId}`);
+  const before = await db
+    .selectFrom("entities")
+    .selectAll()
+    .where("id", "=", row.entityId)
+    .where("deleted_at", "is", null)
+    .where("merged_into_entity_id", "is", null)
+    .executeTakeFirstOrThrow();
+  const aliases = parseAliasesString(before.aliases);
+  const removed = aliases.find((alias) => normalizeName(alias) === normalizedAlias);
+  if (!removed) throw new Error(`alias no longer present for ${row.entityId}`);
+  const aliasRows = await listAliasRows(db, row.entityId);
+  const removedRows = aliasRows.filter((aliasRow) => aliasRow.normalized_alias === normalizedAlias);
+  for (const aliasRow of removedRows) {
+    addManifestEntry(mutations, "entity_aliases", aliasRow.id, aliasRow);
+  }
+  addManifestEntry(mutations, "entities", row.entityId, before);
+  const next = aliases.filter((alias) => normalizeName(alias) !== normalizedAlias);
+  const result = await db
+    .updateTable("entities")
+    .set({ aliases: next.length > 0 ? JSON.stringify(next) : null, updated_at: new Date().toISOString() })
+    .where("id", "=", row.entityId)
+    .where("aliases", before.aliases === null ? "is" : "=", before.aliases)
+    .where("deleted_at", "is", null)
+    .where("merged_into_entity_id", "is", null)
+    .executeTakeFirst();
+  if (updatedCount(result) !== 1) throw new Error(`alias row changed while removing alias for ${row.entityId}`);
+  await deleteAliasRows(db, row.entityId, [removed]);
+  return {
+    action: "remove_alias",
+    alias: removed,
+    normalizedAlias,
+    aliasProvenance: removedRows[0]?.provenance ?? null,
+    aliasCreatedBy: removedRows[0]?.created_by ?? null,
+  };
+}
+
 export async function applyMerge(
   db: Kysely<DB>,
   row: ValidPlannedRow,
@@ -449,14 +541,28 @@ export async function applyMerge(
   return { action: "merge_into", mergeGroupId: context.mergeGroupId ?? null, mergeId: result.mergeId };
 }
 
-export async function planProjectCleanup(db: Kysely<DB>, verdicts: CleanupVerdict[]): Promise<CleanupApplyPlanRow[]> {
+export async function planCleanup(
+  db: Kysely<DB>,
+  verdicts: CleanupVerdict[],
+  opts: { extraLiveEntityIds?: readonly string[] } = {},
+): Promise<CleanupApplyPlanRow[]> {
   const rows: CleanupApplyPlanRow[] = [];
   const executable = verdicts.filter((verdict) => verdict.approved && verdict.validation === "ok");
   const sourceIds = executable.map((verdict) => verdict.entityId);
   const targetIds = executable
     .filter((verdict) => verdict.action === "merge_into" || verdict.action === "nest_under")
     .flatMap((verdict) => (verdict.targetEntityId ? [verdict.targetEntityId] : []));
-  const live = await liveProjects(db, [...sourceIds, ...targetIds]);
+  const lookupIds = [...sourceIds, ...targetIds, ...(opts.extraLiveEntityIds ?? [])];
+  const allLive = await liveEntities(db, lookupIds);
+  const sourceTypes = [
+    ...new Set(
+      sourceIds.map((id) => allLive.get(id)?.source_type).filter((sourceType): sourceType is string => !!sourceType),
+    ),
+  ];
+  const liveBySourceType = new Map<string, Map<string, LiveEntity>>();
+  for (const sourceType of sourceTypes) {
+    liveBySourceType.set(sourceType, await liveEntitiesOfType(db, sourceType, lookupIds));
+  }
   const archiveSources = new Set(
     executable.filter((verdict) => verdict.action === "archive").map((verdict) => verdict.entityId),
   );
@@ -484,8 +590,42 @@ export async function planProjectCleanup(db: Kysely<DB>, verdicts: CleanupVerdic
       continue;
     }
     const action = verdict.action as CleanupAction;
-    if (!live.has(verdict.entityId)) {
-      rows.push(failedRow(verdict, "source_not_live_project", null));
+    const source = allLive.get(verdict.entityId) ?? null;
+    if (!source) {
+      rows.push(failedRow(verdict, "source_not_live", null));
+      continue;
+    }
+    const live = liveBySourceType.get(source.source_type) ?? new Map<string, LiveEntity>();
+    if (isProtectedSource(source)) {
+      rows.push(failedRow(verdict, "protected_source", null));
+      continue;
+    }
+    if (action === "nest_under" && source.source_type !== "project") {
+      rows.push(failedRow(verdict, "action_not_allowed_for_type", null));
+      continue;
+    }
+    if (action === "remove_alias") {
+      const normalizedAlias = normalizeName(verdict.targetName ?? "");
+      if (normalizedAlias && normalizeName(source.name) === normalizedAlias) {
+        rows.push(failedRow(verdict, "alias_is_canonical_name", null));
+        continue;
+      }
+      const alias = aliasFromBlob(source, verdict.targetName);
+      if (!alias) {
+        rows.push(failedRow(verdict, "alias_not_found", null));
+        continue;
+      }
+      rows.push({
+        entityId: verdict.entityId,
+        name: verdict.name,
+        action,
+        state: "applied",
+        targetEntityId: verdict.targetEntityId,
+        resolvedTargetEntityId: null,
+        targetName: alias,
+        reason: null,
+        wouldChange: await mutationCounts(db, action, verdict.entityId, null, alias),
+      });
       continue;
     }
     if (mergeCycleIds.has(verdict.entityId)) {
@@ -506,12 +646,34 @@ export async function planProjectCleanup(db: Kysely<DB>, verdicts: CleanupVerdic
       rows.push(failedRow(verdict, "self_target_after_resolution", resolvedTarget));
       continue;
     }
+    const target = resolvedTarget ? (allLive.get(resolvedTarget) ?? null) : null;
+    if (resolvedTarget && !target) {
+      rows.push(failedRow(verdict, "target_not_live", resolvedTarget));
+      continue;
+    }
+    if (action === "merge_into" && isProtectedSource(target)) {
+      rows.push(failedRow(verdict, "protected_source", resolvedTarget));
+      continue;
+    }
+    if (target && target.source_type !== source.source_type) {
+      rows.push(failedRow(verdict, "type_mismatch", resolvedTarget));
+      continue;
+    }
     if (resolvedTarget && !live.has(resolvedTarget)) {
-      rows.push(failedRow(verdict, "target_not_live_project", resolvedTarget));
+      rows.push(failedRow(verdict, "target_not_live", resolvedTarget));
       continue;
     }
     if (resolvedTarget && archiveSources.has(resolvedTarget)) {
       rows.push(failedRow(verdict, "target_archived_this_run", resolvedTarget));
+      continue;
+    }
+    if (
+      action === "merge_into" &&
+      target &&
+      source.provenance_tier === "declared" &&
+      target.provenance_tier !== "declared"
+    ) {
+      rows.push(failedRow(verdict, "protected_tier_direction", resolvedTarget));
       continue;
     }
     if (
@@ -522,6 +684,10 @@ export async function planProjectCleanup(db: Kysely<DB>, verdicts: CleanupVerdic
       continue;
     }
     if (action === "archive") {
+      if (source.provenance_tier === "declared") {
+        rows.push(failedRow(verdict, "protected_tier", null));
+        continue;
+      }
       const refs = await archiveReferenceCounts(db, verdict.entityId);
       if (refs.tasks > 0 || refs.relationships > 0) {
         rows.push(
@@ -538,11 +704,15 @@ export async function planProjectCleanup(db: Kysely<DB>, verdicts: CleanupVerdic
       targetEntityId: verdict.targetEntityId,
       resolvedTargetEntityId: resolvedTarget,
       reason: null,
-      wouldChange: await mutationCounts(db, action, verdict.entityId, resolvedTarget),
+      wouldChange: await mutationCounts(db, action, verdict.entityId, resolvedTarget, verdict.targetName),
     });
   }
 
   return rows;
+}
+
+export async function planProjectCleanup(db: Kysely<DB>, verdicts: CleanupVerdict[]): Promise<CleanupApplyPlanRow[]> {
+  return planCleanup(db, verdicts);
 }
 
 export async function applyProjectCleanup(
@@ -572,6 +742,11 @@ export async function applyProjectCleanup(
       (row): row is ValidPlannedRow => row.state === "applied" && row.action === "archive",
     )) {
       await applyArchive(trx, row, mutations);
+    }
+    for (const row of rows.filter(
+      (row): row is ValidPlannedRow => row.state === "applied" && row.action === "remove_alias",
+    )) {
+      await applyRemoveAlias(trx, row, mutations);
     }
   });
 

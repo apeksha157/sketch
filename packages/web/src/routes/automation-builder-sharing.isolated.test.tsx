@@ -380,8 +380,10 @@ describe("AutomationBuilderPage sharing", () => {
 
     renderBuilder();
 
-    expect(await screen.findByTestId("automation-shared-hint")).toBeInTheDocument();
-    expect(screen.getByText("Shared with you · runs execute with the owner's integrations")).toBeInTheDocument();
+    const sharedHint = await screen.findByTestId("automation-shared-hint");
+    expect(sharedHint).toHaveClass("automation-builder-shared-hint", "w-full", "text-right");
+    expect(screen.getByTestId("automation-builder-ownership-stack")).toContainElement(sharedHint);
+    expect(screen.getByText("Runs use the owner's integrations")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Share/i })).not.toBeInTheDocument();
   });
 
@@ -441,14 +443,9 @@ describe("AutomationBuilderPage sharing", () => {
       ],
     });
 
-    const user = userEvent.setup();
     renderBuilder();
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Viewing/ })).toBeInTheDocument();
-    });
-    await user.click(screen.getByRole("button", { name: /Viewing/ }));
-    expect(screen.getByRole("menuitem", { name: /by Grantee Member/ })).toBeInTheDocument();
+    expect(await screen.findByText(/by Grantee Member/)).toBeInTheDocument();
   });
 
   it("loads another member's transcript through the task-scoped endpoint in owner/admin views", async () => {

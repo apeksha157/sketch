@@ -147,17 +147,15 @@ describe("resetDerivedEntityData", () => {
     });
   }
 
-  it("deletes derived graph data, including alias rejections, and keeps raw facts/content outputs", async () => {
+  it("deletes derived graph data and keeps raw facts/content outputs", async () => {
     await seedGraph();
 
     const summary = await resetDerivedEntityData(db, createTestLogger());
 
     expect(summary.deleted.entities).toBe(1);
-    expect(summary.deleted.entity_alias_rejections).toBe(1);
     expect(summary.deleted.entity_review_queue).toBe(1);
     expect(summary.filesMarkedPending).toBe(0);
     expect(summary.factsMarkedUnmaterialized).toBe(1);
-    expect(summary.warnings.join(" ")).toContain("alias rejections will be deleted");
 
     await expect(db.selectFrom("entities").selectAll().execute()).resolves.toHaveLength(0);
     await expect(db.selectFrom("entity_alias_rejections").selectAll().execute()).resolves.toHaveLength(0);
@@ -219,12 +217,23 @@ describe("resetDerivedEntityData", () => {
     await seedEntity("approved-project", "human_confirmed");
     await seedEntity("structural-project", "structural");
     await seedEntity("inferred-guess", "inferred");
+    await db
+      .insertInto("entity_alias_rejections")
+      .values({
+        id: "approved-rejection",
+        entity_id: "approved-project",
+        rejected_name: "Junk Alias",
+        normalized_rejected_name: "junk alias",
+        rejected_by: "user-1",
+      })
+      .execute();
 
     const summary = await resetDerivedEntityData(db, createTestLogger());
 
     expect(summary.deleted.entities).toBe(2);
     const survivors = await db.selectFrom("entities").select("id").orderBy("id", "asc").execute();
     expect(survivors.map((row) => row.id)).toEqual(["approved-project", "declared-product"]);
+    await expect(db.selectFrom("entity_alias_rejections").selectAll().execute()).resolves.toHaveLength(1);
   });
 
   it("rejects while a connector is marked syncing", async () => {

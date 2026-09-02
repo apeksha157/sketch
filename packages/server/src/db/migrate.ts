@@ -212,6 +212,14 @@ import * as m209 from "./migrations/209-weekly-mint-retirement";
 import * as m210 from "./migrations/210-graph-verdicts";
 import * as m211 from "./migrations/211-graph-verdicts-approved-active";
 import * as m212 from "./migrations/212-cli-integration-user-org-access";
+import * as m213 from "./migrations/213-containers";
+import * as m214 from "./migrations/214-container-verdicts";
+import * as m215 from "./migrations/215-membership-suppressions";
+import * as m216 from "./migrations/216-entity-aliases";
+import * as m217 from "./migrations/217-machine-principal";
+import * as m218 from "./migrations/218-resolution-decisions";
+import * as m219 from "./migrations/219-mention-verdicts";
+import * as m220 from "./migrations/220-retire-pats";
 import type { DB } from "./schema";
 
 /**
@@ -433,6 +441,14 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "210-graph-verdicts": m210,
           "211-graph-verdicts-approved-active": m211,
           "212-cli-integration-user-org-access": m212,
+          "213-containers": m213,
+          "214-container-verdicts": m214,
+          "215-membership-suppressions": m215,
+          "216-entity-aliases": m216,
+          "217-machine-principal": m217,
+          "218-resolution-decisions": m218,
+          "219-mention-verdicts": m219,
+          "220-retire-pats": m220,
         };
       },
     },

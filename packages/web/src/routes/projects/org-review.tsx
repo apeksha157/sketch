@@ -1,3 +1,5 @@
+import { CompactAction } from "@/components/compact-action";
+import { SourceTag } from "@/components/entity-drawer/drawer-kit";
 /**
  * The review surface for Your Org: each type tab's band, expanding in place
  * to the full type-scoped list (the standalone Review tab is gone — triage
@@ -17,12 +19,13 @@ import {
   WhatsAppIdentityRow,
   useWhatsAppIdentityReview,
 } from "@/components/entity-review/whatsapp-identity-review";
+import { GraphVerdictsSection, graphVerdictBandType } from "@/components/graph-verdicts-section";
+import { OrgRow } from "@/components/org-row";
 import { ProjectSuggestionsSection } from "@/components/project-suggestions";
 import { useReviewMutations } from "@/components/review-actions";
 import type { EntityReviewQueueRow } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
-import { MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
@@ -32,10 +35,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@sketch/ui/components/dialog";
-import { Input } from "@sketch/ui/components/input";
 import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 /** Shared 300ms debounce for the org search inputs (band + tab lists). */
 export function useDebouncedSearch(delay = 300) {
@@ -84,35 +87,6 @@ export function useReviewRowSheets() {
   return { openRow, sheets, refresh };
 }
 
-function CompactAction({
-  label,
-  emphasis,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  emphasis?: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      className={cn(
-        "px-1.5 py-0.5 text-[11px] disabled:opacity-40",
-        emphasis ? "font-medium text-foreground hover:underline" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
 /**
  * One-line review row: name, muted suggested-match, quiet Confirm/Dismiss
  * text actions. Everything else (evidence detail, match reason, pick
@@ -125,11 +99,19 @@ export function ReviewRowCompact({
   onOpen,
   onResolved,
   detail,
+  selectMode,
+  selectable,
+  isSelected,
+  onToggleSelect,
 }: {
   row: EntityReviewQueueRow;
   onOpen: (row: EntityReviewQueueRow) => void;
   onResolved: () => void;
   detail?: boolean;
+  selectMode?: boolean;
+  selectable?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: (row: EntityReviewQueueRow) => void;
 }) {
   const mutations = useReviewMutations(row, onResolved);
   const candidates = row.candidates ?? (row.candidate ? [row.candidate] : []);
@@ -153,21 +135,36 @@ export function ReviewRowCompact({
   const linkOnly = guardedProject && row.candidate_entity_id !== null;
   const sheetOnly = guardedProject && row.candidate_entity_id === null;
   return (
-    <div className="border-b border-border/60 last:border-b-0" data-testid={`org-review-row-${row.id}`}>
-      <div className="flex w-full items-center transition-colors hover:bg-foreground/10">
-        <button
-          type="button"
-          onClick={() => onOpen(row)}
-          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left"
-        >
-          <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
-          <span className="shrink-0 truncate text-[12.5px] font-medium">{row.proposed_name}</span>
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">{suggestion}</span>
-          {evidence ? (
-            <span className="hidden shrink-0 text-[10.5px] text-muted-foreground/70 sm:inline">{evidence}</span>
+    <OrgRow
+      testId={`org-review-row-${row.id}`}
+      rowClassName={selectMode && !selectable ? "opacity-45" : undefined}
+      disabled={selectMode && !selectable}
+      onOpen={() => (selectMode ? onToggleSelect?.(row) : onOpen(row))}
+      avatar={
+        <>
+          {selectMode ? (
+            <input
+              type="checkbox"
+              readOnly
+              tabIndex={-1}
+              checked={isSelected ?? false}
+              disabled={!selectable}
+              className="pointer-events-none size-3.5 shrink-0 accent-foreground"
+              data-testid={`org-review-select-${row.id}`}
+            />
           ) : null}
-        </button>
-        {sheetOnly ? null : (
+          <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
+        </>
+      }
+      primary={row.proposed_name}
+      inlineSuffix={suggestion}
+      meta={
+        evidence ? (
+          <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 sm:inline">{evidence}</span>
+        ) : null
+      }
+      actions={
+        sheetOnly || selectMode ? null : (
           <span className="flex shrink-0 items-center gap-0.5 pr-3">
             <CompactAction
               label={linkOnly ? "Link" : hasCandidate ? "Confirm" : "Add"}
@@ -182,13 +179,32 @@ export function ReviewRowCompact({
               </>
             )}
           </span>
-        )}
-      </div>
-      {mutations.errorCopy ? (
-        <p className="px-3 pb-1.5 text-[11px] text-destructive">{mutations.errorCopy.message}</p>
-      ) : null}
-    </div>
+        )
+      }
+      footer={
+        mutations.errorCopy ? (
+          <p className="px-3 pb-1.5 text-[11px] text-destructive">{mutations.errorCopy.message}</p>
+        ) : null
+      }
+    />
   );
+}
+
+/** A birth proposal — no suggested match at all; bulk verb is Dismiss. */
+function isBirthRow(row: EntityReviewQueueRow): boolean {
+  return row.candidate_entity_id === null && (row.candidates?.length ?? 0) === 0;
+}
+
+/** The origin shown in the bulk source filter — LLM origin first, structural seed as fallback. */
+function bulkSource(row: EntityReviewQueueRow): string {
+  return row.source ?? row.seed_source ?? "unknown";
+}
+
+/** Whether the row was last seen more than `days` ago (missing timestamps never match). */
+function olderThan(row: EntityReviewQueueRow, days: number): boolean {
+  const seen = row.last_seen_at ?? row.first_seen_at;
+  if (!seen) return false;
+  return Date.now() - new Date(seen).getTime() > days * 24 * 60 * 60 * 1000;
 }
 
 /** Label for the next natural weekly pass — the Monday after today. */
@@ -201,24 +217,23 @@ function nextPassLabel(): string {
 
 /**
  * Candidate-less, seed-less project rows are not individually actionable —
- * they pool for the weekly mint pass. Collapsed they are one summary line;
- * expanded they list read-only for transparency. "Run now" (admin) forces
+ * they pool for the weekly mint pass. One summary line by default; clicking
+ * it discloses the read-only list for transparency. "Run now" (admin) forces
  * this week's pass early, behind a warning: re-judging previously skipped
  * groups is where measured LLM variance re-mints junk.
  */
 function PoolingSummary({
   rows,
-  expanded,
   isAdmin,
   onRunStarted,
 }: {
   rows: EntityReviewQueueRow[];
-  expanded: boolean;
   isAdmin: boolean;
   onRunStarted: () => void;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [started, setStarted] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
   const run = useMutation({
     mutationFn: () => api.projectMinting.runNow(),
     onSuccess: () => {
@@ -235,23 +250,27 @@ function PoolingSummary({
   return (
     <div className="border-t border-amber-300/40 dark:border-amber-700/30" data-testid="review-band-pooling">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
-        <span className="min-w-0 truncate text-[11.5px] text-muted-foreground">
-          {rows.length} new {rows.length === 1 ? "name" : "names"} pooling for the weekly pass · next pass{" "}
-          {nextPassLabel()}
+        <button
+          type="button"
+          onClick={() => setListOpen((v) => !v)}
+          className="min-w-0 truncate text-left text-[11px] text-muted-foreground hover:text-foreground"
+          data-testid="review-band-pooling-toggle"
+        >
+          {listOpen ? "▾" : "▸"} {rows.length} new {rows.length === 1 ? "name" : "names"} pooling for the weekly pass ·
+          next pass {nextPassLabel()}
           {expiringCount > 0 ? ` · ${expiringCount} expiring` : ""}
-        </span>
+        </button>
         {isAdmin ? (
           started ? (
             <span className="shrink-0 text-[11px] text-muted-foreground">pass running — check back shortly</span>
           ) : (
-            <button
-              type="button"
+            <CompactAction
+              label="Run now"
+              emphasis
+              className="shrink-0"
               onClick={() => setConfirmOpen(true)}
-              className="shrink-0 px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:underline"
               data-testid="review-band-run-now"
-            >
-              Run now
-            </button>
+            />
           )
         ) : null}
       </div>
@@ -262,7 +281,7 @@ function PoolingSummary({
             : "Could not start the pass. Try again shortly."}
         </p>
       ) : null}
-      {expanded ? (
+      {listOpen ? (
         <div className="border-t border-amber-300/30 dark:border-amber-700/20">
           {rows.map((row) => (
             <div
@@ -271,16 +290,13 @@ function PoolingSummary({
               data-testid={`review-band-pooling-row-${row.id}`}
             >
               <EntityAvatar entity={{ id: row.id, name: row.proposed_name, sourceType: row.entity_type }} size="sm" />
-              <span className="min-w-0 flex-1 truncate text-[12px]">{row.proposed_name}</span>
+              <span className="min-w-0 flex-1 truncate text-xs">{row.proposed_name}</span>
               {isExpiringSoon(row) ? (
-                <span
-                  className="shrink-0 rounded-sm bg-muted px-1 py-px text-[9.5px] uppercase tracking-wide text-muted-foreground"
-                  data-testid="review-band-expiring-chip"
-                >
+                <SourceTag className="tracking-wide" data-testid="review-band-expiring-chip">
                   expiring
-                </span>
+                </SourceTag>
               ) : null}
-              <span className="shrink-0 text-[10.5px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
+              <span className="shrink-0 text-[10px] text-muted-foreground/70">seen {row.occurrence_count}×</span>
             </div>
           ))}
         </div>
@@ -310,28 +326,40 @@ function PoolingSummary({
 
 /**
  * Type-scoped review band — the only review surface now that the Review tab
- * is gone. Collapsed: header count + first 3 rows. Expanded (in place):
- * search + the full type-scoped list in a capped scroll region, so the
- * directory below stays reachable. Projects additionally get the pending
- * mint dossiers first (admin) and the pooling summary last. `null` when
- * there is nothing to review keeps the entity list flush to the top.
+ * is gone. No collapsed preview: the full type-scoped list always renders in
+ * a capped scroll region, so the directory below stays reachable. The band has
+ * no search box of its own — the org-wide search is the only search, and the
+ * results view remounts this band with the query via `search` so pending
+ * reviews are filtered alongside entities. Projects additionally get the
+ * pending mint dossiers first (admin) and the pooling summary last. Admins
+ * also get the graph-curation verdict lane ({@link GraphVerdictsSection}) —
+ * open verdicts filtered to this tab's subject types. `null` when there is
+ * nothing to review keeps the entity list flush to the top.
+ *
+ * Select mode (the header toggle) turns the list into bulk triage: client-side
+ * source/age/births filters over the fetched page, checkboxes on rows, and a
+ * footer that splits the selection by verb — Dismiss for births (drops the
+ * proposal), Confirm for rows with a suggested match. Weekly-pass project rows
+ * are never selectable: bulk-dismiss silently starves sub-project minting.
  */
 export function ReviewBandCapped({
   types,
   isAdmin = false,
-  expanded,
-  onExpandedChange,
+  search = "",
 }: {
   types: string[];
   isAdmin?: boolean;
-  expanded?: boolean;
-  onExpandedChange?: (expanded: boolean) => void;
+  search?: string;
 }) {
-  const [internalExpanded, setInternalExpanded] = useState(false);
-  const isExpanded = expanded ?? internalExpanded;
-  const setExpanded = onExpandedChange ?? setInternalExpanded;
-  const { search, setSearch, debounced } = useDebouncedSearch();
-  const activeSearch = isExpanded ? debounced : "";
+  const activeSearch = search.trim();
+  const matchesSearch = (...names: (string | null | undefined)[]) =>
+    activeSearch.length === 0 || names.some((n) => n?.toLowerCase().includes(activeSearch.toLowerCase()));
+
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [ageFilter, setAgeFilter] = useState("any");
+  const [birthsOnly, setBirthsOnly] = useState(false);
 
   const { data } = useQuery({
     queryKey: ["entity-review", "band-capped", types.join(","), activeSearch],
@@ -351,7 +379,24 @@ export function ReviewBandCapped({
     retry: false,
     refetchInterval: 30000,
   });
-  const verdicts = isAdmin && isProjectBand ? (verdictsQuery.data?.verdicts ?? []) : [];
+  const verdicts =
+    isAdmin && isProjectBand
+      ? (verdictsQuery.data?.verdicts ?? []).filter((verdict) => matchesSearch(verdict.companyName))
+      : [];
+
+  const graphVerdictsQuery = useQuery({
+    queryKey: ["graph-verdicts", "open"],
+    queryFn: () => api.graphVerdicts.listOpen(),
+    enabled: isAdmin,
+    retry: false,
+    refetchInterval: 30000,
+  });
+  const graphVerdicts = isAdmin
+    ? (graphVerdictsQuery.data?.verdicts ?? []).filter(
+        (verdict) =>
+          types.includes(graphVerdictBandType(verdict)) && matchesSearch(verdict.subjectName, verdict.targetName),
+      )
+    : [];
 
   const poolingRows = isProjectBand
     ? rows.filter(
@@ -361,14 +406,65 @@ export function ReviewBandCapped({
   const poolingIds = new Set(poolingRows.map((row) => row.id));
   const actionableRows = rows.filter((row) => !poolingIds.has(row.id));
 
+  /**
+   * Weekly-pass project rows never join a bulk action (dismiss starves future
+   * sub-project minting; confirm can birth a bare entity), and rows without a
+   * CAS timestamp can't clear the server's per-item check.
+   */
+  const isSelectable = (row: EntityReviewQueueRow) =>
+    !isWeeklyPassProjectRow(row) && row.candidate_generated_at !== null;
+  const passesBulkFilters = (row: EntityReviewQueueRow) =>
+    (sourceFilter === "all" || bulkSource(row) === sourceFilter) &&
+    (ageFilter === "any" || olderThan(row, Number(ageFilter))) &&
+    (!birthsOnly || isBirthRow(row));
+  const visibleRows = selectMode ? actionableRows.filter(passesBulkFilters) : actionableRows;
+  const selectableVisible = visibleRows.filter(isSelectable);
+  const sourceOptions = [...new Set(actionableRows.map(bulkSource))].sort();
+  const selectedRows = actionableRows.filter((row) => selected.has(row.id) && isSelectable(row));
+  const selectedBirths = selectedRows.filter(isBirthRow);
+  const selectedMatches = selectedRows.filter((row) => !isBirthRow(row));
+
+  const toggleSelect = (row: EntityReviewQueueRow) => {
+    if (!isSelectable(row)) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.add(row.id);
+      return next;
+    });
+  };
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
   const wa = useWhatsAppIdentityReview(types);
+  const waItems = wa.items.filter((item) => matchesSearch(item.phoneE164, item.lid));
   const [waSelected, setWaSelected] = useState<string | null>(null);
 
-  if (rows.length === 0 && wa.items.length === 0 && verdicts.length === 0 && !activeSearch) return null;
+  const bulk = useMutation({
+    mutationFn: ({ verb, items }: { verb: "dismiss" | "confirm"; items: EntityReviewQueueRow[] }) => {
+      const payload = items.map((row) => ({
+        reviewId: row.id,
+        candidateGeneratedAt: row.candidate_generated_at ?? "",
+      }));
+      return verb === "dismiss" ? api.entityReview.dismissBatch(payload) : api.entityReview.confirmBatch(payload);
+    },
+    onSuccess: (res, { verb }) => {
+      const okIds = new Set(res.results.filter((r) => r.ok).map((r) => r.reviewId));
+      const failed = res.results.length - okIds.size;
+      const label = verb === "dismiss" ? "Dismissed" : "Confirmed";
+      if (failed === 0) toast.success(`${label} ${okIds.size} ${okIds.size === 1 ? "row" : "rows"}.`);
+      else toast.warning(`${label} ${okIds.size}, ${failed} failed — failed rows stay selected in the queue.`);
+      setSelected((prev) => new Set([...prev].filter((id) => !okIds.has(id))));
+      refresh();
+    },
+    onError: () => toast.error("Bulk action failed. Try again."),
+  });
 
-  const visibleRows = isExpanded ? actionableRows : actionableRows.slice(0, 3);
-  const hiddenCount = actionableRows.length - visibleRows.length;
-  const headerCount = realTotal + wa.items.length + verdicts.length;
+  if (rows.length === 0 && waItems.length === 0 && verdicts.length === 0 && graphVerdicts.length === 0) return null;
+
+  const headerCount = realTotal + waItems.length + verdicts.length + graphVerdicts.length;
 
   return (
     <section className="mb-6 overflow-hidden rounded-xl border border-amber-300/60 bg-amber-50/40 dark:border-amber-700/50 dark:bg-amber-950/20">
@@ -376,36 +472,80 @@ export function ReviewBandCapped({
         <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-amber-700 dark:text-amber-400">
           Needs your review · {headerCount}
         </span>
-        <button
-          type="button"
-          onClick={() => setExpanded(!isExpanded)}
-          className="font-mono text-[10px] uppercase tracking-[0.08em] text-amber-700/80 hover:text-amber-800 dark:text-amber-400/80 dark:hover:text-amber-300"
-          data-testid="review-band-toggle"
-        >
-          {isExpanded ? "Collapse ▴" : "Show all ▾"}
-        </button>
-      </div>
-      {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}
-      {isExpanded ? (
-        <div className="relative border-b border-amber-300/40 px-3 py-2 dark:border-amber-700/30">
-          <MagnifyingGlassIcon size={14} className="absolute left-5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-            placeholder="Search pending reviews…"
-            className="h-8 pl-8 text-[12.5px]"
-            data-testid="review-band-search"
+        {actionableRows.length > 0 ? (
+          <CompactAction
+            label={selectMode ? "Done" : "Select"}
+            emphasis
+            className="shrink-0"
+            onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+            data-testid="review-band-select-toggle"
           />
+        ) : null}
+      </div>
+      {selectMode ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-300/40 px-3 py-1.5 dark:border-amber-700/30">
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className="h-6 rounded-md border border-border bg-background px-1.5 text-[11px]"
+            data-testid="review-band-source-filter"
+          >
+            <option value="all">All sources</option>
+            {sourceOptions.map((source) => (
+              <option key={source} value={source}>
+                {source}
+              </option>
+            ))}
+          </select>
+          <select
+            value={ageFilter}
+            onChange={(e) => setAgeFilter(e.target.value)}
+            className="h-6 rounded-md border border-border bg-background px-1.5 text-[11px]"
+            data-testid="review-band-age-filter"
+          >
+            <option value="any">Any age</option>
+            <option value="7">Older than 7 days</option>
+            <option value="30">Older than 30 days</option>
+          </select>
+          <label className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={birthsOnly}
+              onChange={(e) => setBirthsOnly(e.target.checked)}
+              className="size-3 accent-foreground"
+              data-testid="review-band-births-only"
+            />
+            Births only
+          </label>
+          <span className="flex-1" />
+          <CompactAction
+            label={`Select all ${selectableVisible.length}`}
+            onClick={() => setSelected(new Set(selectableVisible.map((row) => row.id)))}
+            data-testid="review-band-select-all"
+          />
+          <span className="text-muted-foreground/40">·</span>
+          <CompactAction label="Clear" onClick={() => setSelected(new Set())} />
         </div>
       ) : null}
-      <div className={cn(isExpanded && "max-h-[60vh] overflow-y-auto")}>
-        {activeSearch && actionableRows.length === 0 ? (
-          <p className="px-3 py-3 text-[11.5px] text-muted-foreground">No pending reviews match your search.</p>
-        ) : null}
+      {verdicts.length > 0 ? <ProjectSuggestionsSection verdicts={verdicts} /> : null}
+      {graphVerdicts.length > 0 ? (
+        <GraphVerdictsSection verdicts={graphVerdicts} allOpen={graphVerdictsQuery.data?.verdicts ?? graphVerdicts} />
+      ) : null}
+      <div className="max-h-[60vh] overflow-y-auto">
         {visibleRows.map((row) => (
-          <ReviewRowCompact key={row.id} row={row} onOpen={openRow} onResolved={refresh} detail={isExpanded} />
+          <ReviewRowCompact
+            key={row.id}
+            row={row}
+            onOpen={openRow}
+            onResolved={refresh}
+            detail
+            selectMode={selectMode}
+            selectable={isSelectable(row)}
+            isSelected={selected.has(row.id)}
+            onToggleSelect={toggleSelect}
+          />
         ))}
-        {wa.items.map((item) => (
+        {waItems.map((item) => (
           <WhatsAppIdentityRow
             key={item.id}
             item={item}
@@ -413,30 +553,48 @@ export function ReviewBandCapped({
             onResolve={(message) => wa.resolve(item.id, message)}
           />
         ))}
-        {isExpanded && realTotal > rows.length ? (
-          <p className="border-t border-amber-300/40 px-3 py-2 text-[10.5px] text-muted-foreground dark:border-amber-700/30">
-            Showing {rows.length} of {realTotal}. Search to narrow the rest.
+        {realTotal > rows.length ? (
+          <p className="border-t border-amber-300/40 px-3 py-2 text-[10px] text-muted-foreground dark:border-amber-700/30">
+            Showing {rows.length} of {realTotal}. Use the org search above to narrow the rest.
           </p>
         ) : null}
       </div>
+      {selectMode ? (
+        <div
+          className="flex flex-wrap items-center gap-2 border-t border-amber-300/50 px-3 py-2 dark:border-amber-700/40"
+          data-testid="review-band-bulk-bar"
+        >
+          <span className="text-[11px] text-muted-foreground">{selectedRows.length} selected</span>
+          <span className="flex-1" />
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 text-[11px]"
+            disabled={selectedBirths.length === 0 || bulk.isPending}
+            onClick={() => bulk.mutate({ verb: "dismiss", items: selectedBirths })}
+            data-testid="review-band-bulk-dismiss"
+          >
+            Dismiss {selectedBirths.length} {selectedBirths.length === 1 ? "birth" : "births"}
+          </Button>
+          <Button
+            size="sm"
+            className="h-6 text-[11px]"
+            disabled={selectedMatches.length === 0 || bulk.isPending}
+            onClick={() => bulk.mutate({ verb: "confirm", items: selectedMatches })}
+            data-testid="review-band-bulk-confirm"
+          >
+            Confirm {selectedMatches.length} {selectedMatches.length === 1 ? "match" : "matches"}
+          </Button>
+        </div>
+      ) : null}
       <PoolingSummary
         rows={poolingRows}
-        expanded={isExpanded}
         isAdmin={isAdmin}
         onRunStarted={() => {
           queryClient.invalidateQueries({ queryKey: ["project-minting"] });
           queryClient.invalidateQueries({ queryKey: ["entity-review"] });
         }}
       />
-      {!isExpanded && hiddenCount > 0 ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          className="w-full border-t border-amber-300/40 px-3 py-2 text-left font-mono text-[10px] uppercase tracking-[0.08em] text-amber-700/70 hover:text-amber-800 dark:border-amber-700/30 dark:text-amber-400/70"
-        >
-          {hiddenCount} more — show all ▾
-        </button>
-      ) : null}
       {sheets}
       <WhatsAppIdentityDrawer
         item={wa.items.find((item) => item.id === waSelected) ?? null}
@@ -444,14 +602,5 @@ export function ReviewBandCapped({
         onResolve={wa.resolve}
       />
     </section>
-  );
-}
-
-/** Shared empty/teach frame for a review surface. */
-export function ReviewEmpty({ children }: { children: ReactNode }) {
-  return (
-    <p className="rounded-xl border border-dashed border-border py-10 text-center text-[12.5px] text-muted-foreground">
-      {children}
-    </p>
   );
 }

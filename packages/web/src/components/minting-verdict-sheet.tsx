@@ -377,7 +377,7 @@ function SheetBody({
                 ))}
               </div>
             ) : null}
-            <p className="mt-2 text-[11.5px] text-muted-foreground">
+            <p className="mt-2 text-[11px] text-muted-foreground">
               Accepting records this as the declaration. A stage applies to client and partner only.
             </p>
           </div>
@@ -514,7 +514,7 @@ function SheetBody({
                           onClick={() => setFilesFor(name)}
                           disabled={claim.fileIds.length === 0}
                           className={cn(
-                            "shrink-0 font-mono text-[10.5px] tabular-nums",
+                            "shrink-0 font-mono text-[10px] tabular-nums",
                             claim.fileIds.length === 0
                               ? "text-muted-foreground/60"
                               : "text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground",
@@ -523,7 +523,7 @@ function SheetBody({
                           {claim.fileIds.length} {claim.fileIds.length === 1 ? "file" : "files"}
                         </button>
                       ) : null}
-                      <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                         {project.status} · {project.confidence}
                       </span>
                     </div>
@@ -556,7 +556,7 @@ function SheetBody({
               {verdict.verdict.existingEntities.map((entity) => (
                 <div key={entity.entityId} className="flex items-baseline gap-2 px-3 py-2">
                   <span className="text-[13px] font-medium text-foreground">{entity.name}</span>
-                  <span className="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+                  <span className="min-w-0 flex-1 text-[11px] text-muted-foreground">
                     {entity.disposition === "merge_into" ? `→ merge into “${entity.mergeInto}”` : "→ keep as canonical"}
                   </span>
                 </div>
@@ -590,7 +590,7 @@ function SheetBody({
 
       <div className="sticky bottom-0 border-t border-border bg-background px-6 py-3">
         {error ? (
-          <p className="mb-2 text-[12px] text-destructive">
+          <p className="mb-2 text-xs text-destructive">
             {error instanceof ApiRequestError ? `${error.code}: ${error.message}` : String(error)}
           </p>
         ) : null}
@@ -619,7 +619,7 @@ function SheetBody({
           <div className="flex items-center justify-between border-b border-border px-6 py-4">
             <div>
               <h3 className="text-[15px] font-semibold text-foreground">{filesPanelProject.name}</h3>
-              <p className="mt-0.5 text-[12px] text-muted-foreground">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 {filesPanelProject.fileIds.length} {filesPanelProject.fileIds.length === 1 ? "file" : "files"} this
                 accept will attach
               </p>

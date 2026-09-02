@@ -579,6 +579,26 @@ export const handlers = [
     return HttpResponse.json({ runs: [] });
   }),
 
+  http.get("/api/graph-verdicts", () => {
+    return HttpResponse.json({ verdicts: [] });
+  }),
+
+  http.get("/api/graph-verdicts/:id/evidence", () => {
+    return HttpResponse.json({ rows: [] });
+  }),
+
+  http.get("/api/entities/:id/mentions", () => {
+    return HttpResponse.json({ mentions: [], total: 0, hiddenCount: 0 });
+  }),
+
+  http.get("/api/entities/:id/snippets", () => {
+    return HttpResponse.json({ quotes: [] });
+  }),
+
+  http.get("/api/entities/:id/timeline", () => {
+    return HttpResponse.json({ groups: [] });
+  }),
+
   http.get("/api/entity-review", () => {
     return HttpResponse.json({ rows: [], total: 0 });
   }),

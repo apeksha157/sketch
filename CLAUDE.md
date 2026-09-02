@@ -100,6 +100,8 @@ Vitest, three projects per package by filename suffix. Default to plain unit; th
 
 **Commands:** `pnpm test:changed` (per-iteration, affected unit tests) · `pnpm test:unit` (full unit tier, no integration) · `pnpm test` (everything; enforced by the pre-push hook and CI).
 
+**Resource budget:** the full `pnpm test` run is heavy — hundreds of vitest workers plus PGlite instances — and has crashed the machine when other work was running. Check `uptime` BEFORE `pnpm test` or `git push` (the pre-push hook runs the full suite): only run it when the 1-minute load average is comfortably low (< ~5) and no other heavy sessions/builds are active. Under load, commit the work to its branch immediately and defer the push + PR to a lean moment; individual test files via `npx vitest run <file>` are cheap and safe anytime.
+
 ## Key Design Decisions
 
 - Platform formatting via system prompt only, no post-processing
@@ -112,21 +114,20 @@ Vitest, three projects per package by filename suffix. Default to plain unit; th
 - Static migration imports instead of FileMigrationProvider (for tsdown bundler compatibility)
 - `CURRENT_TIMESTAMP` in migrations for cross-dialect compatibility (SQLite + Postgres)
 
-## Feature Gating (`EXPERIMENTAL_FLAG`)
+## Feature Gating
 
-New features that aren't ready for general availability are gated behind `config.EXPERIMENTAL_FLAG` (env var, defaults to `false`). If the flag is off, the feature must be **completely invisible** — no routes, no tools, no prompt references, no UI. Gate at all 4 layers:
+`EXPERIMENTAL_FLAG` is removed. There is no global feature flag — gate each surface with the targeted mechanism for its layer:
 
-1. **HTTP routes** (`http.ts`): Wrap new API routes in `if (config.EXPERIMENTAL_FLAG) { app.route(...) }`
-2. **Agent tools** (`sketch-tools.ts`): Conditionally include tools using the spread pattern:
+1. **HTTP routes**: Admin-only routes check the session role with `denyIfNotAdmin(c)` from `api/auth-helpers.ts` (role comes from `users.auth_role` via the session middleware).
+2. **Agent tools** (`sketch-tools.ts`): Gate on a concrete capability boolean in `SketchMcpDeps` using the conditional-spread idiom:
    ```ts
-   ...(deps.experimentalFlag
-     ? [tool("MyTool", ...), tool("AnotherTool", ...)]
-     : ([] as ReturnType<typeof tool>[])),
+   ...(deps.transcriptionEnabled ? [createTranscribeAudioTool({...})] : []),
    ```
-3. **System prompt** (`prompt.ts`): Wrap any instructions referencing experimental tools in `if (params.experimentalFlag) { ... }` so the agent isn't told about tools it can't use
-4. **Frontend** (`app-sidebar.tsx`): Hide navigation items using `setupStatus.experimentalFlag`
+   Capability flags are computed at runtime from real config/entitlement state (e.g. `transcriptionEnabled`, `visionAnalysisEnabled`) and flow `config`/`bootstrap.ts` → `RunAgentParams` → `SketchMcpDeps` (tools) and `buildSystemContext` (prompt).
+3. **System prompt** (`prompt.ts`): Wrap instructions that reference a gated tool in the same capability check, so the agent isn't told about tools it can't use.
+4. **Frontend** (`app-sidebar.tsx`): Nav items carry an `adminOnly` flag and are filtered against the session role.
 
-The flag flows: `config` → `bootstrap.ts` (injected in `trackedRunAgent`) → `RunAgentParams` → both `SketchMcpDeps` (tools) and `buildSystemContext` (prompt).
+Per-target authorization (e.g. which Slack channel or WhatsApp group a message may go to) is a separate layer: it lives **inside the tool handler**, checked against membership rosters via `access/membership.ts`. `canUseTool` (`agent/permissions.ts`) only validates tool names and file/Bash paths — it never sees business-level targets.
 
 ## Related Repos
 

@@ -12,6 +12,7 @@
 import { mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import {
+  type AutomationAgentTrace,
   type AutomationExecutionMode,
   type AutomationRunMode,
   type AutomationSketchToolName,
@@ -57,6 +58,7 @@ import type { IntegrationProvider } from "../integrations/types";
 import { cleanupIntegrationAccess, startIntegrationAccess } from "../integrations/wrapper";
 import type { Logger } from "../logger";
 import type { RecordWorkflowStep, WorkflowStepUsage } from "../telemetry/agent-run-telemetry";
+import { AutomationAgentTraceRecorder } from "./agent-trace";
 import { formatWorkflowMessageText, resolveWorkflowDelivery } from "./delivery";
 import type { StepOutput, WorkflowEdge, WorkflowStep } from "./types";
 
@@ -375,6 +377,7 @@ async function executeAutomationInternal(
     const content = contentMap.get(step.id);
     const startTime = Date.now();
     const isMessageDeliveryStep = task.output_mode !== "silent" && step.id === lastExecutionStepId;
+    let agentTrace: AutomationAgentTrace | undefined;
 
     logger.info(
       { taskId: task.id, runId, stepId: step.id, stepType: step.type, stepLabel: step.label },
@@ -403,12 +406,20 @@ async function executeAutomationInternal(
         creatorId,
         creatorEmail,
         isMessageDeliveryStep,
+        onAgentTrace: (trace) => {
+          agentTrace = trace;
+        },
       });
 
       const normalizedOutput = normalizeStepOutput(output);
       const outputForStep = isMessageDeliveryStep ? formatWorkflowMessageText(normalizedOutput) : normalizedOutput;
       const durationMs = Date.now() - startTime;
-      stepOutputs[step.id] = { output: outputForStep, status: "completed", duration_ms: durationMs };
+      stepOutputs[step.id] = {
+        output: outputForStep,
+        status: "completed",
+        duration_ms: durationMs,
+        ...(agentTrace ? { agentTrace } : {}),
+      };
       previousOutput = outputForStep;
 
       logger.info({ taskId: task.id, runId, stepId: step.id, durationMs }, "Automation: step completed");
@@ -431,6 +442,7 @@ async function executeAutomationInternal(
         status: "failed",
         duration_ms: durationMs,
         error: { message: error.message, stack: error.stack },
+        ...(agentTrace ? { agentTrace } : {}),
       };
 
       markSkippedAfterFailure({ failedStepId: step.id, executionSteps, edges, stepOutputs });
@@ -618,6 +630,7 @@ export async function testAutomationStep(
   const contentMap = new Map(contentRows.map((r) => [r.step_id, r]));
   const content = contentMap.get(step.id);
   const startTime = Date.now();
+  let agentTrace: AutomationAgentTrace | undefined;
 
   try {
     validateRuntimeAutomationExecutionMode(executionMode, [step]);
@@ -635,12 +648,16 @@ export async function testAutomationStep(
       creator,
       creatorId,
       creatorEmail,
+      onAgentTrace: (trace) => {
+        agentTrace = trace;
+      },
     });
     const normalizedOutput = normalizeStepOutput(output);
     stepOutputs[step.id] = {
       output: normalizedOutput,
       status: "completed",
       duration_ms: Date.now() - startTime,
+      ...(agentTrace ? { agentTrace } : {}),
     };
     await runsRepo.update(runId, {
       status: "completed",
@@ -655,6 +672,7 @@ export async function testAutomationStep(
       status: "failed",
       duration_ms: Date.now() - startTime,
       error: { message: error.message, stack: error.stack },
+      ...(agentTrace ? { agentTrace } : {}),
     };
     await runsRepo.update(runId, {
       status: "failed",
@@ -679,6 +697,7 @@ async function executeWorkflowStep(params: {
   creatorId: string | null;
   creatorEmail: string | null;
   isMessageDeliveryStep?: boolean;
+  onAgentTrace?: (trace: AutomationAgentTrace) => void;
 }): Promise<unknown> {
   const { step, content, input, task, runId, workspaceDir, creator, creatorId, creatorEmail } = params;
   const runtimeParams = params.params;
@@ -742,6 +761,7 @@ async function executeWorkflowStep(params: {
       loadAgentRuntimeProviderConfig: runtimeParams.loadAgentRuntimeProviderConfig,
       propagateParentAbort: runtimeParams.propagateParentAbort,
       parentAbortSignal: runtimeParams.parentAbortSignal,
+      onAgentTrace: params.onAgentTrace,
     });
   }
 
@@ -1323,6 +1343,7 @@ interface AgentStepParams {
   loadAgentRuntimeProviderConfig?: () => Promise<AgentRuntimeProviderFactoryConfig | null>;
   propagateParentAbort?: boolean;
   parentAbortSignal?: AbortSignal;
+  onAgentTrace?: (trace: AutomationAgentTrace) => void;
 }
 
 /**
@@ -1333,17 +1354,26 @@ interface AgentStepParams {
  */
 async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
   const { prompt, step, input, task, logger, workspaceDir, outputPlatform, recordWorkflowStep } = params;
+  const recorder = new AutomationAgentTraceRecorder(
+    step.agentMode !== "light" ? "sketch" : params.config.AGENT_RUNTIME === "aisdk" ? "aisdk-light" : "sdk-light",
+  );
+  params.onAgentTrace?.(recorder.trace);
 
-  if (step.agentMode === "light" && step.agentSkills?.some((skill) => cliSkillRequiredEnv(skill).length > 0)) {
-    throw new Error("GitHub integration skills require a full Sketch-mode workflow agent step.");
-  }
+  try {
+    if (step.agentMode === "light" && step.agentSkills?.some((skill) => cliSkillRequiredEnv(skill).length > 0)) {
+      throw new Error("GitHub integration skills require a full Sketch-mode workflow agent step.");
+    }
 
-  if (step.agentMode !== "light") {
-    return executeSketchAgentStep(params);
-  }
+    if (step.agentMode !== "light") {
+      return await executeSketchAgentStep(params, recorder);
+    }
 
-  if (params.config.AGENT_RUNTIME === "aisdk") {
-    return executeAiSdkLightAgentStep(params);
+    if (params.config.AGENT_RUNTIME === "aisdk") {
+      return await executeAiSdkLightAgentStep(params, recorder);
+    }
+  } catch (error) {
+    recorder.fail(error, error instanceof AutomationRunAbortedError ? "aborted" : "error");
+    throw error;
   }
 
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
@@ -1377,6 +1407,8 @@ async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
 
   let lastText = "";
   let stepUsage: WorkflowStepUsage | null = null;
+  let stepStopReason: string | null = null;
+  let stepTurns: number | null = null;
   try {
     await limitAgentExecution(async () => {
       const run = query({
@@ -1397,18 +1429,60 @@ async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
       for await (const message of run) {
         if (!message || typeof message !== "object" || !("type" in message)) continue;
         if (message.type === "assistant" && "message" in message) {
-          const msg = message.message as { content?: Array<{ type: string; text?: string }> };
+          const msg = message.message as {
+            content?: Array<{
+              type: string;
+              text?: string;
+              thinking?: string;
+              id?: string;
+              name?: string;
+              input?: unknown;
+            }>;
+          };
           if (msg.content) {
+            const hasToolUse = msg.content.some((block) => block.type === "tool_use");
             for (const block of msg.content) {
               if (block.type === "text" && block.text) {
                 lastText = block.text;
+                if (hasToolUse) recorder.addReasoning(`${block.text}\n`, "assistant");
+              } else if (block.type === "thinking" && block.thinking) {
+                recorder.addReasoning(block.thinking, "provider");
+              } else if (block.type === "tool_use" && block.name) {
+                recorder.startTool({
+                  toolName: block.name,
+                  input: block.input,
+                  externalId: block.id,
+                });
               }
             }
           }
+        } else if (message.type === "user" && "message" in message) {
+          const userMessage = message.message as {
+            content?: Array<{
+              type: string;
+              tool_use_id?: string;
+              content?: unknown;
+              is_error?: boolean;
+            }>;
+          };
+          for (const block of userMessage.content ?? []) {
+            if (block.type !== "tool_result" || !block.tool_use_id) continue;
+            recorder.finishTool({
+              externalId: block.tool_use_id,
+              output: block.content,
+              outputCaptured: true,
+              ...(block.is_error ? { errorMessage: "Tool returned an error" } : {}),
+            });
+          }
+        } else if (message.type === "tool_use_summary" && "summary" in message) {
+          const summary = (message as { summary?: unknown }).summary;
+          if (typeof summary === "string") recorder.addReasoning(`${summary}\n`, "assistant");
         } else if (message.type === "result") {
           const resultMsg = message as Record<string, unknown>;
           const u = resultMsg.usage as Record<string, unknown> | undefined;
           const modelKeys = Object.keys((resultMsg.modelUsage as Record<string, unknown>) ?? {});
+          stepStopReason = typeof resultMsg.stop_reason === "string" ? resultMsg.stop_reason : null;
+          stepTurns = typeof resultMsg.num_turns === "number" ? resultMsg.num_turns : null;
           stepUsage = {
             model: modelKeys.length > 0 ? modelKeys[0] : (modelOverride ?? null),
             inputTokens: (u?.input_tokens as number) ?? 0,
@@ -1424,10 +1498,28 @@ async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
     const stderrText = stderrChunks.join("").slice(0, 2000);
     logger.error({ err, stepId: step.id, stderrText }, "Automation agent: step failed (Claude Code subprocess error)");
     const baseMsg = err instanceof Error ? err.message : String(err);
-    throw new Error(stderrText ? `${baseMsg}\nstderr: ${stderrText}` : baseMsg);
+    const error = new Error(stderrText ? `${baseMsg}\nstderr: ${stderrText}` : baseMsg);
+    recorder.fail(error);
+    throw error;
   }
 
-  if (stepUsage && recordWorkflowStep) {
+  const completedStepUsage = stepUsage as WorkflowStepUsage | null;
+  recorder.complete({
+    model: completedStepUsage?.model ?? modelOverride ?? null,
+    stopReason: stepStopReason,
+    turns: stepTurns,
+    usage: completedStepUsage
+      ? {
+          inputTokens: completedStepUsage.inputTokens,
+          outputTokens: completedStepUsage.outputTokens,
+          cacheReadTokens: completedStepUsage.cacheReadTokens,
+          cacheCreationTokens: completedStepUsage.cacheCreationTokens,
+          costUsd: completedStepUsage.sdkCostUsd,
+        }
+      : null,
+  });
+
+  if (completedStepUsage && recordWorkflowStep) {
     await recordWorkflowStep(
       {
         platform: outputPlatform,
@@ -1435,7 +1527,7 @@ async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
         userId: task.created_by,
         workspaceKey: resolveWorkspaceKey(task),
       },
-      stepUsage,
+      completedStepUsage,
     );
   }
 
@@ -1447,7 +1539,10 @@ async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
   return lastText;
 }
 
-async function executeAiSdkLightAgentStep(params: AgentStepParams): Promise<unknown> {
+async function executeAiSdkLightAgentStep(
+  params: AgentStepParams,
+  recorder: AutomationAgentTraceRecorder,
+): Promise<unknown> {
   const { prompt, step, input, task, logger, workspaceDir, outputPlatform, recordWorkflowStep } = params;
   const providerConfig = await params.loadAgentRuntimeProviderConfig?.();
   if (!providerConfig) {
@@ -1476,6 +1571,7 @@ async function executeAiSdkLightAgentStep(params: AgentStepParams): Promise<unkn
   });
   const tools = createAgentRuntimeWorkspaceTools({ scope, logger });
   const limitAgentExecution = params.limitAgentExecution ?? (<T>(work: () => Promise<T>) => work());
+  const pendingToolIds = new Map<string, string[]>();
 
   const result = await limitAgentExecution(() =>
     runAgentRuntimeCore({
@@ -1485,11 +1581,47 @@ async function executeAiSdkLightAgentStep(params: AgentStepParams): Promise<unkn
       tools,
       maxTurns: 10,
       persistSession: false,
+      events: {
+        onReasoningDelta: (text) => {
+          recorder.addReasoning(text, "provider");
+        },
+        onToolStart: (event) => {
+          const id = recorder.startTool({ toolName: event.name, input: event.input });
+          if (!id) return;
+          pendingToolIds.set(event.name, [...(pendingToolIds.get(event.name) ?? []), id]);
+        },
+        onToolEnd: (event) => {
+          const ids = pendingToolIds.get(event.name) ?? [];
+          const eventId = ids.shift() ?? null;
+          pendingToolIds.set(event.name, ids);
+          recorder.finishTool({
+            eventId,
+            toolName: event.name,
+            output: event.result,
+            outputCaptured: true,
+            durationMs: event.durationMs,
+            ...(event.error ? { errorMessage: event.error.message } : {}),
+          });
+        },
+      },
     }),
   );
 
+  const firstModel = Object.keys(result.usage.byModel)[0] ?? provider.modelId;
+  recorder.complete({
+    model: firstModel,
+    stopReason: result.stopReason,
+    turns: result.num_turns,
+    usage: {
+      inputTokens: result.usage.totalInputTokens,
+      outputTokens: result.usage.totalOutputTokens,
+      cacheReadTokens: result.usage.totalCacheReadTokens,
+      cacheCreationTokens: result.usage.totalCacheWriteTokens,
+      costUsd: result.cost.totalUsd,
+    },
+  });
+
   if (recordWorkflowStep) {
-    const firstModel = Object.keys(result.usage.byModel)[0] ?? provider.modelId;
     await recordWorkflowStep(
       {
         platform: outputPlatform,
@@ -1522,7 +1654,10 @@ async function executeAiSdkLightAgentStep(params: AgentStepParams): Promise<unkn
   return result.finalText;
 }
 
-async function executeSketchAgentStep(params: AgentStepParams): Promise<unknown> {
+async function executeSketchAgentStep(
+  params: AgentStepParams,
+  recorder: AutomationAgentTraceRecorder,
+): Promise<unknown> {
   const {
     prompt,
     step,
@@ -1572,6 +1707,21 @@ async function executeSketchAgentStep(params: AgentStepParams): Promise<unknown>
   const integrationMcpServers = buildMcpServers ? await buildMcpServers(creatorEmail) : {};
   const inheritsParentAbort = params.propagateParentAbort !== false && params.parentAbortSignal !== undefined;
   const abortController = inheritsParentAbort ? createChildAbortController(params.parentAbortSignal) : undefined;
+  const traceToolEventIds: string[] = [];
+  let receivedProgressEvents = 0;
+  const recordProgressEvent: RunAgentParams["onProgressEvent"] = async (event) => {
+    receivedProgressEvents += 1;
+    if (event.kind === "intermediate_text") {
+      recorder.addReasoning(`${event.text}\n`, "assistant");
+      return;
+    }
+    const skillName =
+      (event.toolName === "Skill" || event.toolName === "mcp__sketch__Skill") && typeof event.input.skill === "string"
+        ? event.input.skill
+        : null;
+    const eventId = recorder.startTool({ toolName: event.toolName, input: event.input, skillName });
+    if (eventId) traceToolEventIds.push(eventId);
+  };
   let result: Awaited<ReturnType<typeof runAgent>>;
   try {
     result = await runSketchAgent({
@@ -1584,7 +1734,7 @@ async function executeSketchAgentStep(params: AgentStepParams): Promise<unknown>
       userEmail: creatorEmail,
       logger,
       platform: outputPlatform,
-      onProgressEvent: async () => {},
+      onProgressEvent: recordProgressEvent,
       integrationMcpServers,
       getSlack: params.getSlack,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1615,6 +1765,45 @@ async function executeSketchAgentStep(params: AgentStepParams): Promise<unknown>
     if (abortController?.signal.aborted) throw new AutomationRunAbortedError();
     throw err;
   }
+
+  if (receivedProgressEvents === 0) {
+    for (const event of result.trace.progressEvents ?? []) await recordProgressEvent(event);
+  }
+
+  for (const [index, toolCall] of (result.rawUsage.toolCalls ?? []).entries()) {
+    const eventId =
+      traceToolEventIds[index] ??
+      recorder.startTool({
+        toolName: toolCall.toolName,
+        skillName: toolCall.skillName,
+        startedAt: toolCall.startedAt,
+      });
+    if (!eventId) continue;
+    recorder.reconcileTool(eventId, {
+      skillName: toolCall.skillName,
+      startedAt: toolCall.startedAt,
+      endedAt: toolCall.endedAt,
+      success: toolCall.success,
+      ...(toolCall.errorMessage ? { errorMessage: toolCall.errorMessage } : {}),
+    });
+  }
+
+  const rawUsage = result.rawUsage;
+  recorder.complete({
+    model: rawUsage.model ?? step.agentModel ?? null,
+    stopReason: rawUsage.stopReason,
+    turns: rawUsage.numTurns,
+    usage:
+      typeof rawUsage.inputTokens === "number" && typeof rawUsage.outputTokens === "number"
+        ? {
+            inputTokens: rawUsage.inputTokens,
+            outputTokens: rawUsage.outputTokens,
+            cacheReadTokens: rawUsage.cacheReadTokens ?? 0,
+            cacheCreationTokens: rawUsage.cacheCreationTokens ?? 0,
+            costUsd: typeof result.costUsd === "number" ? result.costUsd : null,
+          }
+        : null,
+  });
 
   if (abortController?.signal.aborted || result.rawUsage.stopReason === "aborted") {
     throw new AutomationRunAbortedError();

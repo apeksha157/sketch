@@ -5,11 +5,11 @@
  * `entities/company-dedup-groups` and prints each multi-entity group with the
  * evidence behind it. With `--plan` it also emits, per group, the canonical
  * survivor and the merge operations the existing merge machinery would run —
- * `previewMerge` counts plus the `entity_review_queue` row the dedup
- * adjudication backfill (`scripts/entity-dedup-backfill.ts`) would upsert.
+ * `previewMerge` counts plus the `entity_review_queue` row a dedup review
+ * import would upsert.
  *
  * The script never writes: no migrations, no inserts, no merges. It is an
- * artifact for human review, and the plan is input for `entity-dedup-backfill`.
+ * artifact for human review.
  */
 import { parseArgs } from "node:util";
 import type { Kysely } from "kysely";

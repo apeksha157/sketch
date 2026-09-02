@@ -1,12 +1,17 @@
-export type ProvenanceTier = "declared" | "human_confirmed" | "structural" | "inferred";
+export type ProvenanceTier = "declared" | "human_confirmed" | "machine_confirmed" | "structural" | "inferred";
 
 export const PRODUCT_MATCH_TARGET_PROVENANCE_TIERS = new Set<ProvenanceTier>(["declared", "human_confirmed"]);
 
+/**
+ * `machine_confirmed` is a machine decision we replay, preserved through
+ * recreate, but never treated as human authority.
+ */
 const PROVENANCE_TIER_PRECEDENCE: Record<ProvenanceTier, number> = {
   inferred: 0,
   structural: 1,
-  human_confirmed: 2,
-  declared: 3,
+  machine_confirmed: 2,
+  human_confirmed: 3,
+  declared: 4,
 };
 
 export function strongestProvenanceTier(a: string | null | undefined, b: string | null | undefined): ProvenanceTier {
@@ -15,8 +20,14 @@ export function strongestProvenanceTier(a: string | null | undefined, b: string 
   return PROVENANCE_TIER_PRECEDENCE[left] >= PROVENANCE_TIER_PRECEDENCE[right] ? left : right;
 }
 
-function toProvenanceTier(value: string | null | undefined): ProvenanceTier {
-  if (value === "declared" || value === "human_confirmed" || value === "structural" || value === "inferred") {
+export function toProvenanceTier(value: string | null | undefined): ProvenanceTier {
+  if (
+    value === "declared" ||
+    value === "human_confirmed" ||
+    value === "machine_confirmed" ||
+    value === "structural" ||
+    value === "inferred"
+  ) {
     return value;
   }
   return "inferred";

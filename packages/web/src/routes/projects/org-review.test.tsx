@@ -9,7 +9,7 @@
 import type { EntityReviewQueueRow } from "@/lib/api";
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/utils";
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -131,10 +131,101 @@ describe("projects review band action policy", () => {
     expect(pooling).toHaveTextContent("2 new names pooling for the weekly pass");
     expect(pooling).toHaveTextContent("1 expiring");
 
-    await userEvent.click(screen.getByTestId("review-band-toggle"));
+    await userEvent.click(screen.getByTestId("review-band-pooling-toggle"));
     const chips = await screen.findAllByTestId("review-band-expiring-chip");
     expect(chips).toHaveLength(1);
     expect(screen.getByTestId("review-band-pooling-row-row-stale")).toHaveTextContent("expiring");
     expect(screen.getByTestId("review-band-pooling-row-row-fresh")).not.toHaveTextContent("expiring");
+  });
+});
+
+describe("review band bulk triage", () => {
+  const BIRTH = queueRow({ id: "row-birth", proposed_name: "Ghost Vendor", entity_type: "person" });
+  const MATCH = queueRow({
+    id: "row-match",
+    proposed_name: "Nadia R",
+    entity_type: "person",
+    candidate_entity_id: "person-1",
+    candidate: { id: "person-1", name: "Nadia Rahman", email: null },
+  });
+
+  function useBandHandlers(rows: EntityReviewQueueRow[]) {
+    server.use(
+      http.get("/api/entity-review", () => HttpResponse.json({ rows, total: rows.length })),
+      http.get("/api/entities/whatsapp/identities", () =>
+        HttpResponse.json({ items: [], viewerHasWhatsAppIdentity: false }),
+      ),
+    );
+  }
+
+  it("select mode swaps inline actions for checkboxes, guards weekly-pass rows, and filters to births", async () => {
+    const guarded = queueRow({
+      id: "row-guarded",
+      proposed_name: "OW Rec Portal",
+      entity_type: "project",
+      candidate_entity_id: "project-1",
+      candidate: { id: "project-1", name: "Recruitment Portal", email: null },
+    });
+    useBandHandlers([BIRTH, MATCH, guarded]);
+    server.use(http.get("/api/project-minting/verdicts", () => HttpResponse.json({ verdicts: [] })));
+
+    renderWithProviders(<ReviewBandCapped types={["person", "project"]} isAdmin />);
+
+    const birthRow = await screen.findByTestId("org-review-row-row-birth");
+    expect(within(birthRow).getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("review-band-select-toggle"));
+    expect(within(screen.getByTestId("org-review-row-row-birth")).queryByRole("button", { name: "Dismiss" })).toBe(
+      null,
+    );
+    expect(screen.getByTestId("org-review-select-row-birth")).toBeEnabled();
+    expect(screen.getByTestId("org-review-select-row-guarded")).toBeDisabled();
+
+    await userEvent.click(screen.getByTestId("review-band-births-only"));
+    expect(screen.queryByTestId("org-review-row-row-match")).not.toBeInTheDocument();
+    expect(screen.getByTestId("review-band-select-all")).toHaveTextContent("Select all 1");
+
+    await userEvent.click(screen.getByTestId("review-band-select-all"));
+    const bar = screen.getByTestId("review-band-bulk-bar");
+    expect(bar).toHaveTextContent("1 selected");
+    expect(screen.getByTestId("review-band-bulk-dismiss")).toBeEnabled();
+    expect(screen.getByTestId("review-band-bulk-confirm")).toBeDisabled();
+  });
+
+  it("dispatches dismiss-batch for births and confirm-batch for matches with per-row CAS timestamps", async () => {
+    useBandHandlers([BIRTH, MATCH]);
+    const dismissed: unknown[] = [];
+    const confirmed: unknown[] = [];
+    server.use(
+      http.post("/api/entity-review/dismiss-batch", async ({ request }) => {
+        const body = (await request.json()) as { items: unknown[] };
+        dismissed.push(...body.items);
+        return HttpResponse.json({ results: [{ reviewId: "row-birth", ok: true }] });
+      }),
+      http.post("/api/entity-review/confirm-batch", async ({ request }) => {
+        const body = (await request.json()) as { items: unknown[] };
+        confirmed.push(...body.items);
+        return HttpResponse.json({ results: [{ reviewId: "row-match", ok: true, targetEntityId: "person-1" }] });
+      }),
+    );
+
+    renderWithProviders(<ReviewBandCapped types={["person"]} />);
+
+    await screen.findByTestId("org-review-row-row-birth");
+    await userEvent.click(screen.getByTestId("review-band-select-toggle"));
+    await userEvent.click(screen.getByTestId("review-band-select-all"));
+    expect(screen.getByTestId("review-band-bulk-bar")).toHaveTextContent("2 selected");
+
+    await userEvent.click(screen.getByTestId("review-band-bulk-dismiss"));
+    await waitFor(() =>
+      expect(dismissed).toEqual([{ reviewId: "row-birth", candidateGeneratedAt: "2026-08-14T09:00:00.000Z" }]),
+    );
+    await waitFor(() => expect(screen.getByTestId("review-band-bulk-bar")).toHaveTextContent("1 selected"));
+
+    await userEvent.click(screen.getByTestId("review-band-bulk-confirm"));
+    await waitFor(() =>
+      expect(confirmed).toEqual([{ reviewId: "row-match", candidateGeneratedAt: "2026-08-14T09:00:00.000Z" }]),
+    );
+    await waitFor(() => expect(screen.getByTestId("review-band-bulk-bar")).toHaveTextContent("0 selected"));
   });
 });

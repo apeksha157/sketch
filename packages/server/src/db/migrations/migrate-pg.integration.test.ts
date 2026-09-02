@@ -23,7 +23,7 @@ import * as slackRosterEvidenceMigration from "./161-slack-roster-evidence";
 import * as slackFileAccessBackfillCleanupMigration from "./163-slack-file-access-backfill-cleanup";
 import * as typedAccessPrincipalsMigration from "./165-typed-access-principals";
 
-const EXPECTED_MIGRATION_COUNT = 208;
+const EXPECTED_MIGRATION_COUNT = 216;
 
 describe("runMigrations on Postgres — full sequence", () => {
   let db!: Kysely<DB>;
@@ -241,6 +241,14 @@ describe("runMigrations on Postgres — full sequence", () => {
     expect(names[205]).toBe("210-graph-verdicts");
     expect(names[206]).toBe("211-graph-verdicts-approved-active");
     expect(names[207]).toBe("212-cli-integration-user-org-access");
+    expect(names[208]).toBe("213-containers");
+    expect(names[209]).toBe("214-container-verdicts");
+    expect(names[210]).toBe("215-membership-suppressions");
+    expect(names[211]).toBe("216-entity-aliases");
+    expect(names[212]).toBe("217-machine-principal");
+    expect(names[213]).toBe("218-resolution-decisions");
+    expect(names[214]).toBe("219-mention-verdicts");
+    expect(names[215]).toBe("220-retire-pats");
   });
   it("keeps the automation-sharing migration ledger in order", async () => {
     await runMigrations(db, { quiet: true });
@@ -780,6 +788,73 @@ describe("runMigrations on Postgres — full sequence", () => {
       expect(rows.rows).toHaveLength(EXPECTED_MIGRATION_COUNT);
     } finally {
       await freshDb.destroy();
+    }
+  });
+
+  it("revokes live PATs while preserving external MCP audit rows", async () => {
+    const legacyDb = await createTestPgDb();
+    try {
+      const migrationResult = await createMigrator(legacyDb).migrateTo("219-mention-verdicts");
+      expect(migrationResult.error).toBeUndefined();
+      await legacyDb.insertInto("users").values({ id: "pat-user", name: "PAT User" }).execute();
+      await legacyDb
+        .insertInto("api_tokens")
+        .values([
+          {
+            id: "live-pat",
+            user_id: "pat-user",
+            name: "Legacy PAT",
+            token_hash: "live-pat-hash",
+            prefix: "skp_live",
+            kind: "pat",
+            client_id: null,
+            scopes: null,
+            refresh_token_hash: null,
+            expires_at: null,
+          },
+          {
+            id: "live-oauth",
+            user_id: "pat-user",
+            name: "OAuth Client",
+            token_hash: "live-oauth-hash",
+            prefix: "sko_live",
+            kind: "oauth",
+            client_id: "client",
+            scopes: '["mcp:read"]',
+            refresh_token_hash: "refresh-hash",
+            expires_at: "2026-09-01T00:00:00.000Z",
+          },
+        ])
+        .execute();
+      await legacyDb
+        .insertInto("external_mcp_tool_calls")
+        .values({
+          id: "audit-row",
+          token_id: "live-pat",
+          user_id: "pat-user",
+          tool_name: "sketch_search",
+          success: 1,
+          duration_ms: 12,
+        })
+        .execute();
+
+      await runMigrations(legacyDb, { quiet: true });
+
+      const tokens = await legacyDb
+        .selectFrom("api_tokens")
+        .select(["id", "revoked_at"])
+        .where("id", "in", ["live-pat", "live-oauth"])
+        .orderBy("id", "asc")
+        .execute();
+      expect(tokens).toEqual([
+        { id: "live-oauth", revoked_at: null },
+        { id: "live-pat", revoked_at: expect.any(String) },
+      ]);
+      await expect(
+        legacyDb.selectFrom("external_mcp_tool_calls").selectAll().where("id", "=", "audit-row").executeTakeFirst(),
+      ).resolves.toMatchObject({ token_id: "live-pat", user_id: "pat-user" });
+    } finally {
+      await legacyDb.destroy();
     }
   });
 

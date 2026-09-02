@@ -287,6 +287,7 @@ export interface AutomationRunRecord {
   errorMessage: string | null;
   startedAt: string;
   completedAt: string | null;
+  triggeredByUserId?: string | null;
   type?: string;
   runType?: string;
 }
@@ -339,6 +340,12 @@ export function normalizeAutomationRun(value: unknown, fallbackTaskId = ""): Aut
         ? raw.completedAt
         : typeof raw.completed_at === "string"
           ? raw.completed_at
+          : null,
+    triggeredByUserId:
+      typeof raw.triggeredByUserId === "string"
+        ? raw.triggeredByUserId
+        : typeof raw.triggered_by_user_id === "string"
+          ? raw.triggered_by_user_id
           : null,
     ...(typeof raw.type === "string" ? { type: raw.type } : {}),
     ...(typeof raw.runType === "string" ? { runType: raw.runType } : {}),
@@ -589,11 +596,21 @@ export interface GraphVerdictRun {
   rollups: Record<GraphVerdictStatus, number>;
 }
 
+export interface GraphVerdictEvidenceRow {
+  fileId: string;
+  fileName: string;
+  source: string;
+  occurredAt: string | null;
+  contextSnippet: string | null;
+}
+
 export interface GraphVerdict {
   id: string;
   runId: string;
   action: string;
-  subjectEntityId: string;
+  subjectEntityId: string | null;
+  subjectContainerId: string | null;
+  subjectMentionName: string | null;
   subjectName: string | null;
   subjectEntityType: string | null;
   targetEntityId: string | null;
@@ -679,6 +696,8 @@ export interface EntityReviewEvidenceRow {
   source: string;
   note: string | null;
   seen_at: string;
+  /** Read-time quote around the proposed name in this file, when found. */
+  contextSnippet?: string | null;
   file: {
     name: string;
     providerUrl: string | null;
@@ -705,6 +724,15 @@ export interface EntityMention {
 export interface EntityReviewListResponse {
   rows: EntityReviewQueueRow[];
   total: number;
+}
+
+export interface EntityReviewBatchResponse {
+  results: Array<{
+    reviewId: string;
+    ok: boolean;
+    targetEntityId?: string;
+    error?: { code: string; message: string };
+  }>;
 }
 
 /** A product on the curated closed list (declared or human_confirmed). */
@@ -1245,6 +1273,7 @@ export interface ResetSubmitResponse {
   reviewQueueCleared?: number;
   reviewEvidenceCleared?: number;
   rejectionsCleared?: number;
+  resolutionDecisionsCleared?: number;
   factsMarkedUnmaterialized?: number;
 }
 
@@ -2480,12 +2509,6 @@ export const api = {
     list() {
       return request<{ tokens: ApiTokenRecord[]; mcpUrl: string | null }>("/api/api-tokens");
     },
-    create(data: { name: string }) {
-      return request<{ token: ApiTokenRecord; plaintext: string; mcpUrl: string | null }>("/api/api-tokens", {
-        method: "POST",
-        body: JSON.stringify(data),
-      });
-    },
     revoke(id: string) {
       return request<{ success: true }>(`/api/api-tokens/${id}`, { method: "DELETE" });
     },
@@ -3547,6 +3570,18 @@ export const api = {
     deleteContactPoint(id: string, contactPointId: string) {
       return request<void>(`/api/entities/${id}/contact-points/${contactPointId}`, { method: "DELETE" });
     },
+    addAlias(id: string, alias: string) {
+      return request<{ aliases: string[] }>(`/api/entities/${id}/aliases`, {
+        method: "POST",
+        body: JSON.stringify({ alias }),
+      });
+    },
+    removeAlias(id: string, alias: string) {
+      return request<{ removed: string[]; aliases: string[] }>(
+        `/api/entities/${id}/aliases?value=${encodeURIComponent(alias)}`,
+        { method: "DELETE" },
+      );
+    },
     relations(id: string) {
       return request<EntityRelationsResponse>(`/api/entities/${id}/relations`);
     },
@@ -3676,9 +3711,10 @@ export const api = {
         method: "DELETE",
       });
     },
-    mentions(id: string, opts?: { source?: string; since?: string; limit?: number; offset?: number }) {
+    mentions(id: string, opts?: { source?: string; fileId?: string; since?: string; limit?: number; offset?: number }) {
       const params = new URLSearchParams();
       if (opts?.source) params.set("source", opts.source);
+      if (opts?.fileId) params.set("fileId", opts.fileId);
       if (opts?.since) params.set("since", opts.since);
       if (opts?.limit) params.set("limit", String(opts.limit));
       if (opts?.offset) params.set("offset", String(opts.offset));
@@ -3688,6 +3724,9 @@ export const api = {
         total: number;
         hiddenCount: number;
       }>(`/api/entities/${id}/mentions${qs ? `?${qs}` : ""}`);
+    },
+    snippets(id: string, fileId: string) {
+      return request<{ quotes: string[] }>(`/api/entities/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
     },
     create(data: { name: string; sourceType: string; subtype?: string; aliases?: string[] }) {
       return request<{ entity: EntityListItem }>("/api/entities", {
@@ -3869,11 +3908,17 @@ export const api = {
     },
   },
   graphVerdicts: {
+    listOpen() {
+      return request<{ verdicts: GraphVerdict[] }>("/api/graph-verdicts?status=awaiting_human,approved");
+    },
     listRuns() {
       return request<{ runs: GraphVerdictRun[] }>("/api/graph-verdicts/runs");
     },
     listRunVerdicts(runId: string) {
       return request<{ verdicts: GraphVerdict[] }>(`/api/graph-verdicts/runs/${runId}/verdicts`);
+    },
+    evidence(id: string) {
+      return request<{ rows: GraphVerdictEvidenceRow[] }>(`/api/graph-verdicts/${id}/evidence`);
     },
     approve(id: string) {
       return request<{ verdict: GraphVerdict }>(`/api/graph-verdicts/${id}/approval`, { method: "POST" });
@@ -3907,6 +3952,27 @@ export const api = {
     },
     get(id: string) {
       return request<EntityReviewDetailResponse>(`/api/entity-review/${id}`);
+    },
+    snippets(id: string, fileId: string) {
+      return request<{ quotes: string[] }>(`/api/entity-review/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
+    },
+    confirmBatch(items: Array<{ reviewId: string; candidateGeneratedAt: string; mergeIntoEntityId?: string }>) {
+      return request<EntityReviewBatchResponse>("/api/entity-review/confirm-batch", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
+    },
+    rejectBatch(items: Array<{ reviewId: string; candidateGeneratedAt: string }>) {
+      return request<EntityReviewBatchResponse>("/api/entity-review/reject-batch", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
+    },
+    dismissBatch(items: Array<{ reviewId: string; candidateGeneratedAt: string }>) {
+      return request<EntityReviewBatchResponse>("/api/entity-review/dismiss-batch", {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      });
     },
     confirm(id: string, body: { candidateGeneratedAt: string; mergeIntoEntityId?: string; nameOverride?: string }) {
       return request<EntityReviewConfirmResult>(`/api/entity-review/${id}/confirm`, {

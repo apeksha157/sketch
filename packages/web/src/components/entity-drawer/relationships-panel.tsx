@@ -10,6 +10,7 @@ import { EntityPicker } from "@/components/entity-picker";
 import type { EntityRelationEvidenceRow, EntityRelationView, EntityRelationsResponse } from "@/lib/api";
 import { api } from "@/lib/api";
 import { entityAccent, useEntityUi } from "@/lib/entity-ui";
+import { formatRelativeTime } from "@/lib/time";
 import { CaretDownIcon, CaretRightIcon, PlusIcon, TrashIcon, WarningIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@sketch/ui/components/dialog";
@@ -20,7 +21,6 @@ import { cn } from "@sketch/ui/lib/utils";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { formatRelative } from "./drawer-kit";
 
 const CONFIDENCE_LABEL: Record<string, string> = {
   CONFIRMED: "CONFIRMED",
@@ -462,7 +462,7 @@ function EvidenceItem({ row }: { row: EntityRelationEvidenceRow }) {
     <li className="flex flex-col gap-0.5 rounded border bg-background p-1.5">
       <div className="flex items-center justify-between gap-2">
         <span className="truncate font-medium">{row.fileName}</span>
-        <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelative(row.occurredAt)}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">{formatRelativeTime(row.occurredAt)}</span>
       </div>
       {row.contextSnippet ? (
         <p className="line-clamp-2 text-[11px] text-muted-foreground">{row.contextSnippet}</p>

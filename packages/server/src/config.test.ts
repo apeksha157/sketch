@@ -77,6 +77,7 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_WINDOW_KEEPALIVE_ENABLED).toBe(false);
         expect(result.data.MAX_CONCURRENT_INTERACTIVE_AGENT_RUNS).toBe(4);
         expect(result.data.MAX_CONCURRENT_SCHEDULED_AGENT_RUNS).toBe(4);
+        expect(result.data.AUTOMATION_BUILDER_MAX_ELAPSED_MS).toBe(600_000);
         expect(result.data.MAX_FILE_SIZE_MB).toBe(20);
         expect(result.data.VISION_ENABLED).toBe(false);
         expect(result.data.AGENT_RUNTIME).toBe("aisdk");
@@ -349,11 +350,13 @@ describe("configSchema", () => {
       const result = configSchema.safeParse({
         MAX_CONCURRENT_INTERACTIVE_AGENT_RUNS: "2",
         MAX_CONCURRENT_SCHEDULED_AGENT_RUNS: "3",
+        AUTOMATION_BUILDER_MAX_ELAPSED_MS: "300000",
       });
       expect(result.success).toBe(true);
       if (result.success) {
         expect(result.data.MAX_CONCURRENT_INTERACTIVE_AGENT_RUNS).toBe(2);
         expect(result.data.MAX_CONCURRENT_SCHEDULED_AGENT_RUNS).toBe(3);
+        expect(result.data.AUTOMATION_BUILDER_MAX_ELAPSED_MS).toBe(300_000);
       }
     });
 
@@ -395,6 +398,11 @@ describe("configSchema", () => {
     it("rejects either agent concurrency below one", () => {
       expect(configSchema.safeParse({ MAX_CONCURRENT_INTERACTIVE_AGENT_RUNS: "0" }).success).toBe(false);
       expect(configSchema.safeParse({ MAX_CONCURRENT_SCHEDULED_AGENT_RUNS: "0" }).success).toBe(false);
+    });
+
+    it("keeps the automation builder deadline within the bounded range", () => {
+      expect(configSchema.safeParse({ AUTOMATION_BUILDER_MAX_ELAPSED_MS: "59999" }).success).toBe(false);
+      expect(configSchema.safeParse({ AUTOMATION_BUILDER_MAX_ELAPSED_MS: "600001" }).success).toBe(false);
     });
 
     it("rejects PostgreSQL pool sizes outside the supported range", () => {

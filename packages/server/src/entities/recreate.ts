@@ -32,12 +32,16 @@ export interface RecreateConflict {
  * Order matters: evidence → relationships → mentions → entities, so FK
  * cascades don't fire mid-loop. `entity_domains` is handled separately
  * because it has a per-row override predicate (manual rows survive reset).
+ *
+ * `entity_alias_rejections` and `resolution_decisions` are durable decision
+ * ledgers, not derived graph state. Rejections for deleted entities disappear
+ * through the entity FK; resolution decisions intentionally do not, because
+ * replay checks target liveness before trusting a row.
  */
 const DERIVED_TABLES = [
   "entity_relationship_evidence",
   "entity_relationships",
   "entity_review_evidence",
-  "entity_alias_rejections",
   "entity_review_queue",
   "entity_candidates",
   "entity_mentions",
@@ -77,14 +81,13 @@ async function deleteTable(db: Kysely<DB>, table: string, logger?: Logger): Prom
 }
 
 /**
- * Reset preserves human-blessed entities: `declared` (added/declared via Your
- * Org) and `human_confirmed` (approved from the review queue). Both encode an
- * explicit operator decision that replay cannot reconstruct — approvals live in
- * `entity_review_queue`, not in `indexed_file_facts`, so a deleted approved
- * entity would never come back as approved. Only derived tiers (`structural`,
- * `inferred`) are rebuilt from facts.
+ * Reset preserves durable-decision entities: `declared` (added/declared via
+ * Your Org), `human_confirmed` (approved from the review queue), and
+ * `machine_confirmed` (machine adjudication captured in the resolution
+ * ledger). These encode decisions replay cannot reconstruct from source facts.
+ * Only derived tiers (`structural`, `inferred`) are rebuilt from facts.
  */
-const PRESERVED_RESET_TIERS = ["declared", "human_confirmed"];
+const PRESERVED_RESET_TIERS = ["declared", "human_confirmed", "machine_confirmed"];
 
 /**
  * Human-written edges (declared, reparents, accepted minting verdicts) encode
@@ -148,16 +151,44 @@ async function deleteRecreatableRelationships(db: Kysely<DB>, logger?: Logger): 
   }
 }
 
+/**
+ * `entity_merges` is a durable decision ledger, not derived graph state: it
+ * powers `unmergeEntities`, which restores the exact soft-deleted loser row,
+ * and both of its entity FKs are ON DELETE RESTRICT. Entities referenced by a
+ * merge — survivors and soft-deleted losers alike — therefore survive reset
+ * regardless of provenance tier. Deleting a loser would both violate the FK
+ * and destroy the row unmerge needs back.
+ */
 async function deleteRecreatableEntities(db: Kysely<DB>): Promise<number> {
   try {
+    const mergeReferenced = (eb: ExpressionBuilder<DB, "entities">) =>
+      eb.or([
+        eb.exists(
+          eb
+            .selectFrom("entity_merges")
+            .select(sql`1`.as("x"))
+            .whereRef("entity_merges.survivor_entity_id", "=", "entities.id"),
+        ),
+        eb.exists(
+          eb
+            .selectFrom("entity_merges")
+            .select(sql`1`.as("x"))
+            .whereRef("entity_merges.merged_entity_id", "=", "entities.id"),
+        ),
+      ]);
     const before = await db
       .selectFrom("entities")
       .select(db.fn.countAll<number>().as("count"))
       .where("provenance_tier", "not in", PRESERVED_RESET_TIERS)
+      .where((eb) => eb.not(mergeReferenced(eb)))
       .executeTakeFirst();
     const count = Number(before?.count ?? 0);
     if (count === 0) return 0;
-    await db.deleteFrom("entities").where("provenance_tier", "not in", PRESERVED_RESET_TIERS).execute();
+    await db
+      .deleteFrom("entities")
+      .where("provenance_tier", "not in", PRESERVED_RESET_TIERS)
+      .where((eb) => eb.not(mergeReferenced(eb)))
+      .execute();
     return count;
   } catch (err) {
     if (isMissingTableError(err)) return 0;
@@ -324,7 +355,6 @@ export async function resetDerivedEntityData(
   const warnings = [
     `${deleted.entities ?? 0} entities will be deleted and recreated from durable facts.`,
     `${deleted.entity_review_queue ?? 0} review-queue rows will be deleted.`,
-    `${deleted.entity_alias_rejections ?? 0} alias rejections will be deleted; rejected aliases may be re-proposed after recreate.`,
   ];
   if (filesWithoutSourceFacts > 0) {
     warnings.push(
@@ -419,6 +449,7 @@ export async function recreateEntityGraph(deps: RecreateDeps): Promise<RecreateS
       factTypes: deps.materializeFactTypes,
       onProgress: deps.onProgress,
       shouldCancel: deps.shouldCancel,
+      suppressContextLinking: true,
     });
 
     if (deps.shouldCancel?.()) throw new Error("Re-enrich stopped");
@@ -477,7 +508,6 @@ async function resetDerivedEntityDataInner(db: Kysely<DB>, logger: Logger): Prom
   const warnings = [
     `${deleted.entities ?? 0} entities will be deleted and recreated from durable facts.`,
     `${deleted.entity_review_queue ?? 0} review-queue rows will be deleted.`,
-    `${deleted.entity_alias_rejections ?? 0} alias rejections will be deleted; rejected aliases may be re-proposed after recreate.`,
   ];
   if (filesWithoutSourceFacts > 0) {
     warnings.push(

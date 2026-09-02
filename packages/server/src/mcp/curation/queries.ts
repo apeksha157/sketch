@@ -43,7 +43,7 @@ function truncateSnippet(value: string | null): string | null {
   return value.length > 200 ? value.slice(0, 200) : value;
 }
 
-async function mentionCounts(db: Kysely<DB>, entityIds: string[]): Promise<Map<string, number>> {
+export async function mentionCounts(db: Kysely<DB>, entityIds: string[]): Promise<Map<string, number>> {
   const ids = [...new Set(entityIds)];
   if (ids.length === 0) return new Map();
   const rows = await db
@@ -62,7 +62,7 @@ async function mergedInto(db: Kysely<DB>, row: Selectable<EntitiesTable>) {
   return target ? { id: target.id, name: target.name } : { id, name: null };
 }
 
-function entityPayload(
+export function entityPayload(
   row: Selectable<EntitiesTable>,
   mentionCount: number,
   merged: { id: string; name: string | null } | null,

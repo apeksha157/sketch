@@ -6,6 +6,7 @@ import {
   whatsappNumberLookupValues,
 } from "../../identity-normalization";
 import type { DB, UsersTable } from "../schema";
+import { MACHINE_PRINCIPAL_USER_ID } from "./machine-principal";
 import { invalidateSettingsCache } from "./settings";
 import { ensureEntityForUser } from "./user-entity-linking";
 import { projectUserWhatsAppIdentityToEntity } from "./user-whatsapp-entity-projection";
@@ -14,6 +15,8 @@ type UserDb = Kysely<DB> | Transaction<DB>;
 type UserRow = Selectable<UsersTable>;
 export type UserRepositoryOptions = { slackEntitySyncEnabled?: boolean };
 type UserRepositoryContextOptions = UserRepositoryOptions & { skipMutationTransaction?: boolean };
+
+export { MACHINE_PRINCIPAL_USER_ID };
 
 export interface UserRepository {
   list(): Promise<UserRow[]>;
@@ -118,7 +121,13 @@ function createUserRepositoryWithContext(
   const slackEntitySyncEnabled = options.slackEntitySyncEnabled ?? true;
   return {
     async list() {
-      return db.selectFrom("users").selectAll().where("type", "!=", "external").orderBy("created_at", "desc").execute();
+      return db
+        .selectFrom("users")
+        .selectAll()
+        .where("type", "!=", "external")
+        .where("id", "!=", MACHINE_PRINCIPAL_USER_ID)
+        .orderBy("created_at", "desc")
+        .execute();
     },
 
     async listExternal() {

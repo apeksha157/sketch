@@ -937,6 +937,7 @@ export function createEntityReviewRepo(db: Kysely<DB>) {
       resolvedEntityId: string,
       by: string,
       candidateGeneratedAt: string,
+      allowedStatuses: string[] = ["pending"],
     ): Promise<boolean> {
       const result = await db
         .updateTable("entity_review_queue")
@@ -947,7 +948,7 @@ export function createEntityReviewRepo(db: Kysely<DB>) {
           resolved_at: new Date().toISOString(),
         })
         .where("id", "=", reviewId)
-        .where("status", "=", "pending")
+        .where("status", "in", allowedStatuses)
         .where("candidate_generated_at", "=", candidateGeneratedAt)
         .execute();
       return Number(result[0]?.numUpdatedRows ?? 0) > 0;
@@ -961,7 +962,12 @@ export function createEntityReviewRepo(db: Kysely<DB>) {
      * status is terminal (in `TERMINAL_STATUSES`), so the same key is never
      * re-proposed.
      */
-    async markDismissed(reviewId: string, by: string, candidateGeneratedAt: string): Promise<boolean> {
+    async markDismissed(
+      reviewId: string,
+      by: string,
+      candidateGeneratedAt: string,
+      allowedStatuses: string[] = ["pending"],
+    ): Promise<boolean> {
       const result = await db
         .updateTable("entity_review_queue")
         .set({
@@ -970,7 +976,7 @@ export function createEntityReviewRepo(db: Kysely<DB>) {
           resolved_at: new Date().toISOString(),
         })
         .where("id", "=", reviewId)
-        .where("status", "=", "pending")
+        .where("status", "in", allowedStatuses)
         .where("candidate_generated_at", "=", candidateGeneratedAt)
         .execute();
       return Number(result[0]?.numUpdatedRows ?? 0) > 0;

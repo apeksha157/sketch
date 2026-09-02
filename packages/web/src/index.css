@@ -427,8 +427,7 @@
 
 .automation-node-shell.automation-node-failed {
   border-color: color-mix(in oklch, var(--destructive) 68%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in oklch, var(--destructive) 22%, transparent), 0 14px 28px
-    var(--automation-builder-flow-shadow);
+  box-shadow: none;
 }
 
 .automation-builder-handle.react-flow__handle {
@@ -645,17 +644,6 @@
   }
 }
 
-@keyframes automation-builder-canvas-in {
-  from {
-    opacity: 0;
-    transform: scale(0.997);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 @keyframes automation-builder-rise-in {
   from {
     opacity: 0;
@@ -697,9 +685,179 @@
   animation: automation-builder-sidecar-in 320ms cubic-bezier(0.16, 1, 0.3, 1) 25ms both;
 }
 
-.automation-builder-canvas-enter {
-  transform-origin: 50% 50%;
-  animation: automation-builder-canvas-in 360ms cubic-bezier(0.16, 1, 0.3, 1) 55ms both;
+.automation-builder-canvas-container {
+  container: automation-canvas / inline-size;
+}
+
+.automation-builder-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "primary"
+    "status"
+    "meta"
+    "actions";
+  align-items: start;
+  gap: 0.625rem;
+}
+
+.automation-builder-header-primary,
+.automation-builder-header-status,
+.automation-builder-header-meta,
+.automation-builder-header-actions {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.automation-builder-header-primary {
+  grid-area: primary;
+  width: 100%;
+  justify-self: start;
+}
+
+.automation-builder-header-status {
+  grid-area: status;
+  width: 100%;
+  justify-content: flex-end;
+  justify-self: end;
+}
+
+.automation-builder-header-meta {
+  grid-area: meta;
+  width: 100%;
+  justify-self: end;
+}
+
+.automation-builder-header-actions {
+  grid-area: actions;
+  width: 100%;
+  container: automation-actions / inline-size;
+  justify-self: end;
+}
+
+.automation-builder-header-action-layout {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.automation-builder-header-action-row {
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.automation-builder-header-primary:empty {
+  display: none;
+}
+
+.automation-builder-canvas-container[data-chat-sidecar-open="true"] .automation-builder-header {
+  grid-template-areas:
+    "status"
+    "meta"
+    "actions";
+}
+
+.automation-builder-canvas-container[data-chat-sidecar-open="false"] .automation-builder-header-status {
+  justify-content: flex-start;
+  justify-self: start;
+}
+
+.automation-builder-header-status > *,
+.automation-builder-header-meta > *,
+.automation-builder-header-actions > *,
+.automation-builder-header-action-group > * {
+  min-width: 0;
+}
+
+.automation-builder-header-action-group:empty {
+  display: none;
+}
+
+.automation-builder-header-action-group {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@container automation-canvas (max-width: 420px) {
+  .automation-builder-ownership {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.125rem;
+  }
+
+  .automation-builder-ownership-divider {
+    display: none;
+  }
+}
+
+@container automation-canvas (min-width: 720px) {
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="true"]
+    .automation-builder-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "primary meta"
+      "status actions";
+    column-gap: 0.75rem;
+    row-gap: 0.625rem;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="true"]
+    .automation-builder-header-status,
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="true"]
+    .automation-builder-header-meta {
+    width: auto;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="true"]
+    .automation-builder-header-meta,
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="true"]
+    .automation-builder-header-actions {
+    align-self: start;
+    justify-self: end;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="false"]
+    .automation-builder-header {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-areas:
+      "primary meta actions"
+      "status meta actions";
+    column-gap: 0.75rem;
+    row-gap: 0.625rem;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="false"]
+    .automation-builder-header-status,
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="false"]
+    .automation-builder-header-meta {
+    width: auto;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="false"]
+    .automation-builder-header-meta {
+    align-self: start;
+    justify-self: center;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="false"]
+    .automation-builder-header-actions {
+    align-self: start;
+  }
+
+  .automation-builder-canvas-container[data-chat-sidecar-open="false"][data-run-inspector-open="false"]
+    .automation-builder-shared-hint {
+    text-align: center;
+  }
 }
 
 .automation-builder-toolbar-enter {
@@ -1037,7 +1195,6 @@
   .automation-builder-empty-edge-progress,
   .automation-builder-empty-diagram-loading .automation-builder-empty-node,
   .automation-builder-sidecar-enter,
-  .automation-builder-canvas-enter,
   .automation-builder-toolbar-enter,
   .automation-builder-empty-state > div,
   .automation-builder-typewriter,

@@ -15,21 +15,6 @@ function parseDbTime(value: string | null): number {
 
 export function createApiTokenRepository(db: Kysely<DB>) {
   return {
-    async create(input: { userId: string; name: string; tokenHash: string; prefix: string }): Promise<ApiTokenRow> {
-      const id = randomUUID();
-      await db
-        .insertInto("api_tokens")
-        .values({
-          id,
-          user_id: input.userId,
-          name: input.name,
-          token_hash: input.tokenHash,
-          prefix: input.prefix,
-        })
-        .execute();
-      return db.selectFrom("api_tokens").selectAll().where("id", "=", id).executeTakeFirstOrThrow();
-    },
-
     async createOAuth(input: {
       userId: string;
       name: string;
@@ -64,7 +49,8 @@ export function createApiTokenRepository(db: Kysely<DB>) {
         .selectFrom("api_tokens")
         .selectAll()
         .where("user_id", "=", userId)
-        .where("kind", "=", "pat")
+        .where("kind", "=", "oauth")
+        .where("revoked_at", "is", null)
         .orderBy("created_at", "desc")
         .execute();
     },

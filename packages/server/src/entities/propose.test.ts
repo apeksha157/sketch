@@ -854,12 +854,12 @@ describe("proposeEntity", () => {
     expect(queue[0].candidate_reason).toBe("exact-ambiguous");
   });
 
-  it("13. alias-match links — post-Confirm proposal hits the alias half of the fast-path", async () => {
+  it("13. alias-match queues — post-Confirm proposal is a candidate, not a fast-path link", async () => {
     // Models the post-Confirm scenario: existing entity 'Simran Suri'
     // already carries 'Simran Suri Neeli' in its aliases JSON (the state
     // left behind after a reviewer Confirmed a merge proposal). A future
-    // propose for 'Simran Suri Neeli' with no email must auto-link to
-    // that entity, not fall through to the fuzzy ranker.
+    // propose for 'Simran Suri Neeli' with no email must queue that
+    // entity as a candidate rather than using the alias as link authority.
     const entityRepo = createEntityRepository(db);
     const ss = await entityRepo.upsertPersonEntity({
       name: "Simran Suri",
@@ -867,7 +867,7 @@ describe("proposeEntity", () => {
       source: "seed",
       sourceId: "seed:simran",
     });
-    await entityRepo.appendAlias(ss.id, "Simran Suri Neeli");
+    await entityRepo.appendAlias(ss.id, "Simran Suri Neeli", "human_confirmed", "test");
 
     const before = await fetchPersonEntities(db);
     const deps = {
@@ -887,12 +887,12 @@ describe("proposeEntity", () => {
       triggeredByUserId: "user-1",
     });
 
-    expect(result.kind).toBe("linked");
-    if (result.kind !== "linked") throw new Error("unreachable");
-    expect(result.entity.id).toBe(ss.id);
+    expect(result.kind).toBe("queued");
 
     const queue = await db.selectFrom("entity_review_queue").selectAll().execute();
-    expect(queue).toHaveLength(0);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].candidate_entity_id).toBe(ss.id);
+    expect(queue[0].candidate_reason).toBe("alias-exact");
   });
 
   it("14. alias-match dedup — same entity returned by name+alias counts as one (no ambiguity misfire)", async () => {
@@ -1766,6 +1766,46 @@ describe("proposeEntity", () => {
     expect(queue.candidate_reason).toBe("token-set");
   });
 
+  it("29a. edit-distance candidates surface in the lookup but never change propose decisions", async () => {
+    const entityRepo = createEntityRepository(db);
+    const akanksha = await entityRepo.upsertEntity({
+      name: "Akanksha Labs",
+      sourceType: "company",
+      subtype: "external",
+      status: "confirmed",
+    });
+    const materializeDeps = await buildMaterializeDeps(db);
+
+    expect(materializeDeps.lookup.findNameDedupCandidates?.("company", "Akansha Labs")).toMatchObject([
+      { entity: { id: akanksha.id }, score: 0.9, reason: "edit-distance" },
+    ]);
+
+    const result = await proposeEntity(
+      {
+        entityRepo: materializeDeps.entityRepo,
+        reviewRepo: materializeDeps.reviewRepo,
+        domainsRepo: materializeDeps.domainsRepo,
+        lookup: materializeDeps.lookup,
+        readEmail: materializeDeps.readEmail,
+        onEntityResolved: materializeDeps.onEntityResolved,
+      },
+      {
+        name: "Akansha Labs",
+        entityType: "company",
+        subtype: "external",
+        source: "llm",
+        sourceId: "mention-akansha-labs",
+        evidence: [],
+        triggeredByUserId: "user-1",
+      },
+    );
+
+    expect(result.kind).toBe("created");
+    if (result.kind !== "created") throw new Error("unreachable");
+    expect(result.entity.name).toBe("Akansha Labs");
+    expect(await db.selectFrom("entity_review_queue").selectAll().execute()).toEqual([]);
+  });
+
   it("30. suppresses a product proposal matching an existing company entity", async () => {
     const entityRepo = createEntityRepository(db);
     await entityRepo.upsertEntity({
@@ -1863,7 +1903,9 @@ describe("proposeEntity", () => {
       triggeredByUserId: "user-1",
     });
 
-    expect(aliasOnly.kind).toBe("created");
+    expect(aliasOnly.kind).toBe("queued");
+    if (aliasOnly.kind !== "queued") throw new Error("expected alias candidate queue");
+    expect(aliasOnly.candidateEntityId).not.toBeNull();
 
     const domainCollision = await proposeEntity(deps, {
       name: "Nullcorp",

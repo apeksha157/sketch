@@ -505,7 +505,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
     );
   }
   app.route("/api/graph-passes", graphPassRoutes(db, logger));
-  app.route("/api/graph-verdicts", graphVerdictRoutes(db, logger, { enabled: config.DEV_TOOLS_ENABLED }));
+  app.route("/api/graph-verdicts", graphVerdictRoutes(db, logger));
   app.route(
     "/api/project-minting",
     projectMintingRoutes(db, logger, {
@@ -704,6 +704,9 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
     workspaceDir: join(config.DATA_DIR, "external-mcp"),
     logger,
     baseUrl: config.BASE_URL,
+    getSlack: deps?.getSlack,
+    whatsappRuntime: deps?.whatsappRuntime,
+    sendTargetMessage: deps?.sendTargetMessage,
   });
   if (config.GRAPH_CURATION_TOOLS_ENABLED) {
     mountMcpServer({

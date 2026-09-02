@@ -35,7 +35,7 @@ export type CleanupReportProject = {
   bucket: "keeper" | "junk_candidate" | "merge_family" | "needs_judge";
 };
 
-export type CleanupAction = "keep" | "merge_into" | "nest_under" | "archive";
+export type CleanupAction = "keep" | "merge_into" | "nest_under" | "archive" | "remove_alias";
 
 export type CleanupVerdict = {
   entityId: string;

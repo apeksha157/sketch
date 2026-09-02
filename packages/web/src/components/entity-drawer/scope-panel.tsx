@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { SectionLabel } from "./drawer-kit";
 
 function bindingsKey(entityId: string): unknown[] {
   return ["entity-drawer", "bindings", entityId];
@@ -75,7 +76,7 @@ export function ScopePanel({ entityId }: { entityId: string }) {
   return (
     <div className="space-y-5">
       <section>
-        <SectionLabel>Data sources</SectionLabel>
+        <SectionLabel className="mb-2">Data sources</SectionLabel>
         {bindings.length === 0 ? (
           <p className="text-xs text-muted-foreground">No connector containers bound to this project yet.</p>
         ) : (
@@ -93,7 +94,7 @@ export function ScopePanel({ entityId }: { entityId: string }) {
       {isAdmin ? <AddBindingForm entityId={entityId} /> : null}
 
       <section>
-        <SectionLabel>Sub-projects</SectionLabel>
+        <SectionLabel className="mb-2">Sub-projects</SectionLabel>
         {children.length === 0 ? (
           <p className="mb-2 text-xs text-muted-foreground">No projects grouped under this one.</p>
         ) : (
@@ -119,7 +120,7 @@ function MembersSection({ entityId, isAdmin }: { entityId: string; isAdmin: bool
 
   return (
     <section>
-      <SectionLabel>Members</SectionLabel>
+      <SectionLabel className="mb-2">Members</SectionLabel>
       {membersQuery.isLoading ? (
         <Skeleton className="h-16 w-full" />
       ) : !membersQuery.data || membersQuery.data.members.length === 0 ? (
@@ -201,10 +202,6 @@ function MemberRow({
       ) : null}
     </div>
   );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">{children}</div>;
 }
 
 function provenanceBadge(binding: EntityBinding, entityId: string) {
@@ -316,7 +313,7 @@ function AddBindingForm({ entityId }: { entityId: string }) {
         if (chosen && !addMutation.isPending) addMutation.mutate(chosen);
       }}
     >
-      <SectionLabel>Add data source</SectionLabel>
+      <SectionLabel className="mb-2">Add data source</SectionLabel>
       <div className="space-y-2">
         <WireField label="Tracking board">
           <Select value={selected} onValueChange={setSelected} disabled={containers.length === 0}>
@@ -373,7 +370,7 @@ function WireField({
       <div className="flex items-center gap-1.5">
         <span className="font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">{label}</span>
         {comingSoon ? (
-          <Badge variant="outline" className="text-[8px] uppercase tracking-wider text-muted-foreground/70">
+          <Badge variant="outline" className="text-[9px] uppercase tracking-wider text-muted-foreground/70">
             Soon
           </Badge>
         ) : null}

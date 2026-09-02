@@ -21,6 +21,7 @@ import {
   curationListAffiliationsSchema,
   handleCurationListAffiliations,
 } from "./list-affiliations";
+import { type CurationListAliasesArgs, curationListAliasesSchema, handleCurationListAliases } from "./list-aliases";
 import {
   type CurationListCandidatesArgs,
   curationListCandidatesSchema,
@@ -128,9 +129,19 @@ export async function createCurationMcpServer(params: {
     curationListCandidatesSchema,
     (args) => handleCurationListCandidates(args, params.db),
   );
+  register<CurationListAliasesArgs>(
+    "curation_list_aliases",
+    "Enumerate live entity aliases for read-only cleanup campaigns, filterable by alias provenance and entity type.",
+    curationListAliasesSchema,
+    (args) => handleCurationListAliases(args, params.db),
+  );
   register<ProposeGraphVerdictsArgs>(
     "propose_graph_verdicts",
-    "Store project graph cleanup proposals after dry-run validation without applying them.",
+    [
+      "Store entity graph cleanup proposals after dry-run validation.",
+      "remove_alias carries the alias in targetName.",
+      "autoApply is valid only for remove_alias proposals whose alias provenance is mint_model or legacy; all other proposals await human approval.",
+    ].join(" "),
     proposeGraphVerdictsSchema,
     (args) => handleProposeGraphVerdicts(args, params.db, { userId: params.userId, tokenId: params.tokenId }),
   );

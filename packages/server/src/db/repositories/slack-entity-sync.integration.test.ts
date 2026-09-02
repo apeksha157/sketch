@@ -721,9 +721,9 @@ describe("upsertSlackPersonEntity", () => {
       .execute();
 
     await Promise.all([
-      mergeEntityAliases(db, "concurrent-alias-person", ["Slack Name"]),
-      mergeEntityAliases(db, "concurrent-alias-person", ["WhatsApp Name"]),
-      mergeEntityAliases(db, "concurrent-alias-person", ["Manual Name"]),
+      mergeEntityAliases(db, "concurrent-alias-person", ["Slack Name"], "roster"),
+      mergeEntityAliases(db, "concurrent-alias-person", ["WhatsApp Name"], "roster"),
+      mergeEntityAliases(db, "concurrent-alias-person", ["Manual Name"], "roster"),
     ]);
 
     const entity = await db

@@ -26,13 +26,16 @@ export async function declareCompany(
   input: { name: string; aliases: string[] },
 ): Promise<{ entityId: string }> {
   const repo = createEntityRepository(db);
-  const entity = await repo.upsertEntity({
-    name: input.name,
-    sourceType: "company",
-    aliases: input.aliases,
-    status: "confirmed",
-    provenanceTier: "declared",
-  });
+  const entity = await repo.upsertEntity(
+    {
+      name: input.name,
+      sourceType: "company",
+      aliases: input.aliases,
+      status: "confirmed",
+      provenanceTier: "declared",
+    },
+    "human_confirmed",
+  );
   return { entityId: entity.id };
 }
 

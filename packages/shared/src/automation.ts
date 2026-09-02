@@ -209,11 +209,74 @@ export function recommendAutomationExecutionMode(
   return { mode, reason: automationExecutionModeMetadata[mode].recommendation };
 }
 
+export const automationAgentTraceReasoningEventSchema = z
+  .object({
+    id: z.string(),
+    type: z.literal("reasoning"),
+    text: z.string(),
+    source: z.enum(["provider", "assistant"]),
+    at: z.number(),
+  })
+  .strict();
+
+export const automationAgentTraceToolCallEventSchema = z
+  .object({
+    id: z.string(),
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    skillName: z.string().nullable(),
+    input: z.unknown().optional(),
+    output: z.unknown().optional(),
+    status: z.enum(["running", "completed", "failed"]),
+    startedAt: z.number(),
+    endedAt: z.number().nullable(),
+    durationMs: z.number().nullable(),
+    errorMessage: z.string().optional(),
+    outputCaptured: z.boolean(),
+  })
+  .strict();
+
+export const automationAgentTraceEventSchema = z.discriminatedUnion("type", [
+  automationAgentTraceReasoningEventSchema,
+  automationAgentTraceToolCallEventSchema,
+]);
+
+export type AutomationAgentTraceEvent = z.infer<typeof automationAgentTraceEventSchema>;
+export type AutomationAgentTraceToolCallEvent = z.infer<typeof automationAgentTraceToolCallEventSchema>;
+
+export const automationAgentTraceUsageSchema = z
+  .object({
+    inputTokens: z.number(),
+    outputTokens: z.number(),
+    cacheReadTokens: z.number(),
+    cacheCreationTokens: z.number(),
+    costUsd: z.number().nullable(),
+  })
+  .strict();
+
+export const automationAgentTraceSchema = z
+  .object({
+    version: z.literal(1),
+    runtime: z.enum(["sdk-light", "aisdk-light", "sketch"]),
+    model: z.string().nullable(),
+    startedAt: z.number(),
+    completedAt: z.number().nullable(),
+    stopReason: z.string().nullable(),
+    turns: z.number().int().nonnegative().nullable(),
+    usage: automationAgentTraceUsageSchema.nullable(),
+    events: z.array(automationAgentTraceEventSchema),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+export type AutomationAgentTrace = z.infer<typeof automationAgentTraceSchema>;
+
 export const stepOutputSchema = z.object({
   output: z.unknown(),
   status: z.enum(["completed", "failed", "skipped"]),
   duration_ms: z.number(),
   error: z.object({ message: z.string(), stack: z.string().optional() }).optional(),
+  agentTrace: automationAgentTraceSchema.optional(),
 });
 
 export type StepOutput = z.infer<typeof stepOutputSchema>;

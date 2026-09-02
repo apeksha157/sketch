@@ -1,3 +1,4 @@
+import { AiBadge, OrgListHeader, OrgRow } from "@/components/org-row";
 /**
  * People tab — the directory, grouped by company with the Unaffiliated tail
  * collapsed by default (315 of 501 people in dev have no `works_at`, so the
@@ -10,22 +11,21 @@
  * last active. Rows render through the shared {@link OrgRow} primitive so their
  * density matches the rest of the surface.
  *
- * Search and the "Needs placement" chip both auto-expand the tail.
+ * The "Needs placement" chip auto-expands the tail; entity search lives in
+ * the org-wide box above the tabs.
  */
 import type { EntityListItem } from "@/lib/api";
 import { api } from "@/lib/api";
 import { EntityAvatar, entityDisplayLabel, useEntityUi } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
-import { CaretDownIcon, MagnifyingGlassIcon, SparkleIcon } from "@phosphor-icons/react";
+import { formatRelativeTime } from "@/lib/time";
+import { CaretDownIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
-import { Input } from "@sketch/ui/components/input";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { cn } from "@sketch/ui/lib/utils";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ContactLine } from "./contact-line";
 import { ReviewBandCapped } from "./org-review";
-import { OrgRow } from "./org-row";
 
 const PAGE = 200;
 
@@ -35,27 +35,15 @@ interface CompanyInfo {
   subtype: string | null;
 }
 
-export function PeopleTab() {
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
+export function PeopleTab({ isAdmin = false }: { isAdmin?: boolean } = {}) {
   const [needsPlacementOnly, setNeedsPlacementOnly] = useState(false);
   const [tailExpanded, setTailExpanded] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>(null);
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setDebounced(search.trim().toLowerCase()), 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [search]);
 
   const peopleQuery = useInfiniteQuery({
-    queryKey: ["entities", "person", "org-people", debounced],
+    queryKey: ["entities", "person", "org-people"],
     queryFn: ({ pageParam }) =>
       api.entities.list({
         type: "person",
-        search: debounced || undefined,
         sort: "mentions",
         limit: PAGE,
         offset: pageParam,
@@ -85,7 +73,7 @@ export function PeopleTab() {
   });
 
   const people = useMemo(() => peopleQuery.data?.pages.flatMap((p) => p.entities) ?? [], [peopleQuery.data]);
-  const totalPeople = peopleCountQuery.data?.total ?? (debounced ? 0 : (peopleQuery.data?.pages[0]?.total ?? 0));
+  const totalPeople = peopleCountQuery.data?.total ?? peopleQuery.data?.pages[0]?.total ?? 0;
 
   const companiesMap = useMemo(() => {
     const map = new Map<string, CompanyInfo>();
@@ -109,20 +97,14 @@ export function PeopleTab() {
   }, [graphQuery.data]);
 
   const needsPlacementCount = Math.max(0, totalPeople - personToCompany.size);
-  const showTail = tailExpanded || debounced.length > 0 || needsPlacementOnly;
+  const showTail = tailExpanded || needsPlacementOnly;
 
   const filteredPeople = useMemo(() => {
     return people.filter((p) => {
       const hasCompany = personToCompany.has(p.id) && companiesMap.has(personToCompany.get(p.id) as string);
-      if (needsPlacementOnly && hasCompany) return false;
-      if (debounced) {
-        const inName = p.name.toLowerCase().includes(debounced);
-        const inAlias = p.aliases.some((a) => a.toLowerCase().includes(debounced));
-        if (!inName && !inAlias) return false;
-      }
-      return true;
+      return !(needsPlacementOnly && hasCompany);
     });
-  }, [people, personToCompany, companiesMap, needsPlacementOnly, debounced]);
+  }, [people, personToCompany, companiesMap, needsPlacementOnly]);
 
   const { companyGroups, unaffiliated } = useMemo(() => {
     const byCompany = new Map<string, EntityListItem[]>();
@@ -147,19 +129,10 @@ export function PeopleTab() {
 
   return (
     <div className="space-y-4">
-      <ReviewBandCapped types={["person"]} />
+      <ReviewBandCapped types={["person"]} isAdmin={isAdmin} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-0 flex-1">
-          <MagnifyingGlassIcon size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-            placeholder="Search people…"
-            className="pl-9 text-sm"
-          />
-        </div>
-        {needsPlacementCount > 0 ? (
+      {needsPlacementCount > 0 ? (
+        <div className="flex justify-end">
           <button
             type="button"
             onClick={() => setNeedsPlacementOnly((v) => !v)}
@@ -172,8 +145,8 @@ export function PeopleTab() {
           >
             ⚑ Needs placement · {needsPlacementCount}
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="space-y-2">
@@ -183,12 +156,14 @@ export function PeopleTab() {
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border" data-testid="org-people-table">
-          <div className="flex items-center gap-2.5 border-b border-border bg-muted/30 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            <span className="min-w-0 flex-1">Name</span>
-            <span className="hidden w-56 sm:block">Contact</span>
-            <span className="w-14 text-center">Mentions</span>
-            <span className="w-16 text-right">Active</span>
-          </div>
+          <OrgListHeader
+            columns={[
+              { label: "Name", className: "min-w-0 flex-1" },
+              { label: "Contact", className: "hidden w-56 sm:block" },
+              { label: "Mentions", className: "w-14 text-center" },
+              { label: "Active", className: "w-16 text-right" },
+            ]}
+          />
 
           {!needsPlacementOnly &&
             companyGroups.map((group) => (
@@ -231,9 +206,7 @@ export function PeopleTab() {
           ) : null}
 
           {filteredPeople.length === 0 ? (
-            <p className="px-3 py-10 text-center text-[12.5px] text-muted-foreground">
-              {debounced ? "No people match your search." : "No people yet."}
-            </p>
+            <p className="px-3 py-10 text-center text-[12.5px] text-muted-foreground">{"No people yet."}</p>
           ) : null}
         </div>
       )}
@@ -276,17 +249,7 @@ function PersonRow({ person }: { person: EntityListItem }) {
       onOpen={() => openEntity(person.id)}
       avatar={<EntityAvatar entity={{ id: person.id, name: person.name, sourceType: "person" }} size="sm" />}
       primary={entityDisplayLabel(person)}
-      primaryChips={
-        isAi ? (
-          <Badge
-            variant="secondary"
-            className="gap-0.5 bg-violet-100 px-1 py-0 text-[9px] text-violet-700 dark:bg-violet-900 dark:text-violet-300"
-          >
-            <SparkleIcon size={8} weight="fill" />
-            AI
-          </Badge>
-        ) : null
-      }
+      primaryChips={isAi ? <AiBadge /> : null}
       secondary={subtitle}
       middle={
         <div className="hidden w-56 flex-col gap-0.5 sm:flex">

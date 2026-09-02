@@ -28,8 +28,10 @@ export async function materializePersonSeed(
   const subtype = raw.subtype === "internal" ? "internal" : "external";
   const result = await proposeEntity(
     {
+      db: deps.db,
       entityRepo: deps.entityRepo,
       reviewRepo: deps.reviewRepo,
+      resolutionLedger: deps.resolutionLedger,
       domainsRepo: deps.domainsRepo,
       lookup: deps.lookup,
       readEmail: deps.readEmail,
@@ -43,9 +45,11 @@ export async function materializePersonSeed(
       source: fact.subject_source,
       sourceId: fact.subject_source_id,
       evidence: fact.indexed_file_id ? [{ indexedFileId: fact.indexed_file_id }] : [],
+      contextFileId: fact.indexed_file_id,
       triggeredByUserId,
       provenanceTier: "structural",
       strictPersonScopeGate: true,
+      suppressContextLinking: deps.suppressContextLinking,
     },
   );
   if (result.kind === "queued") return { kind: "queued", reviewId: result.reviewId };
@@ -200,8 +204,10 @@ export async function materializePersonFact(
     if (!entity) {
       const result = await proposeEntity(
         {
+          db: deps.db,
           entityRepo: deps.entityRepo,
           reviewRepo: deps.reviewRepo,
+          resolutionLedger: deps.resolutionLedger,
           domainsRepo: deps.domainsRepo,
           lookup: deps.lookup,
           readEmail: deps.readEmail,
@@ -215,12 +221,14 @@ export async function materializePersonFact(
           source,
           sourceId,
           evidence: fact.indexed_file_id ? [{ indexedFileId: fact.indexed_file_id }] : [],
+          contextFileId: fact.indexed_file_id,
           triggeredByUserId,
           aliases: variations,
           provenanceTier: "inferred",
           precomputedCandidates,
           skipFuzzy,
           linkOnly: options.linkOnly,
+          suppressContextLinking: deps.suppressContextLinking,
         },
       );
       if (result.kind === "queued") {

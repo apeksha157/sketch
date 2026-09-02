@@ -15,10 +15,11 @@
  * endpoints: Save is a rename plus optional contact points, Merge folds the
  * placeholder into a person you already know, Dismiss retires it unnamed.
  */
-import { EntityPicker } from "@/components/entity-picker";
+import { CompactAction } from "@/components/compact-action";
+import { MergeDialog, MergePreview } from "@/components/entity-merge-dialog";
 import { type WhatsAppContextMessage, type WhatsAppIdentityReviewItem, api } from "@/lib/api";
 import { EntityAvatar } from "@/lib/entity-ui";
-import { formatRelativeTime } from "@/routes/files/file-list";
+import { formatRelativeTime } from "@/lib/time";
 import { ArrowsLeftRightIcon, CheckIcon, UserFocusIcon, WhatsappLogoIcon, XIcon } from "@phosphor-icons/react";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
@@ -29,7 +30,7 @@ import { cn } from "@sketch/ui/lib/utils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
-import { EntryList, SectionLabel } from "../entity-drawer/drawer-kit";
+import { EntryList, SectionLabel, SourceTag } from "../entity-drawer/drawer-kit";
 
 export type { WhatsAppGroupSighting, WhatsAppIdentitySuggestion, WhatsAppIdentityReviewItem } from "@/lib/api";
 
@@ -118,7 +119,7 @@ function GroupEvidence({
 }) {
   if (excerpts.length === 0) {
     return fallbackSnippet ? (
-      <p className="mt-1.5 border-l-2 border-border pl-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
+      <p className="mt-1.5 border-l-2 border-border pl-2.5 text-[11px] leading-relaxed text-muted-foreground">
         {fallbackSnippet}
       </p>
     ) : null;
@@ -129,7 +130,7 @@ function GroupEvidence({
       {excerpts.map((excerpt) => (
         <div key={excerpt.startedAt} className="border-l-2 border-border pl-2.5">
           {excerpt.messages.map((message) => (
-            <p key={message.id} className="text-[11.5px] leading-relaxed">
+            <p key={message.id} className="text-[11px] leading-relaxed">
               <span
                 className={cn(
                   "mr-1 font-medium",
@@ -149,7 +150,7 @@ function GroupEvidence({
 
 function GroupChip({ name }: { name: string }) {
   return (
-    <span className="inline-flex max-w-[12rem] items-center truncate rounded-full border border-border bg-background/40 px-2 py-0.5 text-[10.5px] text-foreground/80">
+    <span className="inline-flex max-w-[12rem] items-center truncate rounded-full border border-border bg-background/40 px-2 py-0.5 text-[10px] text-foreground/80">
       <span className="truncate">{name}</span>
     </span>
   );
@@ -193,7 +194,7 @@ export function WhatsAppIdentityRow({
             >
               {name}
             </span>
-            <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">{note}</span>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{note}</span>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 pl-6">
             <WhatsappLogoIcon
@@ -205,7 +206,7 @@ export function WhatsAppIdentityRow({
             {shownGroups.map((group) => (
               <GroupChip key={group.groupJid} name={group.groupName} />
             ))}
-            {moreGroups > 0 ? <span className="text-[10.5px] text-muted-foreground">+{moreGroups} more</span> : null}
+            {moreGroups > 0 ? <span className="text-[10px] text-muted-foreground">+{moreGroups} more</span> : null}
             {item.phoneE164 ? (
               <span className="ml-1 font-mono text-[10px] tracking-tight text-muted-foreground/70">
                 {item.phoneE164}
@@ -214,27 +215,14 @@ export function WhatsAppIdentityRow({
           </div>
         </button>
         <span className="flex shrink-0 items-center gap-0.5 py-2 pr-3">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onOpen();
-            }}
-            className="px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:underline"
-          >
-            {primaryLabel}
-          </button>
+          <CompactAction label={primaryLabel} emphasis onClick={onOpen} />
           <span className="text-muted-foreground/40">·</span>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void runIdentityAction(() => api.entities.dismissWhatsAppIdentity(item.entityId), onResolve, "Dismissed");
-            }}
-            className="px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            Dismiss
-          </button>
+          <CompactAction
+            label="Dismiss"
+            onClick={() =>
+              void runIdentityAction(() => api.entities.dismissWhatsAppIdentity(item.entityId), onResolve, "Dismissed")
+            }
+          />
         </span>
       </div>
     </div>
@@ -290,6 +278,7 @@ function WhatsAppIdentityBody({
   const [phone, setPhone] = useState(item.phoneE164 ?? "");
   const [email, setEmail] = useState("");
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeSeedId, setMergeSeedId] = useState<string | null>(null);
   const trimmedName = name.trim();
   const initialName = (item.suggestion?.name ?? "").trim();
   const initialPhone = (item.phoneE164 ?? "").trim();
@@ -341,14 +330,20 @@ function WhatsAppIdentityBody({
     void runIdentityAction(action, onResolve, message).finally(() => setBusy(false));
   };
 
+  /**
+   * A suggestion pointing at an existing entity routes through the shared
+   * merge preview instead of merging on the spot — same consequences view as
+   * every other merge. A name-only suggestion still saves directly.
+   */
   const confirmSuggestion = () => {
     const suggestion = item.suggestion;
     if (!suggestion) return;
-    act(
-      () =>
-        suggestion.entityId ? api.entities.merge(suggestion.entityId, item.entityId) : saveIdentity(suggestion.name),
-      suggestion.entityId ? `Merged into ${suggestion.name}` : `Saved ${suggestion.name}`,
-    );
+    if (suggestion.entityId) {
+      setMergeSeedId(suggestion.entityId);
+      setMergeOpen(true);
+      return;
+    }
+    act(() => saveIdentity(suggestion.name), `Saved ${suggestion.name}`);
   };
   const accent = "#f59e0b";
   const helper = item.suggestion
@@ -442,10 +437,10 @@ function WhatsAppIdentityBody({
             {item.groups.map((group) => (
               <li key={group.groupJid} className="px-3 py-2.5">
                 <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-sm bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground">
+                  <SourceTag className="inline-flex items-center gap-1">
                     <WhatsappLogoIcon size={9} weight="fill" />
                     Group
-                  </span>
+                  </SourceTag>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{group.groupName}</span>
                   <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                     {group.messageCount} msgs · {formatRelativeTime(group.lastMessageAt)}
@@ -492,24 +487,33 @@ function WhatsAppIdentityBody({
         </Button>
       </div>
 
-      <Dialog open={mergeOpen} onOpenChange={setMergeOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-base">Merge this contact into…</DialogTitle>
-            <DialogDescription>
-              Pick the person this WhatsApp contact already is. Their number and group history fold into that entity —
-              no new person is created.
-            </DialogDescription>
-          </DialogHeader>
-          <EntityPicker
-            entityType="person"
-            onPick={(entityId) => {
+      <MergeDialog
+        open={mergeOpen}
+        onOpenChange={(open) => {
+          setMergeOpen(open);
+          if (!open) setMergeSeedId(null);
+        }}
+        initialPickId={mergeSeedId}
+        entityType="person"
+        excludeEntityId={item.entityId}
+        title={() => "Merge this contact into…"}
+        description={() =>
+          "Pick the person this WhatsApp contact already is. Their number and group history fold into that entity — no new person is created."
+        }
+        renderPreview={(picked, reset) => (
+          <MergePreview
+            subject={{ kind: "entity", id: item.entityId, name: trimmedName || item.phoneE164 || "This contact" }}
+            target={picked}
+            defaultSurvivor="target"
+            onBack={reset}
+            onMerged={() => {
               setMergeOpen(false);
-              act(() => api.entities.merge(entityId, item.entityId), "Merged");
+              setMergeSeedId(null);
+              onResolve("Merged");
             }}
           />
-        </DialogContent>
-      </Dialog>
+        )}
+      />
     </>
   );
 }

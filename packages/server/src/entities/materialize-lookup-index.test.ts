@@ -364,6 +364,24 @@ describe("lookup index row sharing", () => {
     ).toEqual(["orion"]);
   });
 
+  it("removes old edit-distance candidates from a built candidate pool when an entity is re-registered", async () => {
+    await seedEntity(db, { id: "akanksha", name: "Akanksha Labs", sourceType: "product" });
+    const deps = await buildMaterializeDeps(db);
+    const original = (deps.index.entitiesByType.get("product") ?? []).find((e) => e.id === "akanksha");
+    if (!original) throw new Error("missing seeded product");
+
+    expect(deps.lookup.findNameDedupCandidates?.("product", "Akansha Labs")).toMatchObject([
+      { entity: { id: "akanksha" }, score: 0.9, reason: "edit-distance" },
+    ]);
+
+    registerEntity(deps.index, { ...original, name: "Beacon Labs" });
+
+    expect(deps.lookup.findNameDedupCandidates?.("product", "Akansha Labs")).toEqual([]);
+    expect(deps.lookup.findNameDedupCandidates?.("product", "Becon Labs")).toMatchObject([
+      { entity: { id: "akanksha" }, score: 0.9, reason: "edit-distance" },
+    ]);
+  });
+
   it("resolves product digit-boundary exact names and keeps same-run collision names fresh", async () => {
     const entityRepo = createEntityRepository(db);
     const product = await entityRepo.upsertEntity({
@@ -422,10 +440,10 @@ describe("lookup index row sharing", () => {
     );
 
     expect(nameLinked.kind).toBe("linked");
-    expect(aliasLinked.kind).toBe("linked");
-    if (nameLinked.kind !== "linked" || aliasLinked.kind !== "linked") throw new Error("expected linked products");
+    expect(aliasLinked.kind).toBe("queued");
+    if (nameLinked.kind !== "linked" || aliasLinked.kind !== "queued") throw new Error("expected product outcomes");
     expect(nameLinked.entity.id).toBe(product.id);
-    expect(aliasLinked.entity.id).toBe(product.id);
+    expect(aliasLinked.candidateEntityId).toBe(product.id);
 
     const company = await entityRepo.upsertEntity({
       name: "Fresh Vendor",
