@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [1.6.0] -- 2026-09-02
+
+- Replaces MinHash/LSH similarity with bounded edit-distance matching for typo-class entity candidates, drops the dead adjudicator and backfill pipeline, netting −1,773 lines while preserving recreate determinism.
+- Adds durable resolution-decisions ledger with T1.5 replay rung and `machine_confirmed` provenance tier so graph recreates replay confirmed links instead of losing them; applies to both enrichment and recreate flows.
+- Introduces T2 context-adjacency linking that resolves single-token and near-miss person mentions through relationship-graph evidence with provenance-aware alias revocation, preventing junk-alias auto-links.
+- Ports the real adjacency rule (precision 0.997, coverage 0.144 measured on 9,208 trials) from the eval harness into production, using the same predicate as a regression test.
+- Extracts `linkReviewRowToExistingEntity` as a machine-safe link core with explicit non-goals for human-only behaviors; adds terminal retry cap at 8 enrichment attempts and per-call `llm_usage_events` telemetry.
+- Seeds a `sketch-machine` principal so machine sweeps stop attributing to the oldest admin; adds `resolution_decisions` backfill script for historical confirmed rows.
+- Extends graph verdicts with a review/mention subject family (`link_to`, `dismiss`) targeting durable mention keys rather than queue-row ids, with guarded revert and supersession of prior awaiting verdicts.
+- Adds four summarized judge views (entity summary, candidate lookup, pairwise evidence, file context) budget-fitted to ≤2,000 chars for the upcoming judge loop.
+- Moves graph-verdict review from dev-tools into Your Org with per-type agent proposals lanes, inline approve→apply in one sheet visit, and org-wide entity search across all types.
+- Iterates Your Org review UX with drawer-anatomy timeline surfaces, real quote expansion from document chunks, managed alias add/edit/delete at `human_confirmed` provenance, and quiet reading views.
+- Adds bulk triage in the review band with source/age/births-only filters and per-item CAS, unified Identity card with kind-driven edit rows, and a shared `CompactAction` / `SourceTag` design audit.
+- Unifies all Your Org rows onto `OrgRow`, one relative-time formatter, one type ramp (9→13px), one merge dialog with drawer preview, and deletes the dead `ReviewBand`.
+- Preserves merge-ledger entities through graph recreate by skipping entities referenced in `entity_merges` during reset, fixing an FK violation on any tenant with merge rows.
+- Increases automation builder total tool-call budget from 20 to 48 while preserving the ten-minute elapsed deadline, 24-turn limit, and repeated-call guard.
+- Keeps automation builder SSE streams alive with a 15-second `: keep-alive` comment heartbeat, clearing the timer on all stream exit paths.
+- Exposes `sketch_search_delivery_targets` and `sketch_send_message` on the public MCP with membership-bound authorization, per-token send rate limiting, and full WhatsApp group principal support.
+- Retires PAT (`skp_`) tokens from the public MCP in favor of OAuth-only access, revoking existing PAT rows while preserving audit history.
+
 ## [1.5.0] -- 2026-08-29
 
 - Fixes GitHub and Linear access updates by replacing the misleading `Done` button with a persistent `Save access` footer and keeping saved recipients visible in the picker.
