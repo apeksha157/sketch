@@ -36,11 +36,13 @@ vi.mock("./embeddings", () => ({
 
 // Mock the connector registry so runConnectorSync doesn't hit real APIs
 const mockConnectorSync = vi.fn();
+const mockOnItemResult = vi.fn();
 vi.mock("./registry", () => ({
   getConnector: vi.fn(() => ({
     type: "google_drive",
     promotableFileTypes: ["project"],
     sync: (...args: unknown[]) => mockConnectorSync(...args),
+    onItemResult: (...args: unknown[]) => mockOnItemResult(...args),
     getCursor: vi.fn().mockResolvedValue("cursor-v2"),
     validateCredentials: vi.fn().mockResolvedValue(undefined),
   })),
@@ -674,6 +676,7 @@ describe("runConnectorSync — ACL sync on unchanged items", () => {
   const logger = createTestLogger();
 
   afterEach(async () => {
+    mockOnItemResult.mockClear();
     if (db) {
       try {
         await db.destroy();
@@ -682,6 +685,55 @@ describe("runConnectorSync — ACL sync on unchanged items", () => {
       }
       db = null;
     }
+  });
+
+  it("reports downstream persistence outcomes to the connector", async () => {
+    mockOnItemResult.mockClear();
+    db = await createTestDb();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "connector-item-results",
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: JSON.stringify({ type: "oauth", accessToken: "test", expiresAt: "2099-01-01T00:00:00.000Z" }),
+        created_by: "admin",
+        scope_config: JSON.stringify({}),
+      })
+      .execute();
+    const failedItem = {
+      providerFileId: "failed-item",
+      providerUrl: null,
+      fileName: null,
+      fileType: "document",
+      contentCategory: "document" as const,
+      content: "failed",
+      sourcePath: "/failed.txt",
+      contentHash: "failed",
+      sourceCreatedAt: null,
+      sourceUpdatedAt: null,
+    } as unknown as SyncedItem;
+    const persistedItem = {
+      ...failedItem,
+      providerFileId: "persisted-item",
+      fileName: "persisted.txt",
+      content: "persisted",
+      contentHash: "persisted",
+    } satisfies SyncedItem;
+    async function* items() {
+      yield failedItem;
+      yield persistedItem;
+    }
+    mockConnectorSync.mockReturnValue(items());
+
+    await runConnectorSync(db, "connector-item-results", logger);
+
+    expect(mockOnItemResult).toHaveBeenNthCalledWith(1, {
+      item: failedItem,
+      persisted: false,
+      error: expect.any(String),
+    });
+    expect(mockOnItemResult).toHaveBeenNthCalledWith(2, { item: persistedItem, persisted: true });
   });
 
   it("syncs accessPrincipals even when content hash is unchanged", async () => {
