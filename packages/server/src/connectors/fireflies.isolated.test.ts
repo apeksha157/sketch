@@ -11,7 +11,7 @@
  */
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFirefliesConnector } from "./fireflies";
+import { FirefliesRateLimitError, createFirefliesConnector, parseRetryAfterMs } from "./fireflies";
 import { type NameResolver, type SyncedItem, toEmailPrincipals } from "./types";
 
 const silentLogger = pino({ level: "silent" });
@@ -475,5 +475,123 @@ describe("Fireflies request rate limiting", () => {
       10,
     );
     expect(item?.providerFileId).toBe("t-rate-limit");
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  it("parses delay-seconds form", () => {
+    expect(parseRetryAfterMs("120")).toBe(120_000);
+  });
+
+  it("parses date forms relative to now", () => {
+    const now = Date.parse("2026-09-03T12:00:00.000Z");
+    expect(parseRetryAfterMs("2026-09-03T12:10:00.000Z", now)).toBe(10 * 60 * 1000);
+    expect(parseRetryAfterMs("Thu, 03 Sep 2026 12:05:00 GMT", now)).toBe(5 * 60 * 1000);
+  });
+
+  it("clamps past dates to zero", () => {
+    const now = Date.parse("2026-09-03T12:00:00.000Z");
+    expect(parseRetryAfterMs("2026-09-03T11:00:00.000Z", now)).toBe(0);
+  });
+
+  it("returns null for absent or malformed input", () => {
+    expect(parseRetryAfterMs(null)).toBeNull();
+    expect(parseRetryAfterMs("")).toBeNull();
+    expect(parseRetryAfterMs("soon-ish")).toBeNull();
+  });
+});
+
+describe("Fireflies rate-limit failure modes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Run a sync against a fetch stub and capture the terminal error. */
+  async function syncError(mockFetch: (callCount: number) => Response): Promise<unknown> {
+    let calls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      calls++;
+      return mockFetch(calls);
+    });
+    const connector = createFirefliesConnector({ minRequestIntervalMs: 0 });
+    try {
+      for await (const _item of connector.sync({
+        credentials: { type: "api_key", api_key: "test" },
+        scopeConfig: {},
+        cursor: null,
+        logger: pino({ level: "silent" }),
+        ownerEmail: null,
+        resolveNameToEmail: undefined,
+      })) {
+        // drain
+      }
+      return null;
+    } catch (err) {
+      return err;
+    }
+  }
+
+  it("throws a typed quota error when a 429 Retry-After exceeds the cap", async () => {
+    const err = await syncError(
+      () => new Response("rate limited", { status: 429, headers: { "Retry-After": "35531" } }),
+    );
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
+    expect((err as FirefliesRateLimitError).message).toContain("35531");
+  });
+
+  it("throws a typed quota error when a GraphQL retry-after date exceeds the cap", async () => {
+    const retryDate = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
+    const err = await syncError(
+      () =>
+        new Response(
+          JSON.stringify({ data: null, errors: [{ message: `too many requests, retry after ${retryDate}` }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
+    expect((err as FirefliesRateLimitError).message).toContain(retryDate);
+  });
+
+  it("throws a typed non-quota error when 429 retries are exhausted within the cap", async () => {
+    const err = await syncError(() => new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }));
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(false);
+  });
+
+  it("sleeps and retries when the wait is exactly at the cap", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response("rate limited", { status: 429, headers: { "Retry-After": "120" } });
+        }
+        return new Response(JSON.stringify({ data: { contacts: [] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      const connector = createFirefliesConnector({ minRequestIntervalMs: 0 });
+      const drain = (async () => {
+        for await (const _item of connector.sync({
+          credentials: { type: "api_key", api_key: "test" },
+          scopeConfig: {},
+          cursor: null,
+          logger: pino({ level: "silent" }),
+          ownerEmail: null,
+          resolveNameToEmail: undefined,
+        })) {
+          // drain
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(121_000);
+      await drain;
+      expect(calls).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
