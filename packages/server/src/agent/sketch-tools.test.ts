@@ -114,7 +114,7 @@ describe("createSketchMcpServer", () => {
     expect(server.instance).toBeDefined();
   });
 
-  it("exposes ClickUp only when the managed connection is available", () => {
+  it("exposes managed tools only when their connections are available", () => {
     const registeredTools = (deps: Parameters<typeof createSketchMcpServer>[0]) =>
       (createSketchMcpServer(deps).instance as unknown as { _registeredTools: Record<string, unknown> })
         ._registeredTools;
@@ -123,12 +123,27 @@ describe("createSketchMcpServer", () => {
       registeredTools({
         uploadCollector: new UploadCollector(),
         workspaceDir: tmpDir,
-        availableManagedIntegrations: new Set(["clickup"]),
-      }).clickup_api,
-    ).toBeDefined();
-    expect(
-      registeredTools({ uploadCollector: new UploadCollector(), workspaceDir: tmpDir }).clickup_api,
-    ).toBeUndefined();
+        availableManagedIntegrations: new Set(["github", "linear", "clickup"]),
+      }),
+    ).toMatchObject({ github_cli: expect.anything(), linear_api: expect.anything(), clickup_api: expect.anything() });
+
+    const disconnectedTools = registeredTools({ uploadCollector: new UploadCollector(), workspaceDir: tmpDir });
+    expect(disconnectedTools.github_cli).toBeUndefined();
+    expect(disconnectedTools.linear_api).toBeUndefined();
+    expect(disconnectedTools.clickup_api).toBeUndefined();
+  });
+
+  it("does not expose a managed tool when only another managed connection is available", () => {
+    const registeredTools = (
+      createSketchMcpServer({
+        uploadCollector: new UploadCollector(),
+        workspaceDir: tmpDir,
+        availableManagedIntegrations: new Set(["github"]),
+      }).instance as unknown as { _registeredTools: Record<string, unknown> }
+    )._registeredTools;
+    expect(registeredTools.github_cli).toBeDefined();
+    expect(registeredTools.linear_api).toBeUndefined();
+    expect(registeredTools.clickup_api).toBeUndefined();
   });
 
   it("keeps questions available in web chat and exposes them to capable channels only when enabled", () => {

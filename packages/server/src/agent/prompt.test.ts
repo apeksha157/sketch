@@ -19,9 +19,9 @@ describe("buildRuntimeCapabilitiesContext", () => {
   });
 
   it("keeps direct managed integrations supplemental to Canvas", () => {
-    const result = buildRuntimeCapabilitiesContext({ CANVAS_CLI: "launcher", GH_TOKEN: "secret" });
+    const result = buildRuntimeCapabilitiesContext({ CANVAS_CLI: "launcher", GH_TOKEN: "secret" }, new Set(["github"]));
 
-    expect(result).toContain("Available managed skill integrations for this run: Canvas, GitHub");
+    expect(result).toContain("Available managed skill integrations for this run: Canvas, GitHub (Sketch github_cli)");
     expect(result).not.toContain("launcher");
     expect(result).not.toContain("secret");
   });
@@ -445,10 +445,14 @@ describe("buildSystemContext", () => {
     });
 
     it("documents managed Linear routing", () => {
-      const result = buildSystemContext({ platform: "web" });
+      const result = buildSystemContext({
+        platform: "web",
+        availableManagedIntegrations: new Set(["linear"]),
+      });
       expect(result).toContain("Linear is a managed API integration in Sketch.");
       expect(result).toContain("use its GraphQL API");
       expect(result).toContain("never route Linear through Canvas tools");
+      expect(buildSystemContext({ platform: "web" })).not.toContain("linear_api");
     });
 
     it("includes GitHub-flavored Markdown rules", () => {

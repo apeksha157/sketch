@@ -1,4 +1,4 @@
-import type { IntegrationApp, IntegrationConnection, PageInfo } from "@sketch/shared";
+import type { IntegrationApp, IntegrationConnection, ManagedIntegrationAppId, PageInfo } from "@sketch/shared";
 /**
  * Server-side integration types.
  * Shared types (IntegrationApp, IntegrationConnection, PageInfo) are imported
@@ -30,7 +30,7 @@ export function getIntegrationActor(params: {
   };
 }
 
-export type CanvasManagedIntegration = "github" | "linear" | "clickup";
+export type CanvasManagedIntegration = ManagedIntegrationAppId;
 
 export interface CanvasAccessToken {
   accessToken: string;
@@ -108,10 +108,20 @@ export interface IntegrationProvider {
    * Returns a broker spec when this provider exposes a brokered CLI to the agent,
    * or null for HTTP-only providers (no CLI surface).
    */
-  getBrokerSpec(params: { userEmail: string | null; claudeConfigDir: string }): BrokerSpec | null;
+  getBrokerSpec(params: {
+    userEmail: string | null;
+    claudeConfigDir: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+  }): BrokerSpec | null;
   executeAction?(request: IntegrationActionRequest, signal?: AbortSignal): Promise<unknown>;
   getCanvasAccessToken?(params: {
     integration: CanvasManagedIntegration;
+    userEmail: string;
+    accountId?: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+    forceRefresh?: boolean;
+  }): Promise<CanvasAccessToken>;
+  getGithubAccessToken?(params: {
     userEmail: string;
     accountId?: string;
     workspaceContext?: IntegrationWorkspaceContext;

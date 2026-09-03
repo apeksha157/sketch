@@ -76,7 +76,7 @@ import { createApp } from "./http";
 import { listAvailableManagedIntegrations } from "./integrations/availability";
 import { createCliIntegrationService } from "./integrations/cli/service";
 import { buildMcpConfig, createProvider } from "./integrations/factory";
-import type { IntegrationProvider, IntegrationStatus } from "./integrations/types";
+import { type IntegrationProvider, type IntegrationStatus, getIntegrationActor } from "./integrations/types";
 import { LocalClaudeSessionService } from "./local-devices/claude-sessions";
 import { LocalDeviceGateway } from "./local-devices/gateway";
 import { createLogger } from "./logger";
@@ -404,13 +404,26 @@ export async function createServer(config: Config, options?: CreateServerOptions
         pricing,
         providerCtx,
         enrichedParams,
-        () => runAgent(enrichedParams),
+        async () => {
+          const { userId, userEmail } = getIntegrationActor(enrichedParams);
+          const availableManagedIntegrations =
+            enrichedParams.availableManagedIntegrations ??
+            (userEmail && userId
+              ? await listAvailableManagedIntegrations({
+                  loadIntegrationProvider: managedIntegrationProviderLoader,
+                  userEmail,
+                  currentUserId: userId,
+                  logger,
+                })
+              : new Set());
+          return runAgent({ ...enrichedParams, availableManagedIntegrations });
+        },
         config.AGENT_RUN_WATCHDOG_MS,
       ),
     );
   };
   const trackedRunAgent = (params: RunAgentParams): Promise<RunAgentResult> =>
-    runTrackedAgent(params, limitAgentExecution);
+    runTrackedAgent(params, (work) => interactiveAgentRunLimiter.run(work, { signal: params.abortController?.signal }));
   const trackedScheduledRunAgent = (
     params: RunAgentParams,
     admission?: AgentRunAdmissionOptions,

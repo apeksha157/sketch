@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { MANAGED_CLICKUP_SKILL, ensureBuiltinManagedSkills } from "./builtin";
+import {
+  MANAGED_CLICKUP_SKILL,
+  MANAGED_GITHUB_SKILL,
+  MANAGED_LINEAR_SKILL,
+  ensureBuiltinManagedSkills,
+} from "./builtin";
 
 describe("MANAGED_CLICKUP_SKILL", () => {
   it("teaches the managed direct API webhook lifecycle", () => {
@@ -76,5 +81,14 @@ describe("ensureBuiltinManagedSkills", () => {
 
     const skill = await readFile(join(configDir, "skills", "clickup", "SKILL.md"), "utf8");
     expect(skill).toBe(MANAGED_CLICKUP_SKILL);
+  });
+
+  it("installs the Canvas-account managed GitHub and Linear skills", async () => {
+    configDir = await mkdtemp(join(tmpdir(), "sketch-builtin-skills-"));
+
+    await ensureBuiltinManagedSkills({ CLAUDE_CONFIG_DIR: configDir });
+
+    await expect(readFile(join(configDir, "skills", "github", "SKILL.md"), "utf8")).resolves.toBe(MANAGED_GITHUB_SKILL);
+    await expect(readFile(join(configDir, "skills", "linear", "SKILL.md"), "utf8")).resolves.toBe(MANAGED_LINEAR_SKILL);
   });
 });

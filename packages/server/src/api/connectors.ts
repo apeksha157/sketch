@@ -755,6 +755,7 @@ export function connectorRoutes(
         parsed.data.callbackUrl,
         undefined,
         c.get("role") === "admin" ? "admin" : "member",
+        { workspaceId: provider.providerId, userId: sub },
       );
       return c.json(result);
     } catch (err) {
@@ -813,6 +814,7 @@ export function connectorRoutes(
         userEmail: email,
         accountId: parsed.data.accountId,
         userOrgRole: c.get("role") === "admin" ? "admin" : "member",
+        workspaceContext: { workspaceId: (await canvasCredentialProvider.loadProvider()).providerId, userId: sub },
       });
       await connectorMeta.validateCredentials(validationCredentials);
     } catch (err) {

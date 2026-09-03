@@ -135,13 +135,13 @@ function isSkillToolName(toolName: string): boolean {
   return toolName === "Skill" || toolName === "mcp__sketch__Skill";
 }
 
-function buildAgentChildEnv(
+export function buildAgentChildEnv(
   integrationEnv: Record<string, string>,
   agentEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...integrationEnv, ...agentEnv };
-  if (!agentEnv?.GH_TOKEN) env.GH_TOKEN = undefined;
-  if (!agentEnv?.LINEAR_API_KEY) env.LINEAR_API_KEY = undefined;
+  env.GH_TOKEN = undefined;
+  env.LINEAR_API_KEY = undefined;
   return env;
 }
 
@@ -189,12 +189,15 @@ export interface SdkToolStartMapping {
   startedAt: number;
 }
 
-export interface SdkToolEndMapping {
-  toolUseId: string;
+export interface ToolResultEvent {
   toolName: string;
   input: Record<string, unknown>;
   output: unknown;
   isError: boolean;
+}
+
+export interface SdkToolEndMapping extends ToolResultEvent {
+  toolUseId: string;
   endedAt: number;
 }
 
@@ -347,6 +350,9 @@ export interface RunAgentParams {
   responseSurface?: ResponseSurface;
   questionInteractionCapabilities?: QuestionInteractionCapabilities;
   onProgressEvent: (event: ProgressEvent) => Promise<void>;
+  onToolResult?: (event: ToolResultEvent) => Promise<void>;
+  /** Called after queue admission, before runtime setup or tool execution. */
+  onRunStart?: () => Promise<void>;
   onTextDelta?: (delta: string) => Promise<void>;
   onSessionId?: (sessionId: string) => Promise<void>;
   attachments?: Attachment[];
@@ -364,6 +370,7 @@ export interface RunAgentParams {
   botName?: string | null;
   integrationMcpServers?: Record<string, McpServerConfig>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
   model?: string;
   maxTurns?: number;
   maxPersistedTextBytes?: number;
@@ -417,7 +424,6 @@ export interface RunAgentParams {
   };
   enqueueMessage?: (params: { requesterUserId: string; message: string }) => Promise<void>;
   agentEnv?: Record<string, string>;
-  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
   getCanvasAccessToken?: (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
   cliIntegrations?: CliIntegrationCardResolver;
   loadTranscriptionSettings?: () => Promise<TranscriptionSettings | null>;
@@ -921,10 +927,10 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
 
   let integrationAccess: IntegrationAccessResult = { envVars: {}, runtimePaths: [], cleanup: async () => {} };
   if (params.loadIntegrationProvider && params.claudeConfigDir) {
-    const integrationUserEmail =
-      params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
+    const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
+      workspaceUserId: integrationUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1088,6 +1094,12 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
             },
             onToolEnd: async (event) => {
               customToolEffects.onToolEnd(event);
+              await params.onToolResult?.({
+                toolName: event.name,
+                input: event.input,
+                output: event.result ?? event.error,
+                isError: event.error !== undefined,
+              });
               for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
                 const toolCall = toolCalls[index];
                 if (toolCall.toolName !== event.name || toolCall.endedAt !== 0) continue;
@@ -1187,6 +1199,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
 }
 
 export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> {
+  await params.onRunStart?.();
   const adminReadAllEnabled = await resolveAdminReadAllEnabled(params);
   const { userId: actorId, userEmail: actorEmail } = getIntegrationActor(params);
   const availableManagedIntegrations =
@@ -1417,10 +1430,10 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
   // into the real CLI child process.
   let integrationAccess: IntegrationAccessResult = { envVars: {}, runtimePaths: [], cleanup: async () => {} };
   if (params.loadIntegrationProvider && params.claudeConfigDir) {
-    const integrationUserEmail =
-      params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
+    const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
+      workspaceUserId: integrationUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1436,7 +1449,10 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     logger.debug({ userEmail: integrationUserEmail }, "Integration access resolved (user context)");
   }
   const effectiveAgentEnv = { ...params.agentEnv, ...integrationAccess.envVars };
-  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv, params.availableManagedIntegrations)}`;
+  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(
+    effectiveAgentEnv,
+    params.availableManagedIntegrations,
+  )}`;
   const baseCanUseTool = createCanUseTool(absWorkspace, logger, params.claudeConfigDir, {
     agentAllowedTools: params.agentAllowedTools,
     agentEnv: effectiveAgentEnv,
@@ -1520,6 +1536,15 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
         }
       }
 
+      for (const event of effects.toolEnds) {
+        await params.onToolResult?.({
+          toolName: event.toolName,
+          input: event.input,
+          output: event.output,
+          isError: event.isError,
+        });
+      }
+
       const completedCreateAutomationSkill =
         shouldStopAfterCreateAutomationSkill &&
         effects.toolEnds.some(
@@ -1587,13 +1612,14 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
 
   if (params.contextType !== "scheduled_task") {
     try {
+      const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
       await collectIntegrationCardsFromProgressEvents({
         events: sdkStreamState.integrationProgressEvents,
         loadIntegrationProvider: params.loadIntegrationProvider,
         cliIntegrations: params.cliIntegrations,
-        currentUserId: params.integrationUserId === undefined ? params.currentUserId : params.integrationUserId,
+        currentUserId: integrationUserId,
         collector: integrationConnectionCollector,
-        userEmail: params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail,
+        userEmail: integrationUserEmail,
         userName: params.integrationUserName === undefined ? params.userName : params.integrationUserName,
       });
     } catch (err) {

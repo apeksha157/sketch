@@ -4,56 +4,44 @@ import type { Config } from "../config";
 
 export const MANAGED_LINEAR_SKILL = `---
 name: Linear
-description: Use Linear through its managed GraphQL API for issue and project work.
+description: Use Linear through the Sketch Linear GraphQL tool with Canvas OAuth.
 category: engineering
-provider-type: api:linear
-requires-env:
-  - LINEAR_API_KEY
+canvas-account: linear
 ---
 
-# Linear API
+# Linear
 
-Use Linear's GraphQL API at \`https://api.linear.app/graphql\` for Linear work. The runtime supplies \`LINEAR_API_KEY\` only when the current user owns the connection, has a user share, or has organization-wide access.
-
-Authenticate with the raw API key in the \`Authorization\` header. Do not add \`Bearer\`, print the key, put it in a URL or command argument, or expose the process environment.
+Use the Sketch \`linear_api\` tool for Linear work. The request executes inside the trusted Sketch process against Linear's GraphQL API. Canvas is the OAuth vault and returns only a short-lived access token; Sketch never receives or stores a refresh token. Select an opaque Canvas account when more than one usable account is available.
 
 ## Safe workflow
 
-1. Read before writing. Use a small GraphQL query to inspect the target team, project, or issue before changing it.
-2. Use JSON request bodies with \`query\` and \`variables\`; keep queries bounded and request only fields needed for the task.
-3. Use \`viewer\`, \`teams\`, and \`projects\` to resolve identity and IDs. Use \`issues(filter: ...)\` or \`issue(id: ...)\` to locate an issue.
-4. For writes, show the intended title, description, target team, and issue identifier before asking for normal user confirmation. Then use \`issueCreate\`, \`issueUpdate\`, or \`commentCreate\` mutations with variables.
-5. Explain GraphQL errors plainly and retry only transient failures. Never log request headers or credential values.
-
-Useful operations include \`query { viewer { id name email } }\`, bounded team/project lookups, issue searches filtered by team or identifier, \`issueCreate(input: { title, description, teamId })\`, \`issueUpdate(id: \"...\", input: { title, description })\`, and \`commentCreate(input: { issueId, body })\`.
+1. Read before writing. Resolve the target team, project, or issue with a bounded \`linear_api\` query before changing it.
+2. For writes, show the intended title, description, target team, and issue identifier before asking for normal user confirmation.
+3. If account resolution is ambiguous, ask the user to choose the Canvas account; never fall back to another owner or workspace.
+4. Keep queries and variables bounded. Explain provider errors plainly. The tool refreshes once on a definite 401 and never retries 403, 429, network, or GraphQL errors. Never log headers, access tokens, refresh tokens, or connector configuration.
 `;
 
 export const MANAGED_GITHUB_SKILL = `---
 name: GitHub CLI
-description: Use GitHub through the managed gh CLI for repository, issue, pull request, workflow, and release work.
+description: Use GitHub through Sketch's managed local GitHub CLI tool with Canvas OAuth.
 category: engineering
-provider-type: cli:github
-requires-env:
-  - GH_TOKEN
+canvas-account: github
 ---
 
 # GitHub CLI
 
-Use the GitHub CLI executable \`gh\` for GitHub work. The Sketch runtime supplies authentication only when the current user owns the connection, has a user share, or has organization-wide access.
+Use the Sketch \`github_cli\` tool for GitHub work. Sketch executes \`gh\` locally; Canvas is only the OAuth vault and account-selection authority. Trusted Sketch server code receives the access token, injects it only into the \`gh\` child process as \`GH_TOKEN\`, and never exposes it to the agent. Refresh tokens remain in Canvas.
 
 ## Safe workflow
 
-1. Start with discovery. Use \`gh repo list\`, \`gh repo view OWNER/REPO\`, or a read-only command to identify the repository before reading or changing it.
-2. Prefer JSON output and \`--jq\` for stable, concise results. Use \`--paginate\` when the result can span pages.
-3. Pass \`--repo OWNER/REPO\` explicitly whenever the working directory does not make the target unambiguous.
-4. Read before writing. For issues, pull requests, workflows, and releases, show the proposed target and change, then ask for normal user confirmation before a write.
-5. Use \`gh api\` only when a dedicated command does not expose the needed endpoint. Keep API paths explicit and never put tokens in arguments.
+1. Start with discovery. Use \`repo view OWNER/REPO\`, \`issue list\`, \`pr list\`, or another read-only command to identify the target before reading it.
+2. Prefer JSON output and \`--jq\` for stable, concise results. Keep result sizes bounded.
+3. Pass \`--repo OWNER/REPO\` explicitly whenever the target is not unambiguous.
+4. Read before writing. For issues, pull requests, workflows, and releases, show the intended target and change before asking for normal user confirmation.
+5. The local runner rejects authentication/configuration commands, credential flags, arbitrary hosts, and environment inspection.
+6. If more than one usable account exists, pass the selected opaque Canvas account ID or ask the user to choose one.
 
-Useful read commands include \`gh repo view --repo OWNER/REPO --json nameWithOwner,defaultBranchRef\`, \`gh issue list --repo OWNER/REPO --json number,title,state --limit 20\`, \`gh pr list --repo OWNER/REPO --json number,title,state --limit 20\`, \`gh run list --repo OWNER/REPO --json databaseId,status,conclusion --limit 20\`, and \`gh release list --repo OWNER/REPO --limit 20\`.
-
-Use \`gh issue create\`, \`gh pr create\`, \`gh workflow run\`, and \`gh release create\` only after the user has confirmed the intended write. Explain provider errors plainly and retry only when the error is transient.
-
-Never use \`$CANVAS_CLI\`, Canvas MCP tools, raw HTTP authorization headers, raw tokens, token-printing commands, or commands that expose the process environment. Do not pass a token in a URL, shell argument, file, issue, pull request, or log. Keep generated files inside the Sketch workspace.
+Never use raw HTTP authorization headers, raw tokens, token-printing commands, or commands that expose the process environment.
 `;
 
 export const MANAGED_CLICKUP_SKILL = `---
@@ -119,8 +107,8 @@ Use health GETs when needed, not an automatic monitor. ClickUp treats responses 
 
 export async function ensureBuiltinManagedSkills(config: Pick<Config, "CLAUDE_CONFIG_DIR">): Promise<void> {
   const skills = [
-    { id: "github", content: MANAGED_GITHUB_SKILL, marker: "provider-type: cli:github" },
-    { id: "linear", content: MANAGED_LINEAR_SKILL, marker: "provider-type: api:linear" },
+    { id: "github", content: MANAGED_GITHUB_SKILL, marker: "canvas-account: github" },
+    { id: "linear", content: MANAGED_LINEAR_SKILL, marker: "canvas-account: linear" },
     { id: "clickup", content: MANAGED_CLICKUP_SKILL, marker: "managed-integration: clickup" },
   ];
   for (const skill of skills) {
@@ -128,8 +116,10 @@ export async function ensureBuiltinManagedSkills(config: Pick<Config, "CLAUDE_CO
     let existing: string | null = null;
     try {
       existing = await readFile(skillPath, "utf8");
-    } catch {}
-    if (existing?.includes(skill.marker) && existing.includes("requires-env:")) continue;
+    } catch {
+      existing = null;
+    }
+    if (existing?.includes(skill.marker)) continue;
     await mkdir(join(config.CLAUDE_CONFIG_DIR, "skills", skill.id), { recursive: true });
     await writeFile(skillPath, skill.content, "utf8");
   }

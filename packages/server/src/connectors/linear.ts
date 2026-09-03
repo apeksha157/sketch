@@ -108,6 +108,10 @@ function getAccessToken(credentials: ConnectorCredentials): string {
   throw new Error("Linear connector requires api_key or oauth credentials");
 }
 
+function getAuthorizationHeader(credentials: ConnectorCredentials, accessToken: string): string {
+  return credentials.type === "oauth" ? `Bearer ${accessToken}` : accessToken;
+}
+
 function makeLinearRequest(getLastRequestTime: () => number, setLastRequestTime: (t: number) => void) {
   return async function linearRequest<T>(
     query: string,
@@ -559,11 +563,12 @@ export function createLinearConnector(): Connector {
     async validateCredentials(credentials) {
       const token = getAccessToken(credentials);
       const query = "query { viewer { id name } }";
-      await linearRequest(query, {}, token, pino({ level: "silent" }));
+      await linearRequest(query, {}, getAuthorizationHeader(credentials, token), pino({ level: "silent" }));
     },
 
     async *sync({
       credentials,
+      accessTokenProvider,
       scopeConfig,
       cursor,
       logger,
@@ -571,14 +576,15 @@ export function createLinearConnector(): Connector {
       onContainerObservation,
       containerTargetOverrides,
     }) {
-      const token = getAccessToken(credentials);
+      const token = accessTokenProvider ? (await accessTokenProvider()).accessToken : getAccessToken(credentials);
+      const authorization = accessTokenProvider ? `Bearer ${token}` : getAuthorizationHeader(credentials, token);
       const allowedTeams = (scopeConfig.teams as string[] | undefined) ?? [];
       const sinceDate = cursor ?? null;
 
-      yield* syncIssues(token, sinceDate, allowedTeams, logger, linearRequest);
-      yield* syncTeams(token, allowedTeams, logger, linearRequest, onEntitySeed, onContainerObservation);
+      yield* syncIssues(authorization, sinceDate, allowedTeams, logger, linearRequest);
+      yield* syncTeams(authorization, allowedTeams, logger, linearRequest, onEntitySeed, onContainerObservation);
       yield* syncProjects(
-        token,
+        authorization,
         sinceDate,
         logger,
         linearRequest,
@@ -593,6 +599,7 @@ export function createLinearConnector(): Connector {
     },
 
     async refreshTokens(credentials) {
+      if (credentials.type === "oauth" && credentials.client_id === "canvas") return null;
       if (credentials.expires_at && new Date(credentials.expires_at) > new Date()) {
         return null;
       }

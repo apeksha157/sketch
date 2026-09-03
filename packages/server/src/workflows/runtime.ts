@@ -1055,6 +1055,7 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
   const integrationAccess = usesIntegrationActions
     ? await startIntegrationAccess({
         userEmail: creatorEmail,
+        workspaceUserId: creatorId,
         claudeConfigDir: params.config.CLAUDE_CONFIG_DIR,
         workspaceDir,
         loadIntegrationProvider: async () => integrationProvider,
@@ -1140,6 +1141,9 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
           userEmail: creatorEmail,
           componentKey: request.componentKey,
           configuredProps,
+          ...(integrationProvider.providerId && creatorId
+            ? { workspaceContext: { workspaceId: integrationProvider.providerId, userId: creatorId } }
+            : {}),
         };
         return integrationProvider.executeAction(actionRequest, controller.signal);
       },
@@ -1676,20 +1680,6 @@ async function executeSketchAgentStep(
 
   if (!runSketchAgent) {
     throw new Error("Sketch-mode workflow agent is not available.");
-  }
-
-  if (step.agentSkills?.some((skill) => cliSkillRequiredEnv(skill).length > 0)) {
-    const env = params.listAgentEnvForRuntime
-      ? await params.listAgentEnvForRuntime({
-          currentUserId: task.created_by,
-          contextType: "scheduled_task",
-          allowOrgSharedEnv: true,
-          taskContext: buildRunAgentTaskContext(task),
-        })
-      : {};
-    if (!env.GH_TOKEN) {
-      throw new Error("GitHub connection required for this automation step. Reconnect GitHub in Sketch Integrations.");
-    }
   }
 
   const userMessage = buildSketchContext({

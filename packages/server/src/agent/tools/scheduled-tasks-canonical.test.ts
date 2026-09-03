@@ -462,6 +462,47 @@ describe("ManageScheduledTasks canonical structured mutations", () => {
     },
   );
 
+  it.each(["github", "linear"] as const)(
+    "rejects automation creation when the %s managed integration is unavailable",
+    async (integration) => {
+      const scheduler = schedulerFor("managed-integration-task");
+      const validateAgentSkills = vi.fn().mockResolvedValue([integration]);
+      const result = await handleManageScheduledTasks(
+        {
+          action: "add",
+          title: `${integration} automation`,
+          schedule_type: "interval",
+          schedule_value: "120",
+          steps: [
+            definition().steps[0],
+            {
+              ...definition().steps[1],
+              agentPrompt: `Use ${integration}`,
+              agentSkills: [integration],
+            },
+          ],
+        },
+        {
+          db,
+          scheduler,
+          validateAgentSkills,
+          taskContext: taskContextFor("managed-integration-task"),
+        },
+      );
+
+      expect(result.content[0].text).toBe(
+        `Error: connect or share the required integration before saving this automation: ${integration}.`,
+      );
+      expect(validateAgentSkills).toHaveBeenCalledWith("owner-1", [integration], {
+        platform: "slack",
+        contextType: "dm",
+        deliveryTarget: "D123",
+        createdBy: "owner-1",
+      });
+      await expect(createScheduledTaskRepository(db).listAll()).resolves.toEqual([]);
+    },
+  );
+
   it("creates the complete definition atomically and refreshes scheduler state after commit", async () => {
     await db.updateTable("users").set({ slack_user_id: "U-OWNER" }).where("id", "=", "owner-1").execute();
     await db

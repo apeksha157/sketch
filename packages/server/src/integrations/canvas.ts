@@ -13,18 +13,14 @@ import {
   type IntegrationApp,
   type IntegrationConnection,
   type PageInfo,
+  isCanvasNativeIntegrationAppId,
   isClickUpApiKeyAppId,
   managedIntegrationAppId,
 } from "@sketch/shared";
 import { z } from "zod";
 import type { CredentialEnvelope } from "../connectors/credential-envelope";
 import { decryptCredentialEnvelope } from "../connectors/credential-envelope";
-import {
-  canvasBlockedIntegrationMessage,
-  isCanvasBlockedAppId,
-  isCanvasBlockedComponentKey,
-  isCanvasBlockedConnectionId,
-} from "./cli/policy";
+import { canvasBlockedIntegrationMessage, isCanvasBlockedAppId, isCanvasBlockedComponentKey } from "./cli/policy";
 import type {
   BrokerSpec,
   CanvasAccessToken,
@@ -51,6 +47,17 @@ type CanvasAccountResponse = {
   dead?: boolean;
   status?: "active" | "error" | "expired";
   accessLevel?: "personal" | "organization";
+  visibility?: "private" | "selected_members" | "organization";
+  memberGrants?: Array<{
+    accountId: string;
+    orgId: string;
+    workspaceId?: string;
+    granteeUserId: string;
+    grantedByUserId: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  sharingReason?: "owner" | "selected_member" | "organization";
   ownerUserId?: string;
   ownerName?: string;
   isOwnedByViewer?: boolean;
@@ -132,6 +139,7 @@ const canvasCredentialMintResponseSchema = z.object({
 function hasCanvasAccessMetadata(account: CanvasAccountResponse): boolean {
   return (
     account.accessLevel !== undefined ||
+    account.visibility !== undefined ||
     account.ownerUserId !== undefined ||
     account.ownerName !== undefined ||
     account.isOwnedByViewer !== undefined ||
@@ -218,7 +226,7 @@ export class CanvasProvider implements IntegrationProvider {
     const expiresAtMs = cached?.token.expiresAt ? Date.parse(cached.token.expiresAt) : 0;
     const providerTokenIsFresh = cached?.token.expiresAt
       ? Number.isFinite(expiresAtMs) && expiresAtMs > now + CACHE_EXPIRY_SAFETY_MS
-      : params.integration === "clickup";
+      : params.integration === "github" || params.integration === "clickup";
     const grantIsFresh =
       params.integration !== "clickup" || Boolean(cached && cached.grantLeaseExpiresAt > now + CACHE_EXPIRY_SAFETY_MS);
     if (cached && !params.forceRefresh && providerTokenIsFresh && grantIsFresh) return cached.token;
@@ -308,10 +316,8 @@ export class CanvasProvider implements IntegrationProvider {
     if (this.options.credentialPublicKeyId && response.envelope.keyId !== this.options.credentialPublicKeyId) {
       throw new Error("Canvas credential envelope key id does not match the configured key");
     }
-    const token = {
-      accessToken: payload.accessToken,
-      ...(payload.expiresAt ? { expiresAt: payload.expiresAt } : {}),
-    };
+    const expiresAt = params.integration === "clickup" ? payload.expiresAt : (response.expiresAt ?? payload.expiresAt);
+    const token = { accessToken: payload.accessToken, ...(expiresAt ? { expiresAt } : {}) };
     const cacheKey = this.accessTokenCacheKey(params);
     const grantExpiresAtMs = response.expiresAt ? Date.parse(response.expiresAt) : Number.NaN;
     const grantLeaseExpiresAt = Number.isFinite(grantExpiresAtMs)
@@ -367,18 +373,33 @@ export class CanvasProvider implements IntegrationProvider {
     return body.data;
   }
 
+  async getGithubAccessToken(params: {
+    userEmail: string;
+    accountId?: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+    forceRefresh?: boolean;
+  }): Promise<CanvasAccessToken> {
+    return this.getCanvasAccessToken({ ...params, integration: "github" });
+  }
+
   getBrokerSpec({
     userEmail,
     claudeConfigDir,
+    workspaceContext,
   }: {
     userEmail: string | null;
     claudeConfigDir: string;
+    workspaceContext?: IntegrationWorkspaceContext;
   }): BrokerSpec {
     const credentialEnv: Record<string, string> = {
       CANVAS_MCP_URL: this.apiUrl.endsWith("/mcp") ? this.apiUrl : `${this.apiUrl.replace(/\/+$/, "")}/mcp`,
     };
     if (this.apiKey) credentialEnv.CANVAS_API_KEY_MCP = this.apiKey;
     if (userEmail) credentialEnv.CANVAS_USER_EMAIL = userEmail;
+    if (workspaceContext) {
+      credentialEnv.CANVAS_SKETCH_WORKSPACE_ID = workspaceContext.workspaceId;
+      credentialEnv.CANVAS_SKETCH_WORKSPACE_USER_ID = workspaceContext.userId;
+    }
     return {
       cliPath: join(claudeConfigDir, "skills", "canvas", "canvas-cli.js"),
       credentialEnv: {
@@ -448,9 +469,6 @@ export class CanvasProvider implements IntegrationProvider {
     limit?: number,
     after?: string,
   ): Promise<{ apps: IntegrationApp[]; pageInfo: PageInfo }> {
-    if (query && isCanvasBlockedAppId(query)) {
-      return { apps: [], pageInfo: { endCursor: null, hasMore: false } };
-    }
     const url = new URL("/api/apps", this.apiUrl);
     if (query) url.searchParams.set("q", query);
     if (limit !== undefined || after !== undefined) {
@@ -487,21 +505,19 @@ export class CanvasProvider implements IntegrationProvider {
       message?: string;
     };
 
-    const apps: IntegrationApp[] = (raw.data?.data ?? [])
-      .filter(
-        (app) =>
-          !isCanvasBlockedAppId(app.nameSlug ?? app.id ?? "") &&
-          !isCanvasBlockedAppId(app.name ?? "") &&
-          !isClickUpApiKeyAppId(app.nameSlug ?? app.id ?? ""),
-      )
-      .map((app) => ({
-        id: app.nameSlug,
-        name: app.name,
-        description: app.description ?? "",
-        icon: app.imgSrc,
-        category: app.categories?.[0],
-        executionMode: "canvas" as const,
-      }));
+    const catalogApps = (raw.data?.data ?? []).filter((app) => !isClickUpApiKeyAppId(app.nameSlug ?? app.id ?? ""));
+    const orderedCatalogApps = [
+      ...catalogApps.filter((app) => isCanvasNativeIntegrationAppId(app.nameSlug)),
+      ...catalogApps.filter((app) => !isCanvasNativeIntegrationAppId(app.nameSlug)),
+    ];
+    const apps: IntegrationApp[] = orderedCatalogApps.map((app) => ({
+      id: app.nameSlug,
+      name: app.name,
+      description: app.description ?? "",
+      icon: app.imgSrc,
+      category: app.categories?.[0],
+      executionMode: "canvas" as const,
+    }));
 
     const pageInfo: PageInfo = raw.data?.pageInfo ?? { endCursor: null, hasMore: false };
 
@@ -516,9 +532,6 @@ export class CanvasProvider implements IntegrationProvider {
     userOrgRole?: IntegrationUserOrgRole,
     workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<{ redirectUrl: string }> {
-    if (isCanvasBlockedAppId(appId)) {
-      throw new CanvasProviderRequestError(409, "CLI_INTEGRATION", canvasBlockedIntegrationMessage());
-    }
     if (isClickUpApiKeyAppId(appId)) {
       throw new CanvasProviderRequestError(409, "OAUTH_REQUIRED", CLICKUP_OAUTH_REQUIRED_MESSAGE);
     }
@@ -563,15 +576,6 @@ export class CanvasProvider implements IntegrationProvider {
     return (data.accounts ?? [])
       .filter(canUseConnection)
       .filter(isAllowedCanvasClickUpAccount)
-      .filter((account) => {
-        const appId = account.app?.nameSlug ?? account.app?.name_slug ?? account.id;
-        return (
-          !isCanvasBlockedAppId(appId) &&
-          !isCanvasBlockedAppId(account.app?.name ?? "") &&
-          !isCanvasBlockedAppId(account.name ?? "") &&
-          !isCanvasBlockedConnectionId(account.id)
-        );
-      })
       .map((account): IntegrationConnection => {
         const appId = account.app?.nameSlug ?? account.app?.name_slug ?? account.id;
         const appName = account.app?.name ?? account.name ?? "Unknown";
@@ -596,6 +600,9 @@ export class CanvasProvider implements IntegrationProvider {
           healthy: account.healthy,
           status: account.status ?? (account.dead ? "error" : account.healthy ? "active" : "error"),
           accessLevel: account.accessLevel,
+          visibility: account.visibility,
+          memberGrants: account.memberGrants,
+          sharingReason: account.sharingReason,
           ownerUserId: account.ownerUserId,
           ownerName: account.ownerName,
           isOwnedByViewer: account.isOwnedByViewer,
@@ -614,9 +621,6 @@ export class CanvasProvider implements IntegrationProvider {
     userName?: string,
     workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<void> {
-    if (isCanvasBlockedConnectionId(connectionId)) {
-      throw new CanvasProviderRequestError(409, "CLI_INTEGRATION", canvasBlockedIntegrationMessage());
-    }
     const res = await fetch(`${this.apiUrl}/api/pipedream/accounts/${connectionId}`, {
       method: "DELETE",
       headers: this.headers(userEmail, false, userName, undefined, workspaceContext),
@@ -639,11 +643,8 @@ export class CanvasProvider implements IntegrationProvider {
     },
     workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<IntegrationConnection | null> {
-    if (isCanvasBlockedConnectionId(connectionId)) {
-      throw new CanvasProviderRequestError(409, "CLI_INTEGRATION", canvasBlockedIntegrationMessage());
-    }
     const res = await fetch(`${this.apiUrl}/api/canvas-accounts/${encodeURIComponent(connectionId)}/access`, {
-      method: "PATCH",
+      method: "PUT",
       headers: this.headers(userEmail, true, userName, undefined, workspaceContext),
       body: JSON.stringify({
         accessLevel,

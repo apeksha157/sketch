@@ -11,8 +11,12 @@
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, matchesGlob, relative, resolve } from "node:path";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
-import { VISUAL_ANALYSIS_AGENT_TOOL_NAME, cliSkillRequiredEnv, managedIntegrationAppId } from "@sketch/shared";
-import type { ManagedIntegrationAppId } from "@sketch/shared";
+import {
+  type ManagedIntegrationAppId,
+  VISUAL_ANALYSIS_AGENT_TOOL_NAME,
+  cliSkillRequiredEnv,
+  managedIntegrationAppId,
+} from "@sketch/shared";
 import type { Logger } from "../logger";
 import {
   SHELL_PATH_EXPANSION_DENY_MESSAGE,
@@ -212,19 +216,17 @@ export function createCanUseTool(
     if (toolName === "Skill" || toolName.endsWith("__Skill")) {
       const skillName = typeof input.skill === "string" ? input.skill.trim() : "";
       const requiredEnv = cliSkillRequiredEnv(skillName);
-      const unavailable = requiredEnv.some((name) => !options.agentEnv?.[name]);
-      const managedAppId = managedIntegrationAppId(skillName);
-      const managedUnavailable = managedAppId === "clickup" && !options.availableManagedIntegrations?.has(managedAppId);
-      if (managedUnavailable) {
-        return {
-          behavior: "deny",
-          message: `Skill "${skillName}" is unavailable because ClickUp access could not be verified for this run. Existing connections were not changed.`,
-        };
-      }
+      const managedIntegration = managedIntegrationAppId(skillName.replace(/\s+cli$/i, ""));
+      const unavailable = managedIntegration
+        ? !options.availableManagedIntegrations?.has(managedIntegration)
+        : requiredEnv.some((name) => !options.agentEnv?.[name]);
       if (unavailable) {
         return {
           behavior: "deny",
-          message: `Skill "${skillName}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,
+          message:
+            managedIntegration === "clickup"
+              ? `Skill "${skillName}" is unavailable because ClickUp access could not be verified for this run. Existing connections were not changed.`
+              : `Skill "${skillName}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,
         };
       }
     }

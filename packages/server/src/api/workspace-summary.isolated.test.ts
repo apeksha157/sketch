@@ -296,6 +296,10 @@ describe("Workspace summary API", () => {
       connected: 2,
       appNames: ["Gmail", "Slack"],
     });
-    expect(mockProvider.listConnections).toHaveBeenCalledWith("admin@test.com");
+    expect(mockProvider.listConnections).toHaveBeenCalledWith(
+      "admin@test.com",
+      undefined,
+      expect.objectContaining({ workspaceId: expect.any(String), userId: expect.any(String) }),
+    );
   });
 });
