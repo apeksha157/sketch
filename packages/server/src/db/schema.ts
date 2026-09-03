@@ -1948,6 +1948,9 @@ export interface WebhookEndpointsTable {
   id: string;
   task_id: string;
   status: string;
+  verification_json: Generated<string | null>;
+  signing_secret_encrypted: Generated<string | null>;
+  source_binding: Generated<string | null>;
   generation: Generated<number>;
   created_at: Generated<string>;
   updated_at: Generated<string>;

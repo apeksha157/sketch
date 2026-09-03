@@ -1,8 +1,35 @@
+import { constants, createCipheriv, generateKeyPairSync, publicEncrypt, randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CredentialEnvelope } from "../connectors/credential-envelope";
 import { CanvasProvider, type CanvasProviderRequestError } from "./canvas";
+
+function encryptForTest(payload: unknown, publicKeyPem: string): CredentialEnvelope {
+  const contentKey = randomBytes(32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", contentKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(Buffer.from(JSON.stringify(payload), "utf8")), cipher.final()]);
+  const encryptedKey = publicEncrypt(
+    {
+      key: publicKeyPem,
+      oaepHash: "sha256",
+      padding: constants.RSA_PKCS1_OAEP_PADDING,
+    },
+    contentKey,
+  );
+  return {
+    version: 1,
+    algorithm: "RSA-OAEP-256+A256GCM",
+    keyId: "key-1",
+    encryptedKey: encryptedKey.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: cipher.getAuthTag().toString("base64"),
+    ciphertext: ciphertext.toString("base64"),
+  };
+}
 
 describe("CanvasProvider", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -125,6 +152,125 @@ describe("CanvasProvider", () => {
       code: "NOT_FOUND",
       message: "App not found",
     } satisfies Partial<CanvasProviderRequestError>);
+  });
+
+  it("does not expose or initiate the ClickUp API-token Canvas app", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            data: [
+              { nameSlug: "clickup", name: "ClickUp", description: "OAuth" },
+              { nameSlug: "clickup-api-key", name: "ClickUp", description: "API token" },
+            ],
+            pageInfo: { endCursor: null, hasMore: false },
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    await expect(provider.listApps("clickup")).resolves.toMatchObject({
+      apps: [expect.objectContaining({ id: "clickup" })],
+    });
+    await expect(provider.initiateConnection("priya@example.com", "clickup-api-key", "")).rejects.toMatchObject({
+      status: 409,
+      code: "OAUTH_REQUIRED",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("lists only OAuth ClickUp accounts for managed access", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            accounts: [
+              {
+                id: "secrets:user-1:clickup:clickup",
+                source: "canvas_user_secrets",
+                name: "ClickUp",
+                app: { name: "ClickUp", nameSlug: "clickup" },
+                authType: "oauth",
+                healthy: true,
+                status: "active",
+              },
+              {
+                id: "secrets:user-1:clickup-api-key:clickup-api-key",
+                source: "canvas_user_secrets",
+                name: "ClickUp",
+                app: { name: "ClickUp", nameSlug: "clickup-api-key" },
+                authType: "api_key",
+                healthy: true,
+                status: "active",
+              },
+              {
+                id: "legacy-clickup",
+                source: "canvas_user_secrets",
+                name: "ClickUp",
+                app: { name: "ClickUp", nameSlug: "clickup" },
+                authType: "api_key",
+                healthy: true,
+                status: "active",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    const connections = await provider.listConnections("priya@example.com");
+    expect(connections).toHaveLength(1);
+    expect(connections).toMatchObject([{ appId: "clickup", authType: "oauth" }]);
+  });
+
+  it("keeps Canvas-owned ClickUp OAuth accounts when legacy metadata omits authType", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            accounts: [
+              {
+                id: "secrets:user-1:clickup:clickup",
+                source: "canvas_user_secrets",
+                name: "ClickUp",
+                app: { name: "ClickUp", nameSlug: "clickup" },
+                healthy: true,
+                status: "active",
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    await expect(provider.listConnections("priya@example.com")).resolves.toMatchObject([
+      { appId: "clickup", source: "canvas_user_secrets", authType: "oauth" },
+    ]);
+  });
+
+  it("keeps ClickUp out of the Canvas CLI broker while leaving OAuth app discovery available", () => {
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    const policy = provider.getBrokerSpec({
+      userEmail: "priya@example.com",
+      claudeConfigDir: "/tmp/sketch",
+    }).argvPolicy;
+    expect(
+      provider.getBrokerSpec({ userEmail: "priya@example.com", claudeConfigDir: "/tmp/sketch" }).credentialEnv
+        .CANVAS_BLOCKED_APP_IDS,
+    ).toContain("clickup");
+
+    expect(policy?.(["search-apps", "clickup"])).toMatchObject({ allowed: false });
+    expect(policy?.(["search-apps", "google-drive"])).toEqual({ allowed: true });
   });
 
   it("classifies legacy Canvas access rows as Canvas-owned when source is missing", async () => {
@@ -545,5 +691,128 @@ describe("CanvasProvider", () => {
         connectorType: "teams",
       }),
     ).rejects.toThrow("Canvas credential mint returned an invalid response");
+  });
+
+  it("mints and rechecks a cached actor-scoped ClickUp OAuth token without exposing the envelope", async () => {
+    const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    const envelope = encryptForTest(
+      {
+        type: "oauth_access_token",
+        connectorType: "clickup",
+        provider: "clickup",
+        accessToken: "clickup-short-lived-token",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      },
+      publicKeyPem,
+    );
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              connectorType: "clickup",
+              provider: "clickup",
+              credentialKind: "oauth_access_token",
+              expiresAt: "2099-02-01T00:00:00.000Z",
+              envelope,
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1", {
+      credentialPrivateKeyPem: privateKeyPem,
+      credentialPublicKeyId: "key-1",
+    });
+    const request = {
+      integration: "clickup" as const,
+      userEmail: "priya@example.com",
+      accountId: "clickup-account-1",
+      workspaceContext: { workspaceId: "provider-1", userId: "user-1" },
+    };
+
+    await expect(provider.getCanvasAccessToken(request)).resolves.toEqual({
+      accessToken: "clickup-short-lived-token",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    await expect(provider.getCanvasAccessToken(request)).resolves.toEqual({
+      accessToken: "clickup-short-lived-token",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(11 * 60_000);
+    await expect(provider.getCanvasAccessToken(request)).resolves.toEqual({
+      accessToken: "clickup-short-lived-token",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledWith("https://canvas.example.com/api/sketch/credentials/mint", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer sk-test",
+        "Content-Type": "application/json",
+        "X-User-Email": "priya@example.com",
+        "X-Sketch-Workspace-Id": "provider-1",
+        "X-Sketch-Workspace-User-Id": "user-1",
+      },
+      body: JSON.stringify({
+        connectorType: "clickup",
+        publicKeyId: "key-1",
+        accountId: "clickup-account-1",
+      }),
+      signal: expect.any(AbortSignal),
+    });
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("clickup-short-lived-token");
+  });
+
+  it("rejects a Canvas ClickUp personal-token envelope", async () => {
+    const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+    const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    const envelope = encryptForTest(
+      {
+        type: "api_key",
+        connectorType: "clickup",
+        provider: "clickup-api-key",
+        apiKey: "pk_clickup-token",
+      },
+      publicKeyPem,
+    );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            connectorType: "clickup",
+            provider: "clickup-api-key",
+            credentialKind: "api_key",
+            envelope,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1", {
+      credentialPrivateKeyPem: privateKeyPem,
+      credentialPublicKeyId: "key-1",
+    });
+
+    await expect(
+      provider.getCanvasAccessToken({
+        integration: "clickup",
+        userEmail: "priya@example.com",
+        workspaceContext: { workspaceId: "provider-1", userId: "user-1" },
+      }),
+    ).rejects.toThrow("Canvas clickup credential response did not contain the requested credential");
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("pk_clickup-token");
   });
 });

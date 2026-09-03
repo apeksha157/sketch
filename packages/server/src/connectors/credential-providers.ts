@@ -82,7 +82,6 @@ const CANVAS_CONNECTOR_TYPE_VALUES = [
   "outlook_calendar",
   "teams",
   "fireflies",
-  "clickup",
   "notion",
   "linear",
 ] as const satisfies readonly CanvasSketchConnectorType[];

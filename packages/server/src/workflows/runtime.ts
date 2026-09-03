@@ -21,6 +21,7 @@ import {
   cliIntegrationAppDefinition,
   cliIntegrationAppDefinitions,
   cliSkillRequiredEnv,
+  managedIntegrationAppId,
   workflowEdgeSchema,
   workflowStepSchema,
   workflowStepUsesIntegrationActions,
@@ -1356,8 +1357,13 @@ async function executeAgentStep(params: AgentStepParams): Promise<unknown> {
   params.onAgentTrace?.(recorder.trace);
 
   try {
-    if (step.agentMode === "light" && step.agentSkills?.some((skill) => cliSkillRequiredEnv(skill).length > 0)) {
-      throw new Error("GitHub integration skills require a full Sketch-mode workflow agent step.");
+    if (
+      step.agentMode === "light" &&
+      step.agentSkills?.some(
+        (skill) => cliSkillRequiredEnv(skill).length > 0 || managedIntegrationAppId(skill) === "clickup",
+      )
+    ) {
+      throw new Error("Managed integration skills require a full Sketch-mode workflow agent step.");
     }
 
     if (step.agentMode !== "light") {

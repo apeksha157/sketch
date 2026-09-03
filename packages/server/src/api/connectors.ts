@@ -365,7 +365,6 @@ const CANVAS_APP_BY_CONNECTOR: Partial<Record<ConnectorType, string>> = {
   outlook_calendar: "microsoft-outlook-calendar-oauth",
   teams: "microsoft-teams-oauth",
   fireflies: "fireflies",
-  clickup: "clickup-api-key",
   notion: "notion",
   linear: "linear",
 };

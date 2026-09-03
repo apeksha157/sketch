@@ -1,6 +1,6 @@
 import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { parseCliSkillFrontmatter } from "@sketch/shared";
+import { managedIntegrationAppId, parseCliSkillFrontmatter } from "@sketch/shared";
 import { type Tool, type ToolSet, tool } from "ai";
 import { z } from "zod/v4";
 import type { Logger } from "../../logger";
@@ -321,6 +321,7 @@ async function loadSkillsFromDir(params: {
       id: entry.name,
       name: entry.name,
       ...(displayName ? { displayName } : {}),
+      ...(frontMatter["managed-integration"] ? { managedIntegration: frontMatter["managed-integration"] } : {}),
       ...(cliFrontMatter?.providerType ? { providerType: cliFrontMatter.providerType } : {}),
       requiresEnv: cliFrontMatter?.requiresEnv ?? [],
       description,
@@ -444,6 +445,16 @@ export class DefaultAgentRuntimeSkillsProvider implements AgentRuntimeSkillsProv
           const selected = byName.get(skill.trim().toLowerCase());
           if (!selected) throw new Error(`Skill not found: ${skill}`);
           const missingEnv = selected.requiresEnv.filter((name) => !params.agentEnv?.[name]);
+          const managedAppId = selected.managedIntegration
+            ? managedIntegrationAppId(selected.managedIntegration)
+            : null;
+          const managedUnavailable =
+            managedAppId === "clickup" && !params.availableManagedIntegrations?.has(managedAppId);
+          if (managedUnavailable) {
+            throw new Error(
+              `Skill "${selected.name}" is unavailable because ClickUp access could not be verified for this run. Existing connections were not changed.`,
+            );
+          }
           if (missingEnv.length > 0) {
             throw new Error(
               `Skill "${selected.name}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,

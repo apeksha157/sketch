@@ -4,6 +4,7 @@ import {
   type AutomationExecutionMode,
   type AutomationRun,
   type AutomationStepContent,
+  type WebhookDeliveryReceipt,
   type WorkflowEdge,
   type WorkflowStep,
   type WorkflowTriggerConfig,
@@ -11,6 +12,7 @@ import {
   automationExecutionModeAllowsStep,
   automationExecutionModeSchema,
   cliSkillRequiredEnv,
+  managedIntegrationAppId,
   recommendAutomationExecutionMode,
   stepOutputSchema,
   workflowEdgeSchema,
@@ -33,6 +35,7 @@ import {
   referencesRawCanvasCli,
   undeclaredAutomationSketchTools,
 } from "./action-script";
+import { webhookBindingMetadata } from "./webhook-bindings";
 import { buildNativeWebhookUrl } from "./webhook-endpoints";
 
 export type BuilderValidationIssue = { code: string; message: string; path?: string };
@@ -286,6 +289,7 @@ export function addWebhookEndpointMetadata(
   taskId: string,
   options: {
     endpoint?: WebhookEndpointRow | null;
+    lastDelivery?: WebhookDeliveryReceipt;
     baseUrl?: string | null;
     port?: number;
   } = {},
@@ -301,14 +305,27 @@ export function addWebhookEndpointMetadata(
       webhookEndpointId: options.endpoint.id,
       webhookMethod: "POST",
       webhookContentType: "application/json",
-      webhookAuthentication: "none",
-      webhookStatus: options.endpoint.status === "revoked" ? "revoked" : "active",
+      webhookAuthentication: options.endpoint.verification_json ? "hmac_sha256" : "none",
+      webhookBinding: webhookBindingMetadata(options.endpoint),
+      webhookLastDelivery:
+        options.lastDelivery?.endpointId === options.endpoint.id &&
+        options.lastDelivery.endpointGeneration === options.endpoint.generation
+          ? options.lastDelivery
+          : undefined,
+      webhookStatus:
+        options.endpoint.status === "revoked"
+          ? "revoked"
+          : options.endpoint.status === "pending"
+            ? "unavailable"
+            : "active",
     };
   }
   const {
     webhookUrl: _legacyWebhookUrl,
     webhookEndpointId: _legacyWebhookEndpointId,
     webhookStatus: _legacyWebhookStatus,
+    webhookBinding: _legacyWebhookBinding,
+    webhookLastDelivery: _legacyWebhookLastDelivery,
     ...withoutLegacyEndpoint
   } = config;
   return {
@@ -330,6 +347,7 @@ export function buildAutomationDefinition(params: {
   webhookBaseUrl?: string | null;
   webhookPort?: number;
   webhookEndpoint?: WebhookEndpointRow | null;
+  webhookLastDelivery?: WebhookDeliveryReceipt;
   includeWebhookMetadata?: boolean;
 }): AutomationDefinition {
   const steps = safeSteps(params.row, params.normalizeScheduleTriggers).map((step) => {
@@ -339,6 +357,7 @@ export function buildAutomationDefinition(params: {
         ...step,
         triggerConfig: addWebhookEndpointMetadata(step.triggerConfig, params.row.id, {
           endpoint: params.webhookEndpoint,
+          lastDelivery: params.webhookLastDelivery,
           baseUrl: params.webhookBaseUrl,
           port: params.webhookPort,
         }),
@@ -349,6 +368,7 @@ export function buildAutomationDefinition(params: {
       ...step,
       triggerConfig: addWebhookEndpointMetadata(step.triggerConfig, params.row.id, {
         endpoint: params.webhookEndpoint,
+        lastDelivery: params.webhookLastDelivery,
         baseUrl: params.webhookBaseUrl,
         port: params.webhookPort,
       }),
@@ -620,12 +640,14 @@ export function validateAutomationBuilderSaveRequest(params: {
     if (
       step.type === "agent" &&
       step.agentMode === "light" &&
-      step.agentSkills?.some((skill) => cliSkillRequiredEnv(skill).length > 0)
+      step.agentSkills?.some(
+        (skill) => cliSkillRequiredEnv(skill).length > 0 || managedIntegrationAppId(skill) === "clickup",
+      )
     ) {
       addIssue(
         issues,
         "CLI_INTEGRATION_REQUIRES_SKETCH",
-        `Agent step "${step.label}" must use Sketch mode for GitHub integration skills`,
+        `Agent step "${step.label}" must use Sketch mode for managed integration skills`,
         `steps.${step.id}.agentMode`,
       );
     }

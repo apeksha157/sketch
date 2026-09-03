@@ -1,3 +1,4 @@
+import type { WebhookDeliveryReceipt } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import {
   type WebhookEndpointRepositoryOptions,
@@ -5,6 +6,7 @@ import {
   createWebhookEndpointsRepository,
 } from "../db/repositories/webhook-endpoints";
 import type { DB } from "../db/schema";
+import { type WebhookSourceBinding, webhookBindingMetadata } from "./webhook-bindings";
 
 export const WEBHOOK_ENDPOINT_PATH = "/api/webhooks/v1";
 export const WEBHOOK_BODY_LIMIT_BYTES = 1_000_000;
@@ -16,13 +18,38 @@ export const NATIVE_WEBHOOK_PATH = WEBHOOK_ENDPOINT_PATH;
 export const NATIVE_WEBHOOK_METHOD = "POST" as const;
 export const NATIVE_WEBHOOK_CONTENT_TYPE = "application/json" as const;
 
+/** Only receipts from the current binding generation count as delivery verification. */
+export async function lastWebhookDeliveryMetadata(
+  db: Kysely<DB>,
+  taskId: string,
+): Promise<WebhookDeliveryReceipt | undefined> {
+  return db
+    .selectFrom("webhook_deliveries as delivery")
+    .innerJoin("webhook_endpoints as endpoint", "endpoint.id", "delivery.endpoint_id")
+    .select([
+      "endpoint.id as endpointId",
+      "endpoint.generation as endpointGeneration",
+      "delivery.id as deliveryId",
+      "delivery.event_id as eventId",
+      "delivery.created_at as receivedAt",
+      "delivery.status as status",
+    ])
+    .where("endpoint.task_id", "=", taskId)
+    .whereRef("delivery.endpoint_generation", "=", "endpoint.generation")
+    .orderBy("delivery.created_at", "desc")
+    .orderBy("delivery.id", "desc")
+    .limit(1)
+    .executeTakeFirst();
+}
+
 export interface WebhookEndpointConfiguration {
   readonly endpointId: string;
   readonly taskId: string;
   readonly url: string;
   readonly method: typeof NATIVE_WEBHOOK_METHOD;
   readonly contentType: typeof NATIVE_WEBHOOK_CONTENT_TYPE;
-  readonly authentication: "none";
+  readonly authentication: "none" | "hmac_sha256";
+  readonly binding?: WebhookSourceBinding;
   readonly bodyLimitBytes: typeof WEBHOOK_BODY_LIMIT_BYTES;
   readonly idempotencyHeader: typeof WEBHOOK_IDEMPOTENCY_KEY_HEADER;
   readonly status: string;
@@ -56,7 +83,8 @@ function configurationFor(
     url: buildNativeWebhookUrl(row.id, options),
     method: NATIVE_WEBHOOK_METHOD,
     contentType: NATIVE_WEBHOOK_CONTENT_TYPE,
-    authentication: "none",
+    authentication: row.verification_json != null ? "hmac_sha256" : "none",
+    binding: webhookBindingMetadata(row),
     bodyLimitBytes: WEBHOOK_BODY_LIMIT_BYTES,
     idempotencyHeader: WEBHOOK_IDEMPOTENCY_KEY_HEADER,
     status: row.status,

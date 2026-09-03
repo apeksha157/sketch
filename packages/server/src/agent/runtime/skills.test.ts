@@ -45,6 +45,7 @@ function runParams(params: {
   agentAllowedTools?: string[] | null;
   agentEnv?: Record<string, string>;
   agentSkillIds?: string[] | null;
+  availableManagedIntegrations?: RunAgentParams["availableManagedIntegrations"];
 }): RunAgentParams {
   return {
     workspaceDir: params.workspaceDir,
@@ -52,6 +53,7 @@ function runParams(params: {
     agentAllowedTools: params.agentAllowedTools,
     agentEnv: params.agentEnv,
     agentSkillIds: params.agentSkillIds,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   } as RunAgentParams;
 }
 
@@ -268,6 +270,24 @@ describe("agent runtime skills", () => {
     );
 
     await expect(executeTool(tools, "Skill", { skill: "GitHub CLI" })).resolves.toContain("GitHub body");
+  });
+
+  it("requires managed ClickUp availability before loading the skill", async () => {
+    await writeSkill(orgSkillsDir, "clickup", "---\nname: ClickUp\nmanaged-integration: clickup\n---\nClickUp body");
+    const provider = new DefaultAgentRuntimeSkillsProvider();
+    const unavailableTools = await provider.createSkillTool(runParams({ workspaceDir, claudeConfigDir: orgClaudeDir }));
+    await expect(executeTool(unavailableTools, "Skill", { skill: "ClickUp" })).rejects.toThrow(
+      "access could not be verified",
+    );
+
+    const availableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        availableManagedIntegrations: new Set(["clickup"]),
+      }),
+    );
+    await expect(executeTool(availableTools, "Skill", { skill: "ClickUp" })).resolves.toContain("ClickUp body");
   });
 
   it("returns the selected skill body and keeps the skill directory readable", async () => {

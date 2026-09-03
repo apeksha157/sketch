@@ -1576,10 +1576,98 @@ describe("chat route", () => {
     expect(screen.getByRole("button", { name: "Connecting", hidden: true })).toBeDisabled();
 
     connectionVerified = true;
-    window.postMessage({ type: "sketch-integration-connected" }, window.location.origin);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: window.location.origin,
+        source: popup as unknown as Window,
+        data: { type: "sketch-integration-connected" },
+      }),
+    );
 
     await waitFor(() => expect(screen.getByRole("button", { name: "Connected" })).toBeDisabled());
     await waitFor(() => expect(screen.queryByTitle("Connect GitHub")).not.toBeInTheDocument());
+  });
+
+  it("completes a Canvas OAuth connection from the cross-origin callback", async () => {
+    const user = userEvent.setup();
+    const popup = { closed: false, close: vi.fn(), location: { href: "" } };
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    mocks.search = {};
+    mockChatMessages = [
+      {
+        id: "a1",
+        role: "assistant",
+        parts: [
+          { type: "text", text: "Connect ClickUp first." },
+          {
+            type: "data-integration-connection",
+            id: "integration-connection-0",
+            data: {
+              requestId: "integration-req-clickup",
+              appId: "clickup",
+              appName: "ClickUp",
+              providerId: "provider-1",
+              reason: "Connect ClickUp so Sketch can update tickets.",
+            },
+          },
+        ],
+      },
+    ];
+    mocks.listMcpServers.mockResolvedValue([
+      {
+        id: "provider-1",
+        type: "canvas",
+        slug: "canvas",
+        displayName: "Canvas",
+        url: "https://mcp.example",
+        apiUrl: "https://canvas.example",
+        credentials: {},
+        mode: "mcp",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ]);
+    mocks.createConnectionIntent.mockResolvedValue({
+      app: { id: "clickup", name: "ClickUp", description: "Project management" },
+      redirectUrl:
+        "https://app.clickup.com/api?client_id=client-id&redirect_uri=https%3A%2F%2Fcanvas.example%2Fconnect%2Fsecrets%2Fcallback&state=oauth-state",
+    });
+    let callbackReceived = false;
+    mocks.listConnections.mockImplementation(async () =>
+      callbackReceived
+        ? [
+            {
+              id: "secrets:user-1:clickup:clickup",
+              providerId: "provider-1",
+              source: "canvas_user_secrets",
+              appId: "clickup",
+              appName: "ClickUp",
+              status: "active",
+              accessLevel: "personal",
+              isOwnedByViewer: true,
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ]
+        : [],
+    );
+
+    renderWithProviders(<ChatPage />);
+
+    await waitFor(() => expect(mocks.listConnections).toHaveBeenCalled());
+    await user.click(await screen.findByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("button", { name: "Connecting" })).toBeDisabled();
+
+    callbackReceived = true;
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "https://canvas.example",
+        source: popup as unknown as Window,
+        data: { type: "oauth-success", provider: "clickup" },
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Connected" })).toBeDisabled());
+    await waitFor(() => expect(screen.queryByTitle("Connect ClickUp")).not.toBeInTheDocument());
   });
 
   it("keeps integration cards disabled while the provider configuration is loading", async () => {

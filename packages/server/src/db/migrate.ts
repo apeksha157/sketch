@@ -221,6 +221,7 @@ import * as m218 from "./migrations/218-resolution-decisions";
 import * as m219 from "./migrations/219-mention-verdicts";
 import * as m220 from "./migrations/220-retire-pats";
 import * as m221 from "./migrations/221-extraction-stages";
+import * as m222 from "./migrations/222-webhook-verification";
 import type { DB } from "./schema";
 
 /**
@@ -451,6 +452,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "219-mention-verdicts": m219,
           "220-retire-pats": m220,
           "221-extraction-stages": m221,
+          "222-webhook-verification": m222,
         };
       },
     },

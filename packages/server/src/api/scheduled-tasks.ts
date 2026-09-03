@@ -28,6 +28,8 @@ import {
   selectAutomationSetupExecutionMode,
 } from "../automation/persistence";
 import { parseAutomationTriggerConfig } from "../automation/webhook";
+import { WebhookBindingError } from "../automation/webhook-bindings";
+import { lastWebhookDeliveryMetadata } from "../automation/webhook-endpoints";
 import type { AutomationTaskLockRow, LockHolderFields } from "../db/repositories/automation-locks";
 
 import { createAutomationLocksRepository } from "../db/repositories/automation-locks";
@@ -713,13 +715,14 @@ export function scheduledTaskRoutes(
   ) {
     const stepContentRepo = createAutomationStepContentRepository(db);
     const runsRepo = createAutomationRunsRepository(db);
-    const [stepContentRows, runRows, owner, editor, webhookEndpoint, lockRow] = await Promise.all([
+    const [stepContentRows, runRows, owner, editor, webhookEndpoint, lockRow, webhookLastDelivery] = await Promise.all([
       stepContentRepo.getByTask(row.id),
       runsRepo.list(row.id),
       row.created_by ? users.findById(row.created_by) : Promise.resolve(undefined),
       row.last_edited_by ? users.findById(row.last_edited_by) : Promise.resolve(undefined),
       createWebhookEndpointRepository(db, options.encryptionKey).getByTaskId(row.id),
       createAutomationLocksRepository(db).getByTaskId(row.id),
+      lastWebhookDeliveryMetadata(db, row.id),
     ]);
     const definition = await buildAutomationDefinition({
       row,
@@ -730,6 +733,7 @@ export function scheduledTaskRoutes(
       webhookBaseUrl: options.baseUrl,
       webhookPort: options.port,
       webhookEndpoint,
+      webhookLastDelivery,
     });
     const isOwner = viewer.userId !== null && row.created_by === viewer.userId;
     const isAdmin = viewer.role === "admin";
@@ -1587,7 +1591,14 @@ export function scheduledTaskRoutes(
     }
 
     if (result.row.status !== "active") {
-      await scheduler.resumeTask(id);
+      try {
+        await scheduler.resumeTask(id);
+      } catch (error) {
+        if (error instanceof WebhookBindingError) {
+          return c.json({ error: { code: "WEBHOOK_NOT_READY", message: error.message } }, 409);
+        }
+        throw error;
+      }
     }
 
     const updated = await repo.getById(id);
@@ -1658,6 +1669,17 @@ export function scheduledTaskRoutes(
     });
     if (deletion.kind === "not_found" || deletion.kind === "access_denied") {
       return c.json({ error: { code: "NOT_FOUND", message: "Scheduled task not found" } }, 404);
+    }
+    if (deletion.kind === "webhook_cleanup_required") {
+      return c.json(
+        {
+          error: {
+            code: "WEBHOOK_CLEANUP_REQUIRED",
+            message: "Delete the remote webhook through its provider API before deleting this automation.",
+          },
+        },
+        409,
+      );
     }
     if (deletion.kind === "locked" || deletion.kind === "lease_stale") {
       return taskMutationLeaseError(c, access.userId, request.lease, deletion);

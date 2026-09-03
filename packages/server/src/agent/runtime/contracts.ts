@@ -304,6 +304,7 @@ export interface AgentRuntimeSkillDescriptor {
   skillFilePath: string;
   scope: AgentRuntimeSkillScope;
   frontMatter: Readonly<Record<string, string>>;
+  managedIntegration?: string;
   providerType?: string;
   requiresEnv: readonly string[];
   body: string;

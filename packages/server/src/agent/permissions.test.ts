@@ -81,6 +81,21 @@ describe("createCanUseTool", () => {
       expectDeny(result);
       expect(result.message).toContain("not allowed");
     });
+
+    it("gates the ClickUp skill on managed availability", async () => {
+      const disconnected = createCanUseTool(workspace, createTestLogger(), claudeDir, {
+        availableManagedIntegrations: new Set(),
+      });
+      const connected = createCanUseTool(workspace, createTestLogger(), claudeDir, {
+        availableManagedIntegrations: new Set(["clickup"]),
+      });
+
+      const denied = await disconnected("Skill", { skill: "ClickUp" });
+      expectDeny(denied);
+      expect(denied.message).toContain("access could not be verified");
+      expect(denied.message).not.toContain("Reconnect");
+      await expect(connected("Skill", { skill: "ClickUp" })).resolves.toMatchObject({ behavior: "allow" });
+    });
   });
 
   describe("file tools — workspace access", () => {

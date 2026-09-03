@@ -1,5 +1,6 @@
 import type {
   AutomationArtifact,
+  ManagedIntegrationAppId,
   WebChatIntegrationConnectionData,
   WebChatQuestion,
   WebChatQuestionBatch,
@@ -14,7 +15,7 @@ import type { createConversationRepository } from "../../db/repositories/convers
 import type { createInboxMessagesRepository } from "../../db/repositories/inbox-messages";
 import type { DB, UsersTable } from "../../db/schema";
 import { normalizeIntegrationLookup } from "../../integrations/cards";
-import type { IntegrationProvider } from "../../integrations/types";
+import type { CanvasAccessToken, CanvasAccessTokenRequest, IntegrationProvider } from "../../integrations/types";
 import type { LocalClaudeSessionService } from "../../local-devices/claude-sessions";
 import type { LocalDeviceGateway } from "../../local-devices/gateway";
 import type { Logger } from "../../logger";
@@ -147,6 +148,10 @@ export interface SketchMcpDeps {
   workspaceDir: string;
   db?: Kysely<DB>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
+  integrationUserId?: string | null;
+  integrationUserEmail?: string | null;
+  getCanvasAccessToken?: (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
   validateAgentSkills?: (
     ownerUserId: string,
     skillIds: string[],

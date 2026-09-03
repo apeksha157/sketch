@@ -3,9 +3,19 @@ import { type Kysely, type Selectable, sql } from "kysely";
 import type { DB, WebhookEndpointsTable } from "../schema";
 
 export const WEBHOOK_ENDPOINT_STATUS_ACTIVE = "active" as const;
+export const WEBHOOK_ENDPOINT_STATUS_SIGNED = "active_signed" as const;
+export const WEBHOOK_ENDPOINT_STATUS_PENDING = "pending" as const;
 export const WEBHOOK_ENDPOINT_STATUS_REVOKED = "revoked" as const;
 
-export type WebhookEndpointStatus = typeof WEBHOOK_ENDPOINT_STATUS_ACTIVE | typeof WEBHOOK_ENDPOINT_STATUS_REVOKED;
+export type WebhookEndpointStatus =
+  | typeof WEBHOOK_ENDPOINT_STATUS_ACTIVE
+  | typeof WEBHOOK_ENDPOINT_STATUS_SIGNED
+  | typeof WEBHOOK_ENDPOINT_STATUS_PENDING
+  | typeof WEBHOOK_ENDPOINT_STATUS_REVOKED;
+
+export function isWebhookEndpointActive(status: string): boolean {
+  return status === WEBHOOK_ENDPOINT_STATUS_ACTIVE || status === WEBHOOK_ENDPOINT_STATUS_SIGNED;
+}
 export type WebhookEndpointRow = Selectable<WebhookEndpointsTable>;
 
 export interface WebhookEndpointRepositoryOptions {
@@ -50,11 +60,12 @@ export function createWebhookEndpointsRepository(
   }
 
   async function activate(endpoint: WebhookEndpointRow): Promise<WebhookEndpointRow> {
-    if (endpoint.status === WEBHOOK_ENDPOINT_STATUS_ACTIVE) return endpoint;
+    if (isWebhookEndpointActive(endpoint.status) || endpoint.status === WEBHOOK_ENDPOINT_STATUS_PENDING)
+      return endpoint;
     await db
       .updateTable("webhook_endpoints")
       .set({
-        status: WEBHOOK_ENDPOINT_STATUS_ACTIVE,
+        status: endpoint.verification_json ? WEBHOOK_ENDPOINT_STATUS_PENDING : WEBHOOK_ENDPOINT_STATUS_ACTIVE,
         generation: sql<number>`generation + 1`,
         updated_at: now(),
       })
@@ -111,6 +122,14 @@ export function createWebhookEndpointsRepository(
 
     async deleteByTaskId(taskId: string): Promise<void> {
       await db.transaction().execute(async (trx) => {
+        const endpoint = await trx
+          .selectFrom("webhook_endpoints")
+          .select("source_binding")
+          .where("task_id", "=", taskId)
+          .executeTakeFirst();
+        if (endpoint?.source_binding != null) {
+          throw new Error("Delete the remote webhook through its provider API before deleting this endpoint.");
+        }
         await trx.deleteFrom("webhook_deliveries").where("task_id", "=", taskId).execute();
         await trx.deleteFrom("webhook_endpoints").where("task_id", "=", taskId).execute();
       });

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Logger } from "pino";
 import { isAutomationWebhookTrigger, parseAutomationTriggerConfig } from "../automation/webhook";
 import {
@@ -9,9 +9,19 @@ import {
   WEBHOOK_EVENT_ID_HEADER,
   WEBHOOK_EVENT_ID_MAX_LENGTH,
 } from "../automation/webhook-endpoints";
+import {
+  parseWebhookVerification,
+  verifyWebhookRequest,
+  webhookEventIdentity,
+} from "../automation/webhook-verification";
 import { createScheduledTaskRepository } from "../db/repositories/scheduled-tasks";
 import { createWebhookDeliveryRepository } from "../db/repositories/webhook-deliveries";
-import { createWebhookEndpointRepository } from "../db/repositories/webhook-endpoints";
+import {
+  WEBHOOK_ENDPOINT_STATUS_ACTIVE,
+  WEBHOOK_ENDPOINT_STATUS_SIGNED,
+  createWebhookEndpointRepository,
+  isWebhookEndpointActive,
+} from "../db/repositories/webhook-endpoints";
 import type { DB } from "../db/schema";
 import type { TaskScheduler } from "../scheduler/service";
 
@@ -67,11 +77,45 @@ function requestEventId(value: string | undefined): string | undefined {
   return value;
 }
 
+function hasSignedMetadata(endpoint: {
+  verification_json: string | null;
+  signing_secret_encrypted: string | null;
+  source_binding: string | null;
+}): boolean {
+  return (
+    endpoint.verification_json !== null ||
+    endpoint.signing_secret_encrypted !== null ||
+    endpoint.source_binding !== null
+  );
+}
+
+function endpointAuthMatches(
+  left: {
+    verification_json: string | null;
+    signing_secret_encrypted: string | null;
+    source_binding: string | null;
+  },
+  right: {
+    verification_json: string | null;
+    signing_secret_encrypted: string | null;
+    source_binding: string | null;
+  },
+): boolean {
+  return (
+    left.verification_json === right.verification_json &&
+    left.signing_secret_encrypted === right.signing_secret_encrypted &&
+    left.source_binding === right.source_binding
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
   const routes = new Hono();
   const tasks = createScheduledTaskRepository(deps.db);
   const endpoints = createWebhookEndpointRepository(deps.db, deps.encryptionKey);
-  const deliveries = createWebhookDeliveryRepository(deps.db);
 
   const handleWebhook = async (c: Context, kind: WebhookRouteKind) => {
     const identifier = c.req.param(kind === "endpoint" ? "endpointId" : "taskId");
@@ -83,8 +127,13 @@ export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
       return errorResponse(c, "WEBHOOK_UNAVAILABLE", "Webhook endpoint is temporarily unavailable", 503);
     }
 
-    if (!endpoint || endpoint.status !== "active") {
+    if (!endpoint || !isWebhookEndpointActive(endpoint.status)) {
       return errorResponse(c, "NOT_FOUND", "Webhook endpoint not found", 404);
+    }
+
+    const signed = endpoint.status === WEBHOOK_ENDPOINT_STATUS_SIGNED || hasSignedMetadata(endpoint);
+    if (signed && endpoint.status !== WEBHOOK_ENDPOINT_STATUS_SIGNED) {
+      return errorResponse(c, "WEBHOOK_VERIFICATION_UNAVAILABLE", "Webhook verification is unavailable", 503);
     }
 
     const task = await tasks.getById(endpoint.task_id);
@@ -120,7 +169,59 @@ export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
       throw error;
     }
 
-    const rawBodyText = rawBody.toString("utf8");
+    if (signed) {
+      const verification = parseWebhookVerification(endpoint.verification_json);
+      const verificationResult = verifyWebhookRequest({
+        rawBody,
+        signature: verification ? c.req.header(verification.signatureHeader) : undefined,
+        verificationJson: endpoint.verification_json,
+        signingSecretEncrypted: endpoint.signing_secret_encrypted,
+        sourceBinding: endpoint.source_binding,
+        encryptionKey: deps.encryptionKey,
+      });
+      if (verificationResult.kind === "invalid_configuration") {
+        return errorResponse(c, "WEBHOOK_VERIFICATION_UNAVAILABLE", "Webhook verification is unavailable", 503);
+      }
+      if (verificationResult.kind === "invalid_signature") {
+        return errorResponse(c, "WEBHOOK_SIGNATURE_INVALID", "Webhook signature is invalid", 401);
+      }
+
+      let data: unknown;
+      try {
+        data = JSON.parse(rawBody.toString("utf8"));
+      } catch {
+        return errorResponse(c, "INVALID_JSON", "Webhook payload must be valid JSON", 400);
+      }
+      if (!isRecord(data)) {
+        return errorResponse(c, "INVALID_JSON", "Webhook payload must be a JSON object", 400);
+      }
+
+      const resourceId = data[verificationResult.verification.resourceIdField];
+      if (resourceId !== verificationResult.sourceBinding.resourceId) {
+        return errorResponse(c, "WEBHOOK_RESOURCE_MISMATCH", "Webhook resource is not bound to this endpoint", 400);
+      }
+      const identity = webhookEventIdentity(
+        rawBody,
+        data,
+        verificationResult.verification,
+        verificationResult.sourceBinding.resourceId,
+      );
+      return admitAndQueue(c, {
+        deps,
+        endpoint,
+        task,
+        trigger,
+        eventId: identity.eventId,
+        payloadHash: identity.payloadHash,
+        triggerData: {
+          source: "webhook",
+          requestedAt: new Date().toISOString(),
+          eventId: identity.eventId,
+          data,
+        },
+        signed: true,
+      });
+    }
 
     if (task.status !== "active") {
       return errorResponse(c, "AUTOMATION_INACTIVE", "Automation is not active", 409);
@@ -128,7 +229,7 @@ export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
 
     let data: unknown;
     try {
-      data = JSON.parse(rawBodyText);
+      data = JSON.parse(rawBody.toString("utf8"));
     } catch {
       return errorResponse(c, "INVALID_JSON", "Webhook payload must be valid JSON", 400);
     }
@@ -138,61 +239,141 @@ export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
       return errorResponse(c, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must be between 1 and 200 characters", 400);
     }
     const payloadHash = createHash("sha256").update(rawBody).digest("hex");
-    const triggerData = {
-      source: "webhook" as const,
-      requestedAt: new Date().toISOString(),
+    return admitAndQueue(c, {
+      deps,
+      endpoint,
+      task,
+      trigger,
       eventId,
-      data,
-    };
-
-    let admission: WebhookAdmissionResult;
-    try {
-      admission = await deps.db.transaction().execute((trx) =>
-        createWebhookDeliveryRepository(trx).insertOrGet({
-          endpointId: endpoint.id,
-          taskId: endpoint.task_id,
-          eventId,
-          payloadHash,
-          triggerData,
-          taskRevision: task.revision,
-          endpointGeneration: endpoint.generation,
-        }),
-      );
-    } catch (error) {
-      deps.logger?.error({ err: error, endpointId: endpoint.id }, "Webhook durable admission failed");
-      return errorResponse(c, "ADMISSION_UNAVAILABLE", "Webhook admission is temporarily unavailable", 503);
-    }
-
-    const { delivery, created } = admission;
-    if (delivery.payload_hash !== payloadHash) {
-      return errorResponse(c, "IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used for a different payload", 409);
-    }
-
-    try {
-      await deps.scheduler.enqueueWebhookDelivery(delivery.id);
-    } catch (error) {
-      deps.logger?.warn({ error, deliveryId: delivery.id }, "Webhook delivery handoff failed");
-    }
-
-    return c.json(
-      {
-        accepted: true,
-        duplicate: !created,
-        deliveryId: delivery.id,
-        eventId: delivery.event_id,
-        taskId: task.id,
-        trigger: {
-          type: trigger.type,
-          method: "POST",
-          contentType: JSON_MEDIA_TYPE,
-        },
+      payloadHash,
+      triggerData: {
+        source: "webhook",
+        requestedAt: new Date().toISOString(),
+        eventId,
+        data,
       },
-      202,
-    );
+      signed: false,
+    });
   };
 
   routes.post("/v1/:endpointId", (c) => handleWebhook(c, "endpoint"));
   routes.post("/wf/:taskId", (c) => handleWebhook(c, "compatibility"));
 
   return routes;
+}
+
+async function admitAndQueue(
+  c: Context,
+  params: {
+    deps: AutomationWebhookRouteDeps;
+    endpoint: NonNullable<Awaited<ReturnType<ReturnType<typeof createWebhookEndpointRepository>["getById"]>>>;
+    task: NonNullable<Awaited<ReturnType<ReturnType<typeof createScheduledTaskRepository>["getById"]>>>;
+    trigger: { type: string };
+    eventId: string;
+    payloadHash: string;
+    triggerData: Record<string, unknown>;
+    signed: boolean;
+  },
+) {
+  type Admission =
+    | { readonly kind: "state_changed" }
+    | {
+        readonly kind: "admitted";
+        readonly delivery: WebhookAdmissionResult["delivery"];
+        readonly created: boolean;
+        readonly paused: boolean;
+      };
+  let admission: Admission;
+  try {
+    admission = await params.deps.db.transaction().execute(async (trx) => {
+      const currentTask = await trx
+        .updateTable("scheduled_tasks")
+        .set({ revision: sql<number>`revision` })
+        .where("id", "=", params.task.id)
+        .returningAll()
+        .executeTakeFirst();
+      const currentEndpoint = await trx
+        .selectFrom("webhook_endpoints")
+        .selectAll()
+        .where("id", "=", params.endpoint.id)
+        .executeTakeFirst();
+      if (!currentTask || !currentEndpoint) return { kind: "state_changed" as const };
+      const taskUnchanged =
+        currentTask.revision === params.task.revision &&
+        currentEndpoint.task_id === params.endpoint.task_id &&
+        currentEndpoint.generation === params.endpoint.generation &&
+        currentEndpoint.status === params.endpoint.status &&
+        endpointAuthMatches(currentEndpoint, params.endpoint);
+      if (!taskUnchanged) return { kind: "state_changed" as const };
+      if (
+        params.signed &&
+        (currentEndpoint.status !== WEBHOOK_ENDPOINT_STATUS_SIGNED ||
+          (params.task.status === "paused" && currentTask.status === "active") ||
+          currentTask.status === "completed")
+      ) {
+        return { kind: "state_changed" as const };
+      }
+      if (
+        !params.signed &&
+        (currentEndpoint.status !== WEBHOOK_ENDPOINT_STATUS_ACTIVE || currentTask.status !== "active")
+      ) {
+        return { kind: "state_changed" as const };
+      }
+
+      const paused = params.signed && currentTask.status !== "active";
+      const delivery = await createWebhookDeliveryRepository(trx).insertOrGet({
+        endpointId: params.endpoint.id,
+        taskId: params.endpoint.task_id,
+        eventId: params.eventId,
+        payloadHash: params.payloadHash,
+        triggerData: params.triggerData,
+        taskRevision: params.task.revision,
+        endpointGeneration: params.endpoint.generation,
+        status: paused ? "cancelled" : "pending",
+      });
+      return { kind: "admitted" as const, ...delivery, paused };
+    });
+  } catch (error) {
+    params.deps.logger?.error({ err: error, endpointId: params.endpoint.id }, "Webhook durable admission failed");
+    return errorResponse(c, "ADMISSION_UNAVAILABLE", "Webhook admission is temporarily unavailable", 503);
+  }
+
+  if (admission.kind === "state_changed") {
+    return errorResponse(c, "WEBHOOK_STATE_CHANGED", "Webhook endpoint or automation changed during admission", 409);
+  }
+
+  const { delivery, created, paused } = admission;
+  if (!params.signed && delivery.payload_hash !== params.payloadHash) {
+    return errorResponse(c, "IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used for a different payload", 409);
+  }
+
+  const shouldEnqueue = params.signed ? created && !paused : !isTerminalDelivery(delivery.status);
+  if (shouldEnqueue) {
+    try {
+      await params.deps.scheduler.enqueueWebhookDelivery(delivery.id);
+    } catch (error) {
+      params.deps.logger?.warn({ error, deliveryId: delivery.id }, "Webhook delivery handoff failed");
+    }
+  }
+
+  return c.json(
+    {
+      accepted: true,
+      duplicate: !created,
+      ...(params.signed && paused ? { paused: true, ignored: true } : {}),
+      deliveryId: delivery.id,
+      eventId: delivery.event_id,
+      taskId: params.task.id,
+      trigger: {
+        type: params.trigger.type,
+        method: "POST",
+        contentType: JSON_MEDIA_TYPE,
+      },
+    },
+    202,
+  );
+}
+
+function isTerminalDelivery(status: string): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
 }

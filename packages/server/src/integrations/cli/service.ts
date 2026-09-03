@@ -7,7 +7,9 @@ import {
   cliIntegrationAppDefinition,
   cliIntegrationAppDefinitions,
   cliSkillRequiredEnv,
+  managedIntegrationAppId,
 } from "@sketch/shared";
+import type { ManagedIntegrationAppId } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import { decrypt, encrypt } from "../../auth/encryption";
 import type {
@@ -113,6 +115,10 @@ export function createCliIntegrationService(params: {
   db: Kysely<DB>;
   encryptionKey?: string;
   environmentVariables: ReturnType<typeof createAgentEnvironmentVariableRepository>;
+  getAvailableManagedIntegrations?: (
+    ownerUserId: string,
+    taskContext?: AgentEnvironmentRuntimeContext["taskContext"],
+  ) => Promise<ReadonlySet<ManagedIntegrationAppId>>;
 }) {
   const connections = createCliIntegrationConnectionsRepository(params.db);
 
@@ -280,7 +286,17 @@ export function createCliIntegrationService(params: {
       taskContext?: AgentEnvironmentRuntimeContext["taskContext"],
     ): Promise<string[]> {
       const requested = [...new Set(skillIds.map((skill) => skill.trim().toLowerCase()).filter(Boolean))];
-      if (!requested.some((skill) => cliSkillRequiredEnv(skill).length > 0)) return [];
+      const unavailable = new Set<string>();
+      const clickUpSkills = requested.filter((skill) => managedIntegrationAppId(skill) === "clickup");
+      if (clickUpSkills.length > 0) {
+        const available = params.getAvailableManagedIntegrations
+          ? await params.getAvailableManagedIntegrations(ownerUserId, taskContext)
+          : new Set<ManagedIntegrationAppId>();
+        if (!available.has("clickup")) {
+          for (const skill of clickUpSkills) unavailable.add(skill);
+        }
+      }
+      if (!requested.some((skill) => cliSkillRequiredEnv(skill).length > 0)) return [...unavailable];
       const context: AgentEnvironmentRuntimeContext = {
         currentUserId: ownerUserId,
         contextType: "scheduled_task",
@@ -288,15 +304,15 @@ export function createCliIntegrationService(params: {
         ...(taskContext ? { taskContext } : {}),
       };
       const rows = await runtimeConnectionRows(context);
-      const unavailable = requested.filter((skill) => {
+      for (const skill of requested.filter((skill) => cliSkillRequiredEnv(skill).length > 0)) {
         const definition = Object.values(cliIntegrationAppDefinitions).find(
           (candidate) => candidate.skillId === skill || candidate.id === skill,
         );
-        if (!definition) return false;
+        if (!definition) continue;
         const active = rows.some((row) => row.app_id === definition.id && row.status === "active");
-        return !active;
-      });
-      return unavailable;
+        if (!active) unavailable.add(skill);
+      }
+      return requested.filter((skill) => unavailable.has(skill));
     },
 
     async findManagedVariable(id: string, ownerUserId: string): Promise<boolean> {

@@ -13,6 +13,31 @@ export const canvasWebhookEndpointSchema = z
 
 export type CanvasWebhookEndpoint = z.infer<typeof canvasWebhookEndpointSchema>;
 
+export const webhookSourceBindingSchema = z.object({
+  integration: z.string().min(1).max(256),
+  accountId: z.string().min(1).max(256),
+  collectionPath: z.string().min(1).max(512),
+  callbackUrl: z.string().url().max(2048),
+  resourceId: z.string().min(1).max(256).nullable(),
+  subscription: z
+    .object({
+      events: z.array(z.string().min(1).max(100)).min(1).max(100),
+      scope: z.object({ field: z.string().min(1).max(64), id: z.string().min(1).max(256) }).nullable(),
+    })
+    .optional(),
+});
+export type WebhookSourceBinding = z.infer<typeof webhookSourceBindingSchema>;
+
+export const webhookDeliveryReceiptSchema = z.object({
+  endpointId: z.string(),
+  endpointGeneration: z.number(),
+  deliveryId: z.string(),
+  eventId: z.string(),
+  receivedAt: z.string(),
+  status: z.string(),
+});
+export type WebhookDeliveryReceipt = z.infer<typeof webhookDeliveryReceiptSchema>;
+
 export const workflowTriggerConfigSchema = z
   .object({
     type: z.enum(["webhook", "schedule", "canvas", "slack_channel_message"]),
@@ -27,10 +52,9 @@ export const workflowTriggerConfigSchema = z
     webhookEndpointId: z.string().trim().min(1).optional(),
     webhookMethod: z.literal("POST").optional(),
     webhookContentType: z.literal("application/json").optional(),
-    webhookAuthentication: z.preprocess(
-      (value) => (value === undefined ? undefined : "none"),
-      z.literal("none").optional(),
-    ),
+    webhookAuthentication: z.enum(["none", "hmac_sha256"]).optional(),
+    webhookBinding: webhookSourceBindingSchema.optional(),
+    webhookLastDelivery: webhookDeliveryReceiptSchema.optional(),
     webhookStatus: z.enum(["active", "revoked", "unavailable"]).optional(),
     canvasEndpoint: canvasWebhookEndpointSchema.optional(),
     configuredProps: z.record(z.string(), z.unknown()).optional(),

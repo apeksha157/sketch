@@ -114,6 +114,23 @@ describe("createSketchMcpServer", () => {
     expect(server.instance).toBeDefined();
   });
 
+  it("exposes ClickUp only when the managed connection is available", () => {
+    const registeredTools = (deps: Parameters<typeof createSketchMcpServer>[0]) =>
+      (createSketchMcpServer(deps).instance as unknown as { _registeredTools: Record<string, unknown> })
+        ._registeredTools;
+
+    expect(
+      registeredTools({
+        uploadCollector: new UploadCollector(),
+        workspaceDir: tmpDir,
+        availableManagedIntegrations: new Set(["clickup"]),
+      }).clickup_api,
+    ).toBeDefined();
+    expect(
+      registeredTools({ uploadCollector: new UploadCollector(), workspaceDir: tmpDir }).clickup_api,
+    ).toBeUndefined();
+  });
+
   it("keeps questions available in web chat and exposes them to capable channels only when enabled", () => {
     const questionCollector = new QuestionCollector();
     const capabilities = {

@@ -13,10 +13,12 @@ import { AGENT_BUILT_IN_TOOL_NAMES, VISUAL_ANALYSIS_AGENT_TOOL_NAME } from "@ske
 import type {
   AutomationArtifact,
   AutomationRunMode,
+  ManagedIntegrationAppId,
   WebChatIntegrationConnectionData,
   WebChatQuestion,
   WebChatQuestionInteraction,
 } from "@sketch/shared";
+import { managedIntegrationAppId, managedIntegrationName } from "@sketch/shared";
 import type { Kysely, Selectable } from "kysely";
 import { listIndexedSourcesForPrompt } from "../connectors/search";
 import type { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -26,13 +28,19 @@ import type { createInboxMessagesRepository } from "../db/repositories/inbox-mes
 import type { DB, UsersTable } from "../db/schema";
 import type { Attachment } from "../files";
 import { buildMultimodalContent, formatAttachmentsForPrompt, isImageAttachment } from "../files";
+import { listAvailableManagedIntegrations } from "../integrations/availability";
 import {
   type CliIntegrationCardResolver,
   type IntegrationProgressEventLike,
   collectIntegrationCardsFromProgressEvents,
   projectToolResultForProgressLog,
 } from "../integrations/cards";
-import type { IntegrationProvider } from "../integrations/types";
+import {
+  type CanvasAccessToken,
+  type CanvasAccessTokenRequest,
+  type IntegrationProvider,
+  getIntegrationActor,
+} from "../integrations/types";
 import {
   type IntegrationAccessResult,
   cleanupIntegrationAccess,
@@ -409,6 +417,8 @@ export interface RunAgentParams {
   };
   enqueueMessage?: (params: { requesterUserId: string; message: string }) => Promise<void>;
   agentEnv?: Record<string, string>;
+  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
+  getCanvasAccessToken?: (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
   cliIntegrations?: CliIntegrationCardResolver;
   loadTranscriptionSettings?: () => Promise<TranscriptionSettings | null>;
   visionConfig?: VisionConfig | null;
@@ -853,6 +863,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
     agentInstructions: params.agentInstructions,
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   });
   const claudeMdContext = await loadAgentRuntimeClaudeMdContext({
     orgClaudeDir: params.claudeConfigDir,
@@ -933,7 +944,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
   const systemAppend = `${prependClaudeMdContext({
     claudeMdContext: claudeMdContext.appendedSystemContext,
     systemContext: baseSystemAppend,
-  })}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv)}`;
+  })}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv, params.availableManagedIntegrations)}`;
 
   try {
     const workspaceTools = createAgentRuntimeWorkspaceTools({
@@ -1177,11 +1188,50 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
 
 export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> {
   const adminReadAllEnabled = await resolveAdminReadAllEnabled(params);
+  const { userId: actorId, userEmail: actorEmail } = getIntegrationActor(params);
+  const availableManagedIntegrations =
+    params.availableManagedIntegrations ??
+    (params.loadIntegrationProvider && actorId && actorEmail
+      ? await listAvailableManagedIntegrations({
+          loadIntegrationProvider: params.loadIntegrationProvider,
+          userEmail: actorEmail,
+          currentUserId: actorId,
+          logger: params.logger,
+        })
+      : new Set<ManagedIntegrationAppId>());
+  const requestedClickUp = (params.agentSkillIds ?? []).some((skill) => managedIntegrationAppId(skill) === "clickup");
+  if (requestedClickUp && !availableManagedIntegrations.has("clickup")) {
+    throw new Error(
+      `${managedIntegrationName("clickup")} access could not be verified for this agent run. Existing connections were not changed.`,
+    );
+  }
+  const getCanvasAccessToken =
+    params.getCanvasAccessToken ??
+    (params.loadIntegrationProvider && actorId && actorEmail
+      ? async (request: CanvasAccessTokenRequest): Promise<CanvasAccessToken> => {
+          const provider = await params.loadIntegrationProvider?.();
+          if (!provider?.getCanvasAccessToken) {
+            throw new Error("Canvas OAuth credential access is not configured for this Sketch run.");
+          }
+          return provider.getCanvasAccessToken({
+            ...request,
+            userEmail: actorEmail,
+            ...(provider.providerId && actorId
+              ? { workspaceContext: { workspaceId: provider.providerId, userId: actorId } }
+              : {}),
+          });
+        }
+      : undefined);
+  const effectiveParams = {
+    ...params,
+    availableManagedIntegrations,
+    ...(getCanvasAccessToken ? { getCanvasAccessToken } : {}),
+  };
   if (params.agentRuntime === "aisdk") {
-    return runAgentWithAiSdk(params, adminReadAllEnabled);
+    return runAgentWithAiSdk(effectiveParams, adminReadAllEnabled);
   }
 
-  return runAgentWithClaudeSdk(params, adminReadAllEnabled);
+  return runAgentWithClaudeSdk(effectiveParams, adminReadAllEnabled);
 }
 
 async function resolveAdminReadAllEnabled(params: RunAgentParams): Promise<boolean> {
@@ -1236,6 +1286,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     agentInstructions: params.agentInstructions,
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   });
 
   const sdkBuiltInTools = resolveSdkBuiltInTools(params.agentAllowedTools);
@@ -1302,6 +1353,10 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     db: params.db,
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,
+    availableManagedIntegrations: params.availableManagedIntegrations,
+    getCanvasAccessToken: params.getCanvasAccessToken,
+    integrationUserId: params.integrationUserId,
+    integrationUserEmail: params.integrationUserEmail,
     validateAgentSkills: params.validateAgentSkills,
     taskContext: params.taskContext,
     currentAutomation: params.currentAutomation ?? params.taskContext?.currentAutomation,
@@ -1381,10 +1436,11 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     logger.debug({ userEmail: integrationUserEmail }, "Integration access resolved (user context)");
   }
   const effectiveAgentEnv = { ...params.agentEnv, ...integrationAccess.envVars };
-  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv)}`;
+  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv, params.availableManagedIntegrations)}`;
   const baseCanUseTool = createCanUseTool(absWorkspace, logger, params.claudeConfigDir, {
     agentAllowedTools: params.agentAllowedTools,
     agentEnv: effectiveAgentEnv,
+    availableManagedIntegrations: params.availableManagedIntegrations,
     blockedReadPaths: blockedReadPaths.size > 0 ? Array.from(blockedReadPaths) : undefined,
     blockImageReads: visualAnalysisAllowed,
   });

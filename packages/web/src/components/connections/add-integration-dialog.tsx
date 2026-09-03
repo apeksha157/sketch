@@ -82,6 +82,7 @@ export function AddIntegrationDialog({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const oauthWindowRef = useRef<Window | null>(null);
+  const oauthMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const oauthAttemptRef = useRef(0);
   const cancelledRef = useRef(false);
@@ -95,8 +96,18 @@ export function AddIntegrationDialog({
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
+      if (oauthMessageHandlerRef.current) {
+        window.removeEventListener("message", oauthMessageHandlerRef.current);
+        oauthMessageHandlerRef.current = null;
+      }
     };
   }, []);
+
+  const clearOAuthMessageHandler = () => {
+    if (!oauthMessageHandlerRef.current) return;
+    window.removeEventListener("message", oauthMessageHandlerRef.current);
+    oauthMessageHandlerRef.current = null;
+  };
 
   const loadApps = useCallback(
     async (query: string, cursor: string | null, append: boolean) => {
@@ -232,6 +243,7 @@ export function AddIntegrationDialog({
   const resetAndClose = () => {
     cancelledRef.current = true;
     oauthAttemptRef.current += 1;
+    clearOAuthMessageHandler();
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = undefined;
@@ -274,6 +286,7 @@ export function AddIntegrationDialog({
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = undefined;
     }
+    clearOAuthMessageHandler();
     setStep({ kind: "oauth", app });
 
     const popup = preopenedPopup ?? window.open(redirectUrl, "_blank", "width=600,height=700");
@@ -282,17 +295,25 @@ export function AddIntegrationDialog({
       setStep({ kind: "popup_blocked", app });
       return;
     }
-    if (preopenedPopup) popup.location.href = redirectUrl;
-
     oauthWindowRef.current = popup;
     cancelledRef.current = false;
     let popupClosedAt: number | null = null;
+    let callbackReceived = false;
     let isVerifying = false;
     let finalizeAfterVerify = false;
+    const redirect = new URL(redirectUrl, window.location.origin);
+    const messageOrigins = new Set([window.location.origin, redirect.origin]);
+    const callbackUrl = redirect.searchParams.get("redirect_uri");
+    if (callbackUrl) {
+      try {
+        messageOrigins.add(new URL(callbackUrl).origin);
+      } catch {}
+    }
 
     const stopPolling = () => {
-      clearInterval(intervalId);
+      if (intervalId !== undefined) clearInterval(intervalId);
       if (pollIntervalRef.current === intervalId) pollIntervalRef.current = undefined;
+      clearOAuthMessageHandler();
       oauthWindowRef.current = null;
     };
 
@@ -332,12 +353,41 @@ export function AddIntegrationDialog({
       }
     };
 
-    const intervalId = setInterval(() => {
-      if (oauthAttemptRef.current !== attemptId) {
-        clearInterval(intervalId);
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== popup) return;
+      if (!messageOrigins.has(event.origin)) return;
+      const data = event.data as {
+        type?: unknown;
+        appId?: unknown;
+        provider?: unknown;
+        message?: unknown;
+      } | null;
+      const messageAppId = typeof data?.appId === "string" ? data.appId : null;
+      if (messageAppId && messageAppId !== app.id) return;
+
+      if (data?.type === "sketch-integration-connect-error") {
+        stopPolling();
+        toast.error(typeof data.message === "string" ? data.message : "App connection cancelled");
+        setStep({ kind: "oauth_cancelled", app });
         return;
       }
-      if (popup.closed) {
+
+      const isSketchCallback = data?.type === "sketch-integration-connected";
+      const provider = typeof data?.provider === "string" ? data.provider.trim().toLowerCase() : "";
+      const isCanvasCallback = data?.type === "oauth-success" && (!provider || provider === app.id.toLowerCase());
+      if (!isSketchCallback && !isCanvasCallback) return;
+
+      callbackReceived = true;
+      popupClosedAt ??= Date.now();
+      void verifyConnection(false);
+    };
+
+    const intervalId = setInterval(() => {
+      if (oauthAttemptRef.current !== attemptId) {
+        stopPolling();
+        return;
+      }
+      if (popup.closed || callbackReceived) {
         popupClosedAt ??= Date.now();
         const finalIfMissing = Date.now() - popupClosedAt >= OAUTH_POPUP_CLOSED_GRACE_MS;
         void verifyConnection(finalIfMissing);
@@ -345,6 +395,10 @@ export function AddIntegrationDialog({
         popupClosedAt = null;
       }
     }, 500);
+
+    oauthMessageHandlerRef.current = onMessage;
+    window.addEventListener("message", onMessage);
+    if (preopenedPopup) popup.location.href = redirectUrl;
     pollIntervalRef.current = intervalId;
   };
 
