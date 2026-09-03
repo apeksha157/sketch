@@ -181,12 +181,15 @@ export interface SdkToolStartMapping {
   startedAt: number;
 }
 
-export interface SdkToolEndMapping {
-  toolUseId: string;
+export interface ToolResultEvent {
   toolName: string;
   input: Record<string, unknown>;
   output: unknown;
   isError: boolean;
+}
+
+export interface SdkToolEndMapping extends ToolResultEvent {
+  toolUseId: string;
   endedAt: number;
 }
 
@@ -339,6 +342,9 @@ export interface RunAgentParams {
   responseSurface?: ResponseSurface;
   questionInteractionCapabilities?: QuestionInteractionCapabilities;
   onProgressEvent: (event: ProgressEvent) => Promise<void>;
+  onToolResult?: (event: ToolResultEvent) => Promise<void>;
+  /** Called after queue admission, before runtime setup or tool execution. */
+  onRunStart?: () => Promise<void>;
   onTextDelta?: (delta: string) => Promise<void>;
   onSessionId?: (sessionId: string) => Promise<void>;
   attachments?: Attachment[];
@@ -1077,6 +1083,12 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
             },
             onToolEnd: async (event) => {
               customToolEffects.onToolEnd(event);
+              await params.onToolResult?.({
+                toolName: event.name,
+                input: event.input,
+                output: event.result ?? event.error,
+                isError: event.error !== undefined,
+              });
               for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
                 const toolCall = toolCalls[index];
                 if (toolCall.toolName !== event.name || toolCall.endedAt !== 0) continue;
@@ -1176,6 +1188,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
 }
 
 export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> {
+  await params.onRunStart?.();
   const adminReadAllEnabled = await resolveAdminReadAllEnabled(params);
   if (params.agentRuntime === "aisdk") {
     return runAgentWithAiSdk(params, adminReadAllEnabled);
@@ -1462,6 +1475,15 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
         } catch (err) {
           logger.warn({ err }, "Failed to deliver agent progress event");
         }
+      }
+
+      for (const event of effects.toolEnds) {
+        await params.onToolResult?.({
+          toolName: event.toolName,
+          input: event.input,
+          output: event.output,
+          isError: event.isError,
+        });
       }
 
       const completedCreateAutomationSkill =

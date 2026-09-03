@@ -27,10 +27,10 @@ export function unregisterActiveRun(key: string, controller: AbortController): v
   if (activeRuns.get(key)?.controller === controller) activeRuns.delete(key);
 }
 
-export function abortActiveRun(key: string): boolean {
+export function abortActiveRun(key: string, reason?: string): boolean {
   const activeRun = activeRuns.get(key);
   if (!activeRun || activeRun.controller.signal.aborted) return false;
-  activeRun.controller.abort();
+  activeRun.controller.abort(reason);
   return true;
 }
 
@@ -120,5 +120,5 @@ export function interruptActiveWebChatRun(userId: string, conversationId: string
 }
 
 export function interruptActiveBuilderWebChatRun(taskId: string): boolean {
-  return abortActiveRun(builderWebChatRunKey(taskId));
+  return abortActiveRun(builderWebChatRunKey(taskId), "user_stop");
 }

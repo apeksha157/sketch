@@ -180,6 +180,40 @@ describe("AI SDK custom Sketch tool provider", () => {
     expect(effects.uploadCollector.drain()).toEqual([filePath]);
   });
 
+  it("marks MCP failures as errors for the model and refuses execution after Stop", async () => {
+    const effects = createAgentRuntimeCustomToolEffects();
+    const provider = createDefaultAgentRuntimeCustomToolProvider({
+      effects,
+      transcriptionEnabled: false,
+      visionAnalysisEnabled: false,
+      visionConfig: null,
+    });
+    const tools = await provider.createTools(params());
+    const sendMessage = tools.mcp__sketch__SendMessage as SmokeTool;
+    const input = { recipientUserId: "fixture", message: "fixture" };
+    const output = await sendMessage.execute?.(input, {} as never);
+    expect(sendMessage.toModelOutput?.({ toolCallId: "failed-call", input, output })).toMatchObject({
+      type: "error-json",
+      value: { isError: true },
+    });
+    const filePath = join(workspace, "cancelled.txt");
+    await writeFile(filePath, "fixture");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      tools.mcp__sketch__SendFileToChat.execute?.(
+        { file_path: filePath },
+        {
+          toolCallId: "cancelled-call",
+          context: undefined,
+          messages: [],
+          abortSignal: controller.signal,
+        },
+      ),
+    ).rejects.toThrow();
+    expect(effects.uploadCollector.drain()).toEqual([]);
+  });
+
   it("maps MCP image content to the AI SDK file envelope used by @ai-sdk/mcp", async () => {
     const effects = createAgentRuntimeCustomToolEffects();
     const provider = createDefaultAgentRuntimeCustomToolProvider({
@@ -259,13 +293,14 @@ describe("AI SDK custom Sketch tool provider", () => {
         : await toolDefinition?.inputSchema?.validate?.(input);
       expect(validation?.success, toolName).toBe(true);
       const output = await toolDefinition?.execute?.(input, {} as never);
+      const expected =
+        output && typeof output === "object" && "isError" in output && output.isError === true
+          ? { type: "error-json", value: output }
+          : { type: "content", value: expect.any(Array) };
       await expect(
         Promise.resolve(toolDefinition?.toModelOutput?.({ toolCallId: `${toolName}-call`, input, output })),
         toolName,
-      ).resolves.toMatchObject({
-        type: "content",
-        value: expect.any(Array),
-      });
+      ).resolves.toMatchObject(expected);
     }
   });
 });
