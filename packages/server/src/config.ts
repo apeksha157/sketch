@@ -60,6 +60,7 @@ export const configSchema = z.object({
     .transform((v) => v === "true" || v === "1"),
   WEEKLY_MINT_MODE: z.enum(["off", "shadow", "live", "manual"]).default("off"),
   WEEKLY_MINT_JUDGE_MODE: z.enum(["single", "agentic"]).default("single"),
+  CONSOLIDATED_LOOP_MODE: z.enum(["off", "shadow"]).default("off"),
   WEEKLY_MINT_INTERVAL_MS: z.coerce
     .number()
     .int()
@@ -94,6 +95,14 @@ export const configSchema = z.object({
       .optional(),
   ),
   PROJECT_MINTING_MODEL: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z
+      .string()
+      .trim()
+      .regex(/^[^\s/]+\/\S+$/, "Expected a complete OpenRouter model ID")
+      .optional(),
+  ),
+  CONSOLIDATED_LOOP_MODEL: z.preprocess(
     (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
     z
       .string()

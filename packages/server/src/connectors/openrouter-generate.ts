@@ -322,12 +322,17 @@ export function createOpenRouterGenerator(
     const resultCache = new Map<string, string>();
     let promptTokens = 0;
     let completionTokens = 0;
+    let costUsd: number | undefined;
     let usageSeen = false;
     let rounds = 0;
     let toolRoundsUsed = 0;
 
     function aggregatedUsage() {
       return usageSeen ? { usage: { promptTokens, completionTokens } } : {};
+    }
+
+    function aggregatedCost() {
+      return costUsd === undefined ? {} : { costUsd };
     }
 
     async function postChat(toolChoice: "auto" | "none") {
@@ -417,6 +422,9 @@ export function createOpenRouterGenerator(
         completionTokens += body.usage.completion_tokens;
         usageSeen = true;
       }
+      if (body.usage?.cost !== undefined) {
+        costUsd = (costUsd ?? 0) + body.usage.cost;
+      }
 
       if (!response.ok) {
         reportMeta(opts, {
@@ -425,6 +433,7 @@ export function createOpenRouterGenerator(
           durationMs: Date.now() - startedAt,
           model: modelForCall,
           ...aggregatedUsage(),
+          ...aggregatedCost(),
         });
         throw new Error(body.error?.message ?? `OpenRouter agentic generation failed with HTTP ${response.status}`);
       }
@@ -440,6 +449,7 @@ export function createOpenRouterGenerator(
           durationMs: Date.now() - startedAt,
           model: modelForCall,
           ...aggregatedUsage(),
+          ...aggregatedCost(),
         };
         reportMeta(opts, meta);
         if (!text) throw new Error("OpenRouter agentic response had neither text nor tool calls");
@@ -454,6 +464,7 @@ export function createOpenRouterGenerator(
           durationMs: Date.now() - startedAt,
           model: modelForCall,
           ...aggregatedUsage(),
+          ...aggregatedCost(),
         });
         throw new Error(
           `OpenRouter agentic loop still requested tools after the forced final round (${rounds} rounds)`,

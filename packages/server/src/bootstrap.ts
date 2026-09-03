@@ -964,6 +964,30 @@ export async function createServer(config: Config, options?: CreateServerOptions
           intervalMs: config.WEEKLY_MINT_INTERVAL_MS,
         })
       : null;
+  const consolidatedLoopSettings =
+    config.CONSOLIDATED_LOOP_MODE === "shadow" ? (weeklyMintSettings ?? (await settingsRepo.get())) : null;
+  const consolidatedLoopOpenRouter =
+    config.CONSOLIDATED_LOOP_MODE === "shadow"
+      ? resolveOpenRouterEnrichmentConfig(consolidatedLoopSettings, config.OPENROUTER_API_KEY)
+      : null;
+  const consolidatedLoopModel =
+    config.CONSOLIDATED_LOOP_MODE === "shadow"
+      ? (config.CONSOLIDATED_LOOP_MODEL ??
+        config.PROJECT_MINTING_MODEL ??
+        consolidatedLoopOpenRouter?.openRouterModel ??
+        "openai/gpt-5.6-luna")
+      : null;
+  const consolidatedLoopAgenticGenerator =
+    config.CONSOLIDATED_LOOP_MODE === "shadow" && consolidatedLoopOpenRouter?.openRouterApiKey
+      ? createOpenRouterGenerator(consolidatedLoopOpenRouter.openRouterApiKey, {
+          model: consolidatedLoopModel,
+          reasoningEffort: "medium",
+          timeoutMs: 300_000,
+        })
+      : null;
+  if (config.CONSOLIDATED_LOOP_MODE === "shadow" && !consolidatedLoopAgenticGenerator) {
+    logger.warn("CONSOLIDATED_LOOP_MODE=shadow requires an OpenRouter API key; consolidated loop shadow disabled");
+  }
   if (
     backgroundWork &&
     externalStartup &&
@@ -972,7 +996,11 @@ export async function createServer(config: Config, options?: CreateServerOptions
     weeklyMint?.start();
   }
   const syncScheduler = backgroundWork
-    ? startSyncScheduler(db, logger, 30 * 60 * 1000, { appConfig: config, slackIndexingFacade })
+    ? startSyncScheduler(db, logger, 30 * 60 * 1000, {
+        appConfig: config,
+        slackIndexingFacade,
+        consolidatedLoopAgenticGenerator,
+      })
     : null;
   if (backgroundWork && (await settingsRepo.get())?.slack_bot_token) {
     await ensureSlackConnectorConfig({ db, encryptionKey: config.ENCRYPTION_KEY, logger });

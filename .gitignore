@@ -6,6 +6,7 @@ data
 data/
 tmp/
 packages/server/src/scripts/resolution-eval/reports/
+packages/server/scripts/eval-consolidated-loop-reports/
 .claude/*
 !.claude/skills/
 .claude/skills/tenant-info/

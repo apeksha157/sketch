@@ -234,6 +234,24 @@ export interface LlmUsageEventsTable {
   cost_usd: number | null;
 }
 
+export interface ExtractionStagesTable {
+  id: string;
+  indexed_file_id: string;
+  content_hash: string | null;
+  extractor_version: string;
+  status: string;
+  staged_json: string;
+  model: string | null;
+  rounds: number | null;
+  tool_calls: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  duration_ms: number | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
 export interface EntityNameEmbeddingsTable {
   entity_id: string;
   embedding: string;
@@ -2060,6 +2078,7 @@ export interface DB {
   chunk_embeddings: ChunkEmbeddingsTable;
   file_embeddings: FileEmbeddingsTable;
   llm_usage_events: LlmUsageEventsTable;
+  extraction_stages: ExtractionStagesTable;
   entity_name_embeddings: EntityNameEmbeddingsTable;
   entity_review_queue_embeddings: EntityReviewQueueEmbeddingsTable;
   user_provider_identities: UserProviderIdentitiesTable;
