@@ -125,14 +125,25 @@ describe("Your Org graph-verdict band lane", () => {
     expect(fetches).toBe(0);
   });
 
-  it("approves and applies a dry-run-green verdict with one primary click, then retires the section", async () => {
+  it("row-level Confirm opens the reconcile sheet and merges after the dry run, then retires the section", async () => {
     const decisions: string[] = [];
     let verdicts: ReturnType<typeof verdictFixture>[] = [verdictFixture()];
     server.use(
       http.get("/api/graph-verdicts", () => HttpResponse.json({ verdicts })),
+      http.get("/api/entities/ent-oliver", () =>
+        HttpResponse.json({
+          entity: {
+            id: "ent-oliver",
+            name: "Oliver Wyman",
+            sourceType: "company",
+            mentionCount: 604,
+            aliases: [],
+            contactPoints: [],
+          },
+        }),
+      ),
       http.post("/api/graph-verdicts/gv-1/approval", () => {
         decisions.push("approval");
-        verdicts = [verdictFixture({ status: "approved" })];
         return HttpResponse.json({ verdict: verdictFixture({ status: "approved" }) });
       }),
       http.post("/api/graph-verdicts/gv-1/application", async ({ request }) => {
@@ -154,16 +165,87 @@ describe("Your Org graph-verdict band lane", () => {
 
     renderWithProviders(<ReviewBandCapped types={["company"]} isAdmin />);
 
-    await userEvent.click(await screen.findByTestId("graph-verdict-band-row-gv-1"));
-    await screen.findByText("Same firm under its short and long names");
-    await waitFor(() => expect(decisions).toContain("dry-run"));
+    await userEvent.click(await screen.findByTestId("graph-verdict-band-approve-gv-1"));
+    expect(await screen.findByTestId("graph-verdict-subject")).toHaveTextContent("OW");
+    expect(await screen.findByTestId("graph-verdict-target")).toHaveTextContent("Oliver Wyman");
+    await screen.findByText(/Same firm under its short and long names/);
+    await waitFor(() => expect(decisions).toEqual(["dry-run"]));
 
-    const primary = await screen.findByTestId("graph-verdict-approve");
-    expect(primary).toHaveTextContent("Approve & apply");
-    await userEvent.click(primary);
-    await waitFor(() => expect(decisions).toContain("approval"));
-    await waitFor(() => expect(decisions).toContain("apply"));
-
+    const commit = screen.getByTestId("graph-verdict-approve");
+    expect(commit).toHaveTextContent("Merge into Oliver Wyman");
+    await waitFor(() => expect(commit).toBeEnabled());
+    await userEvent.click(commit);
+    await waitFor(() => expect(decisions).toEqual(["dry-run", "approval", "apply"]));
     await waitFor(() => expect(screen.queryByTestId("review-band-graph-verdicts")).not.toBeInTheDocument());
+  });
+
+  it("row-level Confirm on a chained verdict spells out the related proposals in the sheet", async () => {
+    server.use(
+      http.get("/api/graph-verdicts", () =>
+        HttpResponse.json({
+          verdicts: [
+            verdictFixture(),
+            verdictFixture({ id: "gv-2", subjectEntityId: "ent-ow2", subjectName: "Oliver W." }),
+          ],
+        }),
+      ),
+      http.get("/api/entities/ent-oliver", () =>
+        HttpResponse.json({
+          entity: {
+            id: "ent-oliver",
+            name: "Oliver Wyman",
+            sourceType: "company",
+            mentionCount: 604,
+            aliases: [],
+            contactPoints: [],
+          },
+        }),
+      ),
+      http.post("/api/graph-verdicts/gv-1/application", () =>
+        HttpResponse.json({
+          application: {
+            verdictId: "gv-1",
+            dryRun: true,
+            status: "awaiting_human",
+            ledgerRef: null,
+            wouldChange: { entities: 2 },
+            plan: null,
+          },
+        }),
+      ),
+    );
+
+    renderWithProviders(<ReviewBandCapped types={["company"]} isAdmin />);
+
+    await userEvent.click(await screen.findByTestId("graph-verdict-band-approve-gv-1"));
+    await screen.findByTestId("graph-verdict-related");
+    expect(screen.queryByTestId("graph-verdict-confirm-summary")).not.toBeInTheDocument();
+  });
+
+  it("a failed dry run keeps the merge commit disabled", async () => {
+    server.use(
+      http.get("/api/graph-verdicts", () => HttpResponse.json({ verdicts: [verdictFixture()] })),
+      http.get("/api/entities/ent-oliver", () =>
+        HttpResponse.json({
+          entity: {
+            id: "ent-oliver",
+            name: "Oliver Wyman",
+            sourceType: "company",
+            mentionCount: 604,
+            aliases: [],
+            contactPoints: [],
+          },
+        }),
+      ),
+      http.post("/api/graph-verdicts/gv-1/application", () =>
+        HttpResponse.json({ error: { code: "INTERNAL", message: "boom", details: null } }, { status: 500 }),
+      ),
+    );
+
+    renderWithProviders(<ReviewBandCapped types={["company"]} isAdmin />);
+
+    await userEvent.click(await screen.findByTestId("graph-verdict-band-approve-gv-1"));
+    await screen.findByText(/Dry run failed/);
+    expect(screen.getByTestId("graph-verdict-approve")).toBeDisabled();
   });
 });

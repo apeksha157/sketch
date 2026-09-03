@@ -7,10 +7,16 @@
  * the sheet open on the refreshed verdict so Apply is one click away once the
  * dry run recovers. Every other decision closes the sheet.
  */
+import { CompactAction } from "@/components/compact-action";
+import { TimelineStrip } from "@/components/entity-drawer/timeline-strip";
+import { humanSourceType } from "@/components/entity-review/entity-format";
+import { CompareColumn, mentionTimelineGroups } from "@/components/entity-review/review-band";
 import { EvidenceList } from "@/components/evidence-list";
 import { ApiRequestError, type GraphVerdict, type GraphVerdictStatus, api } from "@/lib/api";
+import { CheckIcon } from "@phosphor-icons/react";
+import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
-import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@sketch/ui/components/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@sketch/ui/components/sheet";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -25,6 +31,124 @@ export const GRAPH_VERDICT_ACTION_LABELS: Record<string, string> = {
   link_to: "link mention",
   dismiss: "dismiss mention",
 };
+
+const TITLE_VERBS: Record<string, string> = {
+  keep: "Keep",
+  merge_into: "Merge",
+  nest_under: "Nest",
+  archive: "Archive",
+  remove_alias: "Remove alias",
+  classify_container: "Classify",
+  link_to: "Link mention",
+  dismiss: "Dismiss mention",
+};
+
+/**
+ * "Merge OW → Oliver Wyman", never "merge into · OW" — the old form read as
+ * merging INTO the subject. The arrow only appears for actions that carry a
+ * target entity; remove_alias keeps its alias in the detail rows instead.
+ */
+export function verdictTitle(verdict: GraphVerdict): string {
+  const verb = TITLE_VERBS[verdict.action] ?? GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action;
+  const subject =
+    verdict.subjectName ?? verdict.subjectMentionName ?? verdict.subjectEntityId ?? verdict.subjectContainerId ?? "";
+  const target = verdict.targetEntityId ? (verdict.targetName ?? verdict.targetEntityId) : null;
+  return target ? `${verb} ${subject} → ${target}` : `${verb} ${subject}`.trim();
+}
+
+const STATUS_COPY: Record<GraphVerdictStatus, string> = {
+  awaiting_human: "Awaiting your review",
+  approved: "Approved — not yet applied",
+  applied: "Applied",
+  bounced: "Bounced by validation",
+  rejected: "Rejected",
+  reverted: "Reverted",
+};
+
+const ENTITY_TYPE_PLURALS: Record<string, string> = {
+  person: "people",
+  company: "companies",
+  team: "teams",
+  project: "projects",
+  product: "products",
+  tool: "tools",
+};
+
+/**
+ * Ledger and index rows the merge machinery writes as a consequence of the
+ * decision — real, but not part of what the human is deciding. They fold into
+ * one trailing phrase instead of one row each.
+ */
+const BOOKKEEPING_TABLES = new Set([
+  "entity_merges",
+  "entity_source_refs",
+  "entity_name_embeddings",
+  "fact_materialization_state",
+]);
+
+/**
+ * The dry run reports per-table row counts; the reviewer is deciding a graph
+ * change. This turns the counts into one sentence in graph terms ("2
+ * companies become 1 · 1 mention moves to Oliver Wyman"), with unknown tables
+ * degrading to a readable generic phrase rather than a schema name.
+ */
+export function summarizeWouldChange(verdict: GraphVerdict, counts: Record<string, number> | null): string | null {
+  const entries = Object.entries(counts ?? {}).filter(([, count]) => count > 0);
+  if (entries.length === 0) return null;
+  const target = verdict.targetName ?? verdict.resolvedTargetEntityId ?? verdict.targetEntityId;
+  const typePlural = ENTITY_TYPE_PLURALS[verdict.subjectEntityType ?? ""] ?? "entities";
+  const s = (count: number) => (count === 1 ? "" : "s");
+  const parts: string[] = [];
+  let bookkeeping = false;
+  for (const [table, count] of entries) {
+    if (BOOKKEEPING_TABLES.has(table)) {
+      bookkeeping = true;
+      continue;
+    }
+    switch (table) {
+      case "entities":
+        parts.push(
+          verdict.action === "merge_into" && count > 1
+            ? `${count} ${typePlural} become 1`
+            : `${count} entit${count === 1 ? "y" : "ies"} update${count === 1 ? "s" : ""}`,
+        );
+        break;
+      case "entity_mentions":
+        parts.push(
+          verdict.action === "merge_into" && target
+            ? `${count} mention${s(count)} move${count === 1 ? "s" : ""} to ${target}`
+            : verdict.action === "link_to" && target
+              ? `${count} mention${s(count)} link${count === 1 ? "s" : ""} to ${target}`
+              : `${count} mention${s(count)} update`,
+        );
+        break;
+      case "entity_relationships":
+        parts.push(
+          verdict.action === "merge_into"
+            ? `${count} relationship${s(count)} move${count === 1 ? "s" : ""}`
+            : `${count} relationship${s(count)} update`,
+        );
+        break;
+      case "entity_review_queue":
+        parts.push(`${count} review row${s(count)} resolve${count === 1 ? "s" : ""}`);
+        break;
+      case "entity_aliases":
+        parts.push(`${count} alias${count === 1 ? "" : "es"} update`);
+        break;
+      case "containers":
+        parts.push(
+          verdict.action === "classify_container"
+            ? `${count} container${s(count)} classified`
+            : `${count} container${s(count)} update`,
+        );
+        break;
+      default:
+        parts.push(`${count} ${table.replace(/_/g, " ")} row${s(count)}`);
+    }
+  }
+  if (bookkeeping) parts.push("plus ledger and index bookkeeping");
+  return parts.join(" · ");
+}
 
 export const GRAPH_VERDICT_STATUS_TONES: Record<GraphVerdictStatus, string> = {
   awaiting_human: "text-amber-600 dark:text-amber-500",
@@ -88,19 +212,39 @@ function canPreview(status: GraphVerdictStatus): boolean {
   return status === "awaiting_human" || status === "approved";
 }
 
+/**
+ * Awaiting merge verdicts render the reconcile comparison (two columns, wide
+ * sheet); everything else keeps the narrow detail layout.
+ */
+function isCompareLayout(verdict: GraphVerdict): boolean {
+  return (
+    verdict.action === "merge_into" &&
+    verdict.status === "awaiting_human" &&
+    !!verdict.subjectEntityId &&
+    !!verdictTargetId(verdict)
+  );
+}
+
 export function GraphVerdictSheet({ verdict, onClose }: { verdict: GraphVerdict | null; onClose: () => void }) {
+  const wide = !!verdict && isCompareLayout(verdict);
   return (
     <Sheet open={!!verdict} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 overflow-y-auto sm:max-w-[560px]">
-        <SheetTitle className="text-sm">
-          {verdict
-            ? `${GRAPH_VERDICT_ACTION_LABELS[verdict.action] ?? verdict.action} · ${verdict.subjectName ?? "verdict"}`
-            : ""}
-        </SheetTitle>
-        <SheetDescription className="sr-only">
-          The proposal's reason and evidence, a server dry run of applying it, and the decision buttons.
-        </SheetDescription>
-        {verdict ? <VerdictDetail key={verdict.id} verdict={verdict} onDone={onClose} /> : null}
+      <SheetContent side="right" className={`flex w-full flex-col ${wide ? "sm:max-w-3xl" : "sm:max-w-[560px]"}`}>
+        <SheetHeader>
+          <SheetTitle className="text-base">
+            {verdict
+              ? wide
+                ? `Reconcile: ${verdict.subjectName ?? verdict.subjectEntityId}`
+                : verdictTitle(verdict)
+              : ""}
+          </SheetTitle>
+          <SheetDescription className="sr-only">
+            The proposal's reason and evidence, a server dry run of applying it, and the decision buttons.
+          </SheetDescription>
+        </SheetHeader>
+        <div className={`flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3 ${wide ? "" : "overflow-y-auto"}`}>
+          {verdict ? <VerdictDetail key={verdict.id} verdict={verdict} onDone={onClose} /> : null}
+        </div>
       </SheetContent>
     </Sheet>
   );
@@ -115,8 +259,14 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
     void queryClient.invalidateQueries({ queryKey: ["graph-verdicts"] });
   }
 
+  /**
+   * Drop the dry-run preview before invalidating: a broad invalidate would
+   * refetch the still-mounted preview against a decided verdict — a wasted
+   * server dry run that can only error.
+   */
   function settle() {
     setActionError(null);
+    queryClient.removeQueries({ queryKey: ["graph-verdicts", "preview", current.id] });
     invalidate();
     onDone();
   }
@@ -192,14 +342,130 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
   });
   const related = relatedOpenVerdicts(current, openQuery.data?.verdicts ?? []);
 
+  const compare = isCompareLayout(current);
+  const targetId = verdictTargetId(current);
+  const targetQuery = useQuery({
+    queryKey: ["entity-detail", targetId],
+    queryFn: () => api.entities.get(targetId as string),
+    enabled: compare && !!targetId,
+  });
+  const targetMentionsQuery = useQuery({
+    queryKey: ["entity-mentions", targetId, { limit: 20 }],
+    queryFn: () => api.entities.mentions(targetId as string, { limit: 20 }),
+    enabled: compare && !!targetId,
+  });
+
+  if (compare) {
+    const targetEntity = targetQuery.data?.entity ?? null;
+    const targetName = current.targetName ?? targetEntity?.name ?? (targetId as string);
+    const targetMentions = targetMentionsQuery.data?.mentions ?? [];
+    const evidenceRows = evidenceQuery.data?.rows ?? [];
+    return (
+      <div className="flex min-h-0 flex-1 flex-col gap-3 text-[13px]">
+        {related.length > 0 ? <RelatedProposals related={related} /> : null}
+        {previewStale || actionStale ? <StaleBanner /> : null}
+        {actionError && !actionStale ? <p className="text-xs text-destructive">{String(actionError)}</p> : null}
+        <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 md:grid-cols-2">
+          <CompareColumn
+            testId="graph-verdict-subject"
+            eyebrow="Proposed"
+            toneClass="border-amber-400 bg-amber-50/40 dark:border-amber-400/60 dark:bg-amber-950/20"
+            name={current.subjectName ?? (current.subjectEntityId as string)}
+            meta={
+              current.subjectEntityType ? (
+                <Badge variant="outline" className="text-[10px]">
+                  {humanSourceType(current.subjectEntityType)}
+                </Badge>
+              ) : undefined
+            }
+          >
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Evidence ({evidenceRows.length})
+            </p>
+            {evidenceQuery.isLoading ? (
+              <Skeleton className="mt-1.5 h-14 rounded-md" />
+            ) : evidenceRows.length > 0 ? (
+              <div className="mt-1 flex-1 overflow-y-auto">
+                <EvidenceList
+                  testId="graph-verdict-evidence"
+                  items={evidenceRows.map((row) => ({
+                    key: row.fileId,
+                    snippet: row.contextSnippet,
+                    fileName: row.fileName,
+                    source: row.source,
+                    occurredAt: row.occurredAt,
+                  }))}
+                />
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-muted-foreground">No file evidence.</p>
+            )}
+            {evidence?.notes.map((note) => (
+              <p key={note} className="mt-1 text-xs text-muted-foreground">
+                {note}
+              </p>
+            ))}
+          </CompareColumn>
+          <CompareColumn
+            testId="graph-verdict-target"
+            eyebrow="Suggested existing"
+            toneClass="border-border bg-muted/20"
+            name={targetName}
+            error={previewQuery.isError && !previewStale ? `Dry run failed: ${String(previewQuery.error)}` : null}
+            meta={
+              <>
+                {targetEntity ? (
+                  <Badge variant="outline" className="text-[10px]">
+                    {humanSourceType(targetEntity.sourceType)}
+                  </Badge>
+                ) : null}
+                <span className="text-[11px] text-muted-foreground">· {current.reason}</span>
+              </>
+            }
+            footer={
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => approveAndApply.mutate()}
+                  disabled={busy || !previewQuery.isSuccess}
+                  data-testid="graph-verdict-approve"
+                  className="h-7 gap-1 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
+                >
+                  <CheckIcon size={12} weight="bold" />
+                  Merge into {targetName}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => reject.mutate()}
+                  disabled={busy}
+                  data-testid="graph-verdict-reject"
+                  className="h-7"
+                >
+                  Not a match
+                </Button>
+              </div>
+            }
+          >
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Recent mentions ({targetMentions.length})
+            </p>
+            {targetMentions.length === 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
+            ) : (
+              <div className="mt-1 flex-1 overflow-y-auto">
+                <TimelineStrip groups={mentionTimelineGroups(targetMentions)} entityId={targetEntity?.id} />
+              </div>
+            )}
+          </CompareColumn>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="mt-3 flex flex-1 flex-col gap-4 text-[13px]">
+    <div className="flex flex-1 flex-col gap-4 text-[13px]">
       <dl className="space-y-1.5">
-        <DetailRow
-          label="Subject"
-          value={`${current.subjectName ?? current.subjectEntityId ?? current.subjectContainerId}`}
-          mono={!current.subjectName}
-        />
         {containerEvidence ? (
           <DetailRow
             label="Proposed"
@@ -207,30 +473,25 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             mono
           />
         ) : null}
-        {current.targetEntityId ? (
-          <DetailRow
-            label="Target"
-            value={`${current.targetName ?? current.targetEntityId}`}
-            mono={!current.targetName}
-          />
-        ) : null}
         {current.action === "remove_alias" && current.targetName ? (
           <DetailRow label="Alias" value={current.targetName} />
         ) : null}
-        <DetailRow label="Status" value={current.status} mono />
+        <DetailRow label="Status" value={STATUS_COPY[current.status] ?? current.status} />
         <DetailRow label="Reason" value={current.reason} />
         {current.validationReason ? <DetailRow label="Validation" value={current.validationReason} mono /> : null}
         {current.appliedLedgerRef ? <DetailRow label="Ledger" value={current.appliedLedgerRef} mono /> : null}
       </dl>
 
-      {evidence ? (
+      {evidence && (evidence.fileIds.length > 0 || evidence.reviewIds.length > 0 || evidence.notes.length > 0) ? (
         <div>
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Evidence</h3>
-          <p className="font-mono text-[11px] text-muted-foreground">
-            {evidence.fileIds.length} file{evidence.fileIds.length === 1 ? "" : "s"} · {evidence.reviewIds.length}{" "}
-            review
-            {evidence.reviewIds.length === 1 ? "" : "s"}
-          </p>
+          {evidence.fileIds.length > 0 || evidence.reviewIds.length > 0 ? (
+            <p className="font-mono text-[11px] text-muted-foreground">
+              {evidence.fileIds.length} file{evidence.fileIds.length === 1 ? "" : "s"} · {evidence.reviewIds.length}{" "}
+              review
+              {evidence.reviewIds.length === 1 ? "" : "s"}
+            </p>
+          ) : null}
           {evidence.fileIds.length > 0 ? (
             evidenceQuery.isLoading ? (
               <Skeleton className="mt-1.5 h-14 rounded-md" />
@@ -268,27 +529,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
         </div>
       ) : null}
 
-      {related.length > 0 ? (
-        <div data-testid="graph-verdict-related">
-          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Related proposals
-          </h3>
-          <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
-            {related.map(({ verdict: other, kind }) => (
-              <p key={other.id} className="text-xs">
-                <span className="font-mono text-[10px] uppercase text-muted-foreground">
-                  {GRAPH_VERDICT_ACTION_LABELS[other.action] ?? other.action}
-                </span>{" "}
-                <span className="font-medium">{other.subjectName ?? other.subjectEntityId}</span>
-                {verdictTargetId(other) ? (
-                  <span className="text-muted-foreground"> → {other.targetName ?? verdictTargetId(other)}</span>
-                ) : null}
-                <span className="text-muted-foreground"> — {RELATED_KIND_COPY[kind]}</span>
-              </p>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {related.length > 0 ? <RelatedProposals related={related} /> : null}
 
       {canPreview(current.status) ? (
         <div>
@@ -302,7 +543,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
           ) : previewQuery.isError ? (
             <p className="text-xs text-destructive">Dry run failed: {String(previewQuery.error)}</p>
           ) : (
-            <WouldChangeTable counts={wouldChange} />
+            <WouldChangeSummary verdict={current} counts={wouldChange} />
           )}
         </div>
       ) : null}
@@ -353,6 +594,28 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
   );
 }
 
+function RelatedProposals({ related }: { related: { verdict: GraphVerdict; kind: RelatedVerdictKind }[] }) {
+  return (
+    <div data-testid="graph-verdict-related">
+      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Related proposals</h3>
+      <div className="space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+        {related.map(({ verdict: other, kind }) => (
+          <p key={other.id} className="text-xs">
+            <span className="font-mono text-[10px] uppercase text-muted-foreground">
+              {GRAPH_VERDICT_ACTION_LABELS[other.action] ?? other.action}
+            </span>{" "}
+            <span className="font-medium">{other.subjectName ?? other.subjectEntityId}</span>
+            {verdictTargetId(other) ? (
+              <span className="text-muted-foreground"> → {other.targetName ?? verdictTargetId(other)}</span>
+            ) : null}
+            <span className="text-muted-foreground"> — {RELATED_KIND_COPY[kind]}</span>
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DetailRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex gap-2">
@@ -370,6 +633,30 @@ function StaleBanner() {
     >
       Evidence changed since this was proposed — the graph moved underneath it. Ask the agent to re-propose.
     </p>
+  );
+}
+
+/**
+ * The human sentence leads; the raw per-table counts stay one click away for
+ * anyone who wants to check the plumbing.
+ */
+function WouldChangeSummary({ verdict, counts }: { verdict: GraphVerdict; counts: Record<string, number> | null }) {
+  const [showCounts, setShowCounts] = useState(false);
+  const summary = summarizeWouldChange(verdict, counts);
+  if (!summary) {
+    return <p className="text-xs text-muted-foreground">No rows change — this action is a no-op.</p>;
+  }
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[12.5px]">{summary}</p>
+      <CompactAction
+        label={showCounts ? "Hide row counts" : "Show row counts"}
+        className="-ml-1.5"
+        data-testid="graph-verdict-counts-toggle"
+        onClick={() => setShowCounts((value) => !value)}
+      />
+      {showCounts ? <WouldChangeTable counts={counts} /> : null}
+    </div>
   );
 }
 

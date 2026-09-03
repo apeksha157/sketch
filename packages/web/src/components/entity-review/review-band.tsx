@@ -41,7 +41,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@sketch/ui/components/sheet";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { birthOrigin, entityEmail, humanSourceType, isWeeklyPassProjectRow } from "./entity-format";
 
 /**
@@ -90,7 +90,7 @@ function reviewQuotesLoader(reviewId: string) {
 }
 
 /** Same fold for the candidate side's recent mentions. */
-function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[] {
+export function mentionTimelineGroups(mentions: EntityMention[]): EntityTimelineGroup[] {
   return evidenceTimelineGroups(
     mentions.map((m) => ({
       id: m.id,
@@ -538,6 +538,49 @@ function ReconcileBody({
   );
 }
 
+/**
+ * The reconcile column shell — eyebrow + name + meta header, optional error
+ * strip, scrollable body, optional footer. Shared between the review-queue
+ * reconcile sheet and the graph-verdict merge sheet so the two comparison
+ * surfaces stay one structure.
+ */
+export function CompareColumn({
+  eyebrow,
+  eyebrowClass,
+  name,
+  meta,
+  toneClass = "border-border",
+  error,
+  children,
+  footer,
+  testId,
+}: {
+  eyebrow: string;
+  eyebrowClass?: string;
+  name: string;
+  meta?: ReactNode;
+  toneClass?: string;
+  error?: string | null;
+  children: ReactNode;
+  footer?: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <div className={`flex min-h-0 flex-col rounded-lg border ${toneClass}`} data-testid={testId}>
+      <div className="border-b border-current/10 px-3 py-2">
+        <p className={`text-[10px] font-medium uppercase tracking-wider ${eyebrowClass ?? "text-muted-foreground"}`}>
+          {eyebrow}
+        </p>
+        <p className="mt-0.5 truncate text-sm font-semibold">{name}</p>
+        {meta ? <div className="mt-1 flex flex-wrap items-center gap-1.5">{meta}</div> : null}
+      </div>
+      {error ? <div className="border-b border-border px-3 py-2 text-xs text-destructive">{error}</div> : null}
+      <div className="flex min-h-0 flex-1 flex-col px-3 py-2">{children}</div>
+      {footer ? <div className="border-t border-border px-3 py-2">{footer}</div> : null}
+    </div>
+  );
+}
+
 function ReconcileColumn({
   title,
   toneClass,
@@ -556,34 +599,35 @@ function ReconcileColumn({
   reviewId: string;
 }) {
   return (
-    <div className={`flex min-h-0 flex-col rounded-lg border ${toneClass}`} data-testid="reconcile-proposed">
-      <div className="border-b border-current/10 px-3 py-2">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
-        <p className="mt-0.5 truncate text-sm font-semibold">{name}</p>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+    <CompareColumn
+      eyebrow={title}
+      name={name}
+      toneClass={toneClass}
+      testId="reconcile-proposed"
+      meta={
+        <>
           <Badge variant="outline" className="text-[10px]">
             {typeLabel}
           </Badge>
           {email ? <span className="text-[11px] text-muted-foreground">{email}</span> : null}
+        </>
+      }
+    >
+      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Evidence ({evidence.length})
+      </p>
+      {evidence.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">No evidence rows.</p>
+      ) : (
+        <div className="mt-1 flex-1 overflow-y-auto">
+          <TimelineStrip
+            groups={evidenceTimelineGroups(evidence)}
+            loadQuotes={reviewQuotesLoader(reviewId)}
+            quotesScope={reviewId}
+          />
         </div>
-      </div>
-      <div className="flex min-h-0 flex-1 flex-col px-3 py-2">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Evidence ({evidence.length})
-        </p>
-        {evidence.length === 0 ? (
-          <p className="mt-1 text-xs text-muted-foreground">No evidence rows.</p>
-        ) : (
-          <div className="mt-1 flex-1 overflow-y-auto">
-            <TimelineStrip
-              groups={evidenceTimelineGroups(evidence)}
-              loadQuotes={reviewQuotesLoader(reviewId)}
-              quotesScope={reviewId}
-            />
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </CompareColumn>
   );
 }
 
@@ -618,73 +662,62 @@ function CandidateView({
   const sectionTitle = isPickedPreview ? "Picked — confirm to merge" : "Suggested existing";
   const email = entityEmail(candidateEntity) ?? (isPickedPreview ? null : row.candidate?.email);
   return (
-    <div
-      className={`flex min-h-0 flex-col rounded-lg border bg-muted/20 ${
-        isPickedPreview ? "border-emerald-400 dark:border-emerald-600" : "border-border"
-      }`}
-      data-testid="reconcile-candidate"
-    >
-      <div className="flex items-start justify-between gap-2 border-b border-border px-3 py-2">
-        <div className="min-w-0">
-          <p
-            className={`text-[10px] font-medium uppercase tracking-wider ${
-              isPickedPreview ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground"
-            }`}
+    <CompareColumn
+      testId="reconcile-candidate"
+      toneClass={`bg-muted/20 ${isPickedPreview ? "border-emerald-400 dark:border-emerald-600" : "border-border"}`}
+      eyebrow={sectionTitle}
+      eyebrowClass={isPickedPreview ? "text-emerald-700 dark:text-emerald-400" : undefined}
+      name={candidateEntity?.name ?? row.candidate?.name ?? "…"}
+      error={errorMessage}
+      meta={
+        <>
+          {candidateEntity ? (
+            <Badge variant="outline" className="text-[10px]">
+              {humanSourceType(candidateEntity.sourceType)}
+            </Badge>
+          ) : null}
+          {email ? <span className="text-[11px] text-muted-foreground">{email}</span> : null}
+          {row.candidate_reason && !isPickedPreview ? (
+            <span className="text-[11px] text-muted-foreground">· {row.candidate_reason}</span>
+          ) : null}
+        </>
+      }
+      footer={
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={onConfirm}
+            disabled={isPending}
+            data-testid="confirm-merge"
+            className="h-7 gap-1 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
           >
-            {sectionTitle}
-          </p>
-          <p className="mt-0.5 truncate text-sm font-semibold">{candidateEntity?.name ?? row.candidate?.name ?? "…"}</p>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            {candidateEntity ? (
-              <Badge variant="outline" className="text-[10px]">
-                {humanSourceType(candidateEntity.sourceType)}
-              </Badge>
-            ) : null}
-            {email ? <span className="text-[11px] text-muted-foreground">{email}</span> : null}
-            {row.candidate_reason && !isPickedPreview ? (
-              <span className="text-[11px] text-muted-foreground">· {row.candidate_reason}</span>
-            ) : null}
-          </div>
+            <CheckIcon size={12} weight="bold" />
+            Merge into {candidateEntity?.name ?? row.candidate?.name ?? "this"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onReject}
+            disabled={isPending}
+            data-testid="reject-match"
+            className="h-7"
+          >
+            Not a match
+          </Button>
         </div>
-      </div>
-      {errorMessage ? (
-        <div className="border-b border-border px-3 py-2 text-xs text-destructive">{errorMessage}</div>
-      ) : null}
-      <div className="flex min-h-0 flex-1 flex-col px-3 py-2">
-        <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          Recent mentions ({candidateMentions.length})
-        </p>
-        {candidateMentions.length === 0 ? (
-          <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
-        ) : (
-          <div className="mt-1 flex-1 overflow-y-auto">
-            <TimelineStrip groups={mentionTimelineGroups(candidateMentions)} entityId={candidateEntity?.id} />
-          </div>
-        )}
-      </div>
-      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
-        <Button
-          size="sm"
-          onClick={onConfirm}
-          disabled={isPending}
-          data-testid="confirm-merge"
-          className="h-7 gap-1 bg-emerald-600 text-white hover:bg-emerald-700 dark:bg-emerald-700 dark:hover:bg-emerald-600"
-        >
-          <CheckIcon size={12} weight="bold" />
-          Merge into {candidateEntity?.name ?? row.candidate?.name ?? "this"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={onReject}
-          disabled={isPending}
-          data-testid="reject-match"
-          className="h-7"
-        >
-          Not a match
-        </Button>
-      </div>
-    </div>
+      }
+    >
+      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Recent mentions ({candidateMentions.length})
+      </p>
+      {candidateMentions.length === 0 ? (
+        <p className="mt-1 text-xs text-muted-foreground">No mentions yet.</p>
+      ) : (
+        <div className="mt-1 flex-1 overflow-y-auto">
+          <TimelineStrip groups={mentionTimelineGroups(candidateMentions)} entityId={candidateEntity?.id} />
+        </div>
+      )}
+    </CompareColumn>
   );
 }
 
