@@ -50,6 +50,7 @@ const CONNECTOR_GLYPHS = new Set([
   "notion",
   "linear",
   "otter",
+  "linkedin_aimfox",
   "zoho_crm",
   "whatsapp",
 ]);
