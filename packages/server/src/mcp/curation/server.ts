@@ -140,7 +140,7 @@ export async function createCurationMcpServer(params: {
     [
       "Store entity graph cleanup proposals after dry-run validation.",
       "remove_alias carries the alias in targetName.",
-      "autoApply is valid only for remove_alias proposals whose alias provenance is mint_model or legacy; all other proposals await human approval.",
+      "Every proposal parks for review; machine approvals apply only in the resolver executor leg, humans approve in the UI.",
     ].join(" "),
     proposeGraphVerdictsSchema,
     (args) => handleProposeGraphVerdicts(args, params.db, { userId: params.userId, tokenId: params.tokenId }),

@@ -184,7 +184,6 @@ describe("curation PR15 postgres", () => {
     const proposed = parseJsonResult<ProposeResult>(
       await handleProposeGraphVerdicts(
         {
-          autoApply: true,
           verdicts: [
             {
               action: "remove_alias",
@@ -214,7 +213,7 @@ describe("curation PR15 postgres", () => {
     expect(proposed).toMatchObject({
       stored: 2,
       bounced: 1,
-      summary: "autoApplied=1 awaiting_human=1 bounced=1 auto_apply_failed=0",
+      summary: "awaiting_human=2 bounced=1",
     });
     expect(
       proposed.results.map((row) => ({
@@ -227,7 +226,7 @@ describe("curation PR15 postgres", () => {
       {
         action: "remove_alias",
         targetName: "Legacy Echo",
-        disposition: "autoApplied",
+        disposition: "awaiting_human",
         validationReason: null,
       },
       {

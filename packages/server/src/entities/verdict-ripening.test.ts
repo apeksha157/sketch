@@ -69,7 +69,16 @@ async function seedFile(db: Kysely<DB>, id: string, source: string, threadId: st
 async function seedEntity(db: Kysely<DB>, id: string): Promise<void> {
   await db
     .insertInto("entities")
-    .values({ id, name: id, source_type: "company", aliases: "[]", status: "confirmed" })
+    .values({
+      id,
+      name: id,
+      source_type: "company",
+      aliases: "[]",
+      status: "confirmed",
+      hotness: 0,
+      created_at: "2026-09-01T00:00:00.000Z",
+      updated_at: "2026-09-01T00:00:00.000Z",
+    })
     .execute();
 }
 
@@ -195,6 +204,7 @@ describe("verdict ripening (3.1b)", () => {
           source: "llm_extraction",
           relation: "mentioned",
           confidence: "INFERRED",
+          mentioned_at: "2026-09-01T00:00:00.000Z",
         })
         .execute();
     }
