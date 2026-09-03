@@ -6,6 +6,7 @@
  * - "document": full content stored locally (docs, pages, PRDs)
  * - "structured": metadata only, live-fetched when needed (tasks, issues)
  */
+import type { PhoneCountryCode } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import type { DB } from "../db/schema";
@@ -30,6 +31,7 @@ export const CONNECTOR_TYPES = [
   "fireflies",
   "otter",
   "zoho_crm",
+  "linkedin_aimfox",
   "whatsapp",
   "slack",
 ] as const;
@@ -285,6 +287,20 @@ export interface PersonEntitySeed {
   subtype: "internal" | "external";
   source: string;
   sourceId: string;
+  sourceUrl?: string;
+  metadata?: Record<string, unknown>;
+  linkedinPublicIdentifier?: string;
+  linkedinUrl?: string;
+  emails?: string[];
+  phones?: Array<{ number: string; type?: string; country?: string }>;
+  company?: {
+    name: string | null;
+    slug: string | null;
+    linkedinUrl: string | null;
+    websiteDomains: string[];
+    engaged: boolean;
+  };
+  enrichmentCandidate?: boolean;
 }
 
 export interface ContainerObservation {
@@ -314,6 +330,8 @@ export interface ContactPointSeed {
   source: string;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  makePrimary?: boolean;
+  phoneCountry?: PhoneCountryCode | null;
 }
 
 export interface CommitmentSeed {
@@ -577,7 +595,13 @@ export interface Connector {
     containerTargetOverrides?: Record<string, ContainerTarget>;
     onEmailSuppressed?: (record: SuppressedEmailRecord) => Promise<void>;
     onSourceItemRemoved?: (record: SourceItemRemovalRecord) => Promise<void>;
+    getExistingItemState?: (providerFileId: string) => {
+      sourceMeta: Record<string, unknown> | null;
+      threadId: string | null;
+    } | null;
   }): AsyncGenerator<SyncedItem>;
+
+  onItemResult?(result: { item: SyncedItem; persisted: boolean; error?: string }): void | Promise<void>;
 
   /** Return the new sync cursor after a sync run. */
   getCursor(opts: {
