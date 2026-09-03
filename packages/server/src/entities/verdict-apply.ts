@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { Kysely, Selectable } from "kysely";
 import { createEntityRepository, whereLiveEntity } from "../db/repositories/entities";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
-import { type GraphVerdictRow, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
+import {
+  GRAPH_VERDICT_ACTIVE_STATUSES,
+  type GraphVerdictRow,
+  createGraphVerdictRepository,
+} from "../db/repositories/graph-verdicts";
 import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import type { ContainersTable, DB, EntitiesTable, EntityAliasProvenance } from "../db/schema";
 import type { CleanupAction, CleanupVerdict } from "./cleanup-adjudication";
@@ -49,10 +53,20 @@ export class GraphVerdictApplyError extends Error {
   }
 }
 
+/**
+ * Any active status may dry-run (a reviewer previews machine-waiting rows the
+ * same way as human-queue rows); only "approved" may actually apply.
+ */
+type DryRunnableStatus = (typeof GRAPH_VERDICT_ACTIVE_STATUSES)[number];
+
+function isDryRunnable(status: string): status is DryRunnableStatus {
+  return (GRAPH_VERDICT_ACTIVE_STATUSES as readonly string[]).includes(status);
+}
+
 export type GraphVerdictApplyResult = {
   verdictId: string;
   dryRun: boolean;
-  status: "approved" | "awaiting_human" | "applied";
+  status: DryRunnableStatus | "applied";
   ledgerRef: string | null;
   wouldChange: Record<string, number>;
   plan: CleanupApplyPlanRow | ContainerApplyPlanRow | MentionApplyPlanRow;
@@ -658,7 +672,7 @@ async function applyContainerVerdict(
     return {
       verdictId: verdict.id,
       dryRun: true,
-      status: verdict.status as "approved" | "awaiting_human",
+      status: verdict.status as DryRunnableStatus,
       ledgerRef: verdict.applied_ledger_ref,
       wouldChange,
       plan,
@@ -786,7 +800,7 @@ async function applyMentionVerdict(
     return {
       verdictId: verdict.id,
       dryRun: true,
-      status: verdict.status as "approved" | "awaiting_human",
+      status: verdict.status as DryRunnableStatus,
       ledgerRef: verdict.applied_ledger_ref,
       wouldChange: plan.wouldChange,
       plan,
@@ -869,7 +883,7 @@ export async function applyGraphVerdict(
     const applied = await loadAppliedResult(db, input.verdictId);
     if (applied) return applied;
   }
-  if (existing.status !== "approved" && !(input.dryRun && existing.status === "awaiting_human")) {
+  if (existing.status !== "approved" && !(input.dryRun && isDryRunnable(existing.status))) {
     throw new GraphVerdictApplyError("INVALID_VERDICT_STATE", "Graph verdict is not applicable", {
       verdictId: input.verdictId,
       status: existing.status,
@@ -883,7 +897,7 @@ export async function applyGraphVerdict(
       if (!verdict) {
         throw new GraphVerdictApplyError("NOT_FOUND", "Graph verdict not found", { verdictId: input.verdictId });
       }
-      if (verdict.status !== "approved" && !(input.dryRun && verdict.status === "awaiting_human")) {
+      if (verdict.status !== "approved" && !(input.dryRun && isDryRunnable(verdict.status))) {
         throw new GraphVerdictApplyError("INVALID_VERDICT_STATE", "Graph verdict is not applicable", {
           verdictId: input.verdictId,
           status: verdict.status,
@@ -900,7 +914,7 @@ export async function applyGraphVerdict(
         return {
           verdictId: verdict.id,
           dryRun: true,
-          status: verdict.status as "approved" | "awaiting_human",
+          status: verdict.status as DryRunnableStatus,
           ledgerRef: verdict.applied_ledger_ref,
           wouldChange: plan.wouldChange,
           plan,

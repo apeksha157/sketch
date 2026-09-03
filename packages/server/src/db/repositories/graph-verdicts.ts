@@ -4,8 +4,45 @@ import type { DB, GraphVerdictRunsTable, GraphVerdictsTable } from "../schema";
 
 export type GraphVerdictRunRow = Selectable<GraphVerdictRunsTable>;
 export type GraphVerdictRow = Selectable<GraphVerdictsTable>;
-export type GraphVerdictStatus = "awaiting_human" | "bounced" | "approved" | "rejected" | "applied" | "reverted";
+export type GraphVerdictStatus =
+  | "awaiting_human"
+  | "bounced"
+  | "approved"
+  | "rejected"
+  | "applied"
+  | "reverted"
+  | "pending_corroboration"
+  | "veto_window"
+  | "retired";
 export type GraphVerdictValidationStatus = "ok" | "failed";
+
+/**
+ * Statuses that occupy a slot in the partial unique indexes (migration 223).
+ * Every predicate that decides "does an open verdict already exist for this
+ * subject" must use this set — a hand-rolled two-status check silently lets
+ * duplicate proposals through once machine states exist.
+ */
+export const GRAPH_VERDICT_ACTIVE_STATUSES = [
+  "awaiting_human",
+  "approved",
+  "pending_corroboration",
+  "veto_window",
+] as const satisfies readonly GraphVerdictStatus[];
+
+/** Statuses a human Confirm can approve; pending_corroboration has not ripened. */
+export const GRAPH_VERDICT_APPROVABLE_STATUSES = ["awaiting_human", "veto_window"] as const;
+/** Statuses a human Dismiss can reject — any machine-waiting state can be killed early. */
+export const GRAPH_VERDICT_REJECTABLE_STATUSES = ["awaiting_human", "pending_corroboration", "veto_window"] as const;
+
+/**
+ * Unordered merge-pair identity: sorted entity ids joined with "|" (never
+ * NUL — Postgres text cannot store zero bytes). A→B and B→A share one key.
+ */
+export function mergePairKey(subjectEntityId: string, targetEntityId: string): string {
+  return subjectEntityId < targetEntityId
+    ? `${subjectEntityId}|${targetEntityId}`
+    : `${targetEntityId}|${subjectEntityId}`;
+}
 
 export type GraphVerdictRunRollup = GraphVerdictRunRow & {
   rollups: Record<GraphVerdictStatus, number>;
@@ -75,6 +112,14 @@ function toInsert(input: StoreGraphVerdictInput, id: string, now: string): Inser
     decided_at: null,
     decided_by_user_id: null,
     applied_ledger_ref: null,
+    veto_until: null,
+    corroboration_json: null,
+    retired_reason: null,
+    dry_streak: 0,
+    merge_pair_key:
+      input.action === "merge_into" && input.subjectEntityId && input.targetEntityId
+        ? mergePairKey(input.subjectEntityId, input.targetEntityId)
+        : null,
     created_at: now,
     updated_at: now,
   };
@@ -236,6 +281,9 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
         rejected: 0,
         applied: 0,
         reverted: 0,
+        pending_corroboration: 0,
+        veto_window: 0,
+        retired: 0,
       });
       for (const run of runs) rollupsByRun.set(run.id, empty());
       for (const row of counts) {
@@ -302,7 +350,7 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
           updated_at: now,
         })
         .where("id", "=", input.id)
-        .where("status", "=", "awaiting_human")
+        .where("status", "in", [...GRAPH_VERDICT_APPROVABLE_STATUSES])
         .where("superseded_at", "is", null)
         .executeTakeFirst();
       return updatedCount(result) === 1;
@@ -319,7 +367,7 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
           updated_at: now,
         })
         .where("id", "=", input.id)
-        .where("status", "=", "awaiting_human")
+        .where("status", "in", [...GRAPH_VERDICT_REJECTABLE_STATUSES])
         .where("superseded_at", "is", null)
         .executeTakeFirst();
       return updatedCount(result) === 1;

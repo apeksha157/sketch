@@ -63,6 +63,9 @@ const STATUS_COPY: Record<GraphVerdictStatus, string> = {
   bounced: "Bounced by validation",
   rejected: "Rejected",
   reverted: "Reverted",
+  pending_corroboration: "Waiting for more proof",
+  veto_window: "Corroborated — ready",
+  retired: "Retired — revives on new evidence",
 };
 
 const ENTITY_TYPE_PLURALS: Record<string, string> = {
@@ -157,6 +160,9 @@ export const GRAPH_VERDICT_STATUS_TONES: Record<GraphVerdictStatus, string> = {
   bounced: "text-muted-foreground",
   rejected: "text-muted-foreground",
   reverted: "text-muted-foreground",
+  pending_corroboration: "text-muted-foreground",
+  veto_window: "text-amber-600 dark:text-amber-500",
+  retired: "text-muted-foreground",
 };
 
 function isStaleError(err: unknown): boolean {
@@ -209,7 +215,12 @@ const RELATED_KIND_COPY: Record<RelatedVerdictKind, string> = {
  * later already happened, so the sheet shows the recorded ledger ref instead.
  */
 function canPreview(status: GraphVerdictStatus): boolean {
-  return status === "awaiting_human" || status === "approved";
+  return (
+    status === "awaiting_human" ||
+    status === "approved" ||
+    status === "pending_corroboration" ||
+    status === "veto_window"
+  );
 }
 
 /**

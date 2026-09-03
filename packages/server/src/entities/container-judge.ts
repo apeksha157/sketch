@@ -3,7 +3,11 @@ import type { Logger } from "pino";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { readHierarchyMappingConfig } from "../connectors/hierarchy-mapping";
 import type { AgenticOptions, AgenticOutcome } from "../connectors/openrouter-generate";
-import { type StoreGraphVerdictInput, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
+import {
+  GRAPH_VERDICT_ACTIVE_STATUSES,
+  type StoreGraphVerdictInput,
+  createGraphVerdictRepository,
+} from "../db/repositories/graph-verdicts";
 import type { ConnectorConfigsTable, ContainersTable, DB, GraphVerdictsTable, IndexedFilesTable } from "../db/schema";
 import {
   filesForContainer,
@@ -183,7 +187,7 @@ async function listDocketExcludedContainerVerdictIds(db: Kysely<DB>, containers:
   for (const row of rows) {
     const containerId = row.subject_container_id;
     if (!containerId) continue;
-    if (row.status === "awaiting_human" || row.status === "approved") {
+    if ((GRAPH_VERDICT_ACTIVE_STATUSES as readonly string[]).includes(row.status)) {
       excluded.add(containerId);
     }
     if (!latestByContainer.has(containerId)) {

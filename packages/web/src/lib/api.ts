@@ -581,7 +581,16 @@ export interface ProjectMintingAcceptance {
   taskParentUpdates: number;
 }
 
-export type GraphVerdictStatus = "awaiting_human" | "bounced" | "approved" | "rejected" | "applied" | "reverted";
+export type GraphVerdictStatus =
+  | "awaiting_human"
+  | "bounced"
+  | "approved"
+  | "rejected"
+  | "applied"
+  | "reverted"
+  | "pending_corroboration"
+  | "veto_window"
+  | "retired";
 
 export interface GraphVerdictRun {
   id: string;
@@ -627,6 +636,10 @@ export interface GraphVerdict {
   decidedAt: string | null;
   decidedByUserId: string | null;
   appliedLedgerRef: string | null;
+  vetoUntil: string | null;
+  corroboration: unknown;
+  retiredReason: string | null;
+  dryStreak: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -634,7 +647,7 @@ export interface GraphVerdict {
 export interface GraphVerdictApplication {
   verdictId: string;
   dryRun: boolean;
-  status: "approved" | "awaiting_human" | "applied";
+  status: "approved" | "awaiting_human" | "pending_corroboration" | "veto_window" | "applied";
   ledgerRef: string | null;
   wouldChange: Record<string, number>;
   plan: {
@@ -3909,7 +3922,9 @@ export const api = {
   },
   graphVerdicts: {
     listOpen() {
-      return request<{ verdicts: GraphVerdict[] }>("/api/graph-verdicts?status=awaiting_human,approved");
+      return request<{ verdicts: GraphVerdict[] }>(
+        "/api/graph-verdicts?status=awaiting_human,approved,pending_corroboration,veto_window",
+      );
     },
     listRuns() {
       return request<{ runs: GraphVerdictRun[] }>("/api/graph-verdicts/runs");

@@ -2,6 +2,7 @@ import type { Kysely } from "kysely";
 import { z } from "zod/v4";
 import type { GenerateMeta } from "../connectors/gemini-generate";
 import type { AgenticOptions, AgenticOutcome, AgenticTool } from "../connectors/openrouter-generate";
+import { GRAPH_VERDICT_ACTIVE_STATUSES } from "../db/repositories/graph-verdicts";
 import { createLlmUsageRepository } from "../db/repositories/llm-usage";
 import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/machine-principal";
 import type { DB } from "../db/schema";
@@ -578,7 +579,7 @@ async function activeProposalExists(db: Kysely<DB>, row: BacklogSweepQueueRow, v
       .where("subject_mention_name", "=", normalizeEntityMatchName(row.entity_type, row.proposed_name))
       .where("subject_entity_type", "=", row.entity_type)
       .where("action", "=", verdict.verdict === "link" ? "link_to" : "dismiss")
-      .where("status", "in", ["awaiting_human", "approved"])
+      .where("status", "in", [...GRAPH_VERDICT_ACTIVE_STATUSES])
       .where("superseded_at", "is", null);
     query =
       verdict.verdict === "link"
@@ -595,7 +596,7 @@ async function activeProposalExists(db: Kysely<DB>, row: BacklogSweepQueueRow, v
         .where("subject_entity_id", "=", subjectEntityId)
         .where("action", "=", "merge_into")
         .where("target_entity_id", "=", targetEntityId)
-        .where("status", "in", ["awaiting_human", "approved"])
+        .where("status", "in", [...GRAPH_VERDICT_ACTIVE_STATUSES])
         .where("superseded_at", "is", null)
         .executeTakeFirst(),
     );

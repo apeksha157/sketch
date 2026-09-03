@@ -2,6 +2,9 @@ import { type Context, Hono } from "hono";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import {
+  GRAPH_VERDICT_ACTIVE_STATUSES,
+  GRAPH_VERDICT_APPROVABLE_STATUSES,
+  GRAPH_VERDICT_REJECTABLE_STATUSES,
   type GraphVerdictRow,
   type GraphVerdictRunRollup,
   createGraphVerdictRepository,
@@ -64,6 +67,10 @@ function serializeVerdict(row: GraphVerdictRow) {
     decidedAt: row.decided_at,
     decidedByUserId: row.decided_by_user_id,
     appliedLedgerRef: row.applied_ledger_ref,
+    vetoUntil: row.veto_until,
+    corroboration: parseJson(row.corroboration_json),
+    retiredReason: row.retired_reason,
+    dryStreak: row.dry_streak,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -100,19 +107,19 @@ export function graphVerdictRoutes(db: Kysely<DB>, logger: Logger) {
     if (forbidden) return c.json(forbidden, 403);
 
     const statuses = (c.req.query("status") ?? "").split(",").filter(Boolean);
-    const allowed = new Set(["awaiting_human", "approved"]);
+    const allowed = new Set<string>(GRAPH_VERDICT_ACTIVE_STATUSES);
     if (statuses.length === 0 || statuses.some((status) => !allowed.has(status))) {
       return c.json(
         {
           error: {
             code: "UNSUPPORTED_FILTER",
-            message: "status must be a comma-separated subset of: awaiting_human, approved",
+            message: `status must be a comma-separated subset of: ${GRAPH_VERDICT_ACTIVE_STATUSES.join(", ")}`,
           },
         },
         400,
       );
     }
-    const rows = await verdicts.listByStatuses(statuses as ("awaiting_human" | "approved")[]);
+    const rows = await verdicts.listByStatuses(statuses as (typeof GRAPH_VERDICT_ACTIVE_STATUSES)[number][]);
     return c.json({ verdicts: rows.map(serializeVerdict) });
   });
 
@@ -193,7 +200,7 @@ export function graphVerdictRoutes(db: Kysely<DB>, logger: Logger) {
     const won = await verdicts.markApproved({ id, actorUserId: c.get("sub") });
     const row = await verdicts.findById(id);
     if (!row) return c.json({ error: { code: "NOT_FOUND", message: "Graph verdict not found" } }, 404);
-    if (!won && row.status === "awaiting_human") {
+    if (!won && (GRAPH_VERDICT_APPROVABLE_STATUSES as readonly string[]).includes(row.status)) {
       return c.json({ error: { code: "APPLY_CONFLICT", message: "Graph verdict approval lost" } }, 409);
     }
     return c.json({ verdict: serializeVerdict(row) });
@@ -207,7 +214,7 @@ export function graphVerdictRoutes(db: Kysely<DB>, logger: Logger) {
     const won = await verdicts.markRejected({ id, actorUserId: c.get("sub") });
     const row = await verdicts.findById(id);
     if (!row) return c.json({ error: { code: "NOT_FOUND", message: "Graph verdict not found" } }, 404);
-    if (!won && row.status === "awaiting_human") {
+    if (!won && (GRAPH_VERDICT_REJECTABLE_STATUSES as readonly string[]).includes(row.status)) {
       return c.json({ error: { code: "APPLY_CONFLICT", message: "Graph verdict rejection lost" } }, 409);
     }
     return c.json({ verdict: serializeVerdict(row) });

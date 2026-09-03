@@ -1026,6 +1026,11 @@ export interface GraphVerdictsTable {
   decided_at: string | null;
   decided_by_user_id: string | null;
   applied_ledger_ref: string | null;
+  veto_until: string | null;
+  corroboration_json: string | null;
+  retired_reason: string | null;
+  dry_streak: Generated<number>;
+  merge_pair_key: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
