@@ -109,7 +109,7 @@ export function createLinkedinAimfoxConnector(): Connector {
 
   return {
     type: "linkedin_aimfox",
-    perUserAuth: true,
+    perUserAuth: false,
     requiresOAuthClientSetup: false,
     syncIsCompleteSnapshot: false,
     promotableFileTypes: [],

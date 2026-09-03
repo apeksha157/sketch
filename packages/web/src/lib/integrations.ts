@@ -527,7 +527,7 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       "Copy the workspace API key",
       "Paste the key below; all LinkedIn accounts connected to that key will sync",
     ],
-    perUserAuth: true,
+    perUserAuth: false,
     requiresOAuthClientSetup: false,
   },
   {

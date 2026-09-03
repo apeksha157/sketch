@@ -10,6 +10,7 @@ import { createApp } from "../http";
 import { createTestConfig, createTestDb, createTestLogger } from "../test-utils";
 
 const EMAIL = "member@example.com";
+const ADMIN_EMAIL = "admin@example.com";
 const PASSWORD = "testpassword123";
 
 function aimfoxAccountsResponse(accounts: Array<{ id: string }>): Response {
@@ -56,7 +57,7 @@ async function login(app: ReturnType<typeof createApp>): Promise<string> {
   const res = await app.request("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: EMAIL, password: PASSWORD }),
+    body: JSON.stringify({ email: ADMIN_EMAIL, password: PASSWORD }),
   });
   if (res.status !== 200) {
     throw new Error(`login failed ${res.status}: ${await res.text()}`);
@@ -80,7 +81,7 @@ describe("LinkedIn Aimfox connector API", () => {
     await db.destroy();
   });
 
-  it("connects with a personal Aimfox key and stores discovered account ids in scope_config", async () => {
+  it("connects with a workspace Aimfox key and stores discovered account ids in scope_config", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(aimfoxAccountsResponse([{ id: "acct-1" }, { id: "acct-2" }]));
     const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
     const cookie = await login(app);
@@ -148,7 +149,7 @@ describe("LinkedIn Aimfox connector API", () => {
     expect(JSON.parse(updated?.credentials ?? "{}")).toEqual({ type: "api_key", api_key: "rotated-key" });
   });
 
-  it("allows disconnecting and reconnecting the personal connector", async () => {
+  it("allows disconnecting and reconnecting the workspace connector", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => aimfoxAccountsResponse([{ id: "acct-1" }]));
     const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
     const cookie = await login(app);
