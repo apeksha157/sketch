@@ -984,7 +984,7 @@ export async function linkReviewRowToExistingEntity(
   ctx: ResolveCtx,
   opts: { reviewId: string; entityId: string },
   decision: {
-    decider?: "human" | "judge";
+    decider?: "human" | "judge" | "backlog_sweep";
     decidedBy?: string;
     provenanceTier?: "human_confirmed" | "machine_confirmed";
     verdictRef?: string | null;
@@ -1095,7 +1095,7 @@ async function recordResolutionLink(
   row: QueueRow,
   target: Entity,
   evidence: EvidenceRow[],
-  opts: { decider: "human" | "judge"; decidedBy?: string; verdictRef?: string | null },
+  opts: { decider: "human" | "judge" | "backlog_sweep"; decidedBy?: string; verdictRef?: string | null },
 ): Promise<void> {
   const { source, sourceId } = resolutionSource(row, evidence, row.id);
   await ctx.resolutionLedger.recordLink({
