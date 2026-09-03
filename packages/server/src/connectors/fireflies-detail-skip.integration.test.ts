@@ -9,13 +9,14 @@
  * transcript ids get detail requests and which items are yielded.
  *
  * Runs against both dialects: ownership traversal and source_meta parsing are
- * DB-level concerns.
+ * DB-level concerns. The Postgres variant uses the worker-shared PGlite with
+ * per-test BEGIN/ROLLBACK per the repo testing convention.
  */
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import pino from "pino";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB } from "../db/schema";
-import { createTestDb, createTestPgDb } from "../test-utils";
+import { createTestDb, getSharedPgDb } from "../test-utils";
 import { createFirefliesConnector } from "./fireflies";
 import type { SyncedItem } from "./types";
 
@@ -38,6 +39,15 @@ interface DetailMarkerSeed {
   summaryObserved: boolean;
   contactsLoaded: boolean;
   nextRetryAt?: string;
+}
+
+interface DetailFixture {
+  summary?: {
+    overview: string | string[] | null;
+    shorthand_bullet: string | string[] | null;
+    action_items: string | string[] | null;
+    keywords: string | null;
+  } | null;
 }
 
 function settledMarker(): DetailMarkerSeed {
@@ -117,9 +127,13 @@ async function runSync(
   db: Kysely<DB> | undefined,
   connectorConfigId: string,
   transcripts: TranscriptFixture[],
-  opts: { cursor?: string | null; contactsFail?: boolean } = {},
+  opts: { cursor?: string | null; contactsFail?: boolean; detail?: DetailFixture } = {},
 ): Promise<{ items: SyncedItem[]; detailedIds: string[] }> {
   const detailedIds: string[] = [];
+  const detailSummary =
+    opts.detail !== undefined
+      ? opts.detail.summary
+      : { overview: "A summary", shorthand_bullet: null, action_items: null, keywords: null };
   const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
     const body = JSON.parse((init as RequestInit).body as string) as {
       query: string;
@@ -159,17 +173,10 @@ async function runSync(
 
     if (body.query.includes("transcript(id:")) {
       detailedIds.push(body.variables.id as string);
-      return new Response(
-        JSON.stringify({
-          data: {
-            transcript: {
-              summary: { overview: "A summary", shorthand_bullet: null, action_items: null, keywords: null },
-              speakers: [],
-            },
-          },
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return new Response(JSON.stringify({ data: { transcript: { summary: detailSummary, speakers: [] } } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     return new Response(JSON.stringify({ data: {} }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -200,15 +207,33 @@ function detailMarkerOf(item: SyncedItem): Record<string, unknown> {
   return (item.sourceMeta as { detail: Record<string, unknown> }).detail;
 }
 
-function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
+function runSuite(label: string, mode: "sqlite" | "pglite") {
   describe(label, () => {
-    afterEach(() => {
+    let db!: Kysely<DB>;
+
+    if (mode === "pglite") {
+      beforeAll(async () => {
+        db = await getSharedPgDb();
+      }, 30000);
+    }
+
+    beforeEach(async () => {
+      if (mode === "pglite") {
+        await sql`BEGIN`.execute(db);
+      } else {
+        db = await createTestDb();
+      }
+      await seedBase(db);
+    });
+
+    afterEach(async () => {
+      if (mode === "pglite") {
+        await sql`ROLLBACK`.execute(db);
+      }
       vi.restoreAllMocks();
     });
 
     it("skips detail and yield for a linked transcript with a settled marker", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -222,8 +247,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("lets config B skip a settled file owned by config A but linked to B", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -237,8 +260,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("details a settled file that is linked only to the other config", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -252,8 +273,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("details a file whose link to this config was removed", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -267,8 +286,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("details an archived transcript that reappears, even with a settled marker", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -283,8 +300,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("skips an unsettled transcript whose nextRetryAt is in the future", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -304,8 +319,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("re-details an unsettled transcript past nextRetryAt and increments attempts", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -328,9 +341,26 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(marker.nextRetryAt).toBeUndefined();
     });
 
+    it("persists the yielded marker and skips on the following run", async () => {
+      const { items: firstItems, detailedIds: firstDetailed } = await runSync(db, CONFIG_A, [{ id: "t1" }]);
+      expect(firstDetailed).toEqual(["t1"]);
+      expect(firstItems).toHaveLength(1);
+
+      // Store the file the way processSyncedItem would: the yielded item's
+      // sourceMeta lands in indexed_files.source_meta and the file is linked.
+      await seedIndexedTranscript(db, {
+        providerFileId: "t1",
+        ownedBy: CONFIG_A,
+        linkedTo: [CONFIG_A],
+        rawSourceMeta: JSON.stringify(firstItems[0].sourceMeta),
+      });
+
+      const { items: secondItems, detailedIds: secondDetailed } = await runSync(db, CONFIG_A, [{ id: "t1" }]);
+      expect(secondDetailed).toEqual([]);
+      expect(secondItems).toHaveLength(0);
+    });
+
     it("treats attempts >= 4 as settled even when contacts never loaded (accepted residual edge)", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -344,8 +374,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("details transcripts with malformed or missing markers", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -359,15 +387,35 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         rawSourceMeta: '{"detail":"wrong-shape"}',
       });
       await seedIndexedTranscript(db, { providerFileId: "t3", ownedBy: CONFIG_A, linkedTo: [CONFIG_A], marker: null });
+      await seedIndexedTranscript(db, {
+        providerFileId: "t4",
+        ownedBy: CONFIG_A,
+        linkedTo: [CONFIG_A],
+        rawSourceMeta: JSON.stringify({
+          detail: { fetchedAt: new Date().toISOString(), attempts: -1, summaryObserved: true, contactsLoaded: true },
+        }),
+      });
+      await seedIndexedTranscript(db, {
+        providerFileId: "t5",
+        ownedBy: CONFIG_A,
+        linkedTo: [CONFIG_A],
+        rawSourceMeta: JSON.stringify({
+          detail: { fetchedAt: new Date().toISOString(), attempts: 1.5, summaryObserved: true, contactsLoaded: true },
+        }),
+      });
 
-      const { items, detailedIds } = await runSync(db, CONFIG_A, [{ id: "t1" }, { id: "t2" }, { id: "t3" }]);
-      expect(detailedIds.sort()).toEqual(["t1", "t2", "t3"]);
-      expect(items).toHaveLength(3);
+      const { items, detailedIds } = await runSync(db, CONFIG_A, [
+        { id: "t1" },
+        { id: "t2" },
+        { id: "t3" },
+        { id: "t4" },
+        { id: "t5" },
+      ]);
+      expect(detailedIds.sort()).toEqual(["t1", "t2", "t3", "t4", "t5"]);
+      expect(items).toHaveLength(5);
     });
 
     it("never skips on a full sync (no cursor)", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -381,8 +429,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("ignores rows from other sources sharing a provider_file_id namespace", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "t1",
         ownedBy: CONFIG_A,
@@ -397,8 +443,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("handles mixed skipped and detailed transcripts in one page", async () => {
-      const db = await createDb();
-      await seedBase(db);
       await seedIndexedTranscript(db, {
         providerFileId: "settled",
         ownedBy: CONFIG_A,
@@ -413,9 +457,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     it("leaves items unsettled when the contacts directory fails to load", async () => {
-      const db = await createDb();
-      await seedBase(db);
-
       const { items } = await runSync(db, CONFIG_A, [{ id: "t1" }], { contactsFail: true });
       expect(items).toHaveLength(1);
       const marker = detailMarkerOf(items[0]);
@@ -423,8 +464,28 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(marker.summaryObserved).toBe(true);
       expect(marker.nextRetryAt).toBeDefined();
     });
+
+    it("does not count whitespace-only summary arrays as observed summary content", async () => {
+      const { items } = await runSync(db, CONFIG_A, [{ id: "t1" }], {
+        detail: { summary: { overview: null, shorthand_bullet: [""], action_items: ["   "], keywords: null } },
+      });
+      expect(items).toHaveLength(1);
+      const marker = detailMarkerOf(items[0]);
+      expect(marker.summaryObserved).toBe(false);
+      expect(marker.nextRetryAt).toBeDefined();
+    });
+
+    it("counts a non-empty action_items array as summary content", async () => {
+      const { items } = await runSync(db, CONFIG_A, [{ id: "t1" }], {
+        detail: {
+          summary: { overview: null, shorthand_bullet: null, action_items: ["Follow up with Sanaa"], keywords: null },
+        },
+      });
+      expect(items).toHaveLength(1);
+      expect(detailMarkerOf(items[0]).summaryObserved).toBe(true);
+    });
   });
 }
 
-runSuite("fireflies detail skip (sqlite)", createTestDb);
-runSuite("fireflies detail skip (pglite)", createTestPgDb);
+runSuite("fireflies detail skip (sqlite)", "sqlite");
+runSuite("fireflies detail skip (pglite)", "pglite");

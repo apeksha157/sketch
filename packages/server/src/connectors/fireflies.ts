@@ -78,7 +78,14 @@ export function parseRetryAfterMs(raw: string | null | undefined, now: number = 
   if (!raw) return null;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
-  if (/^\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10) * 1000;
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    return Number.isFinite(seconds * 1000) ? seconds * 1000 : null;
+  }
+  // A numeric-looking value that is not plain digits ("-1", "+1", "1.5") is a
+  // malformed delay, not a date — Date.parse would happily read it as an
+  // ancient year and turn it into an immediate retry.
+  if (/^[+-]?\d+(\.\d+)?$/.test(trimmed)) return null;
   const date = Date.parse(trimmed);
   if (Number.isNaN(date)) return null;
   return Math.max(date - now, 0);
@@ -227,7 +234,7 @@ function makeFirefliesRequest(
 
     if (response.status === 429) {
       const retryAfterRaw = response.headers.get("Retry-After");
-      const waitMs = parseRetryAfterMs(retryAfterRaw) ?? 10_000;
+      const waitMs = parseRetryAfterMs(retryAfterRaw) ?? RETRY_BASE_MS * 2 ** (attempt - 1);
       if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
         throw new FirefliesRateLimitError(
           `Fireflies API quota exhausted; provider says retry after ${retryAfterRaw ?? "unknown"}`,
@@ -235,10 +242,10 @@ function makeFirefliesRequest(
         );
       }
       if (attempt >= MAX_RETRIES) {
-        throw new FirefliesRateLimitError(`Fireflies API rate limited after ${MAX_RETRIES} attempts`, {
-          quotaExhausted: false,
-          retryAfterRaw,
-        });
+        throw new FirefliesRateLimitError(
+          `Fireflies API rate limited after ${MAX_RETRIES} attempts${retryAfterRaw ? ` (provider retry-after: ${retryAfterRaw})` : ""}`,
+          { quotaExhausted: false, retryAfterRaw },
+        );
       }
       logger.debug({ waitMs }, "Rate limited, waiting");
       await new Promise((resolve) => setTimeout(resolve, waitMs));
@@ -262,24 +269,27 @@ function makeFirefliesRequest(
     const result = (await response.json()) as { data: T; errors?: Array<{ message: string }> };
 
     if (result.errors && result.errors.length > 0) {
-      const msg = result.errors[0].message;
-      // Rate limit can arrive as a GraphQL error with a retry-after date in the message
-      if (msg.toLowerCase().includes("too many requests")) {
-        const retryAfterRaw = msg.match(/retry after (.+?)(?:\s*\(|$)/i)?.[1]?.trim() ?? null;
+      // Rate limit can arrive as a GraphQL error with a retry-after date in the
+      // message — and not necessarily as the first error in the list.
+      const rateLimitMsg = result.errors.find((e) => e.message.toLowerCase().includes("too many requests"))?.message;
+      if (rateLimitMsg !== undefined) {
+        const retryAfterRaw = rateLimitMsg.match(/retry after (.+?)(?:\s*\(|$)/i)?.[1]?.trim() ?? null;
         const parsed = parseRetryAfterMs(retryAfterRaw);
-        const waitMs = parsed === null ? RETRY_BASE_MS * 2 ** (attempt - 1) : Math.max(parsed, RETRY_BASE_MS) + 1000;
-        if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
+        // The cap applies to the provider's own wait; the +1s scheduling buffer
+        // is added only to the sleep so an exactly-at-cap wait still retries.
+        if (parsed !== null && parsed > MAX_RATE_LIMIT_WAIT_MS) {
           throw new FirefliesRateLimitError(
             `Fireflies API quota exhausted; provider says retry after ${retryAfterRaw ?? "unknown"}`,
             { quotaExhausted: true, retryAfterRaw },
           );
         }
         if (attempt >= MAX_RETRIES) {
-          throw new FirefliesRateLimitError(`Fireflies API rate limited after ${MAX_RETRIES} attempts`, {
-            quotaExhausted: false,
-            retryAfterRaw,
-          });
+          throw new FirefliesRateLimitError(
+            `Fireflies API rate limited after ${MAX_RETRIES} attempts${retryAfterRaw ? ` (provider retry-after: ${retryAfterRaw})` : ""}`,
+            { quotaExhausted: false, retryAfterRaw },
+          );
         }
+        const waitMs = parsed === null ? RETRY_BASE_MS * 2 ** (attempt - 1) : Math.max(parsed, RETRY_BASE_MS) + 1000;
         logger.warn({ attempt, waitMs }, "Fireflies rate limited (GraphQL), retrying");
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         return firefliesRequest(query, variables, apiKey, logger, attempt + 1);
@@ -604,20 +614,29 @@ function isMarkerSettled(marker: FirefliesDetailMarker): boolean {
   return (marker.summaryObserved && marker.contactsLoaded) || marker.attempts >= MAX_DETAIL_ATTEMPTS;
 }
 
-/** Parse `source_meta.detail`; malformed or wrong-shape input reads as "no marker" (re-detail). */
+/**
+ * Parse `source_meta.detail`; malformed or wrong-shape input reads as "no
+ * marker" (re-detail). `attempts` must be a non-negative integer within sane
+ * bounds — a negative or fractional value would index off the backoff table,
+ * and an arbitrary large one would settle a marker that never earned it.
+ */
 function readDetailMarker(sourceMeta: Record<string, unknown> | null): FirefliesDetailMarker | null {
   const detail = sourceMeta?.detail;
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
   const m = detail as Record<string, unknown>;
   if (
     typeof m.attempts !== "number" ||
+    !Number.isInteger(m.attempts) ||
+    m.attempts < 0 ||
+    m.attempts > 1000 ||
+    typeof m.fetchedAt !== "string" ||
     typeof m.summaryObserved !== "boolean" ||
     typeof m.contactsLoaded !== "boolean"
   ) {
     return null;
   }
   return {
-    fetchedAt: typeof m.fetchedAt === "string" ? m.fetchedAt : "",
+    fetchedAt: m.fetchedAt,
     attempts: m.attempts,
     summaryObserved: m.summaryObserved,
     contactsLoaded: m.contactsLoaded,
@@ -628,7 +647,8 @@ function readDetailMarker(sourceMeta: Record<string, unknown> | null): Fireflies
 function hasSummaryContent(summary: FirefliesTranscript["summary"]): boolean {
   if (!summary) return false;
   const fields = [summary.overview, summary.shorthand_bullet, summary.action_items];
-  return fields.some((f) => (Array.isArray(f) ? f.length > 0 : typeof f === "string" && f.trim().length > 0));
+  const hasText = (v: unknown): boolean => typeof v === "string" && v.trim().length > 0;
+  return fields.some((f) => (Array.isArray(f) ? f.some(hasText) : hasText(f)));
 }
 
 function buildDetailMarker(

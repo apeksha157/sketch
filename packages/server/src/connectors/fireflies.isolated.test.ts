@@ -499,6 +499,12 @@ describe("parseRetryAfterMs", () => {
     expect(parseRetryAfterMs("")).toBeNull();
     expect(parseRetryAfterMs("soon-ish")).toBeNull();
   });
+
+  it("rejects numeric-looking values that are not plain delay-seconds", () => {
+    expect(parseRetryAfterMs("-1")).toBeNull();
+    expect(parseRetryAfterMs("+1")).toBeNull();
+    expect(parseRetryAfterMs("1.5")).toBeNull();
+  });
 });
 
 describe("Fireflies rate-limit failure modes", () => {
@@ -552,6 +558,25 @@ describe("Fireflies rate-limit failure modes", () => {
     expect(err).toBeInstanceOf(FirefliesRateLimitError);
     expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
     expect((err as FirefliesRateLimitError).message).toContain(retryDate);
+  });
+
+  it("recognizes a GraphQL rate limit that is not the first error in the list", async () => {
+    const retryDate = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
+    const err = await syncError(
+      () =>
+        new Response(
+          JSON.stringify({
+            data: null,
+            errors: [
+              { message: "some other validation error" },
+              { message: `too many requests, retry after ${retryDate}` },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
   });
 
   it("throws a typed non-quota error when 429 retries are exhausted within the cap", async () => {
