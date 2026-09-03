@@ -13,11 +13,12 @@ import { AGENT_BUILT_IN_TOOL_NAMES, VISUAL_ANALYSIS_AGENT_TOOL_NAME } from "@ske
 import type {
   AutomationArtifact,
   AutomationRunMode,
-  CliIntegrationAppId,
+  ManagedIntegrationAppId,
   WebChatIntegrationConnectionData,
   WebChatQuestion,
   WebChatQuestionInteraction,
 } from "@sketch/shared";
+import { managedIntegrationAppId, managedIntegrationName } from "@sketch/shared";
 import type { Kysely, Selectable } from "kysely";
 import { listIndexedSourcesForPrompt } from "../connectors/search";
 import type { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -27,13 +28,19 @@ import type { createInboxMessagesRepository } from "../db/repositories/inbox-mes
 import type { DB, UsersTable } from "../db/schema";
 import type { Attachment } from "../files";
 import { buildMultimodalContent, formatAttachmentsForPrompt, isImageAttachment } from "../files";
+import { listAvailableManagedIntegrations } from "../integrations/availability";
 import {
   type CliIntegrationCardResolver,
   type IntegrationProgressEventLike,
   collectIntegrationCardsFromProgressEvents,
   projectToolResultForProgressLog,
 } from "../integrations/cards";
-import type { IntegrationProvider } from "../integrations/types";
+import {
+  type CanvasAccessToken,
+  type CanvasAccessTokenRequest,
+  type IntegrationProvider,
+  getIntegrationActor,
+} from "../integrations/types";
 import {
   type IntegrationAccessResult,
   cleanupIntegrationAccess,
@@ -363,7 +370,7 @@ export interface RunAgentParams {
   botName?: string | null;
   integrationMcpServers?: Record<string, McpServerConfig>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
-  availableManagedIntegrations?: ReadonlySet<CliIntegrationAppId>;
+  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
   model?: string;
   maxTurns?: number;
   maxPersistedTextBytes?: number;
@@ -417,6 +424,7 @@ export interface RunAgentParams {
   };
   enqueueMessage?: (params: { requesterUserId: string; message: string }) => Promise<void>;
   agentEnv?: Record<string, string>;
+  getCanvasAccessToken?: (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
   cliIntegrations?: CliIntegrationCardResolver;
   loadTranscriptionSettings?: () => Promise<TranscriptionSettings | null>;
   visionConfig?: VisionConfig | null;
@@ -919,11 +927,10 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
 
   let integrationAccess: IntegrationAccessResult = { envVars: {}, runtimePaths: [], cleanup: async () => {} };
   if (params.loadIntegrationProvider && params.claudeConfigDir) {
-    const integrationUserEmail =
-      params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
+    const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
-      workspaceUserId: params.currentUserId,
+      workspaceUserId: integrationUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1194,11 +1201,50 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
 export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> {
   await params.onRunStart?.();
   const adminReadAllEnabled = await resolveAdminReadAllEnabled(params);
+  const { userId: actorId, userEmail: actorEmail } = getIntegrationActor(params);
+  const availableManagedIntegrations =
+    params.availableManagedIntegrations ??
+    (params.loadIntegrationProvider && actorId && actorEmail
+      ? await listAvailableManagedIntegrations({
+          loadIntegrationProvider: params.loadIntegrationProvider,
+          userEmail: actorEmail,
+          currentUserId: actorId,
+          logger: params.logger,
+        })
+      : new Set<ManagedIntegrationAppId>());
+  const requestedClickUp = (params.agentSkillIds ?? []).some((skill) => managedIntegrationAppId(skill) === "clickup");
+  if (requestedClickUp && !availableManagedIntegrations.has("clickup")) {
+    throw new Error(
+      `${managedIntegrationName("clickup")} access could not be verified for this agent run. Existing connections were not changed.`,
+    );
+  }
+  const getCanvasAccessToken =
+    params.getCanvasAccessToken ??
+    (params.loadIntegrationProvider && actorId && actorEmail
+      ? async (request: CanvasAccessTokenRequest): Promise<CanvasAccessToken> => {
+          const provider = await params.loadIntegrationProvider?.();
+          if (!provider?.getCanvasAccessToken) {
+            throw new Error("Canvas OAuth credential access is not configured for this Sketch run.");
+          }
+          return provider.getCanvasAccessToken({
+            ...request,
+            userEmail: actorEmail,
+            ...(provider.providerId && actorId
+              ? { workspaceContext: { workspaceId: provider.providerId, userId: actorId } }
+              : {}),
+          });
+        }
+      : undefined);
+  const effectiveParams = {
+    ...params,
+    availableManagedIntegrations,
+    ...(getCanvasAccessToken ? { getCanvasAccessToken } : {}),
+  };
   if (params.agentRuntime === "aisdk") {
-    return runAgentWithAiSdk(params, adminReadAllEnabled);
+    return runAgentWithAiSdk(effectiveParams, adminReadAllEnabled);
   }
 
-  return runAgentWithClaudeSdk(params, adminReadAllEnabled);
+  return runAgentWithClaudeSdk(effectiveParams, adminReadAllEnabled);
 }
 
 async function resolveAdminReadAllEnabled(params: RunAgentParams): Promise<boolean> {
@@ -1321,6 +1367,9 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,
     availableManagedIntegrations: params.availableManagedIntegrations,
+    getCanvasAccessToken: params.getCanvasAccessToken,
+    integrationUserId: params.integrationUserId,
+    integrationUserEmail: params.integrationUserEmail,
     validateAgentSkills: params.validateAgentSkills,
     taskContext: params.taskContext,
     currentAutomation: params.currentAutomation ?? params.taskContext?.currentAutomation,
@@ -1381,11 +1430,10 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
   // into the real CLI child process.
   let integrationAccess: IntegrationAccessResult = { envVars: {}, runtimePaths: [], cleanup: async () => {} };
   if (params.loadIntegrationProvider && params.claudeConfigDir) {
-    const integrationUserEmail =
-      params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
+    const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
-      workspaceUserId: params.currentUserId,
+      workspaceUserId: integrationUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1564,13 +1612,14 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
 
   if (params.contextType !== "scheduled_task") {
     try {
+      const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
       await collectIntegrationCardsFromProgressEvents({
         events: sdkStreamState.integrationProgressEvents,
         loadIntegrationProvider: params.loadIntegrationProvider,
         cliIntegrations: params.cliIntegrations,
-        currentUserId: params.integrationUserId === undefined ? params.currentUserId : params.integrationUserId,
+        currentUserId: integrationUserId,
         collector: integrationConnectionCollector,
-        userEmail: params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail,
+        userEmail: integrationUserEmail,
         userName: params.integrationUserName === undefined ? params.userName : params.integrationUserName,
       });
     } catch (err) {

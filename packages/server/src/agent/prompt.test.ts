@@ -32,6 +32,11 @@ describe("buildRuntimeCapabilitiesContext", () => {
     expect(result).toContain("check the provider configuration");
     expect(result).toContain("check in the current turn supports that conclusion");
   });
+
+  it("advertises ClickUp only when the managed capability is available", () => {
+    expect(buildRuntimeCapabilitiesContext(undefined)).not.toContain("ClickUp");
+    expect(buildRuntimeCapabilitiesContext(undefined, new Set(["clickup"]))).toContain("ClickUp (Sketch clickup_api)");
+  });
 });
 
 describe("buildAutomationMessageDeliveryLines", () => {
@@ -431,6 +436,14 @@ describe("buildSystemContext", () => {
   });
 
   describe("web chat platform formatting", () => {
+    it("documents managed ClickUp routing only when available", () => {
+      expect(buildSystemContext({ platform: "web" })).not.toContain("clickup_api");
+      const result = buildSystemContext({ platform: "web", availableManagedIntegrations: new Set(["clickup"]) });
+      expect(result).toContain("ClickUp is a managed API integration in Sketch.");
+      expect(result).toContain("use clickup_api");
+      expect(result).toContain("Never route ClickUp agent work through Canvas tools");
+    });
+
     it("documents managed Linear routing", () => {
       const result = buildSystemContext({
         platform: "web",

@@ -193,4 +193,74 @@ describe("AddIntegrationDialog", () => {
       ),
     );
   });
+
+  it("completes when the OAuth callback posts success before popup closure is observable", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onSuccess = vi.fn();
+    const popup = { closed: false, close: vi.fn(), location: { href: "" } };
+
+    vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+
+    server.use(
+      http.get("/api/mcp-servers/provider-1/apps", () =>
+        HttpResponse.json({
+          apps: [{ id: "clickup", name: "ClickUp", description: "Project management" }],
+          pageInfo: { endCursor: null, hasMore: false },
+        }),
+      ),
+      http.post("/api/mcp-servers/provider-1/connections/intents", () =>
+        HttpResponse.json({
+          app: { id: "clickup", name: "ClickUp", description: "Project management" },
+          redirectUrl:
+            "https://app.clickup.com/api?client_id=client-id&redirect_uri=https%3A%2F%2Fcanvas.example.com%2Fconnect%2Fsecrets%2Fcallback&state=oauth-state",
+        }),
+      ),
+      http.get("/api/mcp-servers/provider-1/connections", () =>
+        HttpResponse.json({
+          connections: [
+            {
+              id: "secrets:user-1:clickup:clickup",
+              providerId: "provider-1",
+              source: "canvas_user_secrets",
+              appId: "clickup",
+              appName: "ClickUp",
+              status: "active",
+              accessLevel: "personal",
+              isOwnedByViewer: true,
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    renderWithProviders(
+      <AddIntegrationDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        providerId="provider-1"
+        connectedAppIds={new Set()}
+        onSuccess={onSuccess}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /ClickUp/ }));
+    expect(await screen.findByText("Waiting for authorization...")).toBeInTheDocument();
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: "https://canvas.example.com",
+        source: popup as unknown as Window,
+        data: { type: "oauth-success", provider: "clickup" },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(onSuccess).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "clickup", connectionId: "secrets:user-1:clickup:clickup" }),
+        expect.objectContaining({ id: "secrets:user-1:clickup:clickup", source: "canvas_user_secrets" }),
+      ),
+    );
+  });
 });

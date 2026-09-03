@@ -5,6 +5,7 @@ export * from "./automation";
 export * from "./automation-handoff";
 export * from "./integration-connectors";
 export * from "./llm-provider";
+export * from "./managed-integrations";
 export * from "./mcp-servers";
 export * from "./skills";
 export * from "./validation";

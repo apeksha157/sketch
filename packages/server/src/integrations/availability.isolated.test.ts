@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CliIntegrationAppId, IntegrationConnection } from "@sketch/shared";
+import type { IntegrationConnection, ManagedIntegrationAppId } from "@sketch/shared";
 import type { ModelMessage, ToolSet } from "ai";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -76,7 +76,7 @@ describe("managed integration availability matrix", () => {
     workspaceDir = join(root, "workspace");
     claudeConfigDir = join(root, "claude");
     await mkdir(workspaceDir, { recursive: true });
-    for (const integration of ["github", "linear"]) {
+    for (const integration of ["github", "linear", "clickup"]) {
       const skillDir = join(claudeConfigDir, "skills", integration);
       await mkdir(skillDir, { recursive: true });
       await writeFile(
@@ -176,21 +176,22 @@ describe("managed integration availability matrix", () => {
   });
 
   it.each(
-    (["github", "linear"] as const).flatMap((integration) => [
+    (["github", "linear", "clickup"] as const).flatMap((integration) => [
       { integration, connected: false },
       { integration, connected: true },
     ]),
   )("keeps $integration fail-closed across every runtime layer when connected=$connected", async (row) => {
-    const available = new Set<CliIntegrationAppId>(row.connected ? [row.integration] : []);
-    const toolName = row.integration === "github" ? "github_cli" : "linear_api";
-    const otherToolName = row.integration === "github" ? "linear_api" : "github_cli";
+    const available = new Set<ManagedIntegrationAppId>(row.connected ? [row.integration] : []);
+    const toolNames = { github: "github_cli", linear: "linear_api", clickup: "clickup_api" };
+    const toolName = toolNames[row.integration];
+    const otherToolNames = Object.values(toolNames).filter((name) => name !== toolName);
     const prompt = `${buildSystemContext({
       platform: "slack",
       availableManagedIntegrations: available,
     })}\n${buildRuntimeCapabilitiesContext(undefined, available)}`;
 
     expect(prompt.includes(toolName)).toBe(row.connected);
-    expect(prompt).not.toContain(otherToolName);
+    for (const name of otherToolNames) expect(prompt).not.toContain(name);
 
     const canUseTool = createCanUseTool(workspaceDir, createTestLogger(), claudeConfigDir, {
       availableManagedIntegrations: available,
@@ -213,7 +214,10 @@ describe("managed integration availability matrix", () => {
     } satisfies RunAgentParams);
     const skillExecution = executeAiTool(skillTools, "Skill", { skill: row.integration });
     if (row.connected) await expect(skillExecution).resolves.toContain(`${row.integration} skill body`);
-    else await expect(skillExecution).rejects.toThrow("integration is not connected");
+    else
+      await expect(skillExecution).rejects.toThrow(
+        row.integration === "clickup" ? "ClickUp access could not be verified" : "integration is not connected",
+      );
 
     const registeredTools = createSketchMcpToolDefinitions({
       uploadCollector: new UploadCollector(),
@@ -221,7 +225,7 @@ describe("managed integration availability matrix", () => {
       availableManagedIntegrations: available,
     }).map((definition) => definition.name);
     expect(registeredTools.includes(toolName)).toBe(row.connected);
-    expect(registeredTools).not.toContain(otherToolName);
+    for (const name of otherToolNames) expect(registeredTools).not.toContain(name);
 
     const cliIntegrations = createCliIntegrationService({
       db,
@@ -239,7 +243,7 @@ describe("managed integration availability matrix", () => {
       db,
       encryptionKey: ENCRYPTION_KEY,
       environmentVariables: createAgentEnvironmentVariableRepository(db, ENCRYPTION_KEY),
-      getAvailableManagedIntegrations: async () => new Set<CliIntegrationAppId>(["linear"]),
+      getAvailableManagedIntegrations: async () => new Set<ManagedIntegrationAppId>(["linear"]),
     });
 
     await expect(cliIntegrations.validateAgentSkills("user-1", ["linear", "github"])).resolves.toEqual(["github"]);
@@ -260,7 +264,7 @@ describe("managed integration availability matrix", () => {
       workspaceDir,
       currentUserId: "user-1",
       currentUserEmail: "user@example.com",
-      availableManagedIntegrations: new Set<CliIntegrationAppId>([row.integration]),
+      availableManagedIntegrations: new Set<ManagedIntegrationAppId>([row.integration]),
       ...(row.integration === "github"
         ? { loadIntegrationProvider: async () => fakeProvider }
         : { getCanvasAccessToken: mint }),
@@ -283,5 +287,76 @@ describe("managed integration availability matrix", () => {
     });
     expect(JSON.stringify(result)).not.toContain("raw Canvas mint failure");
     expect(mint).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { integration: "github" as const, toolName: "github_cli", args: { argv: ["version"] } },
+    { integration: "linear" as const, toolName: "linear_api", args: { query: "query { viewer { id } }" } },
+  ])("mints $integration as the automation owner rather than the viewer", async (row) => {
+    const mint = vi.fn().mockRejectedValue(Object.assign(new Error("mint rejected for test"), { status: 403 }));
+    const fakeProvider = {
+      type: "canvas",
+      providerId: "canvas-provider",
+      getGithubAccessToken: mint,
+      getCanvasAccessToken: mint,
+    } as unknown as IntegrationProvider;
+    const definitions = createSketchMcpToolDefinitions({
+      uploadCollector: new UploadCollector(),
+      workspaceDir,
+      currentUserId: "viewer-1",
+      currentUserEmail: "viewer@example.com",
+      integrationUserId: "owner-1",
+      integrationUserEmail: "owner@example.com",
+      availableManagedIntegrations: new Set<ManagedIntegrationAppId>([row.integration]),
+      loadIntegrationProvider: async () => fakeProvider,
+    }) as ExecutableSdkTool[];
+    const selectedTool = definitions.find((definition) => definition.name === row.toolName);
+    if (!selectedTool) throw new Error(`Missing managed tool: ${row.toolName}`);
+    await selectedTool.handler(row.args, {});
+    expect(mint).toHaveBeenCalledOnce();
+    expect(mint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userEmail: "owner@example.com",
+        workspaceContext: { workspaceId: "canvas-provider", userId: "owner-1" },
+      }),
+    );
+  });
+
+  it.each(
+    (["github", "linear"] as const).flatMap((integration) =>
+      [
+        { integrationUserId: "owner-1" },
+        { integrationUserEmail: "owner@example.com" },
+        { integrationUserId: "owner-1", integrationUserEmail: null },
+        { integrationUserId: null, integrationUserEmail: null },
+      ].map((actor) => ({ integration, actor })),
+    ),
+  )("never fills an incomplete $integration owner from viewer credentials: $actor", async ({ integration, actor }) => {
+    const mint = vi.fn().mockRejectedValue(new Error("must not mint viewer credentials"));
+    const loadIntegrationProvider = vi.fn().mockResolvedValue({
+      type: "canvas",
+      providerId: "canvas-provider",
+      getGithubAccessToken: mint,
+      getCanvasAccessToken: mint,
+    });
+    const definitions = createSketchMcpToolDefinitions({
+      uploadCollector: new UploadCollector(),
+      workspaceDir,
+      currentUserId: "viewer-1",
+      currentUserEmail: "viewer@example.com",
+      ...actor,
+      availableManagedIntegrations: new Set<ManagedIntegrationAppId>([integration]),
+      loadIntegrationProvider,
+    }) as ExecutableSdkTool[];
+    const selectedTool = definitions.find(
+      (definition) => definition.name === (integration === "github" ? "github_cli" : "linear_api"),
+    );
+    if (!selectedTool) throw new Error(`Missing managed tool for ${integration}`);
+    await selectedTool.handler(
+      integration === "github" ? { argv: ["version"] } : { query: "query { viewer { id } }" },
+      {},
+    );
+    expect(loadIntegrationProvider).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
   });
 });

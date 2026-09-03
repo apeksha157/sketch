@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 
 import { runGithubCli } from "../../integrations/cli/github-runner";
+import { getIntegrationActor } from "../../integrations/types";
 import {
   isManagedIntegrationDisconnectedError,
   managedIntegrationReconnectMessage,
@@ -32,7 +33,8 @@ export function createGithubCliTool(deps: SketchMcpDeps) {
     "Run a GitHub CLI operation in the current Sketch workspace. Sketch obtains a short-lived token from Canvas and injects it only into the gh child process. Do not request or print credentials.",
     schema,
     async (args): Promise<ToolResult> => {
-      if (!deps.loadIntegrationProvider || !deps.currentUserEmail) {
+      const { userId, userEmail } = getIntegrationActor({ ...deps, userEmail: deps.currentUserEmail });
+      if (!deps.loadIntegrationProvider || !userId || !userEmail) {
         return { content: [{ type: "text", text: "GitHub OAuth is not configured for this Sketch run." }] };
       }
       const provider = await deps.loadIntegrationProvider();
@@ -41,16 +43,14 @@ export function createGithubCliTool(deps: SketchMcpDeps) {
       }
       try {
         const workspaceContext =
-          provider.providerId && deps.currentUserId
-            ? { workspaceId: provider.providerId, userId: deps.currentUserId }
-            : undefined;
+          provider.providerId && userId ? { workspaceId: provider.providerId, userId } : undefined;
         const result = await runGithubCli({
           argv: args.argv,
           stdin: args.stdin,
           workspaceDir: deps.workspaceDir,
           getAccessToken: (tokenOptions) =>
             provider.getGithubAccessToken?.({
-              userEmail: deps.currentUserEmail ?? "",
+              userEmail,
               accountId: args.accountId,
               forceRefresh: tokenOptions?.forceRefresh,
               workspaceContext,

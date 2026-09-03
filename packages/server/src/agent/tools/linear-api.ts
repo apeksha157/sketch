@@ -1,10 +1,11 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { type CanvasAccessToken, type CanvasAccessTokenRequest, getIntegrationActor } from "../../integrations/types";
 import {
   isManagedIntegrationDisconnectedError,
   managedIntegrationReconnectMessage,
 } from "./managed-integration-errors";
-import type { CanvasAccessToken, CanvasAccessTokenRequest, SketchMcpDeps, ToolResult } from "./types";
+import type { SketchMcpDeps, ToolResult } from "./types";
 
 export const LINEAR_API_URL = "https://api.linear.app/graphql";
 export const LINEAR_API_TIMEOUT_MS = 30_000;
@@ -109,7 +110,8 @@ function parseGraphQlResponse(body: string, accessToken: string): LinearGraphQlR
 
 async function getTokenProvider(deps: SketchMcpDeps): Promise<CanvasAccessTokenProvider | null> {
   if (deps.getCanvasAccessToken) return deps.getCanvasAccessToken;
-  if (!deps.loadIntegrationProvider || !deps.currentUserEmail) return null;
+  const { userId, userEmail } = getIntegrationActor({ ...deps, userEmail: deps.currentUserEmail });
+  if (!deps.loadIntegrationProvider || !userId || !userEmail) return null;
   const provider = await deps.loadIntegrationProvider();
   if (!provider) return null;
   const candidate = provider.getCanvasAccessToken;
@@ -117,10 +119,8 @@ async function getTokenProvider(deps: SketchMcpDeps): Promise<CanvasAccessTokenP
   return (params) =>
     candidate.call(provider, {
       ...params,
-      userEmail: deps.currentUserEmail ?? "",
-      ...(provider.providerId && deps.currentUserId
-        ? { workspaceContext: { workspaceId: provider.providerId, userId: deps.currentUserId } }
-        : {}),
+      userEmail,
+      ...(provider.providerId && userId ? { workspaceContext: { workspaceId: provider.providerId, userId } } : {}),
     });
 }
 

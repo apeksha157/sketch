@@ -1,7 +1,8 @@
 import {
-  type CliIntegrationAppId,
+  type ManagedIntegrationAppId,
   VISUAL_ANALYSIS_AGENT_TOOL_NAME,
   cliIntegrationAppDefinitions,
+  managedIntegrationName,
 } from "@sketch/shared";
 import type { Attachment, AttachmentPromptOptions } from "../files";
 import { formatAttachmentsForPrompt, isImageAttachment } from "../files";
@@ -357,12 +358,14 @@ function sourceLabel(source: string): { label: string; noun: string } {
 
 export function buildRuntimeCapabilitiesContext(
   agentEnv?: Record<string, string>,
-  availableManagedIntegrations: ReadonlySet<CliIntegrationAppId> = new Set(),
+  availableManagedIntegrations: ReadonlySet<ManagedIntegrationAppId> = new Set(),
 ): string {
   const available = Object.values(cliIntegrationAppDefinitions)
     .filter((definition) => definition.id !== "github" && definition.id !== "linear")
     .filter((definition) => definition.credentialFields.every((field) => Boolean(agentEnv?.[field.envName])))
     .map((definition) => definition.name);
+  if (availableManagedIntegrations.has("clickup"))
+    available.push(`${managedIntegrationName("clickup")} (Sketch clickup_api)`);
   if (agentEnv?.CANVAS_CLI) available.unshift("Canvas");
   const sketchManaged = [
     ...(availableManagedIntegrations.has("github") ? ["GitHub (Sketch github_cli)"] : []),
@@ -390,7 +393,7 @@ export function buildSystemContext(params: {
   visionAnalysisEnabled?: boolean;
   automationAuthoringEnabled?: boolean;
   automationBuilderChat?: boolean;
-  availableManagedIntegrations?: ReadonlySet<CliIntegrationAppId>;
+  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
 }): string {
   const sections: string[] = [];
 
@@ -523,6 +526,11 @@ export function buildSystemContext(params: {
     ...(params.availableManagedIntegrations?.has("linear")
       ? [
           "Linear is a managed API integration in Sketch. Load the Linear skill and use its GraphQL API through the linear_api tool; Canvas is only the OAuth vault and account-selection authority. Do not route Linear through Canvas actions. As a safety rule, never route Linear through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
+        ]
+      : []),
+    ...(params.availableManagedIntegrations?.has("clickup")
+      ? [
+          "ClickUp is a managed API integration in Sketch. When ClickUp is available, load the ClickUp skill and use clickup_api; the skill also covers API-created native webhook automations. Never route ClickUp agent work through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
         ]
       : []),
   );

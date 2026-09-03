@@ -7,7 +7,9 @@ import {
   cliIntegrationAppDefinition,
   cliIntegrationAppDefinitions,
   cliSkillRequiredEnv,
+  managedIntegrationAppId,
 } from "@sketch/shared";
+import type { ManagedIntegrationAppId } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import { decrypt, encrypt } from "../../auth/encryption";
 import type {
@@ -116,7 +118,7 @@ export function createCliIntegrationService(params: {
   getAvailableManagedIntegrations?: (
     ownerUserId: string,
     taskContext?: AgentEnvironmentRuntimeContext["taskContext"],
-  ) => Promise<ReadonlySet<CliIntegrationAppId>>;
+  ) => Promise<ReadonlySet<ManagedIntegrationAppId>>;
 }) {
   const connections = createCliIntegrationConnectionsRepository(params.db);
 
@@ -294,24 +296,21 @@ export function createCliIntegrationService(params: {
           ),
         ]),
       );
-      const managedSkills = requested.filter((skill) => {
-        const definition = definitionBySkill.get(skill);
-        return definition?.id === GITHUB_APP_ID || definition?.id === LINEAR_APP_ID;
-      });
-      const legacyCredentialSkills = requested.filter((skill) => {
-        const definition = definitionBySkill.get(skill);
-        return (
-          definition?.id !== GITHUB_APP_ID && definition?.id !== LINEAR_APP_ID && cliSkillRequiredEnv(skill).length > 0
-        );
-      });
+      const managedSkillById = new Map(
+        requested.map((skill) => [skill, managedIntegrationAppId(skill.replace(/\s+cli$/, ""))]),
+      );
+      const managedSkills = requested.filter((skill) => managedSkillById.get(skill) !== null);
+      const legacyCredentialSkills = requested.filter(
+        (skill) => managedSkillById.get(skill) === null && cliSkillRequiredEnv(skill).length > 0,
+      );
       const unavailable = new Set<string>();
       if (managedSkills.length > 0) {
         const availableManagedIntegrations = params.getAvailableManagedIntegrations
           ? await params.getAvailableManagedIntegrations(ownerUserId, taskContext)
-          : new Set<CliIntegrationAppId>();
+          : new Set<ManagedIntegrationAppId>();
         for (const skill of managedSkills) {
-          const definition = definitionBySkill.get(skill);
-          if (definition && !availableManagedIntegrations.has(definition.id)) unavailable.add(skill);
+          const managedIntegration = managedSkillById.get(skill);
+          if (managedIntegration && !availableManagedIntegrations.has(managedIntegration)) unavailable.add(skill);
         }
       }
       if (legacyCredentialSkills.length === 0) return requested.filter((skill) => unavailable.has(skill));

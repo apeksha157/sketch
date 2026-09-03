@@ -20,11 +20,12 @@ import { basename, join, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { workflowTriggerConfigSchema } from "@sketch/shared";
 import { Cron } from "croner";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import { getActiveRunContext } from "../agent/active-runs";
 import type { McpServerConfig, RunAgentParams, runAgent } from "../agent/runner";
 import { resolveAgentRuntimeProviderConfigFromSettings } from "../agent/runtime/provider";
 import type { AutomationCapabilityCallEvent, AutomationCapabilityRegistry } from "../automation/capabilities";
+import { assertWebhookEndpointReady } from "../automation/webhook-bindings";
 import type { Config } from "../config";
 import type { AgentEnvironmentRuntimeContext } from "../db/repositories/agent-environment-variables";
 import { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -37,7 +38,7 @@ import type { createSettingsRepository } from "../db/repositories/settings";
 import type { createUserRepository } from "../db/repositories/users";
 import { createWebhookDeliveryRepository } from "../db/repositories/webhook-deliveries";
 import type { WebhookDeliveryRow } from "../db/repositories/webhook-deliveries";
-import { createWebhookEndpointRepository } from "../db/repositories/webhook-endpoints";
+import { createWebhookEndpointRepository, isWebhookEndpointActive } from "../db/repositories/webhook-endpoints";
 import type { DB } from "../db/schema";
 import type { IntegrationProvider } from "../integrations/types";
 import type { Logger } from "../logger";
@@ -765,7 +766,7 @@ export class TaskScheduler {
       await this.webhookDeliveries.cancel(deliveryId, "Automation is no longer active");
       return false;
     }
-    if (!endpoint || endpoint.status !== "active") {
+    if (!endpoint || !isWebhookEndpointActive(endpoint.status)) {
       await this.webhookDeliveries.cancel(deliveryId, "Webhook endpoint is no longer active");
       return false;
     }
@@ -814,17 +815,24 @@ export class TaskScheduler {
         .executeTakeFirst();
       if (!delivery) return { kind: "stale" as const };
 
-      const [task, endpoint] = await Promise.all([
-        trx.selectFrom("scheduled_tasks").selectAll().where("id", "=", delivery.task_id).executeTakeFirst(),
-        trx.selectFrom("webhook_endpoints").selectAll().where("id", "=", delivery.endpoint_id).executeTakeFirst(),
-      ]);
+      const task = await trx
+        .updateTable("scheduled_tasks")
+        .set({ revision: sql<number>`revision` })
+        .where("id", "=", delivery.task_id)
+        .returningAll()
+        .executeTakeFirst();
+      const endpoint = await trx
+        .selectFrom("webhook_endpoints")
+        .selectAll()
+        .where("id", "=", delivery.endpoint_id)
+        .executeTakeFirst();
       if (
         !task ||
         task.status !== "active" ||
         task.revision !== delivery.task_revision ||
         !endpoint ||
         endpoint.task_id !== task.id ||
-        endpoint.status !== "active" ||
+        !isWebhookEndpointActive(endpoint.status) ||
         endpoint.generation !== delivery.endpoint_generation
       ) {
         return { kind: "stale" as const };
@@ -1192,7 +1200,11 @@ export class TaskScheduler {
   }
 
   async resumeTask(id: string): Promise<void> {
-    await this.repo.updateStatus(id, "active", { incrementRevision: true });
+    await this.deps.db.transaction().execute(async (trx) => {
+      await trx.updateTable("scheduled_tasks").set({ revision: sql<number>`revision` }).where("id", "=", id).execute();
+      await assertWebhookEndpointReady(trx, id, this.deps.config.ENCRYPTION_KEY);
+      await createScheduledTaskRepository(trx).updateStatus(id, "active", { incrementRevision: true });
+    });
     const row = await this.repo.getById(id);
     if (row) {
       await this.scheduleTask(row);

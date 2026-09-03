@@ -1,3 +1,4 @@
+import type { ManagedIntegrationAppId } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentEnvironmentVariableRepository } from "../../db/repositories/agent-environment-variables";
@@ -175,6 +176,25 @@ describe("CLI integration service", () => {
 
     await expect(service.listConnections("external")).resolves.toEqual([]);
     await service.disconnect("owner", connection.id);
+  });
+
+  it("gates each managed provider independently during skill preflight", async () => {
+    const availableManagedIntegrations = new Set<ManagedIntegrationAppId>(["github"]);
+    const managedService = createCliIntegrationService({
+      db,
+      encryptionKey: ENCRYPTION_KEY,
+      environmentVariables: createAgentEnvironmentVariableRepository(db, ENCRYPTION_KEY),
+      getAvailableManagedIntegrations: async () => availableManagedIntegrations,
+    });
+
+    await expect(
+      managedService.validateAgentSkills("owner", ["github", "linear", "clickup"], {
+        platform: "slack",
+        contextType: "dm",
+        deliveryTarget: "D123",
+        createdBy: "owner",
+      }),
+    ).resolves.toEqual(["linear", "clickup"]);
   });
 
   it("ignores legacy conversation shares and uses the invoking user's access", async () => {

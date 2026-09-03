@@ -278,6 +278,53 @@ describe("agent runtime skills", () => {
     await expect(executeTool(tools, "Skill", { skill: "GitHub CLI" })).resolves.toContain("GitHub body");
   });
 
+  it("gates Canvas-account skills without falling back to legacy credentials", async () => {
+    await writeSkill(
+      orgSkillsDir,
+      "linear",
+      "---\nname: Linear\ncanvas-account: linear\nrequires-env:\n  - LINEAR_API_KEY\n---\nLinear body",
+    );
+    const provider = new DefaultAgentRuntimeSkillsProvider();
+    const unavailableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        agentEnv: { LINEAR_API_KEY: "legacy-key" },
+      }),
+    );
+    await expect(executeTool(unavailableTools, "Skill", { skill: "Linear" })).rejects.toThrow(
+      "integration is not connected",
+    );
+
+    const availableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        agentEnv: { LINEAR_API_KEY: "legacy-key" },
+        availableManagedIntegrations: new Set(["linear"]),
+      }),
+    );
+    await expect(executeTool(availableTools, "Skill", { skill: "Linear" })).resolves.toContain("Linear body");
+  });
+
+  it("requires managed ClickUp availability before loading the skill", async () => {
+    await writeSkill(orgSkillsDir, "clickup", "---\nname: ClickUp\nmanaged-integration: clickup\n---\nClickUp body");
+    const provider = new DefaultAgentRuntimeSkillsProvider();
+    const unavailableTools = await provider.createSkillTool(runParams({ workspaceDir, claudeConfigDir: orgClaudeDir }));
+    await expect(executeTool(unavailableTools, "Skill", { skill: "ClickUp" })).rejects.toThrow(
+      "access could not be verified",
+    );
+
+    const availableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        availableManagedIntegrations: new Set(["clickup"]),
+      }),
+    );
+    await expect(executeTool(availableTools, "Skill", { skill: "ClickUp" })).resolves.toContain("ClickUp body");
+  });
+
   it("returns the selected skill body and keeps the skill directory readable", async () => {
     const skillDir = await writeSkill(orgSkillsDir, "research", "---\ndescription: Org research\n---\nOrg body");
     await writeFile(join(skillDir, "reference.md"), "reference notes", "utf-8");

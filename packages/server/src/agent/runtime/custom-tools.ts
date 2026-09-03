@@ -7,6 +7,7 @@ import {
   collectIntegrationCardsFromProgressEvents,
   projectToolResultForProgressLog,
 } from "../../integrations/cards";
+import { getIntegrationActor } from "../../integrations/types";
 import { AuxCostCollector, sumAuxCost } from "../aux-cost";
 import type { RunAgentParams } from "../runner";
 import { createSketchMcpToolDefinitions } from "../sketch-tools";
@@ -147,13 +148,14 @@ export function createAgentRuntimeCustomToolEffects(): AgentRuntimeCustomToolEff
     },
     async collectIntegrationCards(params) {
       if (params.contextType === "scheduled_task") return;
+      const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
       await collectIntegrationCardsFromProgressEvents({
         events: integrationProgressEvents,
         loadIntegrationProvider: params.loadIntegrationProvider,
         cliIntegrations: params.cliIntegrations,
-        currentUserId: params.integrationUserId === undefined ? params.currentUserId : params.integrationUserId,
+        currentUserId: integrationUserId,
         collector: integrationConnectionCollector,
-        userEmail: params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail,
+        userEmail: integrationUserEmail,
         userName: params.integrationUserName === undefined ? params.userName : params.integrationUserName,
       });
     },
@@ -196,6 +198,9 @@ function buildSketchMcpDeps(params: RunAgentParams, deps: AgentRuntimeCustomTool
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,
     availableManagedIntegrations: params.availableManagedIntegrations,
+    integrationUserId: params.integrationUserId,
+    integrationUserEmail: params.integrationUserEmail,
+    getCanvasAccessToken: params.getCanvasAccessToken,
     validateAgentSkills: params.validateAgentSkills,
     taskContext: params.taskContext,
     currentAutomation: params.currentAutomation ?? params.taskContext?.currentAutomation,

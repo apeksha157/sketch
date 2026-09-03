@@ -46,6 +46,9 @@ describe("webhook endpoint repository", () => {
       task_id: "task-1",
       status: "active",
       generation: 1,
+      verification_json: null,
+      signing_secret_encrypted: null,
+      source_binding: null,
       created_at: "2026-08-12T00:00:00.000Z",
       updated_at: "2026-08-12T00:00:00.000Z",
     });

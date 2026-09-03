@@ -33,6 +33,7 @@ import {
   updateAutomationDefinition,
 } from "../../automation/persistence";
 import { webChatTaskConversationAssociation } from "../../automation/task-conversations";
+import { WebhookBindingError } from "../../automation/webhook-bindings";
 import { INT4_MAX } from "../../db/limits";
 import { createAutomationLocksRepository } from "../../db/repositories/automation-locks";
 import type { createAutomationRunsRepository } from "../../db/repositories/automation-runs";
@@ -451,7 +452,7 @@ export function agentLockSessionIdFor(ctx: TaskContext): string {
 
 type AgentLease = { sessionId: string; generation: number; releaseAfterMutation: boolean };
 
-async function acquireAgentLease(
+export async function acquireAgentLease(
   db: Kysely<DB>,
   taskId: string,
   ctx: TaskContext,
@@ -1743,6 +1744,10 @@ export async function handleManageScheduledTasks(
       if (deletion.kind === "not_found") return text(`Error: task ${task_id} not found.`);
       if (deletion.kind === "access_denied")
         return text(`Error: you do not have permission to delete task ${task_id}.`);
+      if (deletion.kind === "webhook_cleanup_required")
+        return text(
+          "Pause the automation and delete its remote webhook through the provider API before removing the automation.",
+        );
       if (deletion.kind === "scheduler_failure") {
         return text(
           `Error: automation ${task_id} was deleted, but scheduler cleanup failed. Runtime state is inconsistent.`,
@@ -1763,7 +1768,12 @@ export async function handleManageScheduledTasks(
       if (!task_id) {
         return text("Error: task_id is required for resume action.");
       }
-      await deps.scheduler.resumeTask(task_id);
+      try {
+        await deps.scheduler.resumeTask(task_id);
+      } catch (error) {
+        if (error instanceof WebhookBindingError) return text(error.message);
+        throw error;
+      }
       return text(`Automation ${task_id} resumed.`);
     }
 

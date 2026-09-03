@@ -1,4 +1,4 @@
-import type { IntegrationApp, IntegrationConnection, PageInfo } from "@sketch/shared";
+import type { IntegrationApp, IntegrationConnection, ManagedIntegrationAppId, PageInfo } from "@sketch/shared";
 /**
  * Server-side integration types.
  * Shared types (IntegrationApp, IntegrationConnection, PageInfo) are imported
@@ -14,6 +14,34 @@ export type IntegrationUserOrgRole = "admin" | "member";
 export interface IntegrationWorkspaceContext {
   workspaceId: string;
   userId: string;
+}
+
+/** Explicit integration identities, including nulls, never inherit fields from the viewer. */
+export function getIntegrationActor(params: {
+  currentUserId?: string | null;
+  userEmail?: string | null;
+  integrationUserId?: string | null;
+  integrationUserEmail?: string | null;
+}) {
+  const overridden = params.integrationUserId !== undefined || params.integrationUserEmail !== undefined;
+  return {
+    userId: (overridden ? params.integrationUserId : params.currentUserId) ?? null,
+    userEmail: (overridden ? params.integrationUserEmail : params.userEmail) ?? null,
+  };
+}
+
+export type CanvasManagedIntegration = ManagedIntegrationAppId;
+
+export interface CanvasAccessToken {
+  accessToken: string;
+  expiresAt?: string;
+}
+
+export interface CanvasAccessTokenRequest {
+  integration: CanvasManagedIntegration;
+  accountId?: string;
+  workspaceContext?: IntegrationWorkspaceContext;
+  forceRefresh?: boolean;
 }
 
 export interface BrokerSpec {
@@ -87,18 +115,18 @@ export interface IntegrationProvider {
   }): BrokerSpec | null;
   executeAction?(request: IntegrationActionRequest, signal?: AbortSignal): Promise<unknown>;
   getCanvasAccessToken?(params: {
-    integration: "github" | "linear";
+    integration: CanvasManagedIntegration;
     userEmail: string;
     accountId?: string;
     workspaceContext?: IntegrationWorkspaceContext;
     forceRefresh?: boolean;
-  }): Promise<{ accessToken: string; expiresAt?: string }>;
+  }): Promise<CanvasAccessToken>;
   getGithubAccessToken?(params: {
     userEmail: string;
     accountId?: string;
     workspaceContext?: IntegrationWorkspaceContext;
     forceRefresh?: boolean;
-  }): Promise<{ accessToken: string; expiresAt?: string }>;
+  }): Promise<CanvasAccessToken>;
 }
 
 /**

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB } from "../../db/schema";
+import { CanvasProvider } from "../../integrations/canvas";
 import { createTestDb, createTestLogger } from "../../test-utils";
 import type { RunAgentParams } from "../runner";
 import { createAgentRuntimeCustomToolEffects, createDefaultAgentRuntimeCustomToolProvider } from "./custom-tools";
@@ -32,6 +33,7 @@ describe("AI SDK custom Sketch tool provider", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await db.destroy();
     await rm(workspace, { recursive: true, force: true });
   });
@@ -63,6 +65,30 @@ describe("AI SDK custom Sketch tool provider", () => {
     const tools = await provider.createTools(params({ agentAllowedTools: ["mcp__sketch__SendFileToChat", "Read"] }));
 
     expect(Object.keys(tools)).toEqual(["mcp__sketch__SendFileToChat"]);
+  });
+
+  it("preserves a missing owner email instead of exposing the viewer's managed accounts", async () => {
+    const canvas = new CanvasProvider("https://canvas.example.test", "test-key", "canvas-1");
+    const listConnections = vi.spyOn(canvas, "listConnections").mockResolvedValue([]);
+    const provider = createDefaultAgentRuntimeCustomToolProvider({
+      effects: createAgentRuntimeCustomToolEffects(),
+      transcriptionEnabled: false,
+      visionAnalysisEnabled: false,
+      visionConfig: null,
+    });
+    const tools = await provider.createTools(
+      params({
+        currentUserId: "viewer",
+        userEmail: "viewer@example.test",
+        integrationUserId: "owner",
+        integrationUserEmail: null,
+        loadIntegrationProvider: async () => canvas,
+      }),
+    );
+    const configTool = tools.mcp__sketch__getProviderConfig as SmokeTool;
+    expect(configTool).toBeDefined();
+    await configTool.execute?.({}, {} as never);
+    expect(listConnections).not.toHaveBeenCalled();
   });
 
   it("exposes the conditional media tools only when enabled", async () => {

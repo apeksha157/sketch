@@ -23,7 +23,6 @@ import { createAutomationCapabilityRegistry } from "./automation/capabilities";
 import { AutomationLockSweeper } from "./automation/lock-service";
 import { isAutomationWebhookTrigger, parseAutomationTriggerConfig } from "./automation/webhook";
 import type { Config } from "./config";
-import { getCanvasCredentialPrivateKeyPem, hasCanvasCredentialImportConfig } from "./connectors/credential-providers";
 import {
   buildEnrichmentProviderConfig,
   createEnrichmentEmbeddingProvider,
@@ -77,7 +76,7 @@ import { createApp } from "./http";
 import { listAvailableManagedIntegrations } from "./integrations/availability";
 import { createCliIntegrationService } from "./integrations/cli/service";
 import { buildMcpConfig, createProvider } from "./integrations/factory";
-import type { IntegrationProvider, IntegrationStatus } from "./integrations/types";
+import { type IntegrationProvider, type IntegrationStatus, getIntegrationActor } from "./integrations/types";
 import { LocalClaudeSessionService } from "./local-devices/claude-sessions";
 import { LocalDeviceGateway } from "./local-devices/gateway";
 import { createLogger } from "./logger";
@@ -406,13 +405,14 @@ export async function createServer(config: Config, options?: CreateServerOptions
         providerCtx,
         enrichedParams,
         async () => {
+          const { userId, userEmail } = getIntegrationActor(enrichedParams);
           const availableManagedIntegrations =
             enrichedParams.availableManagedIntegrations ??
-            (enrichedParams.userEmail && enrichedParams.currentUserId
+            (userEmail && userId
               ? await listAvailableManagedIntegrations({
                   loadIntegrationProvider: managedIntegrationProviderLoader,
-                  userEmail: enrichedParams.userEmail,
-                  currentUserId: enrichedParams.currentUserId,
+                  userEmail,
+                  currentUserId: userId,
                   logger,
                 })
               : new Set());
@@ -817,8 +817,11 @@ export async function createServer(config: Config, options?: CreateServerOptions
         return { kind: "ok", provider: cachedIntegrationProvider.provider };
       }
       const provider = createProvider(row.type, row.api_url ?? "", row.credentials, row.id, {
-        ...(hasCanvasCredentialImportConfig(config)
-          ? { credentialPrivateKeyPem: getCanvasCredentialPrivateKeyPem(config) }
+        ...(config.CANVAS_CREDENTIAL_PRIVATE_KEY_PEM
+          ? { credentialPrivateKeyPem: config.CANVAS_CREDENTIAL_PRIVATE_KEY_PEM }
+          : {}),
+        ...(config.CANVAS_CREDENTIAL_PRIVATE_KEY_PATH
+          ? { credentialPrivateKeyPath: config.CANVAS_CREDENTIAL_PRIVATE_KEY_PATH }
           : {}),
         ...(config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID
           ? { credentialPublicKeyId: config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID }
