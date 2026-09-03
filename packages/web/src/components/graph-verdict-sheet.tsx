@@ -224,13 +224,23 @@ function canPreview(status: GraphVerdictStatus): boolean {
 }
 
 /**
- * Awaiting merge verdicts render the reconcile comparison (two columns, wide
- * sheet); everything else keeps the narrow detail layout.
+ * Statuses where a human decision is still open. veto_window is the
+ * corroborated machine lane — its Confirm is the human tap that applies it
+ * while the digest follow-up is deferred; pending_corroboration only accepts
+ * a rejection (approval waits for proof).
+ */
+function isDecidable(status: GraphVerdictStatus): boolean {
+  return status === "awaiting_human" || status === "veto_window";
+}
+
+/**
+ * Merge verdicts still open for a decision render the reconcile comparison
+ * (two columns, wide sheet); everything else keeps the narrow detail layout.
  */
 function isCompareLayout(verdict: GraphVerdict): boolean {
   return (
     verdict.action === "merge_into" &&
-    verdict.status === "awaiting_human" &&
+    isDecidable(verdict.status) &&
     !!verdict.subjectEntityId &&
     !!verdictTargetId(verdict)
   );
@@ -376,6 +386,10 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
         {related.length > 0 ? <RelatedProposals related={related} /> : null}
         {previewStale || actionStale ? <StaleBanner /> : null}
         {actionError && !actionStale ? <p className="text-xs text-destructive">{String(actionError)}</p> : null}
+        {current.status === "veto_window" ? (
+          <p className="text-xs text-amber-600 dark:text-amber-500">{STATUS_COPY.veto_window}</p>
+        ) : null}
+        <CorroborationSection verdict={current} />
         <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 md:grid-cols-2">
           <CompareColumn
             testId="graph-verdict-subject"
@@ -488,6 +502,9 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
           <DetailRow label="Alias" value={current.targetName} />
         ) : null}
         <DetailRow label="Status" value={STATUS_COPY[current.status] ?? current.status} />
+        {current.status === "veto_window" && current.vetoUntil ? (
+          <DetailRow label="Veto until" value={current.vetoUntil.slice(0, 10)} mono />
+        ) : null}
         <DetailRow label="Reason" value={current.reason} />
         {current.validationReason ? <DetailRow label="Validation" value={current.validationReason} mono /> : null}
         {current.appliedLedgerRef ? <DetailRow label="Ledger" value={current.appliedLedgerRef} mono /> : null}
@@ -529,6 +546,8 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
         </div>
       ) : null}
 
+      <CorroborationSection verdict={current} />
+
       {containerEvidence && containerEvidence.samples.length > 0 ? (
         <div>
           <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Sample items</h3>
@@ -563,7 +582,7 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
       {actionError && !actionStale ? <p className="text-xs text-destructive">{String(actionError)}</p> : null}
 
       <div className="mt-auto flex justify-end gap-2 border-t border-border pt-3">
-        {current.status === "awaiting_human" ? (
+        {isDecidable(current.status) ? (
           <>
             <Button size="sm" variant="outline" disabled={busy} onClick={() => reject.mutate()}>
               Reject
@@ -584,6 +603,11 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
             )}
           </>
         ) : null}
+        {current.status === "pending_corroboration" ? (
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => reject.mutate()}>
+            Reject
+          </Button>
+        ) : null}
         {current.status === "approved" ? (
           <Button
             size="sm"
@@ -601,6 +625,59 @@ function VerdictDetail({ verdict, onDone }: { verdict: GraphVerdict; onDone: () 
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The for/against split: an entry supporting either side of the pair is
+ * evidence FOR the decision (co-occurrence of the pair is what ripened it);
+ * an entry supporting some third entity is evidence AGAINST — the mention
+ * cluster points elsewhere, and the reviewer should see that before the tap.
+ */
+function CorroborationSection({ verdict }: { verdict: GraphVerdict }) {
+  const entries = parseCorroboration(verdict.corroboration);
+  if (entries.length === 0) return null;
+  const pairIds = new Set(
+    [verdict.subjectEntityId, verdict.targetEntityId, verdict.resolvedTargetEntityId].filter(
+      (id): id is string => !!id,
+    ),
+  );
+  const supporting = entries.filter((entry) => !entry.supportsEntityId || pairIds.has(entry.supportsEntityId));
+  const opposing = entries.filter((entry) => entry.supportsEntityId && !pairIds.has(entry.supportsEntityId));
+  const line = (entry: CorroborationEntry, index: number) => (
+    <p key={`${entry.kind}-${entry.source}-${entry.fileId ?? index}`} className="text-xs text-muted-foreground">
+      <span className="font-mono text-[10px] uppercase">{entry.source}</span>{" "}
+      {CORROBORATION_KIND_LABELS[entry.kind] ?? entry.kind}
+      {entry.observedAt ? ` · ${entry.observedAt.slice(0, 10)}` : ""}
+    </p>
+  );
+  return (
+    <div data-testid="graph-verdict-corroboration">
+      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Corroboration ({entries.length})
+      </h3>
+      {supporting.length > 0 ? (
+        <div className="space-y-0.5">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-500">
+            Supports this decision
+          </p>
+          {supporting.map(line)}
+        </div>
+      ) : null}
+      {opposing.length > 0 ? (
+        <div className="mt-1.5 space-y-0.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5">
+          <p className="text-[10px] font-medium uppercase tracking-wider text-amber-700 dark:text-amber-400">
+            Points at a different entity
+          </p>
+          {opposing.map((entry, index) => (
+            <div key={`${entry.supportsEntityId}-${index}`}>
+              {line(entry, index)}
+              <p className="font-mono text-[10px] text-muted-foreground">→ {entry.supportsEntityId}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -695,6 +772,39 @@ function parseEvidence(raw: unknown): { fileIds: string[]; reviewIds: string[]; 
     Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : [];
   return { fileIds: strings(value.fileIds), reviewIds: strings(value.reviewIds), notes: strings(value.notes) };
 }
+
+type CorroborationEntry = {
+  kind: string;
+  source: string;
+  fileId: string | null;
+  supportsEntityId: string | null;
+  observedAt: string;
+};
+
+export function parseCorroboration(raw: unknown): CorroborationEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const value = item as Record<string, unknown>;
+    if (typeof value.kind !== "string" || typeof value.source !== "string") return [];
+    return [
+      {
+        kind: value.kind,
+        source: value.source,
+        fileId: typeof value.fileId === "string" ? value.fileId : null,
+        supportsEntityId: typeof value.supportsEntityId === "string" ? value.supportsEntityId : null,
+        observedAt: typeof value.observedAt === "string" ? value.observedAt : "",
+      },
+    ];
+  });
+}
+
+const CORROBORATION_KIND_LABELS: Record<string, string> = {
+  reproposal: "proposed again",
+  cross_source_cooccurrence: "seen together",
+  identity: "identity signal",
+  contested_adjacency: "contested",
+};
 
 function asCounts(raw: unknown): Record<string, number> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;

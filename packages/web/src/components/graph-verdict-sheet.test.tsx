@@ -127,6 +127,126 @@ describe("related proposals in the review flow", () => {
     expect(related).toHaveTextContent("safe in any order");
   });
 
+  it("gives veto_window rows the normal Confirm path into the reconcile sheet", async () => {
+    const veto = verdict({
+      id: "gv-veto",
+      status: "veto_window",
+      vetoUntil: "2026-09-11T00:00:00.000Z",
+      corroboration: [
+        {
+          kind: "cross_source_cooccurrence",
+          source: "gmail",
+          fileId: "f-1",
+          clusterKey: "gmail:th-1",
+          supportsEntityId: "ent-c",
+          observedAt: "2026-09-02T00:00:00.000Z",
+        },
+      ],
+    });
+    server.use(
+      http.get("/api/graph-verdicts", () => HttpResponse.json({ verdicts: [veto] })),
+      http.post("/api/graph-verdicts/gv-veto/application", () =>
+        HttpResponse.json({
+          application: {
+            verdictId: "gv-veto",
+            dryRun: true,
+            status: "veto_window",
+            ledgerRef: null,
+            wouldChange: { entities: 2 },
+            plan: null,
+          },
+        }),
+      ),
+    );
+
+    renderWithProviders(<GraphVerdictsSection verdicts={[veto]} allOpen={[veto]} />);
+
+    expect(await screen.findByTestId("graph-verdict-veto-chip-gv-veto")).toHaveTextContent("corroborated — ready");
+    await userEvent.click(screen.getByTestId("graph-verdict-band-approve-gv-veto"));
+    expect(await screen.findByTestId("graph-verdict-approve")).toHaveTextContent("Merge into Redseer");
+    expect(screen.getByTestId("graph-verdict-corroboration")).toHaveTextContent("Supports this decision");
+  });
+
+  it("keeps pending_corroboration rows dismissable but never confirmable", async () => {
+    const pending = verdict({ id: "gv-pend", status: "pending_corroboration", corroboration: [] });
+    server.use(
+      http.get("/api/graph-verdicts", () => HttpResponse.json({ verdicts: [pending] })),
+      http.post("/api/graph-verdicts/gv-pend/application", () =>
+        HttpResponse.json({
+          application: {
+            verdictId: "gv-pend",
+            dryRun: true,
+            status: "pending_corroboration",
+            ledgerRef: null,
+            wouldChange: { entities: 2 },
+            plan: null,
+          },
+        }),
+      ),
+    );
+
+    renderWithProviders(<GraphVerdictsSection verdicts={[pending]} allOpen={[pending]} />);
+
+    expect(await screen.findByTestId("graph-verdict-pending-chip-gv-pend")).toHaveTextContent("waiting for proof");
+    expect(screen.queryByTestId("graph-verdict-band-approve-gv-pend")).not.toBeInTheDocument();
+    expect(screen.getByTestId("graph-verdict-band-dismiss-gv-pend")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("graph-verdict-band-row-gv-pend"));
+    expect(await screen.findByText("Waiting for more proof")).toBeInTheDocument();
+    expect(screen.queryByTestId("graph-verdict-approve")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+  });
+
+  it("splits corroboration entries into supporting and pointing-elsewhere groups", async () => {
+    const mixed = verdict({
+      id: "gv-mix",
+      status: "pending_corroboration",
+      corroboration: [
+        {
+          kind: "reproposal",
+          source: "slack",
+          fileId: "f-1",
+          clusterKey: "slack:th-1",
+          supportsEntityId: "ent-c",
+          observedAt: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          kind: "cross_source_cooccurrence",
+          source: "gmail",
+          fileId: "f-2",
+          clusterKey: "gmail:th-2",
+          supportsEntityId: "ent-z",
+          observedAt: "2026-09-02T00:00:00.000Z",
+        },
+      ],
+    });
+    server.use(
+      http.get("/api/graph-verdicts", () => HttpResponse.json({ verdicts: [mixed] })),
+      http.post("/api/graph-verdicts/gv-mix/application", () =>
+        HttpResponse.json({
+          application: {
+            verdictId: "gv-mix",
+            dryRun: true,
+            status: "pending_corroboration",
+            ledgerRef: null,
+            wouldChange: { entities: 2 },
+            plan: null,
+          },
+        }),
+      ),
+    );
+
+    renderWithProviders(<GraphVerdictsSection verdicts={[mixed]} allOpen={[mixed]} />);
+    await userEvent.click(screen.getByTestId("graph-verdict-band-row-gv-mix"));
+
+    const section = await screen.findByTestId("graph-verdict-corroboration");
+    expect(section).toHaveTextContent("Corroboration (2)");
+    expect(section).toHaveTextContent("Supports this decision");
+    expect(section).toHaveTextContent("proposed again");
+    expect(section).toHaveTextContent("Points at a different entity");
+    expect(section).toHaveTextContent("ent-z");
+  });
+
   it("warns the manual merge dialog when an open agent proposal touches the entity", async () => {
     server.use(http.get("/api/graph-verdicts", () => HttpResponse.json({ verdicts: [verdict()] })));
 

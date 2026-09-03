@@ -1,8 +1,11 @@
 import { CompactAction } from "@/components/compact-action";
 /**
- * "Agent proposals" — open graph-curation verdicts (awaiting a decision, or
- * approved but not yet applied), rendered as a section of each type tab's
- * review band. Presentational: the band owns the query (admin-gated there)
+ * "Agent proposals" — open graph-curation verdicts (awaiting a decision,
+ * approved but not yet applied, or in a machine lane: waiting for
+ * corroboration, or corroborated and inside the veto window), rendered as a
+ * section of each type tab's review band. veto_window rows carry the normal
+ * Confirm — that human tap is what applies them while the digest follow-up
+ * is deferred; pending_corroboration rows can only be dismissed. Presentational: the band owns the query (admin-gated there)
  * and passes rows in, which also lets verdict presence count toward the
  * band's render/early-return decision. Dismiss rejects inline without opening
  * the sheet. Confirm on a merge proposal opens the {@link GraphVerdictSheet},
@@ -165,10 +168,26 @@ export function GraphVerdictsSection({ verdicts, allOpen }: { verdicts: GraphVer
                       approved — apply pending
                     </span>
                   ) : null}
+                  {verdict.status === "veto_window" ? (
+                    <span
+                      className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
+                      data-testid={`graph-verdict-veto-chip-${verdict.id}`}
+                    >
+                      corroborated — ready
+                    </span>
+                  ) : null}
+                  {verdict.status === "pending_corroboration" ? (
+                    <span
+                      className="shrink-0 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
+                      data-testid={`graph-verdict-pending-chip-${verdict.id}`}
+                    >
+                      waiting for proof
+                    </span>
+                  ) : null}
                 </>
               }
               actions={
-                verdict.status === "awaiting_human" ? (
+                verdict.status === "awaiting_human" || verdict.status === "veto_window" ? (
                   <span className="flex shrink-0 items-center gap-0.5 pr-3">
                     <CompactAction
                       label="Confirm"
@@ -184,6 +203,15 @@ export function GraphVerdictsSection({ verdicts, allOpen }: { verdicts: GraphVer
                     <span className="text-muted-foreground/40">·</span>
                     <CompactAction
                       label="Dismiss"
+                      disabled={dismiss.isPending}
+                      onClick={() => dismiss.mutate(verdict.id)}
+                    />
+                  </span>
+                ) : verdict.status === "pending_corroboration" ? (
+                  <span className="flex shrink-0 items-center gap-0.5 pr-3">
+                    <CompactAction
+                      label="Dismiss"
+                      data-testid={`graph-verdict-band-dismiss-${verdict.id}`}
                       disabled={dismiss.isPending}
                       onClick={() => dismiss.mutate(verdict.id)}
                     />
