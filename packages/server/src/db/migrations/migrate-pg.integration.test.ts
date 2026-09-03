@@ -249,6 +249,8 @@ describe("runMigrations on Postgres — full sequence", () => {
     expect(names[213]).toBe("218-resolution-decisions");
     expect(names[214]).toBe("219-mention-verdicts");
     expect(names[215]).toBe("220-retire-pats");
+    expect(names[216]).toBe("221-extraction-stages");
+    expect(names[217]).toBe("222-webhook-verification");
   });
   it("keeps the automation-sharing migration ledger in order", async () => {
     await runMigrations(db, { quiet: true });

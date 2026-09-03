@@ -420,6 +420,8 @@ describe("runMigrations — full sequence", () => {
     expect(names[213]).toBe("218-resolution-decisions");
     expect(names[214]).toBe("219-mention-verdicts");
     expect(names[215]).toBe("220-retire-pats");
+    expect(names[216]).toBe("221-extraction-stages");
+    expect(names[217]).toBe("222-webhook-verification");
   });
 
   it("adds portable session fencing columns with safe legacy defaults", async () => {
