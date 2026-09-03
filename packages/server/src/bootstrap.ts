@@ -398,7 +398,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     );
   };
   const trackedRunAgent = (params: RunAgentParams): Promise<RunAgentResult> =>
-    runTrackedAgent(params, limitAgentExecution);
+    runTrackedAgent(params, (work) => interactiveAgentRunLimiter.run(work, { signal: params.abortController?.signal }));
   const trackedScheduledRunAgent = (
     params: RunAgentParams,
     admission?: AgentRunAdmissionOptions,

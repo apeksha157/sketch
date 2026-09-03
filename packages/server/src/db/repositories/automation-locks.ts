@@ -311,10 +311,11 @@ export function createAutomationLocksRepository(db: Kysely<DB>) {
       userId: string;
       generation: number;
       now: string;
+      expiresAt?: string;
     }): Promise<AutomationTaskLockRow | undefined> {
       await db
         .updateTable("automation_task_locks")
-        .set({ updated_at: params.now })
+        .set({ updated_at: params.now, ...(params.expiresAt ? { expires_at: params.expiresAt } : {}) })
         .where("task_id", "=", params.taskId)
         .where("holder_user_id", "=", params.userId)
         .where("generation", "=", params.generation)

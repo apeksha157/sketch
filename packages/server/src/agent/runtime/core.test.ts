@@ -126,6 +126,49 @@ describe("agent runtime core", () => {
     ]);
   });
 
+  it("lets the model recover when a terminal tool returns an MCP error", async () => {
+    const output = { isError: true, content: [{ type: "text", text: "Correct the missing input before retrying." }] };
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [
+        {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: "tool-call", toolCallId: "failed-question", toolName: "Question", input: "{}" },
+              { type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage: usage(10, 2) },
+            ],
+          }),
+        },
+        {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: "text-start", id: "text" },
+              { type: "text-delta", id: "text", delta: "Please provide the missing input." },
+              { type: "text-end", id: "text" },
+              { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: usage(10, 2) },
+            ],
+          }),
+        },
+      ],
+    });
+    const onToolEnd = vi.fn();
+    const result = await runAgentRuntimeCore({
+      provider: mockProvider(model),
+      prompt: "Ask a question",
+      systemPrompt: "system",
+      maxTurns: 4,
+      persistSession: false,
+      stopAfterToolNames: ["Question"],
+      tools: { Question: tool({ inputSchema: z.object({}), execute: async () => output }) },
+      events: { onToolEnd },
+    });
+    expect(result.finalText).toBe("Please provide the missing input.");
+    expect(onToolEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ result: output, error: expect.objectContaining({ name: "Error" }) }),
+    );
+  });
+
   it("returns partial text with stopReason aborted when the abort signal fires mid-stream", async () => {
     const controller = new AbortController();
     const model = new MockLanguageModelV4({

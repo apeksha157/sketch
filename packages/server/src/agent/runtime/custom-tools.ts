@@ -82,7 +82,8 @@ function toRuntimeInputSchema(sdkTool: RuntimeSdkMcpToolDefinition) {
 }
 
 function mcpToModelOutput({ output }: Parameters<ToolToModelOutput>[0]): ReturnType<ToolToModelOutput> {
-  const result = output as { content?: unknown };
+  const result = output as { content?: unknown; isError?: boolean };
+  if (result.isError === true) return { type: "error-json", value: result as JSONValue };
 
   if (!("content" in result) || !Array.isArray(result.content)) {
     return { type: "json", value: result as JSONValue };
@@ -109,7 +110,10 @@ function toAiSdkTool(sdkTool: RuntimeSdkMcpToolDefinition) {
   return tool({
     description: sdkTool.description,
     inputSchema: toRuntimeInputSchema(sdkTool),
-    execute: async (input) => sdkTool.handler(input, {}),
+    execute: async (input, options) => {
+      options.abortSignal?.throwIfAborted();
+      return sdkTool.handler(input, { signal: options.abortSignal });
+    },
     toModelOutput: mcpToModelOutput,
   });
 }
@@ -137,7 +141,7 @@ export function createAgentRuntimeCustomToolEffects(): AgentRuntimeCustomToolEff
         kind: "tool_result",
         toolName: event.name,
         input: event.input,
-        output: projectToolResultForProgressLog(event.error ? event.error : event.result),
+        output: projectToolResultForProgressLog(event.result ?? event.error),
         isError: event.error !== undefined,
       });
     },

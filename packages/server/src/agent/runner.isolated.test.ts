@@ -948,8 +948,10 @@ describe("runAgent", () => {
       }),
     };
 
+    const onToolResult = vi.fn();
     const result = await runAgent(
       makeBaseParams({
+        onToolResult,
         contextType: "dm",
         userEmail: "alice@example.com",
         toolConfig: { BASE_URL: "https://sketch.example.com", PORT: 3000 },
@@ -960,6 +962,12 @@ describe("runAgent", () => {
     expect(result.trace.progressEvents).toEqual([
       { kind: "tool_use", toolName: "mcp__plugin_pipedream__slack_send_message", input: { app: "slack" } },
     ]);
+    expect(onToolResult).toHaveBeenCalledExactlyOnceWith({
+      toolName: "mcp__plugin_pipedream__slack_send_message",
+      input: { app: "slack" },
+      output: [{ type: "text", text: "CONNECTION_NOT_CONNECTED" }],
+      isError: true,
+    });
     expect(provider.initiateConnection).not.toHaveBeenCalled();
     expect(result.pendingIntegrationConnections).toMatchObject([
       {
