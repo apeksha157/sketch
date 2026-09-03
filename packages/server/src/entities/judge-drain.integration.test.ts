@@ -282,7 +282,7 @@ describe("judge drain", () => {
         subject_entity_id: "entity-akansha",
         subject_mention_name: null,
         target_entity_id: "entity-akanksha",
-        status: "awaiting_human",
+        status: "pending_corroboration",
       },
     ]);
     await expect(

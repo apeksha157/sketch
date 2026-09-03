@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Insertable, Kysely, Selectable } from "kysely";
 import type { DB, GraphVerdictRunsTable, GraphVerdictsTable } from "../schema";
+import { MACHINE_PRINCIPAL_USER_ID } from "./machine-principal";
 
 export type GraphVerdictRunRow = Selectable<GraphVerdictRunsTable>;
 export type GraphVerdictRow = Selectable<GraphVerdictsTable>;
@@ -42,6 +43,102 @@ export function mergePairKey(subjectEntityId: string, targetEntityId: string): s
   return subjectEntityId < targetEntityId
     ? `${subjectEntityId}|${targetEntityId}`
     : `${targetEntityId}|${subjectEntityId}`;
+}
+
+export const VETO_WINDOW_DAYS = 7;
+export const DRY_STREAK_RETIRE_AT = 3;
+
+export type CorroborationEntryKind = "reproposal" | "cross_source_cooccurrence" | "identity" | "contested_adjacency";
+
+/**
+ * One observed signal for a waiting merge. `clusterKey` bakes the independence
+ * grouping in at append time (connector source + thread/rollup grouping, so
+ * ten replies on one email thread are ONE cluster) — evaluation then needs no
+ * file lookups. `supportsEntityId` records which side of the pair the signal
+ * argues for, so the review UI can split evidence for/against.
+ */
+export type CorroborationEntry = {
+  kind: CorroborationEntryKind;
+  source: string;
+  fileId: string | null;
+  clusterKey: string;
+  supportsEntityId: string | null;
+  observedAt: string;
+};
+
+export type StoreVerdictDisposition = "inserted" | "bounced" | "corroborated" | "ripened" | "revived";
+
+export function parseCorroboration(raw: string | null): CorroborationEntry[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is CorroborationEntry =>
+        !!entry && typeof entry === "object" && typeof (entry as { clusterKey?: unknown }).clusterKey === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Idempotency key: the same observation appended twice is one entry. */
+export function corroborationKey(entry: Pick<CorroborationEntry, "kind" | "source" | "fileId">): string {
+  return `${entry.kind}|${entry.source}|${entry.fileId ?? ""}`;
+}
+
+export function vetoUntilFrom(nowIso: string): string {
+  return new Date(new Date(nowIso).getTime() + VETO_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * The countable independence test: a corroboration entry counts only when its
+ * cluster is outside the frozen proposal evidence's clusters and not already
+ * counted. More of the same signal is not proof.
+ */
+export function independentClusterCount(proposalClusters: ReadonlySet<string>, entries: CorroborationEntry[]): number {
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!proposalClusters.has(entry.clusterKey)) seen.add(entry.clusterKey);
+  }
+  return seen.size;
+}
+
+/** A merge ripens when proposal evidence plus independent corroboration reach two signals. */
+export function shouldRipen(proposalClusters: ReadonlySet<string>, entries: CorroborationEntry[]): boolean {
+  return Math.max(1, proposalClusters.size) + independentClusterCount(proposalClusters, entries) >= 2;
+}
+
+export function evidenceFileIdsOf(evidenceJson: string | null): string[] {
+  if (!evidenceJson) return [];
+  try {
+    const parsed = JSON.parse(evidenceJson) as { fileIds?: unknown };
+    return Array.isArray(parsed.fileIds) ? parsed.fileIds.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Source + thread grouping for evidence files. Files sharing a thread (or CRM
+ * rollup group) collapse to one cluster; a file with neither groups alone.
+ */
+export async function loadEvidenceClusters(
+  db: Kysely<DB>,
+  fileIds: string[],
+): Promise<Map<string, { source: string; clusterKey: string }>> {
+  if (fileIds.length === 0) return new Map();
+  const files = await db
+    .selectFrom("indexed_files")
+    .select(["id", "source", "thread_id", "rollup_group_id"])
+    .where("id", "in", fileIds)
+    .execute();
+  return new Map(
+    files.map((file) => [
+      file.id,
+      { source: file.source, clusterKey: `${file.source}:${file.thread_id ?? file.rollup_group_id ?? file.id}` },
+    ]),
+  );
 }
 
 export type GraphVerdictRunRollup = GraphVerdictRunRow & {
@@ -112,7 +209,7 @@ function toInsert(input: StoreGraphVerdictInput, id: string, now: string): Inser
     decided_at: null,
     decided_by_user_id: null,
     applied_ledger_ref: null,
-    veto_until: null,
+    veto_until: input.status === "veto_window" ? vetoUntilFrom(now) : null,
     corroboration_json: null,
     retired_reason: null,
     dry_streak: 0,
@@ -195,17 +292,182 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
       return { id };
     },
 
+    /**
+     * Merge proposals are keyed by unordered pair, and a re-proposal of a
+     * waiting pair CORROBORATES the existing verdict instead of superseding it
+     * (§6 ripening): its evidence appends to `corroboration_json` (frozen
+     * `evidence_json`/fingerprint untouched, so STALE_VERDICT never fires on
+     * ripening) and the returned id is the EXISTING verdict's. All pair
+     * lookups run before the generic insert path — a proposal that reached
+     * insertion against a waiting pair would hit the unique index instead of
+     * corroborating. Non-merge rows keep the subject+action flow.
+     */
     async storeVerdicts(
       verdicts: StoreGraphVerdictInput[],
-    ): Promise<{ ids: string[]; rows: StoreGraphVerdictInput[] }> {
+    ): Promise<{ ids: string[]; rows: StoreGraphVerdictInput[]; dispositions: StoreVerdictDisposition[] }> {
       const now = new Date().toISOString();
       const rows: StoreGraphVerdictInput[] = [];
+      const dispositions: StoreVerdictDisposition[] = [];
+      const presetIds: (string | null)[] = [];
+      const machineProposer = await (async () => {
+        const runId = verdicts[0]?.runId;
+        if (!runId) return false;
+        const run = await db
+          .selectFrom("graph_verdict_runs")
+          .select("proposed_by_user_id")
+          .where("id", "=", runId)
+          .executeTakeFirst();
+        return run?.proposed_by_user_id === MACHINE_PRINCIPAL_USER_ID;
+      })();
+
+      const isPairMerge = (
+        verdict: StoreGraphVerdictInput,
+      ): verdict is StoreGraphVerdictInput & {
+        subjectEntityId: string;
+        targetEntityId: string;
+      } => verdict.action === "merge_into" && !!verdict.subjectEntityId && !!verdict.targetEntityId;
+
       for (const input of verdicts) {
         const verdict = await withContainerSubjectEntity(db, input);
         if (verdict.status !== "awaiting_human") {
           rows.push(verdict);
+          dispositions.push(verdict.status === "bounced" ? "bounced" : "inserted");
+          presetIds.push(null);
           continue;
         }
+
+        if (isPairMerge(verdict)) {
+          const pairKey = mergePairKey(verdict.subjectEntityId, verdict.targetEntityId);
+          const pairRows = await db
+            .selectFrom("graph_verdicts")
+            .select(["id", "status", "evidence_json", "corroboration_json", "target_entity_id"])
+            .where("merge_pair_key", "=", pairKey)
+            .where("action", "=", "merge_into")
+            .where("superseded_at", "is", null)
+            .where("status", "in", [...GRAPH_VERDICT_ACTIVE_STATUSES, "retired"])
+            .execute();
+
+          if (pairRows.some((row) => row.status === "approved")) {
+            rows.push(approvedPendingBounce(verdict));
+            dispositions.push("bounced");
+            presetIds.push(null);
+            continue;
+          }
+
+          const waiting = pairRows.find(
+            (row) => row.status === "pending_corroboration" || row.status === "veto_window",
+          );
+          if (waiting) {
+            const proposalClusters = new Set(
+              [...(await loadEvidenceClusters(db, evidenceFileIdsOf(waiting.evidence_json))).values()].map(
+                (cluster) => cluster.clusterKey,
+              ),
+            );
+            const existing = parseCorroboration(waiting.corroboration_json);
+            const known = new Set(existing.map(corroborationKey));
+            const clusters = await loadEvidenceClusters(db, evidenceFileIdsOf(verdict.evidenceJson));
+            const additions: CorroborationEntry[] = [];
+            for (const [fileId, cluster] of clusters) {
+              const entry: CorroborationEntry = {
+                kind: "reproposal",
+                source: cluster.source,
+                fileId,
+                clusterKey: cluster.clusterKey,
+                supportsEntityId: verdict.targetEntityId,
+                observedAt: now,
+              };
+              if (!known.has(corroborationKey(entry))) additions.push(entry);
+            }
+            const merged = [...existing, ...additions];
+            const ripens = waiting.status === "pending_corroboration" && shouldRipen(proposalClusters, merged);
+            if (additions.length > 0 || ripens) {
+              await db
+                .updateTable("graph_verdicts")
+                .set({
+                  corroboration_json: JSON.stringify(merged),
+                  updated_at: now,
+                  ...(ripens ? { status: "veto_window", veto_until: vetoUntilFrom(now) } : {}),
+                })
+                .where("id", "=", waiting.id)
+                .execute();
+            }
+            rows.push({ ...verdict, status: ripens ? "veto_window" : (waiting.status as GraphVerdictStatus) });
+            dispositions.push(ripens ? "ripened" : "corroborated");
+            presetIds.push(waiting.id);
+            continue;
+          }
+
+          const retired = pairRows.find((row) => row.status === "retired");
+          if (retired) {
+            const recorded = new Set([
+              ...evidenceFileIdsOf(retired.evidence_json),
+              ...parseCorroboration(retired.corroboration_json)
+                .map((entry) => entry.fileId)
+                .filter((id): id is string => !!id),
+            ]);
+            const fresh = evidenceFileIdsOf(verdict.evidenceJson).filter((id) => !recorded.has(id));
+            if (fresh.length === 0) {
+              rows.push({
+                ...verdict,
+                validationStatus: "failed",
+                validationReason: "retired_no_new_evidence",
+                wouldChangeJson: null,
+                status: "bounced",
+              });
+              dispositions.push("bounced");
+              presetIds.push(null);
+              continue;
+            }
+            const clusters = await loadEvidenceClusters(db, fresh);
+            const revivalEntries: CorroborationEntry[] = [...clusters.entries()].map(([fileId, cluster]) => ({
+              kind: "reproposal",
+              source: cluster.source,
+              fileId,
+              clusterKey: cluster.clusterKey,
+              supportsEntityId: verdict.targetEntityId,
+              observedAt: now,
+            }));
+            await db
+              .updateTable("graph_verdicts")
+              .set({
+                status: "pending_corroboration",
+                retired_reason: null,
+                dry_streak: 0,
+                corroboration_json: JSON.stringify([
+                  ...parseCorroboration(retired.corroboration_json),
+                  ...revivalEntries,
+                ]),
+                updated_at: now,
+              })
+              .where("id", "=", retired.id)
+              .where("status", "=", "retired")
+              .execute();
+            rows.push({ ...verdict, status: "pending_corroboration" });
+            dispositions.push("revived");
+            presetIds.push(retired.id);
+            continue;
+          }
+
+          await db
+            .updateTable("graph_verdicts")
+            .set({ superseded_at: now, updated_at: now })
+            .where("merge_pair_key", "=", pairKey)
+            .where("action", "=", "merge_into")
+            .where("status", "=", "awaiting_human")
+            .where("superseded_at", "is", null)
+            .execute();
+          let status: GraphVerdictStatus = "awaiting_human";
+          if (machineProposer) {
+            const clusters = await loadEvidenceClusters(db, evidenceFileIdsOf(verdict.evidenceJson));
+            const distinct = new Set([...clusters.values()].map((cluster) => cluster.clusterKey));
+            status = distinct.size >= 2 ? "veto_window" : "pending_corroboration";
+          }
+          rows.push({ ...verdict, status });
+          dispositions.push("inserted");
+          presetIds.push(null);
+          continue;
+        }
+
         const subject = activeSubject(verdict);
         let approvedQuery = db
           .selectFrom("graph_verdicts")
@@ -219,16 +481,22 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
         }
         const approved = await approvedQuery.executeTakeFirst();
         rows.push(approved ? approvedPendingBounce(verdict) : verdict);
+        dispositions.push(approved ? "bounced" : "inserted");
+        presetIds.push(null);
       }
-      const ids = rows.map(() => randomUUID());
-      const awaiting = rows.filter((verdict) => verdict.status === "awaiting_human");
-      for (const verdict of awaiting) {
-        const subject = activeSubject(verdict);
+
+      const ids = rows.map((row, index) => presetIds[index] ?? randomUUID());
+      const inserts = rows
+        .map((row, index) => ({ row, index }))
+        .filter(({ index }) => dispositions[index] === "inserted" || dispositions[index] === "bounced");
+      for (const { row, index } of inserts) {
+        if (row.status !== "awaiting_human" || isPairMerge(row)) continue;
+        const subject = activeSubject(row);
         let updateQuery = db
           .updateTable("graph_verdicts")
           .set({ superseded_at: now, updated_at: now })
           .where(subject.column, "=", subject.id)
-          .where("action", "=", verdict.action)
+          .where("action", "=", row.action)
           .where("status", "=", "awaiting_human")
           .where("superseded_at", "is", null);
         if (subject.kind === "mention") {
@@ -236,22 +504,23 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
         }
         await updateQuery.execute();
       }
-      if (rows.length > 0) {
+      if (inserts.length > 0) {
         await db
           .insertInto("graph_verdicts")
-          .values(rows.map((verdict, index) => toInsert(verdict, ids[index] ?? randomUUID(), now)))
+          .values(inserts.map(({ row, index }) => toInsert(row, ids[index] ?? randomUUID(), now)))
           .execute();
-        const runId = rows[0]?.runId;
-        if (runId) {
-          const bounced = rows.filter((verdict) => verdict.status === "bounced").length;
-          await db
-            .updateTable("graph_verdict_runs")
-            .set({ verdicts_stored: awaiting.length, verdicts_bounced: bounced })
-            .where("id", "=", runId)
-            .execute();
-        }
       }
-      return { ids, rows };
+      const runId = rows[0]?.runId;
+      if (runId && rows.length > 0) {
+        const stored = inserts.filter(({ row }) => row.status !== "bounced").length;
+        const bounced = rows.filter((row) => row.status === "bounced").length;
+        await db
+          .updateTable("graph_verdict_runs")
+          .set({ verdicts_stored: stored, verdicts_bounced: bounced })
+          .where("id", "=", runId)
+          .execute();
+      }
+      return { ids, rows, dispositions };
     },
 
     async listRunsWithRollups(limit = 20): Promise<GraphVerdictRunRollup[]> {

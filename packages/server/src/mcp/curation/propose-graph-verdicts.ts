@@ -3,6 +3,7 @@ import { z } from "zod/v4";
 import {
   type GraphVerdictValidationStatus,
   type StoreGraphVerdictInput,
+  type StoreVerdictDisposition,
   createGraphVerdictRepository,
   withGraphVerdictUniqueRetry,
 } from "../../db/repositories/graph-verdicts";
@@ -97,7 +98,16 @@ type ProposalResult = {
   disposition: ProposalDisposition;
 };
 
-type ProposalDisposition = "autoApplied" | "awaiting_human" | "bounced" | `auto_apply_failed:${string}`;
+type ProposalDisposition =
+  | "autoApplied"
+  | "awaiting_human"
+  | "bounced"
+  | "pending_corroboration"
+  | "veto_window"
+  | "corroborated"
+  | "ripened"
+  | "revived"
+  | `auto_apply_failed:${string}`;
 
 type StoredProposalBatch = {
   runId: string;
@@ -319,7 +329,10 @@ function prepareProposals(args: ProposeGraphVerdictsArgs, entities: Map<string, 
       subject: entities.get(proposal.subjectEntityId) ?? null,
       target: proposal.targetEntityId ? (entities.get(proposal.targetEntityId) ?? null) : null,
     };
-    const pairKey = `entity\u0000${proposal.subjectEntityId}\u0000${proposal.action}`;
+    const pairKey =
+      proposal.action === "merge_into" && proposal.targetEntityId
+        ? `merge\u0000${[proposal.subjectEntityId, proposal.targetEntityId].sort().join("\u0000")}`
+        : `entity\u0000${proposal.subjectEntityId}\u0000${proposal.action}`;
     const duplicate = seenPairs.has(pairKey);
     seenPairs.add(pairKey);
     let validationReason: string | null = null;
@@ -438,20 +451,36 @@ function autoApplyFailureCode(error: unknown): string {
   return "APPLY_CONFLICT";
 }
 
+/**
+ * Corroborated/ripened/revived proposals landed on an EXISTING verdict (the
+ * result's verdictId is that row's id, not a fresh insert); pending/veto
+ * statuses are machine-filed merges ripening under §6. Everything else keeps
+ * the original vocabulary.
+ */
+function proposalDisposition(stored: StoreVerdictDisposition, status: string): ProposalDisposition {
+  if (stored === "corroborated" || stored === "ripened" || stored === "revived") return stored;
+  if (status === "bounced") return "bounced";
+  if (status === "pending_corroboration" || status === "veto_window") return status;
+  return "awaiting_human";
+}
+
 function dispositionSummary(results: ProposalResult[]): string {
-  const counts = {
-    autoApplied: 0,
-    awaiting_human: 0,
-    bounced: 0,
-    autoApplyFailed: 0,
-  };
+  const counts = new Map<string, number>([
+    ["autoApplied", 0],
+    ["awaiting_human", 0],
+    ["bounced", 0],
+    ["auto_apply_failed", 0],
+  ]);
   for (const result of results) {
-    if (result.disposition === "autoApplied") counts.autoApplied += 1;
-    else if (result.disposition === "awaiting_human") counts.awaiting_human += 1;
-    else if (result.disposition === "bounced") counts.bounced += 1;
-    else counts.autoApplyFailed += 1;
+    const key = result.disposition.startsWith("auto_apply_failed") ? "auto_apply_failed" : result.disposition;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return `autoApplied=${counts.autoApplied} awaiting_human=${counts.awaiting_human} bounced=${counts.bounced} auto_apply_failed=${counts.autoApplyFailed}`;
+  return [...counts.entries()]
+    .filter(
+      ([key, count]) => count > 0 || ["autoApplied", "awaiting_human", "bounced", "auto_apply_failed"].includes(key),
+    )
+    .map(([key, count]) => `${key}=${count}`)
+    .join(" ");
 }
 
 export async function handleProposeGraphVerdicts(
@@ -494,12 +523,14 @@ export async function handleProposeGraphVerdicts(
         validationStatus: row.validationStatus,
         validationReason: row.validationReason,
         wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
-        disposition: row.status === "bounced" ? "bounced" : "awaiting_human",
+        disposition: proposalDisposition(stored.dispositions[index] ?? "inserted", row.status),
       }));
       const autoApplyCandidateIds = args.autoApply ? await eligibleRemoveAliasVerdictIds(trx, stored) : [];
       return {
         runId: run.id,
-        stored: stored.rows.filter((row) => row.status === "awaiting_human").length,
+        stored: stored.dispositions.filter(
+          (disposition, index) => disposition === "inserted" && stored.rows[index]?.status !== "bounced",
+        ).length,
         bounced: stored.rows.filter((row) => row.status === "bounced").length,
         results,
         autoApplyCandidateIds,
