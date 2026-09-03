@@ -16,6 +16,8 @@ import { buildLinkedinSegments, createLinkedinAimfoxConnector, orderLinkedinMess
 import { buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { runConnectorSync } from "./sync";
 
+const HOUR_MS = 60 * 60 * 1000;
+
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -117,11 +119,48 @@ describe("LinkedIn conversation segmentation", () => {
         created_at: 1000 + index,
       })),
     );
-    const initial = buildLinkedinSegments(ordered, [], { maxMessages: 2, maxTokens: 10_000 });
+    const initial = buildLinkedinSegments(ordered, [], { maxMessages: 2, maxTokens: 10_000, gapMs: 4 * HOUR_MS });
     const sealed = initial.filter((segment) => segment.manifest.sealed).map((segment) => segment.manifest);
-    const changed = buildLinkedinSegments(ordered, sealed, { maxMessages: 3, maxTokens: 10_000 });
+    const changed = buildLinkedinSegments(ordered, sealed, { maxMessages: 3, maxTokens: 10_000, gapMs: 4 * HOUR_MS });
 
     expect(changed.map((segment) => segment.manifest)).toEqual(initial.map((segment) => segment.manifest));
+  });
+
+  it("cuts a new segment at the burst gap and replays sealed boundaries across algorithm versions", () => {
+    const base = 1_779_900_000_000;
+    const burstMessage = (urn: string, createdAt: number) => ({
+      urn,
+      body: `Body ${urn}`,
+      sender: { id: "lead", full_name: "Lead" },
+      created_at: createdAt,
+    });
+    const ordered = orderLinkedinMessages("urn:conversation:burst", [
+      burstMessage("urn:message:undated", Number.NaN),
+      burstMessage("urn:message:1", base),
+      burstMessage("urn:message:2", base + 10 * 60 * 1000),
+      burstMessage("urn:message:3", base + 5 * HOUR_MS),
+      burstMessage("urn:message:4", base + 5 * HOUR_MS + 10 * 60 * 1000),
+    ]);
+    const identities = (segments: ReturnType<typeof buildLinkedinSegments>) =>
+      segments.map((segment) => segment.messages.map((message) => message.identity));
+
+    const initial = buildLinkedinSegments(ordered, [], { maxMessages: 50, maxTokens: 10_000, gapMs: 4 * HOUR_MS });
+
+    expect(identities(initial)).toEqual([
+      ["urn:message:1", "urn:message:2"],
+      ["urn:message:3", "urn:message:4", "urn:message:undated"],
+    ]);
+    expect(initial.map((segment) => segment.manifest.sealed)).toEqual([true, false]);
+
+    const legacySealed = { ...initial[0].manifest, algorithmVersion: 1 };
+    const replayed = buildLinkedinSegments(ordered, [legacySealed], {
+      maxMessages: 50,
+      maxTokens: 10_000,
+      gapMs: 10 * 24 * HOUR_MS,
+    });
+
+    expect(replayed[0].manifest).toEqual(legacySealed);
+    expect(identities(replayed)).toEqual(identities(initial));
   });
 });
 
@@ -153,7 +192,9 @@ describe("createLinkedinAimfoxConnector", () => {
 
   it("completes sync with no conversations", async () => {
     const db = await createTestDb();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ status: "ok", conversations: [] }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => jsonResponse({ status: "ok", accounts: [], conversations: [] }));
     const connector = createLinkedinAimfoxConnector();
     const items = [];
     for await (const item of connector.sync({
@@ -937,6 +978,7 @@ describe("LinkedIn Aimfox conversation ingest", () => {
     expect(items[1]).toMatchObject({
       providerFileId: "linkedin:acct-1:urn:conversation:thread:segment-0",
       threadId: "acct-1:urn:conversation:thread",
+      fileName: "LinkedIn: Member User <> Alice Smith · 2026-05-27",
       fileType: "linkedin_conversation",
       contentCategory: "document",
       sourceCreatedAt: "2026-05-27T19:55:00.000Z",
@@ -944,11 +986,15 @@ describe("LinkedIn Aimfox conversation ingest", () => {
       rollupGroupId: "linkedin:acct-1:profile:lead-thread",
       accessPrincipals: [{ type: "email", value: "member@example.com" }],
     });
-    expect(items[1].content).toContain("Direction: inbound");
-    expect(items[1].content).toContain("Direction: outbound");
-    expect(items[1].content).toContain("Hello");
-    expect(items[1].content).toContain("Thanks");
-    expect(items[1].content).toContain("Automated: no");
+    expect(items[1].content).toBe(
+      [
+        "LinkedIn conversation: Member User <> Alice Smith",
+        "",
+        "Transcript:",
+        "[2026-05-27 19:55] Alice Smith: Hello",
+        "[2026-05-27 20:00] Member User: Thanks",
+      ].join("\n"),
+    );
     expect(items[1].contactPoints).toBeUndefined();
   });
 
@@ -965,6 +1011,13 @@ describe("LinkedIn Aimfox conversation ingest", () => {
               body: "Automated outreach",
               automated: true,
             }),
+            messageFixture({
+              id: "reply",
+              senderId: "lead-automated",
+              senderName: "Campaign Lead",
+              body: "Interested",
+              createdAt: 1_779_912_000_000,
+            }),
           ],
         },
       },
@@ -972,8 +1025,98 @@ describe("LinkedIn Aimfox conversation ingest", () => {
 
     const items = await collectSyncItems(db);
 
-    expect(items[1].content).toContain("Automated: yes");
-    expect(items[1].content).toContain("Automated outreach");
+    expect(items[1].content).toContain("[2026-05-27 19:55] Member User (automated): Automated outreach");
+    expect(items[1].content).toContain("[2026-05-27 20:00] Campaign Lead: Interested");
+  });
+
+  it("skips a thread until the lead replies, without holding the cursor", async () => {
+    const quiet = conversationFixture({
+      leadId: "lead-quiet",
+      conversationUrn: "urn:conversation:quiet",
+      lastActivityAt: 1_779_912_300_000,
+    });
+    const quietMessages = [
+      messageFixture({ id: "out-1", senderId: "acct-1", senderName: "Member User", body: "Hi there", automated: true }),
+      messageFixture({
+        id: "out-2",
+        senderId: "acct-1",
+        senderName: "Member User",
+        body: "Following up",
+        createdAt: 1_779_912_300_000,
+      }),
+    ];
+    mockLeadSync(
+      [
+        leadFixture({
+          id: "lead-quiet",
+          fullName: "Quiet Lead",
+          publicIdentifier: "quiet-lead",
+          companyName: "Quiet Co",
+        }),
+        leadFixture({ id: "lead-talk", fullName: "Talking Lead", publicIdentifier: "talking-lead" }),
+      ],
+      {
+        conversations: [
+          quiet,
+          conversationFixture({
+            leadId: "lead-talk",
+            conversationUrn: "urn:conversation:talk",
+            lastActivityAt: 1_779_912_000_000,
+          }),
+        ],
+        messages: { "urn:conversation:quiet": quietMessages },
+      },
+    );
+    const config = await createLinkedinTestConfig(db);
+
+    const first = await runLinkedinTestSync(db, config.id);
+
+    expect(first).toMatchObject({ itemsProcessed: 2, itemsCreated: 2, errors: [] });
+    const providerFileIds = async () =>
+      (await db.selectFrom("indexed_files").select("provider_file_id").orderBy("provider_file_id").execute()).map(
+        (file) => file.provider_file_id,
+      );
+    expect(await providerFileIds()).toEqual([
+      "linkedin:acct-1:profile:lead-talk",
+      "linkedin:acct-1:urn:conversation:talk:segment-0",
+    ]);
+    expect(await personCount(db)).toBe(1);
+    await expect(
+      db
+        .selectFrom("entities")
+        .select("id")
+        .where("source_type", "=", "company")
+        .where("name", "=", "Quiet Co")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+    const stored = await db
+      .selectFrom("connector_configs")
+      .select("sync_cursor")
+      .where("id", "=", config.id)
+      .executeTakeFirstOrThrow();
+    expect(stored.sync_cursor).toContain("2026-05-27T20:05:00.000Z");
+
+    quiet.last_activity_at = 1_779_912_600_000;
+    quietMessages.push(
+      messageFixture({
+        id: "in-1",
+        senderId: "lead-quiet",
+        senderName: "Quiet Lead",
+        body: "Sure, let's talk",
+        createdAt: 1_779_912_600_000,
+      }),
+    );
+
+    const second = await runLinkedinTestSync(db, config.id);
+
+    expect(second).toMatchObject({ itemsProcessed: 2, itemsCreated: 2, errors: [] });
+    expect(await providerFileIds()).toEqual([
+      "linkedin:acct-1:profile:lead-quiet",
+      "linkedin:acct-1:profile:lead-talk",
+      "linkedin:acct-1:urn:conversation:quiet:segment-0",
+      "linkedin:acct-1:urn:conversation:talk:segment-0",
+    ]);
+    expect(await personCount(db)).toBe(2);
   });
 
   it("keeps persisted file grants isolated to each connector owner", async () => {
@@ -1210,6 +1353,9 @@ function mockLeadSync(
   const conversationsForAccount = (accountId: string) => opts?.accountConversations?.[accountId] ?? conversations;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
+    if (/\/accounts$/.test(url)) {
+      return jsonResponse({ status: "ok", accounts: [{ id: "acct-1", full_name: "Member User" }] });
+    }
     if (url.includes("/conversations?")) {
       const workspaceConversations = opts?.accountConversations
         ? Object.entries(opts.accountConversations).flatMap(([accountId, accountConversations]) =>

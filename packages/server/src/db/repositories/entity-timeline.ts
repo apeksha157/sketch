@@ -34,6 +34,17 @@ export interface CrmTimelineActivity {
 }
 
 const CONFIDENCE_ORDER: Record<string, number> = { EXTRACTED: 0, INFERRED: 1, AMBIGUOUS: 2 };
+/**
+ * Record-type files describe a person or company rather than something that
+ * happened. They still feed the drawer header and search, but on the timeline
+ * they would sit as a dated row at the source's last activity — a duplicate
+ * of the newest exchange that moves on every sync.
+ *
+ * The exclusion predicate must allow NULL explicitly: `file_type` is nullable
+ * and `NULL NOT IN (...)` is NULL on both dialects, so a bare NOT IN would
+ * silently drop every untyped file.
+ */
+const RECORD_FILE_TYPES = ["linkedin_profile"];
 const CRM_ACTIVITY_TYPES: Record<string, CrmTimelineActivity["activityType"]> = {
   crm_task: "task",
   crm_call: "call",
@@ -94,6 +105,12 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
           "entity_mentions.mentioned_at",
         ])
         .where("entity_mentions.entity_id", "=", entityId)
+        .where((eb) =>
+          eb.or([
+            eb("indexed_files.file_type", "is", null),
+            eb("indexed_files.file_type", "not in", RECORD_FILE_TYPES),
+          ]),
+        )
         .orderBy(
           sql`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
           "desc",

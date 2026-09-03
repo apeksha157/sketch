@@ -10,15 +10,24 @@ import {
 } from "./aimfox-client";
 import { type LinkedinAimfoxPersonSeed, buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { extractErrorMessage, runWithConcurrency, truncateErrorMessage } from "./sync-utils";
+import { renderTranscriptLine } from "./transcript";
 import type { ApiKeyCredentials, Connector, ConnectorCredentials, ContactPointSeed, SyncedItem } from "./types";
 import { toEmailPrincipals } from "./types";
 
 const DEFAULT_CONVERSATION_COUNT = 100;
 const DEFAULT_MAX_INFLIGHT = 3;
-const DEFAULT_SEGMENT_MAX_MESSAGES = 100;
+const DEFAULT_SEGMENT_MAX_MESSAGES = 50;
 const DEFAULT_SEGMENT_MAX_TOKENS = 4_000;
-const SEGMENT_ALGORITHM_VERSION = 1;
+/**
+ * A LinkedIn exchange is a burst of replies minutes to an hour apart; a
+ * message sent after a meeting lands hours later. Four hours separates the
+ * two so each exchange becomes its own dated row on the entity timeline,
+ * interleaving correctly with calendar and meeting files.
+ */
+const DEFAULT_SEGMENT_GAP_HOURS = 4;
+const SEGMENT_ALGORITHM_VERSION = 2;
 const LINKEDIN_AIMFOX_CURSOR_VERSION = 1;
+const HOUR_MS = 60 * 60 * 1000;
 
 export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   accountIds: string[];
@@ -26,6 +35,7 @@ export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   maxInflight?: number;
   segmentMaxMessages?: number;
   segmentMaxTokens?: number;
+  segmentGapHours?: number;
   contactPointDefaultRegion?: string;
 }
 
@@ -66,6 +76,7 @@ interface ConversationCompletion {
 
 interface AccountRunState {
   existingHighWatermark: string | null;
+  ownerName: string;
   conversations: Map<string, ConversationCompletion>;
 }
 
@@ -75,7 +86,14 @@ interface ParsedLinkedinAimfoxScopeConfig {
   maxInflight: number;
   segmentMaxMessages: number;
   segmentMaxTokens: number;
+  segmentGapMs: number;
   contactPointDefaultRegion?: string;
+}
+
+export interface LinkedinSegmentLimits {
+  maxMessages: number;
+  maxTokens: number;
+  gapMs: number;
 }
 
 export class LinkedinAimfoxNoAccountsError extends Error {
@@ -125,11 +143,13 @@ export function createLinkedinAimfoxConnector(): Connector {
       currentCursor = parseLinkedinAimfoxCursor(opts.cursor);
       runState = new Map();
       let remainingConversationBudget = scopeConfig.maxConversations;
+      const ownerNames = await loadOwnerNames(api_key, opts.logger);
 
       for (const accountId of scopeConfig.accountIds) {
         if (remainingConversationBudget <= 0) break;
         const accountState: AccountRunState = {
           existingHighWatermark: currentCursor.accounts[accountId]?.highWatermark ?? null,
+          ownerName: ownerNames.get(accountId) ?? `LinkedIn account ${accountId}`,
           conversations: new Map(),
         };
         runState.set(accountId, accountState);
@@ -172,11 +192,15 @@ export function createLinkedinAimfoxConnector(): Connector {
           try {
             const items = await buildLinkedinSyncedItems(client, {
               accountId,
+              ownerName: accountState.ownerName,
               conversation: result.conversation,
               ownerEmail: opts.ownerEmail,
               seed,
-              segmentMaxMessages: scopeConfig.segmentMaxMessages,
-              segmentMaxTokens: scopeConfig.segmentMaxTokens,
+              segmentLimits: {
+                maxMessages: scopeConfig.segmentMaxMessages,
+                maxTokens: scopeConfig.segmentMaxTokens,
+                gapMs: scopeConfig.segmentGapMs,
+              },
               contactPointDefaultRegion: scopeConfig.contactPointDefaultRegion,
               getExistingItemState: opts.getExistingItemState,
             });
@@ -186,6 +210,12 @@ export function createLinkedinAimfoxConnector(): Connector {
               persistedItems: 0,
               failed: false,
             });
+            if (items.length === 0) {
+              opts.logger.debug(
+                { leadId: result.leadId, conversationUrn },
+                "LinkedIn thread has no reply yet; skipped",
+              );
+            }
             for (const item of items) yield item;
           } catch (err) {
             const error = truncateErrorMessage(extractErrorMessage(err));
@@ -270,15 +300,46 @@ async function* paginateConversationLeads(
   for (const detail of details) yield detail;
 }
 
+/**
+ * The `/accounts` endpoint is workspace-scoped, so one call names every
+ * account in the sync. Names only decorate file headers and titles; a failure
+ * here must never abort the sync or block cursor persistence, so it degrades
+ * to the account id.
+ */
+async function loadOwnerNames(apiKey: string, logger: Logger): Promise<Map<string, string>> {
+  try {
+    const accounts = await new AimfoxClient(apiKey).listAccounts();
+    return new Map(
+      accounts
+        .filter((account) => account.full_name?.trim())
+        .map((account) => [String(account.id), account.full_name.trim()]),
+    );
+  } catch (err) {
+    logger.warn(
+      { err: truncateErrorMessage(extractErrorMessage(err)) },
+      "Failed to load Aimfox account names; falling back to account ids",
+    );
+    return new Map();
+  }
+}
+
+/**
+ * A thread is indexed only once the lead has written back. Outbound-only
+ * threads are campaign blasts nobody engaged with: no profile, no segments,
+ * no person seed, no company mint. Returning no items still records the
+ * conversation as complete, so the cursor advances past it; when the lead
+ * replies later, the activity timestamp moves and the overlap cursor picks
+ * the thread up in full.
+ */
 async function buildLinkedinSyncedItems(
   client: AimfoxClient,
   input: {
     accountId: string;
+    ownerName: string;
     conversation: AimfoxConversationListItem;
     ownerEmail: string;
     seed: LinkedinAimfoxPersonSeed;
-    segmentMaxMessages: number;
-    segmentMaxTokens: number;
+    segmentLimits: LinkedinSegmentLimits;
     contactPointDefaultRegion?: string;
     getExistingItemState?: (providerFileId: string) => {
       sourceMeta: Record<string, unknown> | null;
@@ -288,17 +349,17 @@ async function buildLinkedinSyncedItems(
 ): Promise<SyncedItem[]> {
   const detail = await client.getConversation(input.conversation.conversation_urn);
   const messages = orderLinkedinMessages(input.conversation.conversation_urn, detail.messages);
-  const profileItem = buildLinkedinProfileSyncedItem({ ...input, engaged: true });
+  const hasReply = messages.some(({ message }) => message.sender.id !== input.accountId);
+  if (!hasReply) return [];
+  const profileItem = buildLinkedinProfileSyncedItem({ ...input, engaged: hasReply });
   const manifests = loadExistingSealedManifests(input);
-  const segments = buildLinkedinSegments(messages, manifests, {
-    maxMessages: input.segmentMaxMessages,
-    maxTokens: input.segmentMaxTokens,
-  });
+  const segments = buildLinkedinSegments(messages, manifests, input.segmentLimits);
   return [
     profileItem,
     ...segments.map((segment) =>
       buildLinkedinConversationSyncedItem({
         accountId: input.accountId,
+        ownerName: input.ownerName,
         conversation: input.conversation,
         ownerEmail: input.ownerEmail,
         profileProviderFileId: profileItem.providerFileId,
@@ -333,10 +394,17 @@ function loadExistingSealedManifests(input: {
   return manifests;
 }
 
+/**
+ * Cuts the ordered thread into bursts. A new segment starts when the gap from
+ * the last dated message exceeds `gapMs`, or the message/token caps hit.
+ * Sealed manifests replay first and their boundaries never move; only the
+ * open tail is re-cut. Null-timestamp messages sort last and neither open
+ * nor close a gap, so they can only ever join the open tail.
+ */
 export function buildLinkedinSegments(
   orderedMessages: OrderedMessage[],
   existingSealedManifests: LinkedinAimfoxSegmentManifest[],
-  limits: { maxMessages: number; maxTokens: number },
+  limits: LinkedinSegmentLimits,
 ): LinkedinAimfoxSegment[] {
   const segments: LinkedinAimfoxSegment[] = [];
   let offset = 0;
@@ -354,12 +422,18 @@ export function buildLinkedinSegments(
     const segmentIndex = segments.length;
     const messages: OrderedMessage[] = [];
     let tokenCount = 0;
+    let lastDatedMs: number | null = null;
     while (offset < orderedMessages.length && messages.length < limits.maxMessages) {
       const message = orderedMessages[offset];
       const nextTokens = estimateMessageTokens(message.message);
       if (messages.length > 0 && tokenCount + nextTokens > limits.maxTokens) break;
+      const messageMs = message.timestamp ? Date.parse(message.timestamp) : null;
+      if (messages.length > 0 && messageMs !== null && lastDatedMs !== null && messageMs - lastDatedMs > limits.gapMs) {
+        break;
+      }
       messages.push(message);
       tokenCount += nextTokens;
+      if (messageMs !== null) lastDatedMs = messageMs;
       offset++;
       if (tokenCount >= limits.maxTokens) break;
     }
@@ -440,15 +514,21 @@ function buildLinkedinProfileSyncedItem(input: {
 
 function buildLinkedinConversationSyncedItem(input: {
   accountId: string;
+  ownerName: string;
   conversation: AimfoxConversationListItem;
   ownerEmail: string;
   profileProviderFileId: string;
   seed: LinkedinAimfoxPersonSeed;
   segment: LinkedinAimfoxSegment;
 }): SyncedItem {
-  const content = renderConversationSegment(input.accountId, input.segment.messages);
-  const firstTimestamp = input.segment.messages[0]?.timestamp ?? null;
-  const lastTimestamp = input.segment.messages.at(-1)?.timestamp ?? null;
+  const content = renderConversationSegment({
+    ownerName: input.ownerName,
+    leadName: input.seed.name,
+    messages: input.segment.messages,
+  });
+  const dated = input.segment.messages.filter((message) => message.timestamp !== null);
+  const firstTimestamp = dated[0]?.timestamp ?? null;
+  const lastTimestamp = dated.at(-1)?.timestamp ?? null;
   return {
     providerFileId: linkedinSegmentProviderFileId(
       input.accountId,
@@ -457,7 +537,7 @@ function buildLinkedinConversationSyncedItem(input: {
     ),
     threadId: `${input.accountId}:${input.conversation.conversation_urn}`,
     providerUrl: null,
-    fileName: `LinkedIn conversation - ${input.seed.name} - ${input.segment.manifest.segmentIndex + 1}`,
+    fileName: segmentFileName(input.ownerName, input.seed.name, firstTimestamp, lastTimestamp),
     fileType: "linkedin_conversation",
     contentCategory: "document",
     content,
@@ -552,38 +632,64 @@ function renderLinkedinProfile(seed: LinkedinAimfoxPersonSeed): string {
 }
 
 /**
- * Automated campaign messages remain part of the durable conversation record
- * and are labeled explicitly so retrieval can distinguish them from manual outreach.
+ * WhatsApp-shaped transcript: a one-line header, then one `[time] Name: body`
+ * line per message. Message ids, direction and edit flags stay out of the
+ * content — segment boundaries live in `sourceMeta`, and the sender name
+ * already says who spoke. Automated campaign messages remain in the record
+ * and carry an `(automated)` tag so retrieval can tell a blast from a reply.
  */
-function renderConversationSegment(accountId: string, messages: OrderedMessage[]): string {
-  return messages
-    .map(({ identity, message, timestamp }) => {
-      const direction = message.sender.id === accountId ? "outbound" : "inbound";
-      const body = message.deleted ? "[Deleted message]" : (message.body ?? "").trim();
-      return [
-        `Message: ${identity}`,
-        `Direction: ${direction}`,
-        `At: ${timestamp ?? "unknown time"}`,
-        `Sender: ${displaySenderName(message.sender)}`,
-        `Automated: ${message.automated === true ? "yes" : "no"}`,
-        `Edited: ${message.edited === true ? "yes" : "no"}`,
-        "",
-        body,
-      ].join("\n");
-    })
-    .join("\n\n---\n\n");
+function renderConversationSegment(input: { ownerName: string; leadName: string; messages: OrderedMessage[] }): string {
+  const lines = input.messages.map(({ message, timestamp }) =>
+    renderTranscriptLine({
+      at: formatTranscriptTime(timestamp),
+      name: displaySenderName(message.sender),
+      tag: message.automated === true ? "automated" : null,
+      text: message.deleted ? "[Deleted message]" : (message.body ?? "").trim(),
+    }),
+  );
+  return `LinkedIn conversation: ${input.ownerName} <> ${input.leadName}\n\nTranscript:\n${lines.join("\n")}`;
 }
 
+function formatTranscriptTime(iso: string | null): string {
+  if (!iso) return "unknown time";
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
+}
+
+function segmentFileName(
+  ownerName: string,
+  leadName: string,
+  firstTimestamp: string | null,
+  lastTimestamp: string | null,
+): string {
+  const title = `LinkedIn: ${ownerName} <> ${leadName}`;
+  const from = firstTimestamp?.slice(0, 10);
+  const to = lastTimestamp?.slice(0, 10);
+  if (!from) return title;
+  return to && to !== from ? `${title} · ${from} to ${to}` : `${title} · ${from}`;
+}
+
+/**
+ * Dated messages sort by timestamp, then identity. Messages without a usable
+ * timestamp sort after every dated one, so a late-arriving undated message
+ * can only ever join the open tail rather than rewrite a sealed segment.
+ */
 export function orderLinkedinMessages(conversationUrn: string, messages: AimfoxMessage[]): OrderedMessage[] {
   const byIdentity = new Map<string, OrderedMessage>();
+  const ordinals = new Map<string, number>();
   for (const message of messages) {
+    const ordinalKey = `${message.created_at}|${message.sender.id}`;
+    const ordinal = ordinals.get(ordinalKey) ?? 0;
+    ordinals.set(ordinalKey, ordinal + 1);
     if (!message.deleted && !(message.body ?? "").trim()) continue;
-    const identity = aimfoxMessageIdentity(conversationUrn, message);
+    const identity = aimfoxMessageIdentity(conversationUrn, message, ordinal);
     byIdentity.set(identity, { identity, timestamp: aimfoxTimestampToIso(message.created_at), message });
   }
   return [...byIdentity.values()].sort((left, right) => {
-    const byTimestamp = (left.timestamp ?? "").localeCompare(right.timestamp ?? "");
-    return byTimestamp || left.identity.localeCompare(right.identity);
+    if (left.timestamp === null || right.timestamp === null) {
+      if (left.timestamp === right.timestamp) return left.identity.localeCompare(right.identity);
+      return left.timestamp === null ? 1 : -1;
+    }
+    return left.timestamp.localeCompare(right.timestamp) || left.identity.localeCompare(right.identity);
   });
 }
 
@@ -591,10 +697,16 @@ function estimateMessageTokens(message: AimfoxMessage): number {
   return Math.max(1, Math.ceil(((message.body?.length ?? 0) + message.sender.full_name.length + 80) / 4));
 }
 
-function aimfoxMessageIdentity(conversationUrn: string, message: AimfoxMessage): string {
+/**
+ * The fallback identity (no provider id) must survive edits and deletes, or a
+ * sealed segment's terminal message could vanish and fail the thread forever.
+ * So it hashes only immutable coordinates: the message's position among
+ * API-order messages sharing the same sender and timestamp, never the body.
+ */
+function aimfoxMessageIdentity(conversationUrn: string, message: AimfoxMessage, ordinal: number): string {
   const stableId = message.urn ?? message.id ?? message.message_id;
   if (stableId?.trim()) return stableId.trim();
-  return sha256(`${conversationUrn}|${message.created_at}|${message.sender.id}|${message.body ?? ""}`);
+  return sha256(`${conversationUrn}|${message.created_at}|${message.sender.id}|${ordinal}`);
 }
 
 function displaySenderName(sender: AimfoxMessage["sender"]): string {
@@ -656,6 +768,7 @@ function parseScopeConfig(value: Record<string, unknown>): ParsedLinkedinAimfoxS
     maxInflight: positiveInteger(value.maxInflight, DEFAULT_MAX_INFLIGHT),
     segmentMaxMessages: positiveInteger(value.segmentMaxMessages, DEFAULT_SEGMENT_MAX_MESSAGES),
     segmentMaxTokens: positiveInteger(value.segmentMaxTokens, DEFAULT_SEGMENT_MAX_TOKENS),
+    segmentGapMs: positiveInteger(value.segmentGapHours, DEFAULT_SEGMENT_GAP_HOURS) * HOUR_MS,
     contactPointDefaultRegion:
       typeof value.contactPointDefaultRegion === "string" ? value.contactPointDefaultRegion : undefined,
   };

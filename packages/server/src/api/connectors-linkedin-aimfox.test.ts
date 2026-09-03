@@ -181,11 +181,12 @@ describe("LinkedIn Aimfox connector API", () => {
   });
 
   it("conversation sync completes active with no conversations", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ status: "ok", conversations: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ status: "ok", accounts: [], conversations: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
     const repo = createConnectorRepository(db);
     const config = await repo.createConfig({

@@ -18,6 +18,7 @@ import {
 import { sanitizeWhatsAppDisplayText } from "../whatsapp/privacy";
 import { phoneE164ToWhatsAppJid } from "../whatsapp/provider";
 import type { GeminiGenerator } from "./gemini-generate";
+import { renderTranscriptLine } from "./transcript";
 import {
   type AccessPrincipal,
   type SyncedItem,
@@ -207,7 +208,7 @@ export function renderWhatsAppTranscript(
       const displayName = participant?.displayName ?? renderFallbackSenderName(message);
       const text = sanitizeWhatsAppDisplayText(message.text);
       if (!text) return null;
-      return `${displayName}: ${text}`;
+      return renderTranscriptLine({ name: displayName, text });
     })
     .filter((line): line is string => line !== null);
   const transcript = lines.join("\n");
