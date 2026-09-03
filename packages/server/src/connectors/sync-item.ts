@@ -1,6 +1,8 @@
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
+import type { Logger } from "pino";
 import { createConnectorRepository } from "../db/repositories/connectors";
+import { createRawContentRepository } from "../db/repositories/raw-contents";
 import type { DB } from "../db/schema";
 import { normalizeSourceTimestampForStorage } from "../timestamps";
 import { clearEnrichmentData } from "./enrichment";
@@ -35,6 +37,7 @@ export interface ProcessSyncedItemParams {
   item: SyncedItem;
   existingHashes: ExistingContentHashMap;
   encryptionKey?: string;
+  logger?: Logger;
 }
 
 /**
@@ -110,6 +113,7 @@ export async function processSyncedItem({
   item,
   existingHashes,
   encryptionKey,
+  logger,
 }: ProcessSyncedItemParams): Promise<ProcessSyncedItemResult> {
   if (!item.fileName && !item.content) {
     return { kind: "skipped_empty" };
@@ -140,6 +144,12 @@ export async function processSyncedItem({
     existing.contentCategory === item.contentCategory &&
     !hashlessSourceVersionChanged
   ) {
+    /**
+     * Raw content persists before the metadata update: when it fails, the
+     * update below omits source_meta so the connector's detail marker for this
+     * run is not saved and the next incremental sync re-fetches the detail.
+     */
+    const rawContentPersisted = await persistRawContent(db, existing.id, item, logger);
     await db
       .updateTable("indexed_files")
       .set({
@@ -157,7 +167,9 @@ export async function processSyncedItem({
         ...(item.isAllDay !== undefined ? { is_all_day: item.isAllDay ? 1 : 0 } : {}),
         mime_type: item.mimeType ?? undefined,
         rollup_group_id: item.rollupGroupId ?? null,
-        ...(item.sourceMeta !== undefined ? { source_meta: JSON.stringify(item.sourceMeta) } : {}),
+        ...(item.sourceMeta !== undefined && rawContentPersisted
+          ? { source_meta: JSON.stringify(item.sourceMeta) }
+          : {}),
       })
       .where("id", "=", existing.id)
       .execute();
@@ -199,7 +211,59 @@ export async function processSyncedItem({
     return upsertResult;
   });
 
+  /**
+   * Raw content persists after commit, never inside the transaction: a failed
+   * statement aborts a Postgres transaction, so catching and continuing there
+   * is not portable. If the raw write fails, the compensating update drops the
+   * connector's detail marker from source_meta so the next incremental sync
+   * re-fetches the detail (self-healing); the indexed file itself survives.
+   */
+  const rawContentPersisted = await persistRawContent(db, itemResult.id, item, logger);
+  if (!rawContentPersisted && item.sourceMeta !== undefined) {
+    await removeDetailMarker(db, itemResult.id, item.sourceMeta, logger);
+  }
+
   return { kind: itemResult.created ? "created" : "updated", indexedFileId: itemResult.id, rollupGroupIds };
+}
+
+/** Returns true when there was nothing to persist or the upsert succeeded. */
+async function persistRawContent(
+  db: Kysely<DB>,
+  indexedFileId: string,
+  item: SyncedItem,
+  logger?: Logger,
+): Promise<boolean> {
+  if (!item.rawContent) return true;
+  try {
+    await createRawContentRepository(db).upsertRawContent({
+      indexedFileId,
+      kind: item.rawContent.kind,
+      content: item.rawContent.content,
+    });
+    return true;
+  } catch (err) {
+    logger?.error({ err, indexedFileId, kind: item.rawContent.kind }, "Raw content persist failed");
+    return false;
+  }
+}
+
+async function removeDetailMarker(
+  db: Kysely<DB>,
+  indexedFileId: string,
+  sourceMeta: Record<string, unknown>,
+  logger?: Logger,
+): Promise<void> {
+  if (!("detail" in sourceMeta)) return;
+  const { detail: _detail, ...rest } = sourceMeta;
+  try {
+    await db
+      .updateTable("indexed_files")
+      .set({ source_meta: Object.keys(rest).length > 0 ? JSON.stringify(rest) : null })
+      .where("id", "=", indexedFileId)
+      .execute();
+  } catch (err) {
+    logger?.error({ err, indexedFileId }, "Detail marker compensation failed; raw content missing until backfill");
+  }
 }
 
 function uniqueRollupGroupIds(ids: Array<string | null | undefined>): string[] {

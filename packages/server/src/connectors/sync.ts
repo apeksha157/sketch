@@ -489,6 +489,7 @@ export async function runConnectorSync(
           item,
           existingHashes,
           encryptionKey: appConfig?.ENCRYPTION_KEY,
+          logger: syncLogger,
         });
 
         if (itemResult.kind === "skipped_empty") {

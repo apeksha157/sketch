@@ -10,6 +10,7 @@ import {
 } from "../../connectors/search";
 import type { DevSearchTraceOrigin, DevSearchTraceStatus } from "../../db/repositories/dev-search-traces";
 import { createEntityRepository } from "../../db/repositories/entities";
+import { createRawContentRepository } from "../../db/repositories/raw-contents";
 import { createSearchTraceCapture } from "./search-trace";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
@@ -88,12 +89,29 @@ export const getEntityContextToolSchema = {
     .describe("ISO date string. Only return mentions after this date. Example: '2026-03-01'."),
 };
 
-export const getFileContentToolDescription = `Retrieve the full content of an indexed file by its ID. Use this after Search returns a relevant result and you need the complete text — e.g. full meeting transcript, complete document, or full task description.
+export const getFileContentToolDescription = `Retrieve the content of an indexed file by its ID. Use this after Search returns a relevant result and you need the complete text — e.g. a meeting summary, complete document, or full task description.
+
+Pass view: "full" to get the raw stored version where one exists — for meetings this is the complete sentence-by-sentence transcript with speakers and timestamps. Full view is paged; pass the offset from the previous page's footer to continue reading.
 
 The ID comes from a previous Search result.`;
 
+/** Page size for view: "full" responses on every surface (JS string length, the same metric as offsets). */
+export const FULL_CONTENT_PAGE_CHARS = 50_000;
+
 export const getFileContentToolSchema = {
   fileId: z.string().describe("The indexed file ID from a Search result."),
+  view: z
+    .enum(["summary", "full"])
+    .optional()
+    .describe(
+      '"summary" (default) returns the indexed content. "full" returns the raw stored version (e.g. complete meeting transcript), paged.',
+    ),
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Character offset to continue a paged view: "full" read. Only valid with view: "full".'),
 };
 
 export type SearchArgs = z.infer<z.ZodObject<typeof searchToolSchema>>;
@@ -474,7 +492,13 @@ export async function handleGetEntityContext(
   return { content: [{ type: "text", text: lines.join("\n") }] };
 }
 
-export async function handleGetFileContent({ fileId }: GetFileContentArgs, deps: SketchMcpDeps): Promise<ToolResult> {
+export async function handleGetFileContent(
+  { fileId, view, offset }: GetFileContentArgs,
+  deps: SketchMcpDeps,
+): Promise<ToolResult> {
+  if (offset !== undefined && view !== "full") {
+    return { content: [{ type: "text", text: 'offset is only valid with view: "full".' }], isError: true };
+  }
   if (!deps.db) {
     return { content: [{ type: "text", text: "File content not available." }] };
   }
@@ -494,6 +518,28 @@ export async function handleGetFileContent({ fileId }: GetFileContentArgs, deps:
   lines.push(`Source: ${sourceLabel}${file.fileType ? ` (${file.fileType})` : ""}`);
   if (file.providerUrl) lines.push(`URL: ${file.providerUrl}`);
   lines.push("");
+
+  if (view === "full") {
+    /**
+     * The raw lookup runs only after getFileContent above vetted the id
+     * against the caller's principals — getRawContent has no ACL of its own.
+     */
+    const raw = await createRawContentRepository(deps.db).getRawContent(fileId, "transcript");
+    const chosen =
+      raw?.content ??
+      `(no separate raw version stored — returning indexed content)\n\n${file.content ?? file.summary ?? "(no content)"}`;
+    const start = offset ?? 0;
+    const page = chosen.slice(start, start + FULL_CONTENT_PAGE_CHARS);
+    lines.push(page.length > 0 ? page : "(offset is past the end of the content)");
+    lines.push("");
+    const end = Math.min(start + FULL_CONTENT_PAGE_CHARS, chosen.length);
+    lines.push(
+      end < chosen.length
+        ? `[Showing characters ${start}-${end} of ${chosen.length}. Pass offset: ${end} for the next page.]`
+        : `[Total length: ${chosen.length} characters.]`,
+    );
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  }
 
   const fullContent = file.content ?? file.summary ?? "(no content)";
   const maxChars = deps.publicMcp?.maxFileContentChars;
