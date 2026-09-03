@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+import { acquireRpmSlot } from "./rpm-pacer";
+
 const AIMFOX_BASE_URL = "https://api.aimfox.com/api/v2";
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_MS = 500;
+const DEFAULT_MAX_RPM = 60;
+const MAX_CONVERSATION_PAGE = 100;
 
 export interface AimfoxAccount {
   id: string;
@@ -148,6 +153,8 @@ export interface AimfoxClientOptions {
   sleep?: (ms: number) => Promise<void>;
   maxAttempts?: number;
   retryBaseMs?: number;
+  /** Requests per minute across every client sharing this API key (Aimfox allows 60). */
+  maxRpm?: number;
 }
 
 export class AimfoxError extends Error {
@@ -166,6 +173,8 @@ export class AimfoxClient {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly maxAttempts: number;
   private readonly retryBaseMs: number;
+  private readonly maxRpm: number;
+  private readonly quotaIdentity: string;
 
   constructor(
     private readonly apiKey: string,
@@ -176,9 +185,12 @@ export class AimfoxClient {
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     this.retryBaseMs = options.retryBaseMs ?? DEFAULT_RETRY_BASE_MS;
+    this.maxRpm = options.maxRpm ?? DEFAULT_MAX_RPM;
+    this.quotaIdentity = createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
   }
 
   private async request<T>(path: string, options?: RequestInit, attempt = 1): Promise<T> {
+    await acquireRpmSlot(`aimfox:${this.quotaIdentity}`, { maxRpm: this.maxRpm, sleep: this.sleep });
     const response = await this.fetchFn(`${AIMFOX_BASE_URL}${path}`, {
       ...options,
       headers: {
@@ -256,15 +268,21 @@ export class AimfoxClient {
     return result.leads;
   }
 
-  async listConversations(count: number): Promise<AimfoxConversationListItem[]> {
+  /**
+   * One page of the workspace inbox, newest-first, strictly older than
+   * `before` (ms epoch). Probed 2026-09-04: the default page is 15, `count`
+   * is honoured up to 100, and `in_app` — with either value — restricts the
+   * result to a 440-thread subset of a 1,720-thread inbox and hides the
+   * newest months, so it is deliberately never sent.
+   */
+  async listConversationsPage(input: { before: number; count: number }): Promise<AimfoxConversationListItem[]> {
     const accountId = this.requireAccountId();
-    const params = new URLSearchParams({ in_app: "false", before: String(Date.now()) });
+    const count = Math.max(1, Math.min(MAX_CONVERSATION_PAGE, Math.floor(input.count)));
+    const params = new URLSearchParams({ before: String(Math.floor(input.before)), count: String(count) });
     const result = await this.request<{ status: string; conversations: AimfoxConversationListItem[] }>(
       `/conversations?${params.toString()}`,
     );
-    return result.conversations
-      .filter((conversation) => conversationOwnerId(conversation.owner) === accountId)
-      .slice(0, count);
+    return result.conversations.filter((conversation) => conversationOwnerId(conversation.owner) === accountId);
   }
 
   async getConversationUrn(leadId: string): Promise<string | null> {

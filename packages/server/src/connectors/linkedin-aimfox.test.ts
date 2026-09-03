@@ -14,6 +14,7 @@ import { createTestDb, createTestLogger } from "../test-utils";
 import { AimfoxClient, type AimfoxConversation, type AimfoxLead } from "./aimfox-client";
 import { buildLinkedinSegments, createLinkedinAimfoxConnector, orderLinkedinMessages } from "./linkedin-aimfox";
 import { buildPersonSeed } from "./linkedin-aimfox-mappers";
+import { resetRpmPacerForTests } from "./rpm-pacer";
 import { runConnectorSync } from "./sync";
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -73,21 +74,28 @@ describe("AimfoxClient", () => {
     });
   });
 
-  it("lists conversations through the documented workspace endpoint", async () => {
+  it("pages the workspace inbox with count and before, never in_app", async () => {
     const fetchFn = vi.fn<typeof fetch>(async () =>
       jsonResponse({
         status: "ok",
-        conversations: [conversationFixture({ leadId: "lead-1", conversationUrn: "urn:conversation:1" })],
+        conversations: [
+          conversationFixture({ leadId: "lead-1", conversationUrn: "urn:conversation:1" }),
+          { ...conversationFixture({ leadId: "lead-2", conversationUrn: "urn:conversation:2" }), owner: "acct-2" },
+        ],
       }),
     );
 
-    const conversations = await new AimfoxClient("key", { accountId: "acct-1", fetchFn }).listConversations(50);
+    const conversations = await new AimfoxClient("key", { accountId: "acct-1", fetchFn }).listConversationsPage({
+      before: 1_779_912_000_000,
+      count: 500,
+    });
 
     expect(conversations.map((conversation) => conversation.conversation_urn)).toEqual(["urn:conversation:1"]);
     const url = new URL(String(fetchFn.mock.calls[0][0]));
     expect(`${url.origin}${url.pathname}`).toBe("https://api.aimfox.com/api/v2/conversations");
-    expect(url.searchParams.get("in_app")).toBe("false");
-    expect(url.searchParams.has("before")).toBe(true);
+    expect(url.searchParams.has("in_app")).toBe(false);
+    expect(url.searchParams.get("before")).toBe("1779912000000");
+    expect(url.searchParams.get("count")).toBe("100");
   });
 
   it("reads the conversation urn from the renamed urn field", async () => {
@@ -200,7 +208,7 @@ describe("createLinkedinAimfoxConnector", () => {
     for await (const item of connector.sync({
       db,
       credentials: { type: "api_key", api_key: "key" },
-      scopeConfig: { accountIds: ["acct-1"] },
+      scopeConfig: { accountIds: ["acct-1"], maxRpm: 100_000 },
       cursor: null,
       logger: createTestLogger(),
       ownerEmail: "member@example.com",
@@ -220,7 +228,7 @@ describe("createLinkedinAimfoxConnector", () => {
     const syncOptions = {
       db,
       credentials: { type: "api_key" as const, api_key: "key" },
-      scopeConfig: { accountIds: ["acct-1"] },
+      scopeConfig: { accountIds: ["acct-1"], maxRpm: 100_000 },
       cursor: null,
       logger: createTestLogger(),
       ownerEmail: "member@example.com",
@@ -238,11 +246,17 @@ describe("createLinkedinAimfoxConnector", () => {
     const second = [];
     for await (const item of connector.sync({ ...syncOptions, cursor })) second.push(item);
 
-    expect(JSON.parse(cursor ?? "{}").accounts["acct-1"].highWatermark).toBe("2026-05-27T20:00:00.000Z");
+    expect(JSON.parse(cursor ?? "{}").accounts["acct-1"]).toMatchObject({
+      highWatermark: null,
+      backfillBefore: "2026-05-27T20:00:00.001Z",
+      backfillDone: false,
+    });
     expect(second.map((item) => item.providerFileId)).toEqual(first.map((item) => item.providerFileId));
     await db.destroy();
   });
 });
+
+beforeEach(() => resetRpmPacerForTests());
 
 describe("LinkedIn Aimfox conversation ingest", () => {
   let db: Kysely<DB>;
@@ -459,7 +473,7 @@ describe("LinkedIn Aimfox conversation ingest", () => {
     const second = await runLinkedinTestSync(db, config.id);
 
     expect(first).toMatchObject({ itemsProcessed: 2, itemsCreated: 2, itemsUpdated: 0, errors: [] });
-    expect(second).toMatchObject({ itemsProcessed: 2, itemsCreated: 2, itemsUpdated: 0, errors: [] });
+    expect(second).toMatchObject({ itemsProcessed: 4, itemsCreated: 2, itemsUpdated: 0, errors: [] });
     const files = await db.selectFrom("indexed_files").select("provider_file_id").orderBy("provider_file_id").execute();
     const providerFileIds = files.map((file) => file.provider_file_id);
     expect(providerFileIds).toEqual([
@@ -882,19 +896,153 @@ describe("LinkedIn Aimfox conversation ingest", () => {
     expect(config.sync_cursor).toContain("2026-05-27T20:00:00.000Z");
   });
 
-  it("honors the initial max leads cap", async () => {
-    const fetchSpy = mockLeadSync([
-      leadFixture({ id: "lead-1", fullName: "Lead One", publicIdentifier: "lead-one" }),
-      leadFixture({ id: "lead-2", fullName: "Lead Two", publicIdentifier: "lead-two" }),
-      leadFixture({ id: "lead-3", fullName: "Lead Three", publicIdentifier: "lead-three" }),
-    ]);
+  it("walks the inbox one backfill budget per sync until it runs dry", async () => {
+    const leads = [1, 2, 3].map((index) =>
+      leadFixture({ id: `lead-${index}`, fullName: `Lead ${index}`, publicIdentifier: `lead-${index}` }),
+    );
+    const fetchSpy = mockLeadSync(leads, {
+      conversations: leads.map((lead, index) =>
+        conversationFixture({
+          leadId: lead.id,
+          conversationUrn: `urn:conversation:${index + 1}`,
+          lastActivityAt: 1_779_912_000_000 + index * 60_000,
+        }),
+      ),
+    });
+    const config = await createLinkedinTestConfig(db);
 
-    await drainSync(db, { initialMaxLeads: 2 });
+    await runLinkedinTestSync(db, config.id, { backfillBudget: 2 });
 
     expect(await personCount(db)).toBe(2);
-    const detailUrls = fetchSpy.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("/leads/"));
-    expect(detailUrls).toHaveLength(2);
-    expect(detailUrls.some((url) => url.endsWith("/lead-3"))).toBe(false);
+    expect(
+      leadDetailUrls(fetchSpy)
+        .map((url) => url.split("/leads/")[1])
+        .sort(),
+    ).toEqual(["lead-2", "lead-3"]);
+    expect(await storedAccountCursor(db, config.id)).toMatchObject({
+      highWatermark: "2026-05-27T20:02:00.000Z",
+      backfillBefore: "2026-05-27T20:01:00.000Z",
+      backfillDone: false,
+    });
+
+    const secondFrom = fetchSpy.mock.calls.length;
+    await runLinkedinTestSync(db, config.id, { backfillBudget: 2 });
+
+    expect(await personCount(db)).toBe(3);
+    expect(
+      leadDetailUrls(fetchSpy, secondFrom)
+        .map((url) => url.split("/leads/")[1])
+        .sort(),
+    ).toEqual(["lead-1", "lead-3"]);
+    expect(await storedAccountCursor(db, config.id)).toMatchObject({ backfillDone: true });
+
+    const thirdFrom = fetchSpy.mock.calls.length;
+    await runLinkedinTestSync(db, config.id, { backfillBudget: 2 });
+
+    expect(leadDetailUrls(fetchSpy, thirdFrom).map((url) => url.split("/leads/")[1])).toEqual(["lead-3"]);
+  });
+
+  it("runs the incremental and backfill passes in one sync without double-processing a thread", async () => {
+    const old = conversationFixture({
+      leadId: "lead-old",
+      conversationUrn: "urn:conversation:old",
+      lastActivityAt: 1_779_912_000_000,
+    });
+    const recent = conversationFixture({
+      leadId: "lead-recent",
+      conversationUrn: "urn:conversation:recent",
+      lastActivityAt: 1_779_912_300_000,
+    });
+    const recentMessages = [
+      messageFixture({ id: "r-1", senderId: "lead-recent", senderName: "Recent Lead", body: "Hello" }),
+      messageFixture({
+        id: "r-2",
+        senderId: "acct-1",
+        senderName: "Member User",
+        body: "Thanks",
+        createdAt: 1_779_912_300_000,
+      }),
+    ];
+    const fetchSpy = mockLeadSync(
+      [
+        leadFixture({ id: "lead-old", fullName: "Old Lead", publicIdentifier: "old-lead" }),
+        leadFixture({ id: "lead-recent", fullName: "Recent Lead", publicIdentifier: "recent-lead" }),
+      ],
+      { conversations: [old, recent], messages: { "urn:conversation:recent": recentMessages } },
+    );
+    const config = await createLinkedinTestConfig(db);
+
+    const first = await runLinkedinTestSync(db, config.id, { backfillBudget: 1 });
+
+    expect(first).toMatchObject({ itemsCreated: 2, errors: [] });
+    expect(await personCount(db)).toBe(1);
+
+    recent.last_activity_at = 1_779_912_600_000;
+    recentMessages.push(
+      messageFixture({
+        id: "r-3",
+        senderId: "lead-recent",
+        senderName: "Recent Lead",
+        body: "New reply",
+        createdAt: 1_779_912_600_000,
+      }),
+    );
+    const secondFrom = fetchSpy.mock.calls.length;
+    const second = await runLinkedinTestSync(db, config.id, { backfillBudget: 1 });
+
+    expect(second).toMatchObject({ itemsProcessed: 4, itemsCreated: 2, itemsUpdated: 2, errors: [] });
+    expect(await personCount(db)).toBe(2);
+    expect(
+      leadDetailUrls(fetchSpy, secondFrom)
+        .map((url) => url.split("/leads/")[1])
+        .sort(),
+    ).toEqual(["lead-old", "lead-recent"]);
+  });
+
+  it("gives up on a thread that fails every run so the backfill can descend past it", async () => {
+    const missingLeadIds = new Set(["lead-dead"]);
+    mockLeadSync(
+      [
+        leadFixture({ id: "lead-live", fullName: "Live Lead", publicIdentifier: "live-lead" }),
+        leadFixture({ id: "lead-dead", fullName: "Dead Lead", publicIdentifier: "dead-lead" }),
+      ],
+      {
+        conversations: [
+          conversationFixture({
+            leadId: "lead-live",
+            conversationUrn: "urn:conversation:live",
+            lastActivityAt: 1_779_912_300_000,
+          }),
+          conversationFixture({
+            leadId: "lead-dead",
+            conversationUrn: "urn:conversation:dead",
+            lastActivityAt: 1_779_912_000_000,
+          }),
+        ],
+        missingLeadIds,
+      },
+    );
+    const config = await createLinkedinTestConfig(db);
+
+    await runLinkedinTestSync(db, config.id);
+    expect(await storedAccountCursor(db, config.id)).toMatchObject({
+      highWatermark: "2026-05-27T20:05:00.000Z",
+      backfillBefore: "2026-05-27T20:00:00.001Z",
+      backfillDone: false,
+      backfillStalls: 0,
+    });
+
+    await runLinkedinTestSync(db, config.id);
+    await runLinkedinTestSync(db, config.id);
+    expect(await storedAccountCursor(db, config.id)).toMatchObject({ backfillDone: false, backfillStalls: 2 });
+
+    await runLinkedinTestSync(db, config.id);
+    expect(await storedAccountCursor(db, config.id)).toMatchObject({
+      backfillBefore: "2026-05-27T20:00:00.000Z",
+      backfillDone: true,
+      backfillStalls: 0,
+    });
+    expect(await personCount(db)).toBe(1);
   });
 
   it("stores last_contacted_at from conversation recency", async () => {
@@ -1362,10 +1510,14 @@ function mockLeadSync(
             accountConversations.map((conversation) => ({ ...conversation, owner: accountId })),
           )
         : conversationsForAccount("acct-1").map((conversation) => ({ ...conversation, owner: "acct-1" }));
-      return jsonResponse({
-        status: "ok",
-        conversations: workspaceConversations,
-      });
+      const params = new URL(url).searchParams;
+      const before = Number(params.get("before"));
+      const count = Number(params.get("count")) || 15;
+      const page = workspaceConversations
+        .filter((conversation) => conversation.last_activity_at === null || conversation.last_activity_at < before)
+        .sort((left, right) => (right.last_activity_at ?? 0) - (left.last_activity_at ?? 0))
+        .slice(0, count);
+      return jsonResponse({ status: "ok", conversations: page });
     }
     const conversationMatch = url.match(/\/accounts\/([^/]+)\/conversations\/(.+)$/);
     if (conversationMatch) {
@@ -1418,7 +1570,7 @@ async function collectSyncItems(db: Kysely<DB>) {
   for await (const item of connector.sync({
     db,
     credentials: { type: "api_key", api_key: "key" },
-    scopeConfig: { accountIds: ["acct-1"] },
+    scopeConfig: { accountIds: ["acct-1"], maxRpm: 100_000 },
     cursor: null,
     logger: createTestLogger(),
     ownerEmail: "member@example.com",
@@ -1428,7 +1580,7 @@ async function collectSyncItems(db: Kysely<DB>) {
   return items;
 }
 
-async function drainSync(db: Kysely<DB>, opts?: { initialMaxLeads?: number; accountIds?: string[] }) {
+async function drainSync(db: Kysely<DB>, opts?: { backfillBudget?: number; accountIds?: string[] }) {
   const config = await createLinkedinTestConfig(db, { accountIds: opts?.accountIds });
   const result = await runLinkedinTestSync(db, config.id, opts);
   return {
@@ -1464,10 +1616,27 @@ async function createLinkedinTestConfig(db: Kysely<DB>, opts?: { accountIds?: st
   });
 }
 
-async function runLinkedinTestSync(db: Kysely<DB>, configId: string, opts?: { initialMaxLeads?: number }) {
+async function runLinkedinTestSync(db: Kysely<DB>, configId: string, opts?: { backfillBudget?: number }) {
   return runConnectorSync(db, configId, createTestLogger(), {
-    LINKEDIN_AIMFOX_INITIAL_MAX_LEADS: opts?.initialMaxLeads,
+    LINKEDIN_AIMFOX_BACKFILL_BUDGET: opts?.backfillBudget,
+    LINKEDIN_AIMFOX_MAX_RPM: 100_000,
   });
+}
+
+async function storedAccountCursor(db: Kysely<DB>, configId: string) {
+  const row = await db
+    .selectFrom("connector_configs")
+    .select("sync_cursor")
+    .where("id", "=", configId)
+    .executeTakeFirstOrThrow();
+  return JSON.parse(row.sync_cursor ?? "{}").accounts?.["acct-1"] ?? null;
+}
+
+function leadDetailUrls(fetchSpy: ReturnType<typeof mockLeadSync>, from = 0): string[] {
+  return fetchSpy.mock.calls
+    .slice(from)
+    .map((call) => String(call[0]))
+    .filter((url) => url.includes("/leads/"));
 }
 
 async function personCount(db: Kysely<DB>): Promise<number> {

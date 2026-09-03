@@ -14,7 +14,6 @@ import { renderTranscriptLine } from "./transcript";
 import type { ApiKeyCredentials, Connector, ConnectorCredentials, ContactPointSeed, SyncedItem } from "./types";
 import { toEmailPrincipals } from "./types";
 
-const DEFAULT_CONVERSATION_COUNT = 100;
 const DEFAULT_MAX_INFLIGHT = 3;
 const DEFAULT_SEGMENT_MAX_MESSAGES = 50;
 const DEFAULT_SEGMENT_MAX_TOKENS = 4_000;
@@ -26,25 +25,51 @@ const DEFAULT_SEGMENT_MAX_TOKENS = 4_000;
  */
 const DEFAULT_SEGMENT_GAP_HOURS = 4;
 const SEGMENT_ALGORITHM_VERSION = 2;
-const LINKEDIN_AIMFOX_CURSOR_VERSION = 1;
+const LINKEDIN_AIMFOX_CURSOR_VERSION = 2;
 const HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_BACKFILL_BUDGET = 100;
+const DEFAULT_MAX_RPM = 60;
+const MAX_INCREMENTAL_PAGES = 10;
+const STALL_LIMIT = 3;
+/**
+ * Aimfox mirrors the LinkedIn inbox with some ingestion lag, so a message can
+ * surface after our listing with a `last_activity_at` below a watermark we
+ * just advanced. The watermark therefore never moves past `runAnchor − 6 h`;
+ * the newest six hours of threads are re-listed every sync (two calls each,
+ * hash-identical content, no re-index).
+ */
+const INCREMENTAL_OVERLAP_MS = 6 * HOUR_MS;
 
 export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   accountIds: string[];
-  maxConversations?: number;
+  backfillBudget?: number;
+  backfillSince?: string;
   maxInflight?: number;
+  maxRpm?: number;
   segmentMaxMessages?: number;
   segmentMaxTokens?: number;
   segmentGapHours?: number;
   contactPointDefaultRegion?: string;
 }
 
+/**
+ * Two cursors per account. `highWatermark` walks forward and gates the
+ * incremental pass (threads with activity at or after it). `backfillBefore`
+ * walks backward through the inbox one budgeted page per sync until a page
+ * comes back short (`backfillDone`). `backfillStalls` counts consecutive runs
+ * where a failing thread held `backfillBefore` in place, so one dead thread
+ * cannot starve the descent forever.
+ */
 interface LinkedinAimfoxCursorAccountState {
   highWatermark: string | null;
+  watermarkStalls: number;
+  backfillBefore: string | null;
+  backfillDone: boolean;
+  backfillStalls: number;
 }
 
 interface LinkedinAimfoxCursor {
-  version: 1;
+  version: 2;
   accounts: Record<string, LinkedinAimfoxCursorAccountState>;
 }
 
@@ -75,19 +100,38 @@ interface ConversationCompletion {
 }
 
 interface AccountRunState {
-  existingHighWatermark: string | null;
+  existing: LinkedinAimfoxCursorAccountState;
   ownerName: string;
-  conversations: Map<string, ConversationCompletion>;
+  runAnchorMs: number;
+  incremental: Map<string, ConversationCompletion>;
+  backfill: Map<string, ConversationCompletion>;
+  backfillAttempted: boolean;
+  backfillPageShort: boolean;
 }
 
 interface ParsedLinkedinAimfoxScopeConfig {
   accountIds: string[];
-  maxConversations: number;
+  backfillBudget: number;
+  backfillSinceMs: number | null;
   maxInflight: number;
+  maxRpm: number;
   segmentMaxMessages: number;
   segmentMaxTokens: number;
   segmentGapMs: number;
   contactPointDefaultRegion?: string;
+}
+
+interface IngestContext {
+  client: AimfoxClient;
+  accountId: string;
+  state: AccountRunState;
+  scopeConfig: ParsedLinkedinAimfoxScopeConfig;
+  ownerEmail: string;
+  logger: Logger;
+  getExistingItemState?: (providerFileId: string) => {
+    sourceMeta: Record<string, unknown> | null;
+    threadId: string | null;
+  } | null;
 }
 
 export interface LinkedinSegmentLimits {
@@ -136,97 +180,63 @@ export function createLinkedinAimfoxConnector(): Connector {
       await discoverLinkedinAimfoxScopeConfig(credentials);
     },
 
+    /**
+     * Two passes per account, sharing one ingest path and never touching the
+     * same thread twice in a run. The incremental pass lists newest-first
+     * down to the high watermark; the backfill pass takes one budgeted page
+     * below `backfillBefore`. Both are anchored to a single `runAnchorMs`
+     * so the cursor rules in `nextAccountCursor` reason about one snapshot.
+     */
     async *sync(opts) {
       const { api_key } = requireApiKeyCredentials(opts.credentials);
       if (!opts.ownerEmail) throw new Error("LinkedIn Aimfox sync requires a connector owner email");
       const scopeConfig = parseScopeConfig(opts.scopeConfig);
       currentCursor = parseLinkedinAimfoxCursor(opts.cursor);
       runState = new Map();
-      let remainingConversationBudget = scopeConfig.maxConversations;
-      const ownerNames = await loadOwnerNames(api_key, opts.logger);
+      const runAnchorMs = Date.now();
+      const ownerNames = await loadOwnerNames(api_key, scopeConfig.maxRpm, opts.logger);
 
       for (const accountId of scopeConfig.accountIds) {
-        if (remainingConversationBudget <= 0) break;
-        const accountState: AccountRunState = {
-          existingHighWatermark: currentCursor.accounts[accountId]?.highWatermark ?? null,
+        const existing = currentCursor.accounts[accountId] ?? emptyAccountCursor();
+        const state: AccountRunState = {
+          existing,
           ownerName: ownerNames.get(accountId) ?? `LinkedIn account ${accountId}`,
-          conversations: new Map(),
+          runAnchorMs,
+          incremental: new Map(),
+          backfill: new Map(),
+          backfillAttempted: false,
+          backfillPageShort: false,
         };
-        runState.set(accountId, accountState);
-        const client = new AimfoxClient(api_key, { accountId });
-        for await (const result of paginateConversationLeads(client, {
-          accountHighWatermark: accountState.existingHighWatermark,
-          maxConversations: remainingConversationBudget,
-          maxInflight: scopeConfig.maxInflight,
+        runState.set(accountId, state);
+        const client = new AimfoxClient(api_key, { accountId, maxRpm: scopeConfig.maxRpm });
+        const context: IngestContext = {
+          client,
+          accountId,
+          state,
+          scopeConfig,
+          ownerEmail: opts.ownerEmail,
           logger: opts.logger,
-        })) {
-          remainingConversationBudget--;
-          const conversationUrn = result.conversation.conversation_urn;
-          const activity = conversationLastContactedAt(result.conversation);
+          getExistingItemState: opts.getExistingItemState,
+        };
+        const handled = new Set<string>();
 
-          if (!("lead" in result)) {
-            accountState.conversations.set(conversationUrn, {
-              activity,
-              expectedItems: 0,
-              persistedItems: 0,
-              failed: true,
-            });
-            opts.logger.warn(
-              { leadId: result.leadId, conversationUrn, err: result.error },
-              "Failed to fetch LinkedIn Aimfox lead detail",
-            );
-            continue;
-          }
+        if (existing.highWatermark) {
+          const changed = await listChangedConversations(client, existing.highWatermark, runAnchorMs, opts.logger);
+          for (const conversation of changed) handled.add(conversation.conversation_urn);
+          yield* ingestConversations(context, changed, state.incremental);
+        }
 
-          const seed = buildPersonSeed(result.lead);
-          if (!seed) {
-            accountState.conversations.set(conversationUrn, {
-              activity,
-              expectedItems: 0,
-              persistedItems: 0,
-              failed: false,
-            });
-            continue;
-          }
-
-          try {
-            const items = await buildLinkedinSyncedItems(client, {
-              accountId,
-              ownerName: accountState.ownerName,
-              conversation: result.conversation,
-              ownerEmail: opts.ownerEmail,
-              seed,
-              segmentLimits: {
-                maxMessages: scopeConfig.segmentMaxMessages,
-                maxTokens: scopeConfig.segmentMaxTokens,
-                gapMs: scopeConfig.segmentGapMs,
-              },
-              contactPointDefaultRegion: scopeConfig.contactPointDefaultRegion,
-              getExistingItemState: opts.getExistingItemState,
-            });
-            accountState.conversations.set(conversationUrn, {
-              activity,
-              expectedItems: items.length,
-              persistedItems: 0,
-              failed: false,
-            });
-            if (items.length === 0) {
-              opts.logger.debug(
-                { leadId: result.leadId, conversationUrn },
-                "LinkedIn thread has no reply yet; skipped",
-              );
-            }
-            for (const item of items) yield item;
-          } catch (err) {
-            const error = truncateErrorMessage(extractErrorMessage(err));
-            accountState.conversations.set(conversationUrn, {
-              activity,
-              expectedItems: 0,
-              persistedItems: 0,
-              failed: true,
-            });
-            opts.logger.warn({ leadId: result.leadId, conversationUrn, err: error }, "Failed to ingest Aimfox thread");
-          }
+        if (!existing.backfillDone) {
+          const before = existing.backfillBefore ? Date.parse(existing.backfillBefore) : runAnchorMs;
+          const page = await listBackfillPage(client, {
+            before,
+            budget: scopeConfig.backfillBudget,
+            sinceMs: scopeConfig.backfillSinceMs,
+          });
+          state.backfillAttempted = true;
+          state.backfillPageShort = page.short;
+          const fresh = page.conversations.filter((conversation) => !handled.has(conversation.conversation_urn));
+          yield* ingestConversations(context, fresh, state.backfill);
         }
       }
     },
@@ -235,16 +245,17 @@ export function createLinkedinAimfoxConnector(): Connector {
       const checkpoint = readCheckpoint(item.sourceMeta);
       if (!checkpoint) return;
       const account = runState.get(checkpoint.accountId);
-      const conversation = account?.conversations.get(checkpoint.conversationUrn);
+      const conversation =
+        account?.incremental.get(checkpoint.conversationUrn) ?? account?.backfill.get(checkpoint.conversationUrn);
       if (!conversation) return;
       if (persisted) conversation.persistedItems++;
       else conversation.failed = true;
     },
 
-    async getCursor({ currentCursor: storedCursor }) {
+    async getCursor({ currentCursor: storedCursor, logger }) {
       const next = cloneLinkedinAimfoxCursor(parseLinkedinAimfoxCursor(storedCursor));
       for (const [accountId, state] of runState) {
-        next.accounts[accountId] = { highWatermark: persistedHighWatermark(state) };
+        next.accounts[accountId] = nextAccountCursor(state, accountId, logger);
       }
       return JSON.stringify(next);
     },
@@ -255,28 +266,82 @@ type ConversationLeadResult =
   | { leadId: string; conversation: AimfoxConversationListItem; lead: AimfoxLead; error: null }
   | { leadId: string; conversation: AimfoxConversationListItem; error: string };
 
-async function* paginateConversationLeads(
+/**
+ * Newest-first pages from the run anchor down to the watermark. Stops on a
+ * short page, on the first page whose oldest thread predates the watermark,
+ * or at a page cap that no real inbox reaches between two syncs.
+ */
+async function listChangedConversations(
   client: AimfoxClient,
-  opts: {
-    accountHighWatermark: string | null;
-    maxConversations: number;
-    maxInflight: number;
-    logger: Logger;
-  },
-): AsyncGenerator<ConversationLeadResult> {
-  const conversations = await client.listConversations(opts.maxConversations);
-  if (conversations.length >= opts.maxConversations) {
-    opts.logger.warn(
-      { count: conversations.length },
-      "LinkedIn Aimfox conversation sync reached list cap; upstream pagination is unavailable",
-    );
+  highWatermark: string,
+  runAnchorMs: number,
+  logger: Logger,
+): Promise<AimfoxConversationListItem[]> {
+  const changed: AimfoxConversationListItem[] = [];
+  const seen = new Set<string>();
+  let before = runAnchorMs;
+  for (let pageIndex = 0; pageIndex < MAX_INCREMENTAL_PAGES; pageIndex++) {
+    const page = await client.listConversationsPage({ before, count: 100 });
+    for (const conversation of page) {
+      if (seen.has(conversation.conversation_urn)) continue;
+      seen.add(conversation.conversation_urn);
+      if (conversationChangedSince(conversation, highWatermark)) changed.push(conversation);
+    }
+    const oldest = oldestActivityMs(page);
+    if (page.length < 100 || oldest === null || oldest >= before) break;
+    if (new Date(oldest).toISOString() < highWatermark) break;
+    before = oldest;
+    if (pageIndex === MAX_INCREMENTAL_PAGES - 1) {
+      logger.warn({ pages: MAX_INCREMENTAL_PAGES }, "LinkedIn incremental listing hit the page cap");
+    }
   }
-  const highWatermark = opts.accountHighWatermark;
-  const changedConversations = highWatermark
-    ? conversations.filter((conversation) => conversationChangedSince(conversation, highWatermark))
-    : conversations;
+  return changed;
+}
+
+/**
+ * One backfill batch: up to `budget` threads strictly older than `before`,
+ * fetched in pages of 100. `short` means the inbox ran out (or the age floor
+ * was reached), which is what lets the cursor declare the backfill done.
+ */
+async function listBackfillPage(
+  client: AimfoxClient,
+  input: { before: number; budget: number; sinceMs: number | null },
+): Promise<{ conversations: AimfoxConversationListItem[]; short: boolean }> {
+  const conversations: AimfoxConversationListItem[] = [];
+  const seen = new Set<string>();
+  let before = input.before;
+  let short = false;
+  while (conversations.length < input.budget) {
+    const count = Math.min(100, input.budget - conversations.length);
+    const page = await client.listConversationsPage({ before, count });
+    for (const conversation of page) {
+      if (seen.has(conversation.conversation_urn)) continue;
+      seen.add(conversation.conversation_urn);
+      const activity = activityMs(conversation);
+      if (input.sinceMs !== null && activity !== null && activity < input.sinceMs) {
+        short = true;
+        continue;
+      }
+      conversations.push(conversation);
+    }
+    const oldest = oldestActivityMs(page);
+    if (page.length < count || oldest === null || oldest >= before) {
+      short = true;
+      break;
+    }
+    if (short) break;
+    before = oldest;
+  }
+  return { conversations, short };
+}
+
+async function resolveConversationLeads(
+  client: AimfoxClient,
+  conversations: AimfoxConversationListItem[],
+  maxInflight: number,
+): Promise<ConversationLeadResult[]> {
   const details: ConversationLeadResult[] = [];
-  await runWithConcurrency(changedConversations, opts.maxInflight, async (conversation) => {
+  await runWithConcurrency(conversations, maxInflight, async (conversation) => {
     const participant = conversationCounterpart(conversation);
     if (!participant?.id) {
       details.push({ leadId: "unknown", conversation, error: "LinkedIn conversation has no lead participant" });
@@ -297,7 +362,61 @@ async function* paginateConversationLeads(
       left.conversation.conversation_urn.localeCompare(right.conversation.conversation_urn)
     );
   });
-  for (const detail of details) yield detail;
+  return details;
+}
+
+async function* ingestConversations(
+  context: IngestContext,
+  conversations: AimfoxConversationListItem[],
+  completions: Map<string, ConversationCompletion>,
+): AsyncGenerator<SyncedItem> {
+  const { client, accountId, state, scopeConfig, logger } = context;
+  const results = await resolveConversationLeads(client, conversations, scopeConfig.maxInflight);
+  for (const result of results) {
+    const conversationUrn = result.conversation.conversation_urn;
+    const activity = conversationLastContactedAt(result.conversation);
+
+    if (!("lead" in result)) {
+      completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: true });
+      logger.warn(
+        { leadId: result.leadId, conversationUrn, err: result.error },
+        "Failed to fetch LinkedIn Aimfox lead detail",
+      );
+      continue;
+    }
+
+    const seed = buildPersonSeed(result.lead);
+    if (!seed) {
+      completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: false });
+      continue;
+    }
+
+    try {
+      const items = await buildLinkedinSyncedItems(client, {
+        accountId,
+        ownerName: state.ownerName,
+        conversation: result.conversation,
+        ownerEmail: context.ownerEmail,
+        seed,
+        segmentLimits: {
+          maxMessages: scopeConfig.segmentMaxMessages,
+          maxTokens: scopeConfig.segmentMaxTokens,
+          gapMs: scopeConfig.segmentGapMs,
+        },
+        contactPointDefaultRegion: scopeConfig.contactPointDefaultRegion,
+        getExistingItemState: context.getExistingItemState,
+      });
+      completions.set(conversationUrn, { activity, expectedItems: items.length, persistedItems: 0, failed: false });
+      if (items.length === 0) {
+        logger.debug({ leadId: result.leadId, conversationUrn }, "LinkedIn thread has no reply yet; skipped");
+      }
+      for (const item of items) yield item;
+    } catch (err) {
+      const error = truncateErrorMessage(extractErrorMessage(err));
+      completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: true });
+      logger.warn({ leadId: result.leadId, conversationUrn, err: error }, "Failed to ingest Aimfox thread");
+    }
+  }
 }
 
 /**
@@ -306,9 +425,9 @@ async function* paginateConversationLeads(
  * here must never abort the sync or block cursor persistence, so it degrades
  * to the account id.
  */
-async function loadOwnerNames(apiKey: string, logger: Logger): Promise<Map<string, string>> {
+async function loadOwnerNames(apiKey: string, maxRpm: number, logger: Logger): Promise<Map<string, string>> {
   try {
-    const accounts = await new AimfoxClient(apiKey).listAccounts();
+    const accounts = await new AimfoxClient(apiKey, { maxRpm }).listAccounts();
     return new Map(
       accounts
         .filter((account) => account.full_name?.trim())
@@ -764,8 +883,10 @@ function parseScopeConfig(value: Record<string, unknown>): ParsedLinkedinAimfoxS
   if (accountIds.length === 0) throw new LinkedinAimfoxNoAccountsError();
   return {
     accountIds: [...new Set(accountIds)].sort(),
-    maxConversations: positiveInteger(value.maxConversations, DEFAULT_CONVERSATION_COUNT),
+    backfillBudget: positiveInteger(value.backfillBudget, DEFAULT_BACKFILL_BUDGET),
+    backfillSinceMs: isoToMs(value.backfillSince),
     maxInflight: positiveInteger(value.maxInflight, DEFAULT_MAX_INFLIGHT),
+    maxRpm: positiveInteger(value.maxRpm, DEFAULT_MAX_RPM),
     segmentMaxMessages: positiveInteger(value.segmentMaxMessages, DEFAULT_SEGMENT_MAX_MESSAGES),
     segmentMaxTokens: positiveInteger(value.segmentMaxTokens, DEFAULT_SEGMENT_MAX_TOKENS),
     segmentGapMs: positiveInteger(value.segmentGapHours, DEFAULT_SEGMENT_GAP_HOURS) * HOUR_MS,
@@ -778,6 +899,30 @@ function positiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function isoToMs(value: unknown): number | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function activityMs(conversation: AimfoxConversationListItem): number | null {
+  const iso = conversationLastContactedAt(conversation);
+  return iso ? Date.parse(iso) : null;
+}
+
+function oldestActivityMs(page: AimfoxConversationListItem[]): number | null {
+  let oldest: number | null = null;
+  for (const conversation of page) {
+    const ms = activityMs(conversation);
+    if (ms !== null && (oldest === null || ms < oldest)) oldest = ms;
+  }
+  return oldest;
+}
+
+/**
+ * Cursor upgrades reset the account: a v1 cursor knew only a watermark and
+ * had never walked the inbox, so the only correct v2 state is "start over".
+ */
 function parseLinkedinAimfoxCursor(value: string | null): LinkedinAimfoxCursor {
   if (!value) return emptyLinkedinAimfoxCursor();
   try {
@@ -786,10 +931,14 @@ function parseLinkedinAimfoxCursor(value: string | null): LinkedinAimfoxCursor {
       return emptyLinkedinAimfoxCursor();
     }
     const accounts: Record<string, LinkedinAimfoxCursorAccountState> = {};
-    for (const [accountId, state] of Object.entries(parsed.accounts)) {
+    for (const [accountId, raw] of Object.entries(parsed.accounts)) {
+      const state = raw && typeof raw === "object" ? (raw as Partial<LinkedinAimfoxCursorAccountState>) : {};
       accounts[accountId] = {
-        highWatermark:
-          state && typeof state === "object" && typeof state.highWatermark === "string" ? state.highWatermark : null,
+        highWatermark: typeof state.highWatermark === "string" ? state.highWatermark : null,
+        watermarkStalls: typeof state.watermarkStalls === "number" ? state.watermarkStalls : 0,
+        backfillBefore: typeof state.backfillBefore === "string" ? state.backfillBefore : null,
+        backfillDone: state.backfillDone === true,
+        backfillStalls: typeof state.backfillStalls === "number" ? state.backfillStalls : 0,
       };
     }
     return { version: LINKEDIN_AIMFOX_CURSOR_VERSION, accounts };
@@ -802,6 +951,10 @@ function emptyLinkedinAimfoxCursor(): LinkedinAimfoxCursor {
   return { version: LINKEDIN_AIMFOX_CURSOR_VERSION, accounts: {} };
 }
 
+function emptyAccountCursor(): LinkedinAimfoxCursorAccountState {
+  return { highWatermark: null, watermarkStalls: 0, backfillBefore: null, backfillDone: false, backfillStalls: 0 };
+}
+
 function cloneLinkedinAimfoxCursor(cursor: LinkedinAimfoxCursor): LinkedinAimfoxCursor {
   return {
     version: LINKEDIN_AIMFOX_CURSOR_VERSION,
@@ -811,30 +964,127 @@ function cloneLinkedinAimfoxCursor(cursor: LinkedinAimfoxCursor): LinkedinAimfox
   };
 }
 
-function persistedHighWatermark(state: AccountRunState): string | null {
+function isComplete(conversation: ConversationCompletion): boolean {
+  return !conversation.failed && conversation.persistedItems === conversation.expectedItems;
+}
+
+/**
+ * Forward cursor. Advances to the newest activity seen, but never past the
+ * oldest thread that did not fully persist, so a failure is re-fetched next
+ * run; `>=` on the read side makes the boundary thread itself overlap.
+ */
+function persistedHighWatermark(
+  existingHighWatermark: string | null,
+  conversations: Map<string, ConversationCompletion>,
+): string | null {
   const completeActivities: string[] = [];
   const incompleteActivities: Array<string | null> = [];
-  for (const conversation of state.conversations.values()) {
-    if (!conversation.failed && conversation.persistedItems === conversation.expectedItems) {
+  for (const conversation of conversations.values()) {
+    if (isComplete(conversation)) {
       if (conversation.activity) completeActivities.push(conversation.activity);
     } else {
       incompleteActivities.push(conversation.activity);
     }
   }
-  if (incompleteActivities.some((activity) => activity === null)) return state.existingHighWatermark;
+  if (incompleteActivities.some((activity) => activity === null)) return existingHighWatermark;
   const globalWatermark = [
     ...completeActivities,
     ...incompleteActivities.filter((value): value is string => Boolean(value)),
   ]
     .sort()
     .at(-1);
-  if (!globalWatermark) return state.existingHighWatermark;
+  if (!globalWatermark) return existingHighWatermark;
   const oldestIncomplete = incompleteActivities
     .filter((value): value is string => Boolean(value))
     .sort()
     .at(0);
   const bounded = oldestIncomplete && oldestIncomplete < globalWatermark ? oldestIncomplete : globalWatermark;
-  return !state.existingHighWatermark || bounded > state.existingHighWatermark ? bounded : state.existingHighWatermark;
+  return !existingHighWatermark || bounded > existingHighWatermark ? bounded : existingHighWatermark;
+}
+
+function datedActivities(entries: Array<[string, ConversationCompletion]>): string[] {
+  return entries
+    .map(([, conversation]) => conversation.activity)
+    .filter((value): value is string => Boolean(value))
+    .sort();
+}
+
+/**
+ * Combines both passes into the next cursor.
+ *
+ * Watermark: from the incremental pass alone, by the hold-at-oldest-incomplete
+ * rule, capped at `runAnchor − INCREMENTAL_OVERLAP_MS`. With no watermark yet
+ * it is seeded from the newest *complete* thread of the first backfill page
+ * — backfill failures belong to the backfill cursor, not here, or one dead
+ * thread at the top would force every newer thread to be re-fetched each run.
+ *
+ * Backfill: descends to the page minimum when every thread persisted, holds
+ * just above the newest incomplete thread otherwise.
+ *
+ * Both cursors carry a stall counter: after `STALL_LIMIT` consecutive runs
+ * held in place by the same failures, they give up on those threads and
+ * move, with a warning naming the urns.
+ */
+function nextAccountCursor(
+  state: AccountRunState,
+  accountId: string,
+  logger: Logger,
+): LinkedinAimfoxCursorAccountState {
+  const { existing } = state;
+  const watermarkEntries = [...(existing.highWatermark ? state.incremental : state.backfill).entries()];
+  const newestComplete = datedActivities(watermarkEntries.filter(([, c]) => isComplete(c))).at(-1) ?? null;
+  const held = persistedHighWatermark(existing.highWatermark, new Map(watermarkEntries));
+  let candidate = existing.highWatermark ? held : newestComplete;
+  let watermarkStalls = 0;
+  if (existing.highWatermark && held === existing.highWatermark && newestComplete && newestComplete > held) {
+    watermarkStalls = existing.watermarkStalls + 1;
+    if (watermarkStalls >= STALL_LIMIT) {
+      logger.warn(
+        {
+          accountId,
+          conversationUrns: watermarkEntries.filter(([, c]) => !isComplete(c)).map(([urn]) => urn),
+          stalls: watermarkStalls,
+        },
+        "LinkedIn incremental cursor giving up on threads that failed repeatedly",
+      );
+      candidate = newestComplete;
+      watermarkStalls = 0;
+    }
+  }
+  const bound = new Date(state.runAnchorMs - INCREMENTAL_OVERLAP_MS).toISOString();
+  const capped = candidate && candidate > bound ? bound : candidate;
+  const highWatermark =
+    capped && (!existing.highWatermark || capped > existing.highWatermark) ? capped : existing.highWatermark;
+
+  if (existing.backfillDone || !state.backfillAttempted) return { ...existing, highWatermark, watermarkStalls };
+
+  const entries = [...state.backfill.entries()];
+  const incomplete = entries.filter(([, conversation]) => !isComplete(conversation));
+  const pageMin = datedActivities(entries).at(0) ?? null;
+  const newestIncomplete = datedActivities(incomplete).at(-1) ?? null;
+
+  let backfillBefore = existing.backfillBefore;
+  let backfillDone = false;
+  let backfillStalls = 0;
+  if (newestIncomplete) {
+    backfillBefore = new Date(Date.parse(newestIncomplete) + 1).toISOString();
+    if (backfillBefore === existing.backfillBefore) {
+      backfillStalls = existing.backfillStalls + 1;
+      if (backfillStalls >= STALL_LIMIT) {
+        logger.warn(
+          { accountId, conversationUrns: incomplete.map(([urn]) => urn), stalls: backfillStalls },
+          "LinkedIn backfill giving up on threads that failed repeatedly",
+        );
+        backfillBefore = pageMin ?? backfillBefore;
+        backfillDone = state.backfillPageShort;
+        backfillStalls = 0;
+      }
+    }
+  } else {
+    backfillBefore = pageMin ?? existing.backfillBefore;
+    backfillDone = state.backfillPageShort;
+  }
+  return { highWatermark, watermarkStalls, backfillBefore, backfillDone, backfillStalls };
 }
 
 function conversationChangedSince(conversation: AimfoxConversationListItem, highWatermark: string): boolean {
