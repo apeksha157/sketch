@@ -82,7 +82,17 @@ export function GraphVerdicts() {
 
 function rollupSummary(run: GraphVerdictRun): string {
   const parts: string[] = [];
-  for (const status of ["awaiting_human", "approved", "applied", "reverted", "rejected", "bounced"] as const) {
+  for (const status of [
+    "awaiting_human",
+    "approved",
+    "pending_corroboration",
+    "veto_window",
+    "applied",
+    "reverted",
+    "rejected",
+    "retired",
+    "bounced",
+  ] as const) {
     const count = run.rollups?.[status] ?? 0;
     if (count > 0) parts.push(`${count} ${status === "awaiting_human" ? "awaiting" : status}`);
   }

@@ -2,6 +2,7 @@ import type { Kysely } from "kysely";
 import { z } from "zod/v4";
 import type { GenerateMeta } from "../connectors/gemini-generate";
 import type { AgenticOptions, AgenticOutcome, AgenticTool } from "../connectors/openrouter-generate";
+import { GRAPH_VERDICT_ACTIVE_STATUSES } from "../db/repositories/graph-verdicts";
 import { createLlmUsageRepository } from "../db/repositories/llm-usage";
 import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/machine-principal";
 import type { DB } from "../db/schema";
@@ -75,9 +76,17 @@ type EvidenceExcerpt = {
   content: string;
 };
 
+/**
+ * The sweep never produces storedCandidate — the drain synthesizes it for
+ * unmatched rows whose queue record already carries a stored candidate
+ * suggestion (the Riccardo case: "Riccardo" pending with "Riccardo Buzzotta"
+ * as candidate_entity_id, judge never looked). Sweep counters stay untouched.
+ */
+type DocketDecision = BacklogSweepPendingDecision | { kind: "storedCandidate"; candidateIds: string[] };
+
 type PendingDocketRow = {
   row: BacklogSweepQueueRow;
-  decision: BacklogSweepPendingDecision;
+  decision: DocketDecision;
   evidence: EvidenceExcerpt[];
 };
 
@@ -118,18 +127,31 @@ function orderedUnique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
 
-function hasSurvivingCandidates(decision: BacklogSweepPendingDecision): boolean {
+function hasSurvivingCandidates(decision: DocketDecision): boolean {
   return decision.kind !== "link" && (decision.candidateIds?.length ?? 0) > 0;
 }
 
-function isDocketDecision(decision: BacklogSweepPendingDecision): boolean {
+function isDocketDecision(decision: DocketDecision): boolean {
   if (decision.kind === "link") return false;
   if (decision.kind === "blockedByDistinct") return hasSurvivingCandidates(decision);
   return DOCKET_DECISIONS.has(decision.kind);
 }
 
-function parseCandidateIds(decision: BacklogSweepPendingDecision): string[] {
+function parseCandidateIds(decision: DocketDecision): string[] {
   return decision.kind === "link" ? [decision.targetEntityId] : orderedUnique(decision.candidateIds ?? []);
+}
+
+function parseStoredCandidateIds(row: BacklogSweepQueueRow): string[] {
+  const ids = [row.candidate_entity_id ?? ""];
+  if (row.candidate_entity_ids) {
+    try {
+      const parsed = JSON.parse(row.candidate_entity_ids);
+      if (Array.isArray(parsed)) {
+        ids.push(...parsed.filter((value): value is string => typeof value === "string"));
+      }
+    } catch {}
+  }
+  return orderedUnique(ids);
 }
 
 function collectOfferedIdsFromValue(value: unknown, offeredIds: Set<string>): void {
@@ -288,7 +310,15 @@ async function selectDocket(
       sweepLinkable += 1;
       continue;
     }
-    if (!isDocketDecision(decision)) continue;
+    if (!isDocketDecision(decision)) {
+      if (decision.kind === "unmatched") {
+        const storedIds = parseStoredCandidateIds(row);
+        if (storedIds.length > 0 && docket.length < limit) {
+          docket.push({ row, decision: { kind: "storedCandidate", candidateIds: storedIds }, evidence });
+        }
+      }
+      continue;
+    }
     if (docket.length < limit) docket.push({ row, decision, evidence });
   }
 
@@ -380,7 +410,7 @@ async function loadOrgContext(db: Kysely<DB>): Promise<Record<string, unknown> |
 
 function buildPrompt(params: {
   row: BacklogSweepQueueRow;
-  decision: BacklogSweepPendingDecision;
+  decision: DocketDecision;
   candidates: IndexEntityRow[];
   contaminated: JudgeDrainContaminatedPair[];
   evidence: EvidenceExcerpt[];
@@ -518,7 +548,7 @@ async function recordUsage(db: Kysely<DB>, meta: GenerateMeta | null): Promise<v
 async function judgeRow(params: {
   deps: JudgeDrainDeps;
   row: BacklogSweepQueueRow;
-  decision: BacklogSweepPendingDecision;
+  decision: DocketDecision;
   evidence: EvidenceExcerpt[];
   orgContext: Record<string, unknown> | null;
 }): Promise<{ report: JudgeDrainVerdictReport; demotedUnoffered: boolean }> {
@@ -578,7 +608,7 @@ async function activeProposalExists(db: Kysely<DB>, row: BacklogSweepQueueRow, v
       .where("subject_mention_name", "=", normalizeEntityMatchName(row.entity_type, row.proposed_name))
       .where("subject_entity_type", "=", row.entity_type)
       .where("action", "=", verdict.verdict === "link" ? "link_to" : "dismiss")
-      .where("status", "in", ["awaiting_human", "approved"])
+      .where("status", "in", [...GRAPH_VERDICT_ACTIVE_STATUSES])
       .where("superseded_at", "is", null);
     query =
       verdict.verdict === "link"
@@ -595,7 +625,7 @@ async function activeProposalExists(db: Kysely<DB>, row: BacklogSweepQueueRow, v
         .where("subject_entity_id", "=", subjectEntityId)
         .where("action", "=", "merge_into")
         .where("target_entity_id", "=", targetEntityId)
-        .where("status", "in", ["awaiting_human", "approved"])
+        .where("status", "in", [...GRAPH_VERDICT_ACTIVE_STATUSES])
         .where("superseded_at", "is", null)
         .executeTakeFirst(),
     );

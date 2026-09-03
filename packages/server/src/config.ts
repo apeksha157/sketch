@@ -61,6 +61,29 @@ export const configSchema = z.object({
   WEEKLY_MINT_MODE: z.enum(["off", "shadow", "live", "manual"]).default("off"),
   WEEKLY_MINT_JUDGE_MODE: z.enum(["single", "agentic"]).default("single"),
   CONSOLIDATED_LOOP_MODE: z.enum(["off", "shadow"]).default("off"),
+  RESOLVER_PASS_MODE: z.enum(["off", "live"]).default("off"),
+  RESOLVER_PASS_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .default(24 * 60 * 60 * 1000),
+  RESOLVER_DRAIN_LIMIT: z.coerce.number().int().min(0).default(100),
+  /**
+   * Comma-separated verdict kinds the resolver executor may approve without a
+   * human tap: any of link_to, dismiss, remove_alias. Default empty — every
+   * machine verdict parks awaiting_human until its kind's gate report is
+   * clean. Merges are never auto-applied in 3.1 regardless of this list.
+   */
+  RESOLVER_AUTO_APPLY_KINDS: z
+    .string()
+    .default("")
+    .transform((value) =>
+      value
+        .split(",")
+        .map((kind) => kind.trim())
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.enum(["link_to", "dismiss", "remove_alias"]))),
   WEEKLY_MINT_INTERVAL_MS: z.coerce
     .number()
     .int()

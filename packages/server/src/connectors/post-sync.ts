@@ -7,6 +7,7 @@ import { sweepCoMentionContributesTo } from "../entities/co-mention-sweep";
 import { runDuplicateDrain } from "../entities/duplicate-drain";
 import { materializeUnmaterializedFacts } from "../entities/materialize";
 import { reconcileStructuralAssigneeContributesTo } from "../entities/structural-assignee";
+import { corroborateVerdictsFromFiles } from "../entities/verdict-ripening";
 import { floorRetryForDomains } from "./engagement-floor";
 import { sweepDomainPromotions } from "./smart-enrichment";
 
@@ -145,4 +146,12 @@ export async function runPostSyncGraphPipeline({
     scope: { kind: "files", indexedFileIds: affectedIndexedFileIds },
     threshold: coMentionContributesToThreshold,
   });
+
+  if (affectedIndexedFileIds.length > 0) {
+    await corroborateVerdictsFromFiles(
+      db,
+      affectedIndexedFileIds,
+      syncLogger.child({ component: "verdict-corroboration" }),
+    );
+  }
 }

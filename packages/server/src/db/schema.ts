@@ -1026,6 +1026,11 @@ export interface GraphVerdictsTable {
   decided_at: string | null;
   decided_by_user_id: string | null;
   applied_ledger_ref: string | null;
+  veto_until: string | null;
+  corroboration_json: string | null;
+  retired_reason: string | null;
+  dry_streak: Generated<number>;
+  merge_pair_key: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -1387,6 +1392,26 @@ export interface WeeklyMintRunsTable {
   started_at: Generated<string>;
   completed_at: string | null;
   error: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+export interface ResolverRunsTable {
+  id: string;
+  run_key: string;
+  lease_token: string | null;
+  status: string;
+  heartbeat_at: string | null;
+  sweep_linked: Generated<number>;
+  drain_filed: Generated<number>;
+  aged_retired: Generated<number>;
+  approved_auto: Generated<number>;
+  applied: Generated<number>;
+  bounced_drift: Generated<number>;
+  summary_json: string | null;
+  error: string | null;
+  started_at: Generated<string>;
+  completed_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -2151,6 +2176,7 @@ export interface DB {
   weekly_mint_candidates: WeeklyMintCandidatesTable;
   weekly_mint_run_events: WeeklyMintRunEventsTable;
   weekly_mint_runs: WeeklyMintRunsTable;
+  resolver_runs: ResolverRunsTable;
   weekly_mint_traces: WeeklyMintTracesTable;
   entity_mentions: EntityMentionsTable;
   agent_runs: AgentRunsTable;

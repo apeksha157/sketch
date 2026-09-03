@@ -72,6 +72,7 @@ import { startNormalizationBackfill } from "./entities/normalization-backfill";
 import { isPersonalOrSharedDomain } from "./entities/personal-domains";
 import type { ProposeEntityType } from "./entities/propose";
 import { startQueueDrainSequence } from "./entities/queue-run";
+import { createResolverPassService } from "./entities/resolver-pass";
 import { createApp } from "./http";
 import { listAvailableManagedIntegrations } from "./integrations/availability";
 import { createCliIntegrationService } from "./integrations/cli/service";
@@ -1042,6 +1043,30 @@ export async function createServer(config: Config, options?: CreateServerOptions
   ) {
     weeklyMint?.start();
   }
+  const resolverOpenRouter =
+    config.RESOLVER_PASS_MODE === "live"
+      ? resolveOpenRouterEnrichmentConfig(weeklyMintSettings ?? (await settingsRepo.get()), config.OPENROUTER_API_KEY)
+      : null;
+  const resolverGenerator = resolverOpenRouter?.openRouterApiKey
+    ? createOpenRouterGenerator(resolverOpenRouter.openRouterApiKey, {
+        model: config.CONSOLIDATED_LOOP_MODEL ?? resolverOpenRouter.openRouterModel ?? null,
+        reasoningEffort: "medium",
+        timeoutMs: 300_000,
+      })
+    : null;
+  const resolverPass =
+    config.RESOLVER_PASS_MODE === "live"
+      ? createResolverPassService({
+          db,
+          logger,
+          generateAgenticJSON: resolverGenerator?.generateAgenticJSON ?? null,
+          model: config.CONSOLIDATED_LOOP_MODEL ?? resolverOpenRouter?.openRouterModel ?? null,
+          intervalMs: config.RESOLVER_PASS_INTERVAL_MS,
+          drainLimit: config.RESOLVER_DRAIN_LIMIT,
+          autoApplyKinds: config.RESOLVER_AUTO_APPLY_KINDS,
+        })
+      : null;
+  if (backgroundWork && externalStartup) resolverPass?.start();
   const syncScheduler = backgroundWork
     ? startSyncScheduler(db, logger, 30 * 60 * 1000, {
         appConfig: config,
@@ -1480,6 +1505,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     await slackEntitySync.stop();
     await userEntityLinkSweep.stop();
     await weeklyMint?.stop();
+    await resolverPass?.stop();
     whatsappWindowKeepAliveJob?.stop();
     if (backgroundWork) {
       agentScheduler.stop();

@@ -3,15 +3,16 @@ import { z } from "zod/v4";
 import {
   type GraphVerdictValidationStatus,
   type StoreGraphVerdictInput,
+  type StoreVerdictDisposition,
   createGraphVerdictRepository,
   withGraphVerdictUniqueRetry,
 } from "../../db/repositories/graph-verdicts";
 import type { DB, EntitiesTable } from "../../db/schema";
 import type { CleanupAction, CleanupVerdict } from "../../entities/cleanup-adjudication";
 import { planCleanup } from "../../entities/cleanup-apply";
-import { normalizeEntityMatchName, normalizeName } from "../../entities/name-keys";
+import { normalizeEntityMatchName } from "../../entities/name-keys";
 import { resolveLiveEntity } from "../../entities/redirect";
-import { GraphVerdictApplyError, applyGraphVerdict, mentionPlan } from "../../entities/verdict-apply";
+import { GraphVerdictApplyError, mentionPlan } from "../../entities/verdict-apply";
 import { fingerprintFor, mentionVerdictFingerprint } from "../../entities/verdict-fingerprint";
 import { jsonResult } from "./queries";
 
@@ -43,7 +44,6 @@ const mentionVerdictSchema = z.object({
 });
 
 export const proposeGraphVerdictsSchema = {
-  autoApply: z.boolean().optional(),
   note: z.string().optional(),
   verdicts: z
     .array(z.union([entityVerdictSchema, mentionVerdictSchema]))
@@ -97,14 +97,20 @@ type ProposalResult = {
   disposition: ProposalDisposition;
 };
 
-type ProposalDisposition = "autoApplied" | "awaiting_human" | "bounced" | `auto_apply_failed:${string}`;
+type ProposalDisposition =
+  | "awaiting_human"
+  | "bounced"
+  | "pending_corroboration"
+  | "veto_window"
+  | "corroborated"
+  | "ripened"
+  | "revived";
 
 type StoredProposalBatch = {
   runId: string;
   stored: number;
   bounced: number;
   results: ProposalResult[];
-  autoApplyCandidateIds: string[];
 };
 
 function isMentionProposal(proposal: Proposal): proposal is MentionProposal {
@@ -319,7 +325,10 @@ function prepareProposals(args: ProposeGraphVerdictsArgs, entities: Map<string, 
       subject: entities.get(proposal.subjectEntityId) ?? null,
       target: proposal.targetEntityId ? (entities.get(proposal.targetEntityId) ?? null) : null,
     };
-    const pairKey = `entity\u0000${proposal.subjectEntityId}\u0000${proposal.action}`;
+    const pairKey =
+      proposal.action === "merge_into" && proposal.targetEntityId
+        ? `merge\u0000${[proposal.subjectEntityId, proposal.targetEntityId].sort().join("\u0000")}`
+        : `entity\u0000${proposal.subjectEntityId}\u0000${proposal.action}`;
     const duplicate = seenPairs.has(pairKey);
     seenPairs.add(pairKey);
     let validationReason: string | null = null;
@@ -405,53 +414,30 @@ async function validatePreparedProposal(db: Kysely<DB>, prepared: PreparedPropos
 }
 
 /**
- * Auto-apply only removes aliases whose row provenance proves the alias came
- * from machine cleanup or legacy backfill. A missing row is not enough evidence:
- * unknown provenance parks for human review rather than overriding identity
- * signals that were never mirrored into `entity_aliases`.
+ * Corroborated/ripened/revived proposals landed on an EXISTING verdict (the
+ * result's verdictId is that row's id, not a fresh insert); pending/veto
+ * statuses are machine-filed merges ripening under §6. Everything else keeps
+ * the original vocabulary.
  */
-async function eligibleRemoveAliasVerdictIds(
-  db: Kysely<DB>,
-  stored: { ids: string[]; rows: StoreGraphVerdictInput[] },
-): Promise<string[]> {
-  const eligibleIds: string[] = [];
-  for (const [index, row] of stored.rows.entries()) {
-    if (row.action !== "remove_alias" || row.status !== "awaiting_human" || !row.subjectEntityId || !row.targetName) {
-      continue;
-    }
-    const alias = await db
-      .selectFrom("entity_aliases")
-      .select("provenance")
-      .where("entity_id", "=", row.subjectEntityId)
-      .where("normalized_alias", "=", normalizeName(row.targetName))
-      .executeTakeFirst();
-    if (alias?.provenance === "mint_model" || alias?.provenance === "legacy") {
-      const id = stored.ids[index];
-      if (id) eligibleIds.push(id);
-    }
-  }
-  return eligibleIds;
-}
-
-function autoApplyFailureCode(error: unknown): string {
-  if (error instanceof GraphVerdictApplyError) return error.code;
-  return "APPLY_CONFLICT";
+function proposalDisposition(stored: StoreVerdictDisposition, status: string): ProposalDisposition {
+  if (stored === "corroborated" || stored === "ripened" || stored === "revived") return stored;
+  if (status === "bounced") return "bounced";
+  if (status === "pending_corroboration" || status === "veto_window") return status;
+  return "awaiting_human";
 }
 
 function dispositionSummary(results: ProposalResult[]): string {
-  const counts = {
-    autoApplied: 0,
-    awaiting_human: 0,
-    bounced: 0,
-    autoApplyFailed: 0,
-  };
+  const counts = new Map<string, number>([
+    ["awaiting_human", 0],
+    ["bounced", 0],
+  ]);
   for (const result of results) {
-    if (result.disposition === "autoApplied") counts.autoApplied += 1;
-    else if (result.disposition === "awaiting_human") counts.awaiting_human += 1;
-    else if (result.disposition === "bounced") counts.bounced += 1;
-    else counts.autoApplyFailed += 1;
+    counts.set(result.disposition, (counts.get(result.disposition) ?? 0) + 1);
   }
-  return `autoApplied=${counts.autoApplied} awaiting_human=${counts.awaiting_human} bounced=${counts.bounced} auto_apply_failed=${counts.autoApplyFailed}`;
+  return [...counts.entries()]
+    .filter(([key, count]) => count > 0 || ["awaiting_human", "bounced"].includes(key))
+    .map(([key, count]) => `${key}=${count}`)
+    .join(" ");
 }
 
 export async function handleProposeGraphVerdicts(
@@ -494,38 +480,18 @@ export async function handleProposeGraphVerdicts(
         validationStatus: row.validationStatus,
         validationReason: row.validationReason,
         wouldChange: row.wouldChangeJson ? (JSON.parse(row.wouldChangeJson) as Record<string, number>) : null,
-        disposition: row.status === "bounced" ? "bounced" : "awaiting_human",
+        disposition: proposalDisposition(stored.dispositions[index] ?? "inserted", row.status),
       }));
-      const autoApplyCandidateIds = args.autoApply ? await eligibleRemoveAliasVerdictIds(trx, stored) : [];
       return {
         runId: run.id,
-        stored: stored.rows.filter((row) => row.status === "awaiting_human").length,
+        stored: stored.dispositions.filter(
+          (disposition, index) => disposition === "inserted" && stored.rows[index]?.status !== "bounced",
+        ).length,
         bounced: stored.rows.filter((row) => row.status === "bounced").length,
         results,
-        autoApplyCandidateIds,
       };
     }),
   );
-
-  const repo = createGraphVerdictRepository(db);
-  for (const verdictId of batch.autoApplyCandidateIds) {
-    const result = batch.results.find((row) => row.verdictId === verdictId);
-    if (!result) continue;
-    const approved = await repo.markApproved({
-      id: verdictId,
-      actorUserId: authContext.userId,
-    });
-    if (!approved) {
-      result.disposition = "auto_apply_failed:APPLY_CONFLICT";
-      continue;
-    }
-    try {
-      await applyGraphVerdict(db, { verdictId, actorUserId: authContext.userId });
-      result.disposition = "autoApplied";
-    } catch (error) {
-      result.disposition = `auto_apply_failed:${autoApplyFailureCode(error)}`;
-    }
-  }
 
   return jsonResult({
     runId: batch.runId,
