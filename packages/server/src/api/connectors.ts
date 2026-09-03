@@ -45,6 +45,7 @@ import {
 import { buildCredentialHint } from "../connectors/fireflies";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { ensureValidToken, listFolderContents, listMyDriveFolders, listSharedDrives } from "../connectors/google-drive";
+import { LinkedinAimfoxNoAccountsError, discoverLinkedinAimfoxScopeConfig } from "../connectors/linkedin-aimfox";
 import { browseNotionRootPages, getBrowseStatus, startNotionBrowse } from "../connectors/notion";
 import { createOpenRouterGenerator } from "../connectors/openrouter-generate";
 import { buildOtterCredentialHint } from "../connectors/otter";
@@ -171,6 +172,9 @@ function syncInBackground(
       | "CANVAS_CREDENTIAL_PRIVATE_KEY_PEM"
       | "CANVAS_CREDENTIAL_PRIVATE_KEY_PATH"
       | "CANVAS_CREDENTIAL_PUBLIC_KEY_ID"
+      | "LINKEDIN_AIMFOX_INITIAL_MAX_LEADS"
+      | "LINKEDIN_AIMFOX_MAX_INFLIGHT"
+      | "CONTACT_POINT_DEFAULT_REGION"
     >
   >,
 ) {
@@ -392,6 +396,7 @@ function defaultAuthTypeForConnector(connectorType: ConnectorType): AuthType {
     case "linear":
     case "fireflies":
     case "otter":
+    case "linkedin_aimfox":
       return "api_key";
     case "whatsapp":
     case "slack":
@@ -433,6 +438,9 @@ export function connectorRoutes(
       | "SLACK_ENTITY_SYNC"
       | "CONTAINER_CLASSIFICATION_ENABLED"
       | "PROJECT_MINTING_MODEL"
+      | "LINKEDIN_AIMFOX_INITIAL_MAX_LEADS"
+      | "LINKEDIN_AIMFOX_MAX_INFLIGHT"
+      | "CONTACT_POINT_DEFAULT_REGION"
     >
   >,
   deps?: {
@@ -973,18 +981,26 @@ export function connectorRoutes(
     // Validate credentials by testing the API connection.
     // For OAuth, also refresh the token so we store a valid access_token.
     let credentials = { type: parsed.data.authType, ...parsed.data.credentials } as ConnectorCredentials;
+    let discoveredScopeConfig: Record<string, unknown> | undefined;
     try {
       if (credentials.type === "oauth" && connectorMeta.refreshTokens) {
         const refreshed = await connectorMeta.refreshTokens(credentials);
         if (refreshed) credentials = refreshed;
       }
-      await connectorMeta.validateCredentials(credentials);
+      if (connectorType === "linkedin_aimfox") {
+        discoveredScopeConfig = await discoverLinkedinAimfoxScopeConfig(credentials, parsed.data.scopeConfig);
+      } else {
+        await connectorMeta.validateCredentials(credentials);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Invalid credentials";
       logger.warn(
         { error: validationLogError(err), connectorType: parsed.data.connectorType },
         "Credential validation failed",
       );
+      if (err instanceof LinkedinAimfoxNoAccountsError) {
+        return c.json({ error: { code: "NO_ACCOUNTS", message } }, 400);
+      }
       return c.json(
         { error: { code: "INVALID_CREDENTIALS", message: `Credential validation failed: ${message}` } },
         400,
@@ -1020,9 +1036,10 @@ export function connectorRoutes(
       }
     }
     const scopeConfig =
-      connectorType === "whatsapp" && parsed.data.scopeConfig
+      discoveredScopeConfig ??
+      (connectorType === "whatsapp" && parsed.data.scopeConfig
         ? withoutWhatsAppGroupSelection(parsed.data.scopeConfig)
-        : parsed.data.scopeConfig;
+        : parsed.data.scopeConfig);
 
     const config = await connectorRepo.createConfig({
       connectorType,
@@ -2432,14 +2449,23 @@ export function connectorRoutes(
       type: config.auth_type,
       ...(parsed.data.credentials ?? { api_key: parsed.data.api_key }),
     } as ConnectorCredentials;
+    let discoveredScopeConfig: Record<string, unknown> | undefined;
     try {
-      await getConnector(config.connector_type as ConnectorType).validateCredentials(credentials);
+      if (config.connector_type === "linkedin_aimfox") {
+        const currentScope = JSON.parse(config.scope_config) as Record<string, unknown>;
+        discoveredScopeConfig = await discoverLinkedinAimfoxScopeConfig(credentials, currentScope);
+      } else {
+        await getConnector(config.connector_type as ConnectorType).validateCredentials(credentials);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Invalid credentials";
       logger.warn(
         { error: validationLogError(err), connectorType: config.connector_type },
         "Credential rotation validation failed",
       );
+      if (err instanceof LinkedinAimfoxNoAccountsError) {
+        return c.json({ error: { code: "NO_ACCOUNTS", message } }, 400);
+      }
       return c.json({ error: { code: "INVALID_CREDENTIALS", message } }, 400);
     }
 
@@ -2448,6 +2474,7 @@ export function connectorRoutes(
       credentialHint: credentialHintForConnector(config.connector_type as ConnectorType, credentials),
       syncStatus: "active",
       errorMessage: null,
+      ...(discoveredScopeConfig ? { scopeConfig: JSON.stringify(discoveredScopeConfig) } : {}),
     });
 
     return c.json({ ok: true });

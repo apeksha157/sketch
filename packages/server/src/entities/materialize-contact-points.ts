@@ -1,4 +1,5 @@
 import type { EntityContactPointKind } from "../db/repositories/entities";
+import { normalizePhoneCountryCode, normalizePhoneLike } from "../identity-normalization";
 import { registerEntity } from "./materialize-deps";
 import { readJsonObject } from "./materialize-json";
 import type { EntityRow, IndexedFileFactRow, MaterializeDeps, MaterializeResult } from "./materialize-types";
@@ -15,6 +16,10 @@ function readKind(value: string | null): EntityContactPointKind | null {
   return value as EntityContactPointKind;
 }
 
+function readBoolean(record: Record<string, unknown>, key: string): boolean {
+  return record[key] === true;
+}
+
 export async function materializeContactPointFact(
   deps: MaterializeDeps,
   fact: IndexedFileFactRow,
@@ -27,11 +32,11 @@ export async function materializeContactPointFact(
 
   const contact = contactPoint as Record<string, unknown>;
   const kind = readKind(readString(contact, "kind"));
-  const value = readString(contact, "value");
+  const rawValue = readString(contact, "value");
   const subjectSource = readString(contact, "subjectSource") ?? fact.subject_source;
   const subjectSourceId = readString(contact, "subjectSourceId") ?? fact.subject_source_id;
   const subjectName = readString(contact, "subjectName") ?? fact.subject_name;
-  if (!kind || !value || !subjectSource || !subjectSourceId || !subjectName) {
+  if (!kind || !rawValue || !subjectSource || !subjectSourceId || !subjectName) {
     return { kind: "skipped", reason: "missing_contact_point_subject" };
   }
 
@@ -52,6 +57,8 @@ export async function materializeContactPointFact(
   registerEntity(deps.index, entity);
 
   try {
+    const phoneCountry = normalizePhoneCountryCode(readString(contact, "phoneCountry"));
+    const value = kind === "phone" || kind === "whatsapp" ? normalizePhoneLike(rawValue, phoneCountry) : rawValue;
     await deps.entityRepo.upsertContactPoint({
       entityId: entity.id,
       kind,
@@ -63,6 +70,7 @@ export async function materializeContactPointFact(
       createdByUserId: fact.created_by_user_id,
       verifiedAt: readString(contact, "verifiedAt"),
       lastContactedAt: readString(contact, "lastContactedAt"),
+      makePrimary: readBoolean(contact, "makePrimary"),
     });
   } catch (err) {
     deps.logger?.warn(
