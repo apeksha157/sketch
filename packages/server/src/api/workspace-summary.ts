@@ -116,7 +116,11 @@ async function resolveCurrentUser(users: UserRepo, sub: string, email: string | 
   return null;
 }
 
-async function buildIntegrationSummary(mcpServers: McpServerRepo, userEmail: string | null) {
+async function buildIntegrationSummary(
+  mcpServers: McpServerRepo,
+  userEmail: string | null,
+  workspaceUserId: string | null,
+) {
   if (!userEmail) return { connected: 0, appNames: [] as string[] };
 
   try {
@@ -124,7 +128,11 @@ async function buildIntegrationSummary(mcpServers: McpServerRepo, userEmail: str
     if (!row?.type || !row.api_url) return { connected: 0, appNames: [] as string[] };
 
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
-    const connections = await provider.listConnections(userEmail);
+    const connections = await provider.listConnections(
+      userEmail,
+      undefined,
+      workspaceUserId ? { workspaceId: row.id, userId: workspaceUserId } : undefined,
+    );
     const activeConnections = connections.filter((connection) => connection.status === "active");
     const appNames = Array.from(new Set(activeConnections.map((connection) => connection.appName).filter(Boolean)));
     return { connected: activeConnections.length, appNames };
@@ -158,7 +166,7 @@ export function workspaceSummaryRoutes(deps: WorkspaceSummaryDeps) {
     );
     const [skills, integrations, team] = await Promise.all([
       buildSkillsSummary(deps.config, user?.id ?? null),
-      buildIntegrationSummary(deps.mcpServers, user?.email ?? email),
+      buildIntegrationSummary(deps.mcpServers, user?.email ?? email, user?.id ?? sub),
       buildTeamSummary(deps.users),
     ]);
 

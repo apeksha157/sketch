@@ -3478,12 +3478,24 @@ export const api = {
         method: "DELETE",
       });
     },
-    updateConnectionAccess(providerId: string, connectionId: string, accessLevel: "personal" | "organization") {
+    updateConnectionAccess(
+      providerId: string,
+      connectionId: string,
+      accessLevel: "personal" | "organization",
+      options?: {
+        visibility?: "private" | "selected_members" | "organization";
+        granteeUserIds?: string[];
+      },
+    ) {
       return request<{ success: true; connection: IntegrationConnection | null }>(
         `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/access`,
         {
           method: "PATCH",
-          body: JSON.stringify({ accessLevel }),
+          body: JSON.stringify({
+            accessLevel,
+            ...(options?.visibility ? { visibility: options.visibility } : {}),
+            ...(options?.granteeUserIds ? { granteeUserIds: options.granteeUserIds } : {}),
+          }),
         },
       );
     },

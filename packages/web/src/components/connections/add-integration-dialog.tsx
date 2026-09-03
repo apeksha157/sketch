@@ -1,13 +1,6 @@
 import { api } from "@/lib/api";
 import { CheckIcon, MagnifyingGlassIcon, SpinnerGapIcon, WarningIcon, XCircleIcon } from "@phosphor-icons/react";
-import {
-  type CliIntegrationCatalogApp,
-  type CliIntegrationConnection,
-  type IntegrationApp,
-  type IntegrationConnection,
-  isCanvasBlockedCliAppId,
-  managedCliIntegrationAppId,
-} from "@sketch/shared";
+import type { IntegrationApp, IntegrationConnection } from "@sketch/shared";
 /**
  * Add Integration dialog: catalog search with infinite scroll + OAuth popup flow.
  */
@@ -22,7 +15,7 @@ import {
   DialogTitle,
 } from "@sketch/ui/components/dialog";
 import { Input } from "@sketch/ui/components/input";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppIcon } from "./app-icon";
 import { isNativeCanvasAppConnection, isOwnedOrPersonalAppConnection } from "./connection-status";
@@ -54,22 +47,14 @@ export function AddIntegrationDialog({
   initialAppId,
   initialSearch,
   onSuccess,
-  cliCatalog,
-  cliConnections,
-  onOpenGithubSetup,
-  onOpenLinearSetup,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  providerId?: string;
+  providerId: string;
   connectedAppIds: Set<string>;
   initialAppId?: string | null;
   initialSearch?: string | null;
   onSuccess: (app?: IntegrationApp, connection?: IntegrationConnection) => void;
-  cliCatalog?: CliIntegrationCatalogApp[];
-  cliConnections?: CliIntegrationConnection[];
-  onOpenGithubSetup?: () => void;
-  onOpenLinearSetup?: () => void;
 }) {
   const [step, setStep] = useState<AddIntegrationStep>({ kind: "search" });
   const [search, setSearch] = useState("");
@@ -86,8 +71,6 @@ export function AddIntegrationDialog({
   const oauthAttemptRef = useRef(0);
   const cancelledRef = useRef(false);
   const directRequestRef = useRef<string | null>(null);
-  const cliApps = useMemo(() => cliCatalog ?? [], [cliCatalog]);
-  const connectedCliIds = new Set((cliConnections ?? []).map((connection) => connection.appId.trim().toLowerCase()));
 
   useEffect(() => {
     return () => {
@@ -101,31 +84,11 @@ export function AddIntegrationDialog({
   const loadApps = useCallback(
     async (query: string, cursor: string | null, append: boolean) => {
       setIsLoadingApps(true);
-      const matchingCliApps = query.trim()
-        ? cliApps.filter((app) =>
-            `${app.name} ${app.id} ${app.description}`.toLowerCase().includes(query.trim().toLowerCase()),
-          )
-        : cliApps;
-      if (!providerId) {
-        appsRef.current = append ? appsRef.current : matchingCliApps;
-        setApps(appsRef.current);
-        setHasMore(false);
-        setEndCursor(null);
-        setIsLoadingApps(false);
-        return;
-      }
       try {
         const result = await api.mcpServers.listApps(providerId, query || undefined, 20, cursor ?? undefined);
-        const cliAppIds = new Set(cliApps.map((app) => app.id.trim().toLowerCase()));
-        const canvasApps = result.apps.filter(
-          (app) =>
-            !cliAppIds.has(app.id.trim().toLowerCase()) &&
-            !isCanvasBlockedCliAppId(app.id) &&
-            !isCanvasBlockedCliAppId(app.name),
-        );
-        const mergedApps = append ? [...appsRef.current, ...canvasApps] : [...matchingCliApps, ...canvasApps];
+        const mergedApps = append ? [...appsRef.current, ...result.apps] : result.apps;
         if (append) {
-          appsRef.current = [...appsRef.current, ...canvasApps];
+          appsRef.current = mergedApps;
           setApps(appsRef.current);
         } else {
           appsRef.current = mergedApps;
@@ -139,7 +102,7 @@ export function AddIntegrationDialog({
         setIsLoadingApps(false);
       }
     },
-    [cliApps, providerId],
+    [providerId],
   );
 
   useEffect(() => {
@@ -147,13 +110,6 @@ export function AddIntegrationDialog({
       directRequestRef.current = null;
       return;
     }
-    const managedInitialAppId = initialAppId ? managedCliIntegrationAppId(initialAppId) : null;
-    if (managedInitialAppId) {
-      if (managedInitialAppId === "linear") onOpenLinearSetup?.();
-      else onOpenGithubSetup?.();
-      return;
-    }
-
     const requestedAppId = initialAppId?.trim();
     if (!requestedAppId || directRequestRef.current === requestedAppId) return;
     const appId = requestedAppId;
@@ -168,10 +124,6 @@ export function AddIntegrationDialog({
     setEndCursor(null);
 
     async function loadDirectApp() {
-      if (!providerId) {
-        setStep({ kind: "direct_not_found", appId });
-        return;
-      }
       try {
         const callbackUrl = `${window.location.origin}/integrations/callback`;
         const result = await api.mcpServers.createConnectionIntent(providerId, appId, callbackUrl);
@@ -188,7 +140,7 @@ export function AddIntegrationDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, initialAppId, providerId, onOpenGithubSetup, onOpenLinearSetup]);
+  }, [open, initialAppId, providerId]);
 
   useEffect(() => {
     if (open && !initialAppId?.trim() && step.kind === "search") {
@@ -256,11 +208,6 @@ export function AddIntegrationDialog({
     preopenedPopup?: Window | null,
     attemptId = oauthAttemptRef.current + 1,
   ) => {
-    if (!providerId) {
-      setStep({ kind: "direct_not_found", appId: app.id });
-      return;
-    }
-    const activeProviderId = providerId;
     if (attemptId > oauthAttemptRef.current) oauthAttemptRef.current = attemptId;
     if (oauthAttemptRef.current !== attemptId) {
       if (preopenedPopup && !preopenedPopup.closed) preopenedPopup.close();
@@ -306,7 +253,7 @@ export function AddIntegrationDialog({
       const shouldFinalizeIfMissing = finalIfMissing || finalizeAfterVerify;
       finalizeAfterVerify = false;
       try {
-        const connections = await api.mcpServers.listConnections(activeProviderId);
+        const connections = await api.mcpServers.listConnections(providerId);
         const matchingConnections = connections.filter((c) => c.appId === app.id && isOwnedOrPersonalAppConnection(c));
         const connected = matchingConnections.find(isNativeCanvasAppConnection) ?? matchingConnections[0];
         if (cancelledRef.current || oauthAttemptRef.current !== attemptId) return;
@@ -349,8 +296,7 @@ export function AddIntegrationDialog({
   };
 
   const handleStartOAuth = async (app: IntegrationApp) => {
-    if (!providerId || connectedAppIds.has(app.id)) return;
-    const activeProviderId = providerId;
+    if (connectedAppIds.has(app.id)) return;
     const attemptId = oauthAttemptRef.current + 1;
     oauthAttemptRef.current = attemptId;
     if (pollIntervalRef.current) {
@@ -367,7 +313,7 @@ export function AddIntegrationDialog({
 
     try {
       const callbackUrl = `${window.location.origin}/integrations/callback`;
-      const result = await api.mcpServers.createConnectionIntent(activeProviderId, app.id, callbackUrl, app);
+      const result = await api.mcpServers.createConnectionIntent(providerId, app.id, callbackUrl, app);
       startOAuthWindow(result.app, result.redirectUrl, popup, attemptId);
     } catch (err) {
       if (!popup.closed) popup.close();
@@ -390,11 +336,7 @@ export function AddIntegrationDialog({
           <>
             <DialogHeader>
               <DialogTitle>Add integration</DialogTitle>
-              <DialogDescription>
-                {providerId
-                  ? "Search from apps available via your integration provider."
-                  : "Connect a managed integration."}
-              </DialogDescription>
+              <DialogDescription>Search from apps available via your integration provider.</DialogDescription>
             </DialogHeader>
 
             <div className="py-2">
@@ -427,20 +369,8 @@ export function AddIntegrationDialog({
                       <AppRow
                         key={app.id}
                         app={app}
-                        isConnected={connectedAppIds.has(app.id) || connectedCliIds.has(app.id.trim().toLowerCase())}
-                        onConnect={() => {
-                          if (
-                            app.executionMode === "cli" ||
-                            app.executionMode === "api" ||
-                            isCanvasBlockedCliAppId(app.id) ||
-                            isCanvasBlockedCliAppId(app.name)
-                          ) {
-                            if (managedCliIntegrationAppId(app.id) === "linear") onOpenLinearSetup?.();
-                            else onOpenGithubSetup?.();
-                            return;
-                          }
-                          void handleStartOAuth(app);
-                        }}
+                        isConnected={connectedAppIds.has(app.id)}
+                        onConnect={() => void handleStartOAuth(app)}
                       />
                     ))}
                   </div>

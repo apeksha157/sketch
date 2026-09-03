@@ -374,7 +374,7 @@ describe("runAgent", () => {
     expect(result.trace.finalText).toBe("Recovered");
   });
 
-  it("passes user env vars through the SDK process env", async () => {
+  it("passes non-provider user env vars through the SDK process env", async () => {
     const { query } = await import("@anthropic-ai/claude-agent-sdk");
     let capturedEnv: Record<string, string | undefined> = {};
 
@@ -401,7 +401,7 @@ describe("runAgent", () => {
     );
 
     expect(capturedEnv.TEST_REGION).toBe("us-east-1");
-    expect(capturedEnv.GH_TOKEN).toBe("token'with-quote");
+    expect(capturedEnv.GH_TOKEN).toBeUndefined();
   });
 
   it("does not fail the run when session id notification delivery fails", async () => {
@@ -896,7 +896,7 @@ describe("runAgent", () => {
       }),
     );
 
-    expect(provider.listConnections).toHaveBeenCalledWith("alice@example.com", "TestUser");
+    expect(provider.listConnections).toHaveBeenCalledWith("alice@example.com", "TestUser", undefined);
     expect(result.pendingIntegrationConnections).toMatchObject([
       { appId: "github", appName: "GitHub", state: "connect" },
     ]);

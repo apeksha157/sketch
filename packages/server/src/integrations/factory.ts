@@ -16,12 +16,13 @@ export function createProvider(
   apiUrl: string,
   credentials: string,
   providerId: string,
+  options: { credentialPrivateKeyPem?: string; credentialPublicKeyId?: string } = {},
 ): IntegrationProvider {
   const parsed = JSON.parse(credentials);
   switch (type) {
     case "canvas": {
       const creds = canvasCredentialsSchema.parse(parsed);
-      return new CanvasProvider(apiUrl, creds.apiKey, providerId);
+      return new CanvasProvider(apiUrl, creds.apiKey, providerId, options);
     }
     default:
       throw new Error(`Provider type "${type}" is not yet implemented`);

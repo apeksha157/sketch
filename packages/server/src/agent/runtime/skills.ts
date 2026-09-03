@@ -1,6 +1,6 @@
 import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { parseCliSkillFrontmatter } from "@sketch/shared";
+import { managedCliIntegrationAppId, parseCliSkillFrontmatter } from "@sketch/shared";
 import { type Tool, type ToolSet, tool } from "ai";
 import { z } from "zod/v4";
 import type { Logger } from "../../logger";
@@ -409,6 +409,14 @@ function skillToModelOutput({ output }: Parameters<ToolToModelOutput>[0]): Retur
   return { type: "content", value: [{ type: "text", text: String(output) }] };
 }
 
+function managedIntegrationForSkill(skill: AgentRuntimeSkillDescriptor) {
+  for (const candidate of [skill.name, skill.id, skill.displayName ?? ""]) {
+    const appId = managedCliIntegrationAppId(candidate.replace(/\s+cli$/i, ""));
+    if (appId) return appId;
+  }
+  return null;
+}
+
 export class DefaultAgentRuntimeSkillsProvider implements AgentRuntimeSkillsProvider {
   async createSkillTool(params: RunAgentParams): Promise<ToolSet> {
     if (!agentAllowsSkill(params.agentAllowedTools)) return {};
@@ -443,7 +451,13 @@ export class DefaultAgentRuntimeSkillsProvider implements AgentRuntimeSkillsProv
         execute: async ({ skill }: { skill: string }) => {
           const selected = byName.get(skill.trim().toLowerCase());
           if (!selected) throw new Error(`Skill not found: ${skill}`);
-          const missingEnv = selected.requiresEnv.filter((name) => !params.agentEnv?.[name]);
+          const managedIntegration = managedIntegrationForSkill(selected);
+          if (managedIntegration && !params.availableManagedIntegrations?.has(managedIntegration)) {
+            throw new Error(
+              `Skill "${selected.name}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,
+            );
+          }
+          const missingEnv = managedIntegration ? [] : selected.requiresEnv.filter((name) => !params.agentEnv?.[name]);
           if (missingEnv.length > 0) {
             throw new Error(
               `Skill "${selected.name}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,

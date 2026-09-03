@@ -13,6 +13,7 @@ import { AGENT_BUILT_IN_TOOL_NAMES, VISUAL_ANALYSIS_AGENT_TOOL_NAME } from "@ske
 import type {
   AutomationArtifact,
   AutomationRunMode,
+  CliIntegrationAppId,
   WebChatIntegrationConnectionData,
   WebChatQuestion,
   WebChatQuestionInteraction,
@@ -127,13 +128,13 @@ function isSkillToolName(toolName: string): boolean {
   return toolName === "Skill" || toolName === "mcp__sketch__Skill";
 }
 
-function buildAgentChildEnv(
+export function buildAgentChildEnv(
   integrationEnv: Record<string, string>,
   agentEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...integrationEnv, ...agentEnv };
-  if (!agentEnv?.GH_TOKEN) env.GH_TOKEN = undefined;
-  if (!agentEnv?.LINEAR_API_KEY) env.LINEAR_API_KEY = undefined;
+  env.GH_TOKEN = undefined;
+  env.LINEAR_API_KEY = undefined;
   return env;
 }
 
@@ -362,6 +363,7 @@ export interface RunAgentParams {
   botName?: string | null;
   integrationMcpServers?: Record<string, McpServerConfig>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
+  availableManagedIntegrations?: ReadonlySet<CliIntegrationAppId>;
   model?: string;
   maxTurns?: number;
   maxPersistedTextBytes?: number;
@@ -859,6 +861,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
     agentInstructions: params.agentInstructions,
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   });
   const claudeMdContext = await loadAgentRuntimeClaudeMdContext({
     orgClaudeDir: params.claudeConfigDir,
@@ -920,6 +923,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
       params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
+      workspaceUserId: params.currentUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -939,7 +943,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
   const systemAppend = `${prependClaudeMdContext({
     claudeMdContext: claudeMdContext.appendedSystemContext,
     systemContext: baseSystemAppend,
-  })}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv)}`;
+  })}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv, params.availableManagedIntegrations)}`;
 
   try {
     const workspaceTools = createAgentRuntimeWorkspaceTools({
@@ -1249,6 +1253,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     agentInstructions: params.agentInstructions,
     visionAnalysisEnabled: visualAnalysisAllowed,
     automationBuilderChat: params.automationBuilderChat,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   });
 
   const sdkBuiltInTools = resolveSdkBuiltInTools(params.agentAllowedTools);
@@ -1315,6 +1320,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     db: params.db,
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,
+    availableManagedIntegrations: params.availableManagedIntegrations,
     validateAgentSkills: params.validateAgentSkills,
     taskContext: params.taskContext,
     currentAutomation: params.currentAutomation ?? params.taskContext?.currentAutomation,
@@ -1379,6 +1385,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
       params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail;
     integrationAccess = await startIntegrationAccess({
       userEmail: integrationUserEmail,
+      workspaceUserId: params.currentUserId,
       claudeConfigDir: params.claudeConfigDir,
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
@@ -1394,10 +1401,14 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     logger.debug({ userEmail: integrationUserEmail }, "Integration access resolved (user context)");
   }
   const effectiveAgentEnv = { ...params.agentEnv, ...integrationAccess.envVars };
-  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(effectiveAgentEnv)}`;
+  const systemAppend = `${baseSystemAppend}\n\n${buildRuntimeCapabilitiesContext(
+    effectiveAgentEnv,
+    params.availableManagedIntegrations,
+  )}`;
   const baseCanUseTool = createCanUseTool(absWorkspace, logger, params.claudeConfigDir, {
     agentAllowedTools: params.agentAllowedTools,
     agentEnv: effectiveAgentEnv,
+    availableManagedIntegrations: params.availableManagedIntegrations,
     blockedReadPaths: blockedReadPaths.size > 0 ? Array.from(blockedReadPaths) : undefined,
     blockImageReads: visualAnalysisAllowed,
   });

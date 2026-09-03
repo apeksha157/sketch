@@ -81,6 +81,20 @@ describe("createCanUseTool", () => {
       expectDeny(result);
       expect(result.message).toContain("not allowed");
     });
+
+    it.each(["github", "linear"] as const)("gates the %s skill on managed availability", async (integration) => {
+      const disconnected = createCanUseTool(workspace, createTestLogger(), claudeDir, {
+        availableManagedIntegrations: new Set(),
+      });
+      const connected = createCanUseTool(workspace, createTestLogger(), claudeDir, {
+        availableManagedIntegrations: new Set([integration]),
+      });
+
+      const denied = await disconnected("Skill", { skill: integration });
+      expectDeny(denied);
+      expect(denied.message).toContain("integration is not connected");
+      await expect(connected("Skill", { skill: integration })).resolves.toMatchObject({ behavior: "allow" });
+    });
   });
 
   describe("file tools — workspace access", () => {

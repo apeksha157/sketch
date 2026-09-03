@@ -23,6 +23,7 @@ import { createAutomationCapabilityRegistry } from "./automation/capabilities";
 import { AutomationLockSweeper } from "./automation/lock-service";
 import { isAutomationWebhookTrigger, parseAutomationTriggerConfig } from "./automation/webhook";
 import type { Config } from "./config";
+import { getCanvasCredentialPrivateKeyPem, hasCanvasCredentialImportConfig } from "./connectors/credential-providers";
 import {
   buildEnrichmentProviderConfig,
   createEnrichmentEmbeddingProvider,
@@ -73,6 +74,7 @@ import { isPersonalOrSharedDomain } from "./entities/personal-domains";
 import type { ProposeEntityType } from "./entities/propose";
 import { startQueueDrainSequence } from "./entities/queue-run";
 import { createApp } from "./http";
+import { listAvailableManagedIntegrations } from "./integrations/availability";
 import { createCliIntegrationService } from "./integrations/cli/service";
 import { buildMcpConfig, createProvider } from "./integrations/factory";
 import type { IntegrationProvider, IntegrationStatus } from "./integrations/types";
@@ -279,10 +281,21 @@ export async function createServer(config: Config, options?: CreateServerOptions
   const operationalAlertsRepo = createOperationalAlertsRepository(db);
   const operationalAlertService = createOperationalAlertService({ alerts: operationalAlertsRepo, logger });
   const agentEnvironmentVariables = createAgentEnvironmentVariableRepository(db, config.ENCRYPTION_KEY);
+  let managedIntegrationProviderLoader: () => Promise<IntegrationProvider | null> = async () => null;
   const cliIntegrations = createCliIntegrationService({
     db,
     encryptionKey: config.ENCRYPTION_KEY,
     environmentVariables: agentEnvironmentVariables,
+    getAvailableManagedIntegrations: async (ownerUserId) => {
+      const owner = await users.findById(ownerUserId);
+      if (!owner?.email) return new Set();
+      return listAvailableManagedIntegrations({
+        loadIntegrationProvider: managedIntegrationProviderLoader,
+        userEmail: owner.email,
+        currentUserId: ownerUserId,
+        logger,
+      });
+    },
   });
   await backfillFilesConnectorCredentialEncryption(db, config.ENCRYPTION_KEY, logger);
   await runManagedSeed(config, settingsRepo, users);
@@ -392,7 +405,19 @@ export async function createServer(config: Config, options?: CreateServerOptions
         pricing,
         providerCtx,
         enrichedParams,
-        () => runAgent(enrichedParams),
+        async () => {
+          const availableManagedIntegrations =
+            enrichedParams.availableManagedIntegrations ??
+            (enrichedParams.userEmail && enrichedParams.currentUserId
+              ? await listAvailableManagedIntegrations({
+                  loadIntegrationProvider: managedIntegrationProviderLoader,
+                  userEmail: enrichedParams.userEmail,
+                  currentUserId: enrichedParams.currentUserId,
+                  logger,
+                })
+              : new Set());
+          return runAgent({ ...enrichedParams, availableManagedIntegrations });
+        },
         config.AGENT_RUN_WATCHDOG_MS,
       ),
     );
@@ -779,15 +804,33 @@ export async function createServer(config: Config, options?: CreateServerOptions
    * an accidental HTTP call fails loudly rather than silently treating
    * skill-mode rows as unconfigured.
    */
+  let cachedIntegrationProvider: { key: string; provider: IntegrationProvider } | null = null;
   const getIntegrationStatus = async (): Promise<IntegrationStatus> => {
     const row = await mcpServersRepo.findIntegrationProvider();
-    if (!row || row.type == null) return { kind: "absent" };
+    if (!row || row.type == null) {
+      cachedIntegrationProvider = null;
+      return { kind: "absent" };
+    }
     try {
+      const cacheKey = `${row.id}\0${row.type}\0${row.api_url ?? ""}\0${row.credentials}`;
+      if (cachedIntegrationProvider?.key === cacheKey) {
+        return { kind: "ok", provider: cachedIntegrationProvider.provider };
+      }
+      const provider = createProvider(row.type, row.api_url ?? "", row.credentials, row.id, {
+        ...(hasCanvasCredentialImportConfig(config)
+          ? { credentialPrivateKeyPem: getCanvasCredentialPrivateKeyPem(config) }
+          : {}),
+        ...(config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID
+          ? { credentialPublicKeyId: config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID }
+          : {}),
+      });
+      cachedIntegrationProvider = { key: cacheKey, provider };
       return {
         kind: "ok",
-        provider: createProvider(row.type, row.api_url ?? "", row.credentials, row.id),
+        provider,
       };
     } catch (err) {
+      cachedIntegrationProvider = null;
       logger.error(
         { err, serverId: row.id, type: row.type, event: "integration_provider_load_failed" },
         "Failed to instantiate integration provider",
@@ -812,6 +855,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     const status = await getIntegrationStatus();
     return status.kind === "ok" ? status.provider : null;
   };
+  managedIntegrationProviderLoader = loadIntegrationProvider;
 
   const webhookEndpoints = createWebhookEndpointRepository(db);
   const batchSize = 500;

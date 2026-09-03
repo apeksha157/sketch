@@ -125,7 +125,7 @@ describe("CLI integration service", () => {
       },
       { GH_TOKEN: "ghp_old" },
     );
-    expect(runtimeEnv).toEqual({ GH_TOKEN: "ghp_old" });
+    expect(runtimeEnv).toEqual({});
 
     await service.disconnect("owner", connection.id);
     expect(await db.selectFrom("cli_integration_connections").selectAll().execute()).toEqual([]);
@@ -160,13 +160,13 @@ describe("CLI integration service", () => {
       { currentUserId: "recipient", contextType: "dm", allowOrgSharedEnv: true },
       { LINEAR_API_KEY: "stale" },
     );
-    expect(runtimeEnv).toEqual({ LINEAR_API_KEY: "lin_old" });
+    expect(runtimeEnv).toEqual({});
 
     await service.updateLinearApiKey("owner", connection.id, "lin_new");
     expect(verifyLinearApiKeyMock).toHaveBeenLastCalledWith("lin_new");
     expect(
       await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm", allowOrgSharedEnv: true }),
-    ).toContainEqual({ appId: "linear", skillId: "linear", available: true, status: "active", reason: null });
+    ).toEqual([]);
     await service.disconnect("owner", connection.id);
   });
 
@@ -223,28 +223,10 @@ describe("CLI integration service", () => {
         { GH_TOKEN: "stale" },
       ),
     ).resolves.toEqual({});
-
-    await service.replaceShares("owner", connection.id, [{ type: "user", id: "recipient" }]);
-    await expect(
-      service.filterRuntimeEnvironment(
-        {
-          currentUserId: "recipient",
-          contextType: "channel_mention",
-          allowOrgSharedEnv: true,
-          taskContext: {
-            platform: "whatsapp",
-            contextType: "group",
-            deliveryTarget: "group@g.us",
-            createdBy: "recipient",
-          },
-        },
-        { GH_TOKEN: "stale" },
-      ),
-    ).resolves.toEqual({ GH_TOKEN: "ghp_shared" });
     await service.disconnect("owner", connection.id);
   });
 
-  it("keeps an org-shared GitHub token available to internal recipients", async () => {
+  it("does not report an org-shared legacy GitHub token as runtime availability", async () => {
     const connection = await service.connectGitHub("owner", "ghp_org", [{ type: "org", id: "default" }]);
 
     const runtimeEnv = await service.filterRuntimeEnvironment(
@@ -252,14 +234,8 @@ describe("CLI integration service", () => {
       { GH_TOKEN: "stale-value" },
     );
 
-    expect(runtimeEnv).toEqual({ GH_TOKEN: "ghp_org" });
-    expect(await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm" })).toContainEqual({
-      appId: "github",
-      skillId: "github",
-      available: true,
-      status: "active",
-      reason: null,
-    });
+    expect(runtimeEnv).toEqual({});
+    expect(await service.resolveAvailability({ currentUserId: "recipient", contextType: "dm" })).toEqual([]);
     await service.disconnect("owner", connection.id);
   });
 
@@ -272,13 +248,7 @@ describe("CLI integration service", () => {
     );
 
     expect(runtimeEnv).toEqual({});
-    expect(await service.resolveAvailability({ currentUserId: "external", contextType: "dm" })).toContainEqual({
-      appId: "github",
-      skillId: "github",
-      available: false,
-      status: "missing",
-      reason: "Connect GitHub to use this skill.",
-    });
+    expect(await service.resolveAvailability({ currentUserId: "external", contextType: "dm" })).toEqual([]);
     await service.disconnect("owner", connection.id);
   });
 

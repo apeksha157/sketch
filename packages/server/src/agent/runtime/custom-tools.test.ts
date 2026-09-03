@@ -80,6 +80,20 @@ describe("AI SDK custom Sketch tool provider", () => {
     expect(tools.mcp__sketch__VisualAnalysis).toBeDefined();
   });
 
+  it("exposes the Canvas GitHub broker tool", async () => {
+    const effects = createAgentRuntimeCustomToolEffects();
+    const provider = createDefaultAgentRuntimeCustomToolProvider({
+      effects,
+      transcriptionEnabled: false,
+      visionAnalysisEnabled: false,
+      visionConfig: null,
+    });
+
+    const tools = await provider.createTools(params({ availableManagedIntegrations: new Set(["github"]) }));
+
+    expect(tools.mcp__sketch__github_cli).toBeDefined();
+  });
+
   it("keeps bounded question tools on web and exposes channels with a registered capability", async () => {
     const effects = createAgentRuntimeCustomToolEffects();
     const provider = createDefaultAgentRuntimeCustomToolProvider({
@@ -246,9 +260,11 @@ describe("AI SDK custom Sketch tool provider", () => {
       visionAnalysisEnabled: true,
       visionConfig: { apiKey: "sk-or-vision", model: "vision-model", source: "env", providerMode: "env" },
     });
-    const tools = await provider.createTools(params());
+    const tools = await provider.createTools(params({ availableManagedIntegrations: new Set(["github", "linear"]) }));
     const smokeInputs = {
       mcp__sketch__SendFileToChat: { file_path: filePath },
+      mcp__sketch__github_cli: { argv: ["repo", "view", "owner/repo"] },
+      mcp__sketch__linear_api: { query: "query { viewer { id } }" },
       mcp__sketch__ReadChatHistory: {},
       mcp__sketch__SearchDeliveryTargets: { query: "alpha", limit: 1 },
       mcp__sketch__local_run_command: { command: "pwd" },
