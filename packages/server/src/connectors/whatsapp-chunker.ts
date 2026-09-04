@@ -152,6 +152,7 @@ interface ChunkerRawRow {
   attachments: string | null;
   provider_timestamp: string | null;
   received_at: string;
+  effective_at: string | null;
 }
 
 interface ChunkerTimestampRow {
@@ -514,6 +515,7 @@ async function listMessagesAfterCursor(
   conversationId: number,
   cursor: ConversationSliceCursorRow,
   now: Date,
+  limit: number,
   openFirstMessageId?: number,
 ): Promise<WhatsAppChunkerMessage[]> {
   const lowerBound = cursorReceivedAtLowerBound(cursor);
@@ -521,59 +523,72 @@ async function listMessagesAfterCursor(
   const historyStartId = open?.first_message_id ?? openFirstMessageId;
   let query = db
     .selectFrom("conversation_messages")
-    .select(["id", "provider_message_id", "is_bot", "text", "attachments", "provider_timestamp", "received_at"])
-    .where("conversation_id", "=", conversationId);
+    .select([
+      "id",
+      "provider_message_id",
+      "is_bot",
+      "text",
+      "attachments",
+      "provider_timestamp",
+      "received_at",
+      "effective_at",
+    ])
+    .where("conversation_id", "=", conversationId)
+    .where("effective_at", "is not", null);
   query = query.where((eb) =>
     eb.or([
       eb.and([eb("source", "=", "live"), ...(lowerBound ? [eb("received_at", ">", lowerBound)] : [])]),
       ...(historyStartId !== undefined ? [eb.and([eb("source", "=", "history"), eb("id", ">=", historyStartId)])] : []),
     ]),
   );
-  const rows = await query.orderBy("id", "asc").execute();
-
-  return rows
-    .map((row: ChunkerRawRow) => ({
-      id: row.id,
-      providerMessageId: row.provider_message_id,
-      effectiveAt: effectiveTimestamp(row, now),
-      text: row.text,
-      attachments: row.attachments,
-      isBot: row.is_bot === 1,
-    }))
-    .filter((message) => isAfterCursor(message, cursor))
-    .sort(
-      (left, right) => effectiveTimeMs(left.effectiveAt) - effectiveTimeMs(right.effectiveAt) || left.id - right.id,
+  if (cursor.last_effective_at !== null && cursor.last_message_id !== null) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", ">", cursor.last_effective_at as string),
+        eb.and([
+          eb("effective_at", "=", cursor.last_effective_at as string),
+          eb("id", ">", cursor.last_message_id as number),
+        ]),
+      ]),
     );
+  }
+  const rows = await query.orderBy("effective_at", "asc").orderBy("id", "asc").limit(limit).execute();
+
+  return rows.map((row: ChunkerRawRow) => ({
+    id: row.id,
+    providerMessageId: row.provider_message_id,
+    effectiveAt: row.effective_at ?? effectiveTimestamp(row, now),
+    text: row.text,
+    attachments: row.attachments,
+    isBot: row.is_bot === 1,
+  }));
 }
 
 async function countLateArrivals(
   db: Kysely<DB>,
   conversationId: number,
   cursor: ConversationSliceCursorRow,
-  now: Date,
 ): Promise<number> {
   if (cursor.last_effective_at === null || cursor.last_message_id === null) return 0;
 
   const lowerBound = cursorReceivedAtLowerBound(cursor);
   let query = db
     .selectFrom("conversation_messages")
-    .select(["id", "provider_timestamp", "received_at"])
+    .select(({ fn }) => fn.countAll<number>().as("count"))
     .where("conversation_id", "=", conversationId)
     .where("source", "=", "live")
-    .where("id", ">", cursor.last_message_id);
+    .where("id", ">", cursor.last_message_id)
+    .where("effective_at", "<", cursor.last_effective_at);
   if (lowerBound) query = query.where("received_at", ">", lowerBound);
-  const rows = await query.execute();
-
-  return rows.filter(
-    (row: ChunkerTimestampRow) => !isAfterCursor({ id: row.id, effectiveAt: effectiveTimestamp(row, now) }, cursor),
-  ).length;
+  const row = await query.executeTakeFirstOrThrow();
+  return Number(row.count);
 }
 
 async function runLlmChunkingWithBackoff(
   options: ChunkWhatsAppGroupOptions,
   params: Parameters<typeof runLlmChunkingPass>[1],
 ): Promise<Awaited<ReturnType<typeof runLlmChunkingPass>>> {
-  if (!options.llmGenerate) return { windowsProcessed: 0, slicesClosed: 0, openSliceId: null };
+  if (!options.llmGenerate) return { windowsProcessed: 0, slicesClosed: 0, messagesProcessed: 0, openSliceId: null };
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await runLlmChunkingPass(
@@ -641,10 +656,11 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
     conversation.id,
     cursor,
     now,
+    knobs.windowMessages + 1,
     openBeforeIdleClose?.first_message_id,
   );
   const denoisedMessages = messages.filter(isIndexableWhatsAppChunkMessage);
-  const lateArrivals = await countLateArrivals(db, conversation.id, cursor, now);
+  const lateArrivals = await countLateArrivals(db, conversation.id, cursor);
   if (lateArrivals > 0) logger.info({ conversationId: conversation.id, lateArrivals }, "late_arrival_skipped");
   if (denoisedMessages.length === 0 || !options.llmGenerate) {
     return { ...emptyRunSummary(), conversationsProcessed: 1, lateArrivals };
@@ -674,13 +690,12 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
       groupJid: group.jid,
       knobs,
       mode: "live",
-      pendingMessageIds: messages.map((message) => message.id),
     });
     return {
       conversationsProcessed: 1,
       slicesCreated: result.slicesClosed,
       lateArrivals,
-      messagesProcessed: messages.length,
+      messagesProcessed: result.messagesProcessed,
       maxAgeFlushes: 0,
       maxSizeFlushes: 0,
     };
@@ -1013,7 +1028,10 @@ async function admitWhatsAppBackfillGraphChat(input: {
       groupJid: page.groupJid,
       knobs: resolveWhatsAppLlmChunkerKnobs(input.group, input.defaultLlmKnobs),
       mode: "backfill",
-      pendingMessageIds: page.rows.map((row) => row.id),
+      pendingUntil: {
+        effectiveAt: page.rows[page.rows.length - 1]?.effective_at as string,
+        id: page.rows[page.rows.length - 1]?.id as number,
+      },
     },
   );
   if (llmResult.skippedReason === "overlap_guard") {

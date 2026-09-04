@@ -61,6 +61,11 @@ export interface ChunkEngineKnobs {
   groupWorkerPool: number;
 }
 
+export interface ChunkPendingBound {
+  effectiveAt: string;
+  id: number;
+}
+
 export interface ChunkCursorState {
   lastEffectiveAt: string | null;
   lastMessageId: number | null;
@@ -101,7 +106,13 @@ export interface ChunkStreamAdapter {
     open: ConversationSliceRow | undefined,
     cursor: ChunkCursorState,
     cap: number,
+    pendingUntil?: ChunkPendingBound,
   ): Promise<{ openRaw: ChunkEngineMessage[]; pendingRaw: ChunkEngineMessage[]; pageFull: boolean }>;
+  nextPendingMessage(
+    db: Kysely<DB>,
+    cursor: ChunkCursorState,
+    pendingUntil?: ChunkPendingBound,
+  ): Promise<ChunkEngineMessage | undefined>;
   tailMessage(db: Kysely<DB>, messageId: number): Promise<ChunkEngineMessage | undefined>;
   isIndexable(message: ChunkEngineMessage): boolean;
   senderLabel(message: ChunkEngineMessage): string;
@@ -221,6 +232,7 @@ interface PlannedBoundarySlice {
 interface ApplyResult {
   closed: number;
   openSliceId: string | null;
+  messagesProcessed: number;
   shrunkIndexedFileId: string | null;
 }
 
@@ -517,7 +529,7 @@ function takeWindowSuffix(
 async function loadWindow(
   db: Kysely<DB>,
   adapter: ChunkStreamAdapter,
-  pendingMessageIds?: ReadonlySet<number>,
+  pendingUntil?: ChunkPendingBound,
 ): Promise<BoundaryWindow> {
   const cursor = await adapter.cursor.get(db);
   if (!cursor) throw new Error("Chunking cursor was not claimed");
@@ -525,7 +537,7 @@ async function loadWindow(
     adapter.conversationId,
     adapter.providerThreadId,
   );
-  const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages);
+  const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages, pendingUntil);
   const rawById = new Map([...loaded.openRaw, ...loaded.pendingRaw].map((message) => [message.id, message]));
   const allRaw = sortMessages([...rawById.values()], adapter);
   const openIds = new Set(parseDenoisedIds(open));
@@ -542,7 +554,11 @@ async function loadWindow(
     (message) =>
       adapter.isIndexable(message) &&
       adapter.cursor.isAfterCursor(message, cursor) &&
-      (!pendingMessageIds || pendingMessageIds.has(message.id)),
+      (!pendingUntil ||
+        (adapter.order === "row_id"
+          ? message.id <= pendingUntil.id
+          : message.effectiveAt < pendingUntil.effectiveAt ||
+            (message.effectiveAt === pendingUntil.effectiveAt && message.id <= pendingUntil.id))),
   );
   const suffix = takeWindowSuffix(openMessages, newMessages, adapter.knobs);
   return {
@@ -861,7 +877,12 @@ async function applyBoundaryWindow(
       parseDenoisedIds(previousOpen).some((id) => !finalPlanned.denoisedMessageIds.includes(id))
         ? previousOpen.indexed_file_id
         : null;
-    return { closed, openSliceId, shrunkIndexedFileId: shrank };
+    return {
+      closed,
+      openSliceId,
+      messagesProcessed: state.messages.length - state.openMessages.length,
+      shrunkIndexedFileId: shrank,
+    };
   });
 
   if (applyResult.shrunkIndexedFileId) await deps.onOpenChunkShrunk?.(applyResult.shrunkIndexedFileId);
@@ -922,7 +943,13 @@ async function decideAndApply(
 }
 
 function emptyResult(openSliceId: string | null, skippedReason?: string) {
-  return { windowsProcessed: 0, slicesClosed: 0, openSliceId, ...(skippedReason ? { skippedReason } : {}) };
+  return {
+    windowsProcessed: 0,
+    slicesClosed: 0,
+    messagesProcessed: 0,
+    openSliceId,
+    ...(skippedReason ? { skippedReason } : {}),
+  };
 }
 
 export async function runChunkingPass(
@@ -931,11 +958,12 @@ export async function runChunkingPass(
     adapter: ChunkStreamAdapter;
     mode: "live" | "backfill";
     maxWindows?: number;
-    pendingMessageIds?: number[];
+    pendingUntil?: ChunkPendingBound;
   },
 ): Promise<{
   windowsProcessed: number;
   slicesClosed: number;
+  messagesProcessed: number;
   openSliceId: string | null;
   skippedReason?: string;
 }> {
@@ -950,18 +978,22 @@ export async function runChunkingPass(
 
   let windowsProcessed = 0;
   let slicesClosed = 0;
+  let messagesProcessed = 0;
   let openSliceId: string | null = null;
   let skippedReason: string | undefined;
   const maxWindows = Math.max(1, params.maxWindows ?? Number.MAX_SAFE_INTEGER);
-  const pendingMessageIds = params.pendingMessageIds ? new Set(params.pendingMessageIds) : undefined;
   try {
     while (windowsProcessed < maxWindows) {
-      const state = await loadWindow(deps.db, params.adapter, pendingMessageIds);
+      const state = await loadWindow(deps.db, params.adapter, params.pendingUntil);
       openSliceId = state.open?.id ?? null;
       const pendingRaw = state.allRaw.filter(
         (message) =>
           params.adapter.cursor.isAfterCursor(message, state.cursor) &&
-          (!pendingMessageIds || pendingMessageIds.has(message.id)),
+          (!params.pendingUntil ||
+            (params.adapter.order === "row_id"
+              ? message.id <= params.pendingUntil.id
+              : message.effectiveAt < params.pendingUntil.effectiveAt ||
+                (message.effectiveAt === params.pendingUntil.effectiveAt && message.id <= params.pendingUntil.id))),
       );
       if (state.newMessages.length === 0) {
         const lastPendingRaw = pendingRaw[pendingRaw.length - 1];
@@ -977,6 +1009,7 @@ export async function runChunkingPass(
       if (applied) {
         windowsProcessed += 1;
         slicesClosed += applied.closed;
+        messagesProcessed += applied.messagesProcessed;
         openSliceId = applied.openSliceId;
         continue;
       }
@@ -997,10 +1030,11 @@ export async function runChunkingPass(
       }
       windowsProcessed += 1;
       slicesClosed += firstApplied.closed;
+      messagesProcessed += firstApplied.messagesProcessed;
       openSliceId = firstApplied.openSliceId;
       if (windowsProcessed >= maxWindows) break;
 
-      const secondState = await loadWindow(deps.db, params.adapter, pendingMessageIds);
+      const secondState = await loadWindow(deps.db, params.adapter, params.pendingUntil);
       const secondApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, secondState);
       if (!secondApplied) {
         skippedReason = "boundary_validation_failed";
@@ -1009,6 +1043,7 @@ export async function runChunkingPass(
       }
       windowsProcessed += 1;
       slicesClosed += secondApplied.closed;
+      messagesProcessed += secondApplied.messagesProcessed;
       openSliceId = secondApplied.openSliceId;
     }
   } catch (error) {
@@ -1018,7 +1053,13 @@ export async function runChunkingPass(
   } finally {
     await params.adapter.cursor.release(deps.db, { claimToken });
   }
-  return { windowsProcessed, slicesClosed, openSliceId, ...(skippedReason ? { skippedReason } : {}) };
+  return {
+    windowsProcessed,
+    slicesClosed,
+    messagesProcessed,
+    openSliceId,
+    ...(skippedReason ? { skippedReason } : {}),
+  };
 }
 
 export async function evaluateIdleClose(
@@ -1046,10 +1087,8 @@ export async function evaluateIdleClose(
       if (!tail) return false;
       let nextPending: SortableMessage | undefined;
       if (params.mode === "backfill") {
-        const loaded = await params.adapter.loadOpenAndPending(trx, open, cursor, params.adapter.knobs.windowMessages);
-        nextPending = sortMessages(loaded.pendingRaw, params.adapter).find((message) =>
-          params.adapter.cursor.isAfterCursor(message, cursor),
-        );
+        const loaded = await params.adapter.nextPendingMessage(trx, cursor);
+        nextPending = loaded ? sortMessages([loaded], params.adapter)[0] : undefined;
       }
       const idleMs = params.adapter.knobs.idleCloseHours * 60 * 60 * 1000;
       const isIdle =

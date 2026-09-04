@@ -11,8 +11,10 @@ import {
 import { phoneE164ToWhatsAppJid } from "../whatsapp/provider";
 import {
   type BoundarySegment,
+  type ChunkCursorState,
   type ChunkEngineDeps,
   type ChunkEngineMessage,
+  type ChunkPendingBound,
   type ChunkStreamAdapter,
   createCompositeChunkCursorStore,
   enforceBoundarySize,
@@ -52,6 +54,17 @@ interface RawMessageRow {
 }
 
 const IDENTITY_RECORDED_MARKER = "_whatsappIdentityCandidatesRecorded";
+const RAW_MESSAGE_COLUMNS = [
+  "id",
+  "provider_message_id",
+  "sender_name",
+  "is_bot",
+  "text",
+  "attachments",
+  "provider_timestamp",
+  "received_at",
+  "effective_at",
+] as const;
 
 function effectiveAt(row: RawMessageRow): string {
   return row.effective_at ?? row.provider_timestamp ?? row.received_at;
@@ -127,40 +140,63 @@ async function recordIdentityCandidatesIfNeeded(
     .execute();
 }
 
-async function listRawMessages(db: Kysely<DB>, conversationId: number): Promise<ChunkEngineMessage[]> {
+async function listOpenRawMessages(
+  db: Kysely<DB>,
+  conversationId: number,
+  open: ConversationSliceRow | undefined,
+): Promise<ChunkEngineMessage[]> {
+  if (!open) return [];
   const rows = await db
     .selectFrom("conversation_messages")
-    .select([
-      "id",
-      "provider_message_id",
-      "sender_name",
-      "is_bot",
-      "text",
-      "attachments",
-      "provider_timestamp",
-      "received_at",
-      "effective_at",
-    ])
+    .select(RAW_MESSAGE_COLUMNS)
     .where("conversation_id", "=", conversationId)
+    .where("effective_at", ">=", open.started_at)
+    .where("effective_at", "<=", open.ended_at)
+    .orderBy("effective_at", "asc")
     .orderBy("id", "asc")
     .execute();
+  return rows.map((row) => toMessage(row as RawMessageRow));
+}
+
+async function listPendingRawMessages(
+  db: Kysely<DB>,
+  conversationId: number,
+  cursor: ChunkCursorState,
+  limit: number,
+  pendingUntil?: ChunkPendingBound,
+): Promise<ChunkEngineMessage[]> {
+  let query = db
+    .selectFrom("conversation_messages")
+    .select(RAW_MESSAGE_COLUMNS)
+    .where("conversation_id", "=", conversationId)
+    .where("effective_at", "is not", null);
+  if (cursor.lastEffectiveAt !== null && cursor.lastMessageId !== null) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", ">", cursor.lastEffectiveAt as string),
+        eb.and([
+          eb("effective_at", "=", cursor.lastEffectiveAt as string),
+          eb("id", ">", cursor.lastMessageId as number),
+        ]),
+      ]),
+    );
+  }
+  if (pendingUntil) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", "<", pendingUntil.effectiveAt),
+        eb.and([eb("effective_at", "=", pendingUntil.effectiveAt), eb("id", "<=", pendingUntil.id)]),
+      ]),
+    );
+  }
+  const rows = await query.orderBy("effective_at", "asc").orderBy("id", "asc").limit(limit).execute();
   return rows.map((row) => toMessage(row as RawMessageRow));
 }
 
 async function getRawMessage(db: Kysely<DB>, messageId: number): Promise<ChunkEngineMessage | undefined> {
   const row = await db
     .selectFrom("conversation_messages")
-    .select([
-      "id",
-      "provider_message_id",
-      "sender_name",
-      "is_bot",
-      "text",
-      "attachments",
-      "provider_timestamp",
-      "received_at",
-      "effective_at",
-    ])
+    .select(RAW_MESSAGE_COLUMNS)
     .where("id", "=", messageId)
     .executeTakeFirst();
   return row ? toMessage(row as RawMessageRow) : undefined;
@@ -176,14 +212,20 @@ export function createWhatsAppChunkStreamAdapter(
     streamKey: null,
     providerThreadId: null,
     cursor,
-    loadOpenAndPending: async (db, open, state) => {
-      const allRaw = await listRawMessages(db, params.conversationId);
+    loadOpenAndPending: async (db, open, state, cap, pendingUntil) => {
+      const limit = cap + 50;
+      const [openRaw, pendingRaw] = await Promise.all([
+        listOpenRawMessages(db, params.conversationId, open),
+        listPendingRawMessages(db, params.conversationId, state, limit, pendingUntil),
+      ]);
       return {
-        openRaw: open ? allRaw : [],
-        pendingRaw: allRaw.filter((message) => cursor.isAfterCursor(message, state)),
-        pageFull: false,
+        openRaw,
+        pendingRaw,
+        pageFull: pendingRaw.length === limit,
       };
     },
+    nextPendingMessage: async (db, state, pendingUntil) =>
+      (await listPendingRawMessages(db, params.conversationId, state, 1, pendingUntil))[0],
     tailMessage: getRawMessage,
     isIndexable: isIndexableWhatsAppChunkMessage,
     senderLabel: (message) => (message as ChunkEngineMessage & { senderName: string }).senderName,
@@ -244,23 +286,30 @@ export async function runLlmChunkingPass(
     knobs: WhatsAppLlmChunkerKnobs;
     mode: "live" | "backfill";
     maxWindows?: number;
-    pendingMessageIds?: number[];
+    pendingUntil?: ChunkPendingBound;
   },
 ): Promise<{
   windowsProcessed: number;
   slicesClosed: number;
+  messagesProcessed: number;
   openSliceId: string | null;
   skippedReason?: string;
 }> {
   const actualConversationId = await findConversationId(deps.db, params.groupJid);
   if (actualConversationId !== params.conversationId) {
-    return { windowsProcessed: 0, slicesClosed: 0, openSliceId: null, skippedReason: "conversation_not_found" };
+    return {
+      windowsProcessed: 0,
+      slicesClosed: 0,
+      messagesProcessed: 0,
+      openSliceId: null,
+      skippedReason: "conversation_not_found",
+    };
   }
   return runChunkingPass(deps, {
     adapter: createWhatsAppChunkStreamAdapter(deps, params),
     mode: params.mode,
     maxWindows: params.maxWindows,
-    pendingMessageIds: params.pendingMessageIds,
+    pendingUntil: params.pendingUntil,
   });
 }
 

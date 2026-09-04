@@ -12,7 +12,7 @@ import {
   createStreamChunkCursorStore,
   runChunkingPass,
 } from "./chunk-engine";
-import { runLlmChunkingPass } from "./whatsapp-llm-chunker";
+import { createWhatsAppChunkStreamAdapter, runLlmChunkingPass } from "./whatsapp-llm-chunker";
 
 const knobs = {
   windowMessages: 20,
@@ -91,6 +91,8 @@ function fakeAdapter(messages: ChunkEngineMessage[], overrides: Partial<ChunkStr
         pageFull: false,
       };
     },
+    nextPendingMessage: async () =>
+      messages.find((message) => cursor.lastMessageId === null || message.id > cursor.lastMessageId),
     tailMessage: async (_db, messageId) => messages.find((message) => message.id === messageId),
     isIndexable: () => true,
     senderLabel: () => "Asha",
@@ -194,7 +196,12 @@ describe("chunk engine adapter contract", () => {
         logger: createTestLogger(),
         generate: async () => JSON.stringify({ segments: [{ start: 1, end: 2, threads: ["thread"] }] }),
       },
-      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [1, 2] },
+      {
+        adapter,
+        mode: "live",
+        maxWindows: 1,
+        pendingUntil: { effectiveAt: makeMessages(2)[1]?.effectiveAt ?? "", id: 2 },
+      },
     );
 
     const result = await runChunkingPass(
@@ -208,7 +215,12 @@ describe("chunk engine adapter contract", () => {
           return JSON.stringify({ segments: [{ start: 1, end: calls === 3 ? 5 : 8, threads: ["thread"] }] });
         },
       },
-      { adapter, mode: "live", maxWindows: 2, pendingMessageIds: [3, 4, 5, 6, 7, 8] },
+      {
+        adapter,
+        mode: "live",
+        maxWindows: 2,
+        pendingUntil: { effectiveAt: makeMessages(8)[7]?.effectiveAt ?? "", id: 8 },
+      },
     );
 
     expect(result.windowsProcessed).toBe(2);
@@ -229,13 +241,23 @@ describe("chunk engine adapter contract", () => {
 
     await runChunkingPass(
       { db, logger: createTestLogger(), generate: async () => "unreachable" },
-      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [1] },
+      {
+        adapter,
+        mode: "live",
+        maxWindows: 1,
+        pendingUntil: { effectiveAt: makeMessages(1)[0]?.effectiveAt ?? "", id: 1 },
+      },
     );
     const previousOpen = await db.selectFrom("conversation_slices").select("id").executeTakeFirstOrThrow();
 
     await runChunkingPass(
       { db, logger: createTestLogger(), generate: async () => "unreachable" },
-      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [2, 3, 4, 5, 6] },
+      {
+        adapter,
+        mode: "live",
+        maxWindows: 1,
+        pendingUntil: { effectiveAt: makeMessages(6)[5]?.effectiveAt ?? "", id: 6 },
+      },
     );
     const insertedOpen = await db
       .selectFrom("conversation_slices")
@@ -244,7 +266,12 @@ describe("chunk engine adapter contract", () => {
       .executeTakeFirstOrThrow();
     const growResult = await runChunkingPass(
       { db, logger: createTestLogger(), generate: async () => "unreachable" },
-      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [6] },
+      {
+        adapter,
+        mode: "live",
+        maxWindows: 1,
+        pendingUntil: { effectiveAt: makeMessages(6)[5]?.effectiveAt ?? "", id: 6 },
+      },
     );
     const slices = await db
       .selectFrom("conversation_slices")
@@ -361,6 +388,42 @@ describe("chunk engine adapter contract", () => {
 
     expect(snapshot.participants).toHaveLength(1);
     expect(snapshot.participants[0]?.displayName).toBe("Asha");
+  });
+
+  it("bounds one WhatsApp pass pending read for a 5,000-row conversation", async () => {
+    const groupJid = "bounded-read@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    await db.transaction().execute(async (trx) => {
+      const messages = createConversationRepository(trx);
+      for (let index = 0; index < 5_000; index += 1) {
+        await messages.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `bounded-${index}`,
+          senderName: "Asha",
+          text: "roadmap update",
+          receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+        });
+      }
+    });
+    const deps = { db, logger: createTestLogger(), generate: async () => "unreachable" };
+    const adapter = createWhatsAppChunkStreamAdapter(deps, { conversationId: conversation.id, groupJid, knobs });
+    const loadOpenAndPending = adapter.loadOpenAndPending;
+    const pendingRowsRead: number[] = [];
+    adapter.loadOpenAndPending = async (...args) => {
+      const loaded = await loadOpenAndPending(...args);
+      pendingRowsRead.push(loaded.pendingRaw.length);
+      return loaded;
+    };
+    adapter.boundaries = "single-segment";
+    adapter.rosterSnapshot = async () => "[]";
+
+    await runChunkingPass(deps, { adapter, mode: "live", maxWindows: 1 });
+
+    expect(pendingRowsRead).toEqual([knobs.windowMessages + 50]);
   });
 
   it("renews Slack stream cursor claims only for the active token", async () => {
