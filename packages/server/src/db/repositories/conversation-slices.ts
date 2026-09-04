@@ -142,11 +142,19 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
       return db.selectFrom("conversation_slices").selectAll().where("id", "=", sliceId).executeTakeFirst();
     },
 
-    async getOpenSlice(conversationId: number): Promise<ConversationSliceRow | undefined> {
+    async getOpenSlice(
+      conversationId: number,
+      providerThreadId: string | null = null,
+    ): Promise<ConversationSliceRow | undefined> {
       return db
         .selectFrom("conversation_slices")
         .selectAll()
         .where("conversation_id", "=", conversationId)
+        .where((eb) =>
+          providerThreadId === null
+            ? eb("provider_thread_id", "is", null)
+            : eb("provider_thread_id", "=", providerThreadId),
+        )
         .where("status", "=", "open")
         .executeTakeFirst();
     },
@@ -181,10 +189,13 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
       return db.selectFrom("conversation_slices").selectAll().where("id", "=", input.sliceId).executeTakeFirstOrThrow();
     },
 
-    async closeOpenSlice(sliceId: string): Promise<ConversationSliceRow | undefined> {
+    async closeOpenSlice(
+      sliceId: string,
+      flushReason: ConversationSliceFlushReason = "llm_boundary",
+    ): Promise<ConversationSliceRow | undefined> {
       const result = await db
         .updateTable("conversation_slices")
-        .set({ status: "closed", salience_verdict: "kept", flush_reason: "llm_boundary" })
+        .set({ status: "closed", salience_verdict: "kept", flush_reason: flushReason })
         .where("id", "=", sliceId)
         .where("status", "=", "open")
         .executeTakeFirst();
@@ -519,6 +530,22 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
         .where("conversation_id", "=", input.conversationId)
         .where("stream_key", "=", input.streamKey)
         .executeTakeFirstOrThrow();
+    },
+
+    async renewStreamCursorClaim(input: {
+      conversationId: number;
+      streamKey: string;
+      claimToken: string;
+      now: string;
+    }): Promise<boolean> {
+      const result = await db
+        .updateTable("conversation_slice_stream_cursors")
+        .set({ claimed_at: input.now, updated_at: input.now })
+        .where("conversation_id", "=", input.conversationId)
+        .where("stream_key", "=", input.streamKey)
+        .where("claim_token", "=", input.claimToken)
+        .executeTakeFirst();
+      return Number(result.numUpdatedRows ?? 0) === 1;
     },
 
     async releaseStreamCursorClaim(input: StreamCursorRelease): Promise<boolean> {
