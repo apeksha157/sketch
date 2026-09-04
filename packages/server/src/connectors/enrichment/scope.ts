@@ -5,6 +5,7 @@ const enrichmentScopeSchema = z
     enabled: z.boolean().optional().default(false),
     dailyCap: z.coerce.number().int().min(0).optional().default(200),
     batch: z.coerce.number().int().min(1).optional().default(50),
+    autoMerge: z.boolean().optional().default(false),
   })
   .strict();
 
@@ -12,6 +13,7 @@ export interface LinkedinEnrichmentScope {
   enabled: boolean;
   dailyCap: number;
   batch: number;
+  autoMerge: boolean;
 }
 
 export function parseLinkedinEnrichmentScope(

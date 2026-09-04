@@ -73,6 +73,7 @@ async function main(): Promise<void> {
             limit: positiveInt(parsed.values.limit),
             dailyCap: scope.dailyCap,
             batch: scope.batch,
+            autoMerge: scope.autoMerge,
           },
         )
       : emptyEnrichmentSweepReport();
