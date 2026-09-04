@@ -67,6 +67,12 @@ export interface ChunkPendingBound {
   id: number;
 }
 
+export interface ChunkPendingOptions {
+  mode: "live" | "backfill";
+  pendingUntil?: ChunkPendingBound;
+  historyStartId?: number | null;
+}
+
 export interface ChunkCursorState {
   lastEffectiveAt: string | null;
   lastMessageId: number | null;
@@ -107,12 +113,12 @@ export interface ChunkStreamAdapter {
     open: ConversationSliceRow | undefined,
     cursor: ChunkCursorState,
     cap: number,
-    pendingUntil?: ChunkPendingBound,
+    options: ChunkPendingOptions,
   ): Promise<{ openRaw: ChunkEngineMessage[]; pendingRaw: ChunkEngineMessage[]; pageFull: boolean }>;
   nextPendingMessage(
     db: Kysely<DB>,
     cursor: ChunkCursorState,
-    pendingUntil?: ChunkPendingBound,
+    options: ChunkPendingOptions,
   ): Promise<ChunkEngineMessage | undefined>;
   tailMessage(db: Kysely<DB>, messageId: number): Promise<ChunkEngineMessage | undefined>;
   isIndexable(message: ChunkEngineMessage): boolean;
@@ -541,6 +547,10 @@ function isAtOrBefore(
   );
 }
 
+/**
+ * The read-only no-hit path preserves the supplied open row; `decideAndApply`
+ * revalidates the claim, cursor, and open slice before boundary writes.
+ */
 async function repairOrphanedOpenSlice(
   db: Kysely<DB>,
   adapter: ChunkStreamAdapter,
@@ -584,10 +594,19 @@ async function repairOrphanedOpenSlice(
     return undefined;
   });
 }
+
+/**
+ * The raw range is derived from the open span and bounded pending page, so
+ * `(conversation_id, first_message_id)` is no longer a pure function of the
+ * full message set. This is safe because overlap validation, slice writes,
+ * and cursor advancement happen together in one apply transaction.
+ */
 async function loadWindow(
   db: Kysely<DB>,
   adapter: ChunkStreamAdapter,
+  mode: "live" | "backfill",
   pendingUntil?: ChunkPendingBound,
+  fallbackHistoryStartId?: number | null,
 ): Promise<BoundaryWindow> {
   const cursor = await adapter.cursor.get(db);
   if (!cursor) throw new Error("Chunking cursor was not claimed");
@@ -596,13 +615,11 @@ async function loadWindow(
     adapter.providerThreadId,
   );
   open = await repairOrphanedOpenSlice(db, adapter, open, cursor);
-  const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages, pendingUntil);
-  /**
-   * The raw range is derived from the open span and bounded pending page, so
-   * `(conversation_id, first_message_id)` is no longer a pure function of the
-   * full message set. This is safe because overlap validation, slice writes,
-   * and cursor advancement happen together in one apply transaction.
-   */
+  const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages, {
+    mode,
+    pendingUntil,
+    historyStartId: open?.first_message_id ?? fallbackHistoryStartId ?? null,
+  });
   const rawById = new Map([...loaded.openRaw, ...loaded.pendingRaw].map((message) => [message.id, message]));
   const allRaw = sortMessages([...rawById.values()], adapter);
   const openIds = new Set(parseDenoisedIds(open));
@@ -1054,6 +1071,7 @@ export async function runChunkingPass(
     mode: "live" | "backfill";
     maxWindows?: number;
     pendingUntil?: ChunkPendingBound;
+    historyStartId?: number | null;
   },
 ): Promise<{
   windowsProcessed: number;
@@ -1078,14 +1096,16 @@ export async function runChunkingPass(
   let budgetUsed = 0;
   let lastPageFull = false;
   let openSliceId: string | null = null;
+  let historyStartId = params.historyStartId;
   let skippedReason: string | undefined;
   const maxWindows = Math.max(1, params.maxWindows ?? params.adapter.knobs.maxWindowsPerRun);
   try {
     while (budgetUsed < maxWindows) {
-      const state = await loadWindow(deps.db, params.adapter, params.pendingUntil);
+      const state = await loadWindow(deps.db, params.adapter, params.mode, params.pendingUntil, params.historyStartId);
       budgetUsed += 1;
       lastPageFull = state.pageFull;
       openSliceId = state.open?.id ?? null;
+      historyStartId = state.open?.first_message_id ?? historyStartId;
       const pendingRaw = state.allRaw.filter(
         (message) =>
           params.adapter.cursor.isAfterCursor(message, state.cursor) &&
@@ -1132,9 +1152,16 @@ export async function runChunkingPass(
       openSliceId = firstApplied.openSliceId;
       if (budgetUsed >= maxWindows) break;
 
-      const secondState = await loadWindow(deps.db, params.adapter, params.pendingUntil);
+      const secondState = await loadWindow(
+        deps.db,
+        params.adapter,
+        params.mode,
+        params.pendingUntil,
+        params.historyStartId,
+      );
       budgetUsed += 1;
       lastPageFull = secondState.pageFull;
+      historyStartId = secondState.open?.first_message_id ?? historyStartId;
       const secondApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, secondState);
       if (!secondApplied) {
         skippedReason = "boundary_validation_failed";
@@ -1159,7 +1186,11 @@ export async function runChunkingPass(
     lastPageFull ||
     (budgetUsed >= maxWindows &&
       finalCursor !== undefined &&
-      (await params.adapter.nextPendingMessage(deps.db, finalCursor, params.pendingUntil)) !== undefined);
+      (await params.adapter.nextPendingMessage(deps.db, finalCursor, {
+        mode: params.mode,
+        pendingUntil: params.pendingUntil,
+        historyStartId,
+      })) !== undefined);
   return {
     windowsProcessed,
     slicesClosed,
@@ -1172,7 +1203,7 @@ export async function runChunkingPass(
 
 export async function evaluateIdleClose(
   deps: ChunkEngineDeps,
-  params: { adapter: ChunkStreamAdapter; mode: "live" | "backfill" },
+  params: { adapter: ChunkStreamAdapter; mode: "live" | "backfill"; pendingUntil?: ChunkPendingBound },
 ): Promise<boolean> {
   const claimToken = randomUUID();
   const now = nowMs(deps);
@@ -1195,7 +1226,11 @@ export async function evaluateIdleClose(
       if (!tail) return false;
       let nextPending: SortableMessage | undefined;
       if (params.mode === "backfill") {
-        const loaded = await params.adapter.nextPendingMessage(trx, cursor);
+        const loaded = await params.adapter.nextPendingMessage(trx, cursor, {
+          mode: params.mode,
+          pendingUntil: params.pendingUntil,
+          historyStartId: open.first_message_id,
+        });
         nextPending = loaded ? sortMessages([loaded], params.adapter)[0] : undefined;
       }
       const idleMs = params.adapter.knobs.idleCloseHours * 60 * 60 * 1000;

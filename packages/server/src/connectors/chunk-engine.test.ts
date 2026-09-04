@@ -234,6 +234,23 @@ describe("chunk engine adapter contract", () => {
     expect(result).toMatchObject({ pendingRemaining: true, skippedReason: "boundary_validation_failed" });
   });
 
+  it("keeps pending work marked after a full page of noise", async () => {
+    const noise = makeMessages(knobs.windowMessages);
+    const result = await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      {
+        adapter: fakeAdapter(noise, {
+          isIndexable: () => false,
+          loadOpenAndPending: async () => ({ openRaw: [], pendingRaw: noise, pageFull: true }),
+        }),
+        mode: "live",
+        maxWindows: 1,
+      },
+    );
+
+    expect(result.pendingRemaining).toBe(true);
+  });
+
   it("force-splits a single segment at both message and token hard caps", async () => {
     const byMessages = fakeAdapter(makeMessages(5), { knobs: { ...knobs, maxMessages: 2 } });
     await runChunkingPass(
@@ -589,7 +606,7 @@ describe("chunk engine adapter contract", () => {
     expect(nullStreamResult).toMatchObject({ pendingRemaining: true, skippedReason: "overlap_guard" });
   });
 
-  it("overrides the tick gate when indexable messages follow a full noise page", async () => {
+  it("overrides the tick gate when indexable messages follow a full reaction-only page", async () => {
     const groupJid = "burst-after-noise@g.us";
     const groups = createWhatsAppGroupRepository(db);
     await groups.upsert({
@@ -611,11 +628,10 @@ describe("chunk engine adapter contract", () => {
     });
     await insertMessagesBatched(
       db,
-      Array.from({ length: 550 }, (_, index) => ({
+      Array.from({ length: 501 }, (_, index) => ({
         conversationId: conversation.id,
-        providerMessageId: `burst-after-noise-${index}`,
-        isBot: index < 300,
-        text: index < 300 ? "noise" : "roadmap update",
+        providerMessageId: index < 251 ? `reaction:burst-after-noise-${index}` : `burst-after-noise-${index}`,
+        text: index < 251 ? "👍" : "roadmap update",
         receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
       })),
     );
@@ -634,7 +650,7 @@ describe("chunk engine adapter contract", () => {
     });
 
     expect(generateCalls).toBeGreaterThan(0);
-    expect(result.messagesProcessed).toBe(550);
+    expect(result.messagesProcessed).toBe(501);
   });
 
   it("drains a full WhatsApp noise page before slicing indexable rows", async () => {
@@ -963,6 +979,7 @@ describe("chunk engine adapter contract", () => {
       open,
       { lastEffectiveAt: cursor.last_effective_at, lastMessageId: cursor.last_message_id, claimToken: null },
       knobs.windowMessages,
+      { mode: "live", historyStartId: open?.first_message_id ?? null },
     );
 
     expect(history.row.id).toBeLessThan(liveStart.row.id);

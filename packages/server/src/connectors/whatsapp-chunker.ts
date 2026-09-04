@@ -507,6 +507,7 @@ async function listMessagesAfterCursor(
   limit: number,
   openFirstMessageId?: number,
   indexableOnly = false,
+  after?: { effectiveAt: string; id: number },
 ): Promise<WhatsAppChunkerMessage[]> {
   const lowerBound = cursorReceivedAtLowerBound(cursor);
   const open = await createConversationSlicesRepository(db).getOpenSlice(conversationId);
@@ -543,6 +544,14 @@ async function listMessagesAfterCursor(
       ]),
     );
   }
+  if (after) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", ">", after.effectiveAt),
+        eb.and([eb("effective_at", "=", after.effectiveAt), eb("id", ">", after.id)]),
+      ]),
+    );
+  }
   const rows = await query.orderBy("effective_at", "asc").orderBy("id", "asc").limit(limit).execute();
 
   return rows.map((row: ChunkerRawRow) => ({
@@ -555,6 +564,7 @@ async function listMessagesAfterCursor(
   }));
 }
 
+/** Scans at most four keyset pages so burst detection stays bounded under non-indexable noise. */
 async function countPendingDenoisedMessages(
   db: Kysely<DB>,
   conversationId: number,
@@ -562,8 +572,17 @@ async function countPendingDenoisedMessages(
   limit: number,
   openFirstMessageId?: number,
 ): Promise<number> {
-  const messages = await listMessagesAfterCursor(db, conversationId, cursor, limit, openFirstMessageId, true);
-  return messages.filter(isIndexableWhatsAppChunkMessage).length;
+  let count = 0;
+  let after: { effectiveAt: string; id: number } | undefined;
+  for (let page = 0; page < 4; page += 1) {
+    const messages = await listMessagesAfterCursor(db, conversationId, cursor, limit, openFirstMessageId, true, after);
+    count += messages.filter(isIndexableWhatsAppChunkMessage).length;
+    if (count >= limit - 1 || messages.length < limit) break;
+    const last = messages[messages.length - 1];
+    if (!last) break;
+    after = { effectiveAt: last.effectiveAt, id: last.id };
+  }
+  return count;
 }
 
 async function countLateArrivals(
@@ -704,6 +723,7 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
       groupJid: group.jid,
       knobs,
       mode: "live",
+      historyStartId: openBeforeIdleClose?.first_message_id,
     });
     return {
       conversationsProcessed: 1,
@@ -1003,6 +1023,12 @@ async function admitWhatsAppBackfillGraphChat(input: {
       conversationId: input.conversationId,
       knobs: resolveWhatsAppLlmChunkerKnobs(input.group, input.defaultLlmKnobs),
       mode: "backfill",
+      pendingUntil: page.rows.length
+        ? {
+            effectiveAt: page.rows[page.rows.length - 1]?.effective_at as string,
+            id: page.rows[page.rows.length - 1]?.id as number,
+          }
+        : undefined,
     },
   );
   if (page.rows.length === 0) {

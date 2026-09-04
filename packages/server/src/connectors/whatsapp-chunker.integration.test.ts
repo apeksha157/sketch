@@ -363,13 +363,18 @@ function runChunkerSuite(label: string, getDb: () => Promise<Kysely<DB>>) {
       expect(drainCursor.last_message_id).toBe(drainIds[4]);
     });
 
-    it("closes an idle live tail before the empty-pending return", async () => {
-      const seeded = await seedEnabledGroup(db, { chunkIdleCloseHours: 96 });
-      await insertMessage(db, seeded.conversationId, {
+    it("continues with admitted history after closing an idle live tail", async () => {
+      const seeded = await seedEnabledGroup(db, { chunkIdleCloseHours: 96, chunkBurstThresholdMessages: 1 });
+      const liveId = await insertMessage(db, seeded.conversationId, {
         providerMessageId: "idle-live",
         effectiveAt: "2026-07-07T09:00:00.000Z",
       });
       await runChunker(db, seeded.group, { now: new Date("2026-07-07T09:30:00.000Z") });
+      const historyId = await insertMessage(db, seeded.conversationId, {
+        providerMessageId: "idle-history",
+        effectiveAt: "2026-07-12T09:00:00.000Z",
+        source: "history",
+      });
       await db
         .updateTable("whatsapp_groups")
         .set({ chunk_last_llm_attempt_at: "2026-07-12T09:59:00.000Z" })
@@ -378,11 +383,18 @@ function runChunkerSuite(label: string, getDb: () => Promise<Kysely<DB>>) {
       const freshGroup = await createWhatsAppGroupRepository(db).getIndexingConfig(seeded.group.jid);
       if (!freshGroup) throw new Error("expected idle WhatsApp group config");
 
-      await runChunker(db, freshGroup, { now: new Date("2026-07-12T10:00:00.000Z") });
+      const result = await runChunker(db, freshGroup, { now: new Date("2026-07-12T10:00:00.000Z") });
       const slices = await listSlicesForConversation(db, seeded.conversationId);
 
-      expect(slices).toHaveLength(1);
+      expect(historyId).toBeGreaterThan(liveId);
+      expect(result.messagesProcessed).toBe(1);
+      expect(slices).toHaveLength(2);
       expect(slices[0]).toMatchObject({ status: "closed", salience_verdict: "kept" });
+      expect(slices[1]).toMatchObject({
+        first_message_id: historyId,
+        last_message_id: historyId,
+        status: "open",
+      });
     });
 
     it("bounds concurrent group LLM calls by the configured worker pool", async () => {

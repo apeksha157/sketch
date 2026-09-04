@@ -15,6 +15,7 @@ import {
   type ChunkEngineDeps,
   type ChunkEngineMessage,
   type ChunkPendingBound,
+  type ChunkPendingOptions,
   type ChunkStreamAdapter,
   createCompositeChunkCursorStore,
   enforceBoundarySize,
@@ -168,24 +169,19 @@ async function listPendingRawMessages(
   conversationId: number,
   cursor: ChunkCursorState,
   limit: number,
-  pendingUntil?: ChunkPendingBound,
-  openFirstMessageId?: number | null,
+  options: ChunkPendingOptions,
 ): Promise<ChunkEngineMessage[]> {
-  const historyStartId =
-    pendingUntil === undefined && openFirstMessageId === undefined
-      ? (await createConversationSlicesRepository(db).getOpenSlice(conversationId))?.first_message_id
-      : openFirstMessageId;
   let query = db
     .selectFrom("conversation_messages")
     .select(RAW_MESSAGE_COLUMNS)
     .where("conversation_id", "=", conversationId)
     .where("effective_at", "is not", null);
-  if (pendingUntil === undefined) {
+  if (options.mode === "live") {
     query = query.where((eb) =>
       eb.or([
         eb("source", "=", "live"),
-        ...(historyStartId !== undefined && historyStartId !== null
-          ? [eb.and([eb("source", "=", "history"), eb("id", ">=", historyStartId)])]
+        ...(options.historyStartId !== undefined && options.historyStartId !== null
+          ? [eb.and([eb("source", "=", "history"), eb("id", ">=", options.historyStartId)])]
           : []),
       ]),
     );
@@ -201,7 +197,8 @@ async function listPendingRawMessages(
       ]),
     );
   }
-  if (pendingUntil) {
+  if (options.pendingUntil) {
+    const pendingUntil = options.pendingUntil;
     query = query.where((eb) =>
       eb.or([
         eb("effective_at", "<", pendingUntil.effectiveAt),
@@ -232,11 +229,11 @@ export function createWhatsAppChunkStreamAdapter(
     streamKey: null,
     providerThreadId: null,
     cursor,
-    loadOpenAndPending: async (db, open, state, cap, pendingUntil) => {
+    loadOpenAndPending: async (db, open, state, cap, options) => {
       const limit = cap + 50;
       const [openRaw, pendingRaw] = await Promise.all([
         listOpenRawMessages(db, params.conversationId, open),
-        listPendingRawMessages(db, params.conversationId, state, limit, pendingUntil, open?.first_message_id ?? null),
+        listPendingRawMessages(db, params.conversationId, state, limit, options),
       ]);
       return {
         openRaw,
@@ -244,8 +241,8 @@ export function createWhatsAppChunkStreamAdapter(
         pageFull: pendingRaw.length === limit,
       };
     },
-    nextPendingMessage: async (db, state, pendingUntil) =>
-      (await listPendingRawMessages(db, params.conversationId, state, 1, pendingUntil))[0],
+    nextPendingMessage: async (db, state, options) =>
+      (await listPendingRawMessages(db, params.conversationId, state, 1, options))[0],
     tailMessage: getRawMessage,
     isIndexable: isIndexableWhatsAppChunkMessage,
     senderLabel: (message) => (message as ChunkEngineMessage & { senderName: string }).senderName,
@@ -298,6 +295,7 @@ export function enforceWhatsAppBoundarySize(
   return enforceBoundarySize(segments, messages, knobs);
 }
 
+/** A missing conversation deliberately reports no pending work even though the result is skipped. */
 export async function runLlmChunkingPass(
   deps: WhatsAppLlmChunkerDeps,
   params: {
@@ -307,6 +305,7 @@ export async function runLlmChunkingPass(
     mode: "live" | "backfill";
     maxWindows?: number;
     pendingUntil?: ChunkPendingBound;
+    historyStartId?: number | null;
   },
 ): Promise<{
   windowsProcessed: number;
@@ -332,12 +331,18 @@ export async function runLlmChunkingPass(
     mode: params.mode,
     maxWindows: params.maxWindows,
     pendingUntil: params.pendingUntil,
+    historyStartId: params.historyStartId,
   });
 }
 
 export async function evaluateIdleClose(
   deps: WhatsAppLlmChunkerDeps,
-  params: { conversationId: number; knobs: WhatsAppLlmChunkerKnobs; mode: "live" | "backfill" },
+  params: {
+    conversationId: number;
+    knobs: WhatsAppLlmChunkerKnobs;
+    mode: "live" | "backfill";
+    pendingUntil?: ChunkPendingBound;
+  },
 ): Promise<boolean> {
   const conversation = await deps.db
     .selectFrom("conversations")
@@ -352,5 +357,6 @@ export async function evaluateIdleClose(
       knobs: params.knobs,
     }),
     mode: params.mode,
+    pendingUntil: params.pendingUntil,
   });
 }
