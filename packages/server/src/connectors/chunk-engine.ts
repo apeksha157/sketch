@@ -77,6 +77,7 @@ export interface ChunkCursorState {
   lastEffectiveAt: string | null;
   lastMessageId: number | null;
   claimToken: string | null;
+  pendingSince?: string | null;
 }
 
 interface ChunkCursorClaimInput {
@@ -152,7 +153,12 @@ function compositeCursorState(row: ConversationSliceCursorRow): ChunkCursorState
 }
 
 function streamCursorState(row: ConversationSliceStreamCursorRow): ChunkCursorState {
-  return { lastEffectiveAt: null, lastMessageId: row.last_message_id, claimToken: row.claim_token };
+  return {
+    lastEffectiveAt: null,
+    lastMessageId: row.last_message_id,
+    claimToken: row.claim_token,
+    pendingSince: row.pending_since,
+  };
 }
 
 export function createCompositeChunkCursorStore(conversationId: number): ChunkCursorStore {
@@ -1073,6 +1079,12 @@ export async function runChunkingPass(
     maxWindows?: number;
     pendingUntil?: ChunkPendingBound;
     historyStartId?: number | null;
+    onPassComplete?: (completion: {
+      claimToken: string;
+      pendingSinceAtClaim: string | null;
+      pendingRemaining: boolean;
+      skippedReason?: string;
+    }) => Promise<void>;
   },
 ): Promise<{
   windowsProcessed: number;
@@ -1090,6 +1102,8 @@ export async function runChunkingPass(
     staleBefore: new Date(nowMs(deps) - CLAIM_STALE_MS).toISOString(),
   });
   if (!claimed) return emptyResult(null, "claim_unavailable");
+  const claimedCursor = await params.adapter.cursor.get(deps.db);
+  const pendingSinceAtClaim = claimedCursor?.pendingSince ?? null;
 
   let windowsProcessed = 0;
   let slicesClosed = 0;
@@ -1101,105 +1115,119 @@ export async function runChunkingPass(
   let skippedReason: string | undefined;
   const maxWindows = Math.max(1, params.maxWindows ?? params.adapter.knobs.maxWindowsPerRun);
   try {
-    while (budgetUsed < maxWindows) {
-      const state = await loadWindow(deps.db, params.adapter, params.mode, params.pendingUntil, params.historyStartId);
-      budgetUsed += 1;
-      lastPageFull = state.pageFull;
-      openSliceId = state.open?.id ?? null;
-      historyStartId = state.open?.first_message_id ?? historyStartId;
-      const pendingRaw = state.allRaw.filter(
-        (message) =>
-          params.adapter.cursor.isAfterCursor(message, state.cursor) &&
-          (!params.pendingUntil || isAtOrBefore(params.adapter, message, params.pendingUntil)),
-      );
-      if (state.newMessages.length === 0) {
-        const lastPendingRaw = pendingRaw[pendingRaw.length - 1];
-        if (lastPendingRaw) {
-          await advanceNoiseCursor(deps, params.adapter, claimToken, state.cursor, lastPendingRaw);
-          messagesProcessed += pendingRaw.length;
+    try {
+      while (budgetUsed < maxWindows) {
+        const state = await loadWindow(
+          deps.db,
+          params.adapter,
+          params.mode,
+          params.pendingUntil,
+          params.historyStartId,
+        );
+        budgetUsed += 1;
+        lastPageFull = state.pageFull;
+        openSliceId = state.open?.id ?? null;
+        historyStartId = state.open?.first_message_id ?? historyStartId;
+        const pendingRaw = state.allRaw.filter(
+          (message) =>
+            params.adapter.cursor.isAfterCursor(message, state.cursor) &&
+            (!params.pendingUntil || isAtOrBefore(params.adapter, message, params.pendingUntil)),
+        );
+        if (state.newMessages.length === 0) {
+          const lastPendingRaw = pendingRaw[pendingRaw.length - 1];
+          if (lastPendingRaw) {
+            await advanceNoiseCursor(deps, params.adapter, claimToken, state.cursor, lastPendingRaw);
+            messagesProcessed += pendingRaw.length;
+          }
+          if (state.pageFull) continue;
+          break;
         }
-        if (state.pageFull) continue;
-        break;
-      }
 
-      const suffix = state.messages.slice(state.openMessages.length);
-      const fullState = { ...state, messages: [...state.openMessages, ...suffix] };
-      const applied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, fullState);
-      if (applied) {
+        const suffix = state.messages.slice(state.openMessages.length);
+        const fullState = { ...state, messages: [...state.openMessages, ...suffix] };
+        const applied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, fullState);
+        if (applied) {
+          windowsProcessed += 1;
+          slicesClosed += applied.closed;
+          messagesProcessed += applied.messagesProcessed;
+          openSliceId = applied.openSliceId;
+          continue;
+        }
+
+        if (suffix.length <= 1) {
+          skippedReason = "boundary_validation_failed";
+          logBoundaryValidationFailure(deps.logger, params.adapter, params.mode);
+          break;
+        }
+
+        const splitAt = Math.ceil(suffix.length / 2);
+        const firstState = { ...state, messages: [...state.openMessages, ...suffix.slice(0, splitAt)] };
+        const firstApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, firstState);
+        if (!firstApplied) {
+          skippedReason = "boundary_validation_failed";
+          logBoundaryValidationFailure(deps.logger, params.adapter, params.mode);
+          break;
+        }
         windowsProcessed += 1;
-        slicesClosed += applied.closed;
-        messagesProcessed += applied.messagesProcessed;
-        openSliceId = applied.openSliceId;
-        continue;
-      }
+        slicesClosed += firstApplied.closed;
+        messagesProcessed += firstApplied.messagesProcessed;
+        openSliceId = firstApplied.openSliceId;
+        if (budgetUsed >= maxWindows) break;
 
-      if (suffix.length <= 1) {
-        skippedReason = "boundary_validation_failed";
-        logBoundaryValidationFailure(deps.logger, params.adapter, params.mode);
-        break;
+        const secondState = await loadWindow(
+          deps.db,
+          params.adapter,
+          params.mode,
+          params.pendingUntil,
+          params.historyStartId,
+        );
+        budgetUsed += 1;
+        lastPageFull = secondState.pageFull;
+        historyStartId = secondState.open?.first_message_id ?? historyStartId;
+        const secondApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, secondState);
+        if (!secondApplied) {
+          skippedReason = "boundary_validation_failed";
+          logBoundaryValidationFailure(deps.logger, params.adapter, params.mode);
+          break;
+        }
+        windowsProcessed += 1;
+        slicesClosed += secondApplied.closed;
+        messagesProcessed += secondApplied.messagesProcessed;
+        openSliceId = secondApplied.openSliceId;
       }
-
-      const splitAt = Math.ceil(suffix.length / 2);
-      const firstState = { ...state, messages: [...state.openMessages, ...suffix.slice(0, splitAt)] };
-      const firstApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, firstState);
-      if (!firstApplied) {
-        skippedReason = "boundary_validation_failed";
-        logBoundaryValidationFailure(deps.logger, params.adapter, params.mode);
-        break;
-      }
-      windowsProcessed += 1;
-      slicesClosed += firstApplied.closed;
-      messagesProcessed += firstApplied.messagesProcessed;
-      openSliceId = firstApplied.openSliceId;
-      if (budgetUsed >= maxWindows) break;
-
-      const secondState = await loadWindow(
-        deps.db,
-        params.adapter,
-        params.mode,
-        params.pendingUntil,
-        params.historyStartId,
-      );
-      budgetUsed += 1;
-      lastPageFull = secondState.pageFull;
-      historyStartId = secondState.open?.first_message_id ?? historyStartId;
-      const secondApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, secondState);
-      if (!secondApplied) {
-        skippedReason = "boundary_validation_failed";
-        logBoundaryValidationFailure(deps.logger, params.adapter, params.mode);
-        break;
-      }
-      windowsProcessed += 1;
-      slicesClosed += secondApplied.closed;
-      messagesProcessed += secondApplied.messagesProcessed;
-      openSliceId = secondApplied.openSliceId;
+    } catch (error) {
+      if (error instanceof ClaimLostError) skippedReason = "claim_lost";
+      else if (error instanceof OverlapGuardError) skippedReason = "overlap_guard";
+      else throw error;
     }
-  } catch (error) {
-    if (error instanceof ClaimLostError) skippedReason = "claim_lost";
-    else if (error instanceof OverlapGuardError) skippedReason = "overlap_guard";
-    else throw error;
+    const finalCursor = await params.adapter.cursor.get(deps.db);
+    const pendingRemaining =
+      skippedReason !== undefined ||
+      lastPageFull ||
+      (budgetUsed >= maxWindows &&
+        finalCursor !== undefined &&
+        (await params.adapter.nextPendingMessage(deps.db, finalCursor, {
+          mode: params.mode,
+          pendingUntil: params.pendingUntil,
+          historyStartId,
+        })) !== undefined);
+    await params.onPassComplete?.({
+      claimToken,
+      pendingSinceAtClaim,
+      pendingRemaining,
+      skippedReason,
+    });
+    return {
+      windowsProcessed,
+      slicesClosed,
+      messagesProcessed,
+      pendingRemaining,
+      openSliceId,
+      ...(skippedReason ? { skippedReason } : {}),
+    };
   } finally {
     await params.adapter.cursor.release(deps.db, { claimToken });
   }
-  const finalCursor = await params.adapter.cursor.get(deps.db);
-  const pendingRemaining =
-    skippedReason !== undefined ||
-    lastPageFull ||
-    (budgetUsed >= maxWindows &&
-      finalCursor !== undefined &&
-      (await params.adapter.nextPendingMessage(deps.db, finalCursor, {
-        mode: params.mode,
-        pendingUntil: params.pendingUntil,
-        historyStartId,
-      })) !== undefined);
-  return {
-    windowsProcessed,
-    slicesClosed,
-    messagesProcessed,
-    pendingRemaining,
-    openSliceId,
-    ...(skippedReason ? { skippedReason } : {}),
-  };
 }
 
 export async function evaluateIdleClose(

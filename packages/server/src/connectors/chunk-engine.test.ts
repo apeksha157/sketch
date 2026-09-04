@@ -251,6 +251,43 @@ describe("chunk engine adapter contract", () => {
     expect(result.pendingRemaining).toBe(true);
   });
 
+  it("runs pass completion while the cursor claim is held", async () => {
+    const adapter = fakeAdapter([]);
+    const completions: Array<{
+      claimToken: string;
+      pendingSinceAtClaim: string | null;
+      pendingRemaining: boolean;
+      skippedReason?: string;
+    }> = [];
+    const originalGet = adapter.cursor.get;
+    adapter.cursor.get = async (db) => {
+      const state = await originalGet(db);
+      return state ? { ...state, pendingSince: "2026-09-05T00:00:00.000Z" } : undefined;
+    };
+
+    await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      {
+        adapter,
+        mode: "live",
+        onPassComplete: async (completion) => {
+          expect((await adapter.cursor.get(db))?.claimToken).toBe(completion.claimToken);
+          completions.push(completion);
+        },
+      },
+    );
+
+    expect(completions).toEqual([
+      {
+        claimToken: expect.any(String),
+        pendingSinceAtClaim: "2026-09-05T00:00:00.000Z",
+        pendingRemaining: false,
+        skippedReason: undefined,
+      },
+    ]);
+    expect((await adapter.cursor.get(db))?.claimToken).toBeNull();
+  });
+
   it("force-splits a single segment at both message and token hard caps", async () => {
     const byMessages = fakeAdapter(makeMessages(5), { knobs: { ...knobs, maxMessages: 2 } });
     await runChunkingPass(
