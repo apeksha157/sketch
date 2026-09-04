@@ -2,12 +2,15 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import type { EnrichedEmail, EnrichedPhone, PersonEnrichmentProvider } from "../connectors/enrichment/provider";
 import { createEnrichmentAttemptsRepository } from "../db/repositories/enrichment-attempts";
-import { createEntityRepository } from "../db/repositories/entities";
+import { createEntityRepository, normalizeContactPointValue } from "../db/repositories/entities";
 import { type EntityDomainsRepository, createEntityDomainsRepository } from "../db/repositories/entity-domains";
+import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/machine-principal";
 import type { DB } from "../db/schema";
 import { normalizePhoneCountryCode, normalizePhoneLike } from "../identity-normalization";
 import { yieldToEventLoop } from "../lib/event-loop";
+import { handleProposeGraphVerdicts } from "../mcp/curation/propose-graph-verdicts";
 import { inferAffiliationFromEmail, isProviderManagedEmailDomain, isRoleAccountEmail } from "./affiliations";
+import { mergeEntities } from "./merge";
 import { resolveLiveEntity, resolveLiveEntityId } from "./redirect";
 
 export interface EnrichmentSweepDeps {
@@ -23,6 +26,7 @@ export interface EnrichmentSweepOptions {
   limit?: number;
   dailyCap: number;
   batch: number;
+  autoMerge?: boolean;
 }
 
 export interface EnrichmentSweepReport {
@@ -32,6 +36,10 @@ export interface EnrichmentSweepReport {
   notFound: number;
   failed: number;
   skipped: number;
+  merged: number;
+  proposed: number;
+  wouldMerge: number;
+  wouldPropose: number;
   domainsAttached: number;
   creditsRemaining: number | null;
   stoppedOn?: "rate_limited" | "auth";
@@ -47,7 +55,7 @@ export interface EnrichmentSweepService {
 }
 
 export interface EnrichmentSweepServiceDeps extends EnrichmentSweepDeps {
-  readScope: () => Promise<{ enabled: boolean; dailyCap: number; batch: number } | null>;
+  readScope: () => Promise<{ enabled: boolean; dailyCap: number; batch: number; autoMerge: boolean } | null>;
 }
 
 export function emptyEnrichmentSweepReport(): EnrichmentSweepReport {
@@ -58,6 +66,10 @@ export function emptyEnrichmentSweepReport(): EnrichmentSweepReport {
     notFound: 0,
     failed: 0,
     skipped: 0,
+    merged: 0,
+    proposed: 0,
+    wouldMerge: 0,
+    wouldPropose: 0,
     domainsAttached: 0,
     creditsRemaining: null,
   };
@@ -77,6 +89,147 @@ function domainOf(email: string): string | null {
   const at = email.lastIndexOf("@");
   if (at <= 0 || at === email.length - 1) return null;
   return email.slice(at + 1).toLowerCase();
+}
+
+type DedupCandidate = {
+  entityId: string;
+  emails: EnrichedEmail[];
+};
+
+type DedupResult = {
+  outcome: "attached" | "merged" | "proposed";
+  merged: number;
+  proposed: number;
+  wouldMerge: number;
+  wouldPropose: number;
+};
+
+async function emailPassesAutoMergeGuard(params: {
+  email: EnrichedEmail;
+  domainsRepo: EntityDomainsRepository;
+}): Promise<boolean> {
+  if (!params.email.verified) return false;
+  const domain = domainOf(params.email.email);
+  if (!domain) return false;
+  if (isRoleAccountEmail(params.email.email)) return false;
+  if (isProviderManagedEmailDomain(domain)) return false;
+  return !(await params.domainsRepo.isPersonalOrShared(domain));
+}
+
+async function dedupCandidatesByEmail(params: {
+  db: Kysely<DB>;
+  entitiesRepo: ReturnType<typeof createEntityRepository>;
+  linkedinEntityId: string;
+  emails: EnrichedEmail[];
+}): Promise<DedupCandidate[]> {
+  const emailHits = await params.entitiesRepo.getPersonEntitiesByEmails(params.emails.map((email) => email.email));
+  const candidatesById = new Map<string, DedupCandidate>();
+  for (const email of params.emails) {
+    const normalized = normalizeContactPointValue("email", email.email);
+    for (const hit of emailHits.get(normalized) ?? []) {
+      const liveId = await resolveLiveEntityId(params.db, hit.id);
+      if (liveId === params.linkedinEntityId) continue;
+      const candidate = candidatesById.get(liveId) ?? { entityId: liveId, emails: [] };
+      if (!candidate.emails.some((candidateEmail) => candidateEmail.email === email.email))
+        candidate.emails.push(email);
+      candidatesById.set(liveId, candidate);
+    }
+  }
+  return [...candidatesById.values()].sort((a, b) => a.entityId.localeCompare(b.entityId));
+}
+
+function candidateReason(candidates: DedupCandidate[], candidate: DedupCandidate): string {
+  const status = candidate.emails.some((email) => email.verified) ? "Valid" : "Unverifiable";
+  return `SalesQL enrichment: shared email (${status}, ${candidates.length} candidate(s))`;
+}
+
+function candidateEvidence(candidate: DedupCandidate): { notes: string[] } {
+  return {
+    notes: [
+      ...new Set(candidate.emails.map((email) => domainOf(email.email)).filter((domain): domain is string => !!domain)),
+    ]
+      .sort((a, b) => a.localeCompare(b))
+      .map((domain) => `SalesQL email domain @${domain}`),
+  };
+}
+
+function parseProposalResult(result: Awaited<ReturnType<typeof handleProposeGraphVerdicts>>): {
+  stored: number;
+  results: Array<{ disposition?: string }>;
+} {
+  return JSON.parse(result.content[0]?.text ?? "{}") as {
+    stored: number;
+    results: Array<{ disposition?: string }>;
+  };
+}
+
+async function reResolveDedupByEmail(params: {
+  db: Kysely<DB>;
+  domainsRepo: EntityDomainsRepository;
+  entitiesRepo: ReturnType<typeof createEntityRepository>;
+  linkedinEntityId: string;
+  emails: EnrichedEmail[];
+  apply: boolean;
+  autoMerge: boolean;
+  logger: Logger;
+}): Promise<DedupResult> {
+  const candidates = await dedupCandidatesByEmail({
+    db: params.db,
+    entitiesRepo: params.entitiesRepo,
+    linkedinEntityId: params.linkedinEntityId,
+    emails: params.emails,
+  });
+  if (candidates.length === 0) {
+    return { outcome: "attached", merged: 0, proposed: 0, wouldMerge: 0, wouldPropose: 0 };
+  }
+
+  const autoMergeCandidate =
+    candidates.length === 1 &&
+    (
+      await Promise.all(
+        candidates[0].emails.map((email) => emailPassesAutoMergeGuard({ email, domainsRepo: params.domainsRepo })),
+      )
+    ).some(Boolean);
+
+  if (autoMergeCandidate && params.autoMerge) {
+    if (!params.apply) return { outcome: "merged", merged: 0, proposed: 0, wouldMerge: 1, wouldPropose: 0 };
+    const merge = await mergeEntities(params.db, {
+      survivorId: candidates[0].entityId,
+      loserId: params.linkedinEntityId,
+      mergedBy: "salesql_enrichment@v1",
+    });
+    params.logger.info(
+      { survivorId: candidates[0].entityId, loserId: params.linkedinEntityId, mergeId: merge.mergeId },
+      "SalesQL enrichment auto-merged duplicate person",
+    );
+    return { outcome: "merged", merged: 1, proposed: 0, wouldMerge: 0, wouldPropose: 0 };
+  }
+
+  if (!params.apply) {
+    return { outcome: "proposed", merged: 0, proposed: 0, wouldMerge: 0, wouldPropose: candidates.length };
+  }
+
+  const verdicts: Parameters<typeof handleProposeGraphVerdicts>[0]["verdicts"] = candidates.map((candidate) => ({
+    action: "merge_into",
+    subjectEntityId: params.linkedinEntityId,
+    targetEntityId: candidate.entityId,
+    reason: candidateReason(candidates, candidate),
+    evidence: candidateEvidence(candidate),
+  }));
+  const result = parseProposalResult(
+    await handleProposeGraphVerdicts({ verdicts }, params.db, {
+      userId: MACHINE_PRINCIPAL_USER_ID,
+      tokenId: "salesql-sweep",
+    }),
+  );
+  const proposed = result.stored ?? 0;
+  if (proposed < result.results.length) {
+    params.logger.debug(
+      { dispositions: result.results.map((row) => row.disposition) },
+      "SalesQL merge proposal not inserted",
+    );
+  }
+  return { outcome: "proposed", merged: 0, proposed, wouldMerge: 0, wouldPropose: 0 };
 }
 
 async function attachEmails(params: {
@@ -251,6 +404,7 @@ export async function runEnrichmentSweep(
 
       const selectedPrimary = primaryEmail(result.emails);
       const nowIso = new Date().toISOString();
+      let outcome: "attached" | "merged" | "proposed" | "none" = selectedPrimary ? "attached" : "none";
       if (apply) {
         await attachEmails({
           entitiesRepo,
@@ -279,6 +433,23 @@ export async function runEnrichmentSweep(
           report.domainsAttached++;
         }
       }
+      if (result.emails.length > 0) {
+        const dedup = await reResolveDedupByEmail({
+          db: deps.db,
+          domainsRepo,
+          entitiesRepo,
+          linkedinEntityId: entity.id,
+          emails: result.emails,
+          apply,
+          autoMerge: opts.autoMerge === true,
+          logger: deps.logger,
+        });
+        outcome = dedup.outcome;
+        report.merged += dedup.merged;
+        report.proposed += dedup.proposed;
+        report.wouldMerge += dedup.wouldMerge;
+        report.wouldPropose += dedup.wouldPropose;
+      }
       await attemptsRepo.markOutcome({
         provider: deps.provider.name,
         linkedinUrl: row.linkedin_url,
@@ -286,7 +457,7 @@ export async function runEnrichmentSweep(
         status: apply ? "enriched" : "pending",
         emailsFound: result.emails.length,
         phonesFound: result.phones.length,
-        outcome: apply ? (selectedPrimary ? "attached" : "none") : "dry_run",
+        outcome: apply ? outcome : "dry_run",
       });
       report.enriched++;
     } catch (err) {
@@ -321,6 +492,7 @@ export function createEnrichmentSweepService(deps: EnrichmentSweepServiceDeps): 
         limit: opts.limit,
         dailyCap: scope.dailyCap,
         batch: scope.batch,
+        autoMerge: scope.autoMerge,
       });
     })().finally(() => {
       inflight = null;
