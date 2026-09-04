@@ -1,8 +1,10 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createConnectorRepository } from "../db/repositories/connectors";
 import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { ConversationSliceRow } from "../db/repositories/conversation-slices";
 import { createConversationRepository } from "../db/repositories/conversations";
+import { createUserRepository } from "../db/repositories/users";
 import { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
@@ -13,8 +15,8 @@ import {
   createStreamChunkCursorStore,
   runChunkingPass,
 } from "./chunk-engine";
-import { createWhatsAppChunkStreamAdapter, runLlmChunkingPass } from "./whatsapp-llm-chunker";
 import { chunkWhatsAppIndexingGroups } from "./whatsapp-chunker";
+import { createWhatsAppChunkStreamAdapter, evaluateIdleClose, runLlmChunkingPass } from "./whatsapp-llm-chunker";
 
 const knobs = {
   windowMessages: 20,
@@ -43,6 +45,30 @@ function makeMessages(count: number, text = "four words"): ChunkEngineMessage[] 
     attachments: null,
     isBot: false,
   }));
+}
+
+async function seedIndexedFile(db: Kysely<DB>, fileId: string, sliceId: string): Promise<void> {
+  await createUserRepository(db).create({ id: "chunk-owner", name: "Chunk Owner", email: "chunk@example.com" });
+  const config = await createConnectorRepository(db).createConfig({
+    connectorType: "whatsapp",
+    authType: "system",
+    credentials: JSON.stringify({ type: "system" }),
+    scopeConfig: "{}",
+    createdBy: "chunk-owner",
+  });
+  await db
+    .insertInto("indexed_files")
+    .values({
+      id: fileId,
+      connector_config_id: config.id,
+      provider_file_id: sliceId,
+      file_name: fileId,
+      file_type: "whatsapp_conversation_slice",
+      content_category: "document",
+      source: "whatsapp",
+      synced_at: "2026-07-07T09:00:00.000Z",
+    })
+    .execute();
 }
 
 function fakeAdapter(messages: ChunkEngineMessage[], overrides: Partial<ChunkStreamAdapter> = {}): ChunkStreamAdapter {
@@ -764,6 +790,184 @@ describe("chunk engine adapter contract", () => {
 
     expect(result.windowsProcessed).toBe(1);
     expect(liveOpen).toMatchObject({ status: "open", last_message_id: liveNext.row.id });
+  });
+
+  it("requeues a linked WhatsApp open slice when a boundary revision closes a shorter range", async () => {
+    const groupJid = "range-requeue@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    const messageRows: Array<{ id: number; effectiveAt: string }> = [];
+    for (let index = 0; index < 5; index += 1) {
+      messageRows.push(
+        (
+          await createConversationRepository(db).insertMessage({
+            conversationId: conversation.id,
+            providerMessageId: `range-requeue-${index}`,
+            senderName: "Asha",
+            text: "roadmap update",
+            receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 60_000).toISOString(),
+          })
+        ).row,
+      );
+    }
+    const deps = { db, logger: createTestLogger(), generate: async () => "unreachable" };
+    await runLlmChunkingPass(
+      { ...deps, generate: async () => JSON.stringify({ segments: [{ start: 1, end: 3, threads: ["roadmap"] }] }) },
+      {
+        conversationId: conversation.id,
+        groupJid,
+        knobs,
+        mode: "live",
+        maxWindows: 1,
+        pendingUntil: { effectiveAt: messageRows[2]?.effectiveAt ?? "", id: messageRows[2]?.id ?? 0 },
+      },
+    );
+    const sliceRepo = createConversationSlicesRepository(db);
+    const originalOpen = await sliceRepo.getOpenSlice(conversation.id);
+    await seedIndexedFile(db, "linked-range-file", originalOpen?.id ?? "");
+    await db
+      .updateTable("conversation_slices")
+      .set({ indexed_file_id: "linked-range-file" })
+      .where("id", "=", originalOpen?.id ?? "")
+      .execute();
+
+    await runLlmChunkingPass(
+      {
+        ...deps,
+        generate: async () =>
+          JSON.stringify({
+            segments: [
+              { start: 1, end: 2, threads: ["roadmap"] },
+              { start: 3, end: 5, threads: ["next"] },
+            ],
+          }),
+      },
+      { conversationId: conversation.id, groupJid, knobs, mode: "live", maxWindows: 1 },
+    );
+    const revised = originalOpen ? await sliceRepo.getById(originalOpen.id) : undefined;
+
+    expect(revised).toMatchObject({
+      status: "closed",
+      denoised_message_ids: JSON.stringify([messageRows[0]?.id, messageRows[1]?.id]),
+      indexed_file_id: null,
+    });
+  });
+
+  it("requeues a linked WhatsApp open slice when a single-segment revision shrinks membership", async () => {
+    const groupJid = "single-segment-shrink@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    const messageRows: Array<{ id: number; effectiveAt: string }> = [];
+    for (let index = 0; index < 4; index += 1) {
+      messageRows.push(
+        (
+          await createConversationRepository(db).insertMessage({
+            conversationId: conversation.id,
+            providerMessageId: `single-segment-shrink-${index}`,
+            senderName: "Asha",
+            text: "roadmap update",
+            receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 60_000).toISOString(),
+          })
+        ).row,
+      );
+    }
+    const deps = {
+      db,
+      logger: createTestLogger(),
+      generate: async (prompt: string) => {
+        const count = [...prompt.matchAll(/^\d+\. \[/gmu)].length;
+        return JSON.stringify({ segments: [{ start: 1, end: count, threads: ["roadmap"] }] });
+      },
+    };
+    await runLlmChunkingPass(deps, {
+      conversationId: conversation.id,
+      groupJid,
+      knobs,
+      mode: "live",
+      maxWindows: 1,
+      pendingUntil: { effectiveAt: messageRows[2]?.effectiveAt ?? "", id: messageRows[2]?.id ?? 0 },
+    });
+    const sliceRepo = createConversationSlicesRepository(db);
+    const originalOpen = await sliceRepo.getOpenSlice(conversation.id);
+    await seedIndexedFile(db, "linked-single-segment-file", originalOpen?.id ?? "");
+    await db
+      .updateTable("conversation_slices")
+      .set({ indexed_file_id: "linked-single-segment-file" })
+      .where("id", "=", originalOpen?.id ?? "")
+      .execute();
+    await db
+      .updateTable("conversation_messages")
+      .set({ is_bot: 1 })
+      .where("id", "=", messageRows[2]?.id ?? 0)
+      .execute();
+
+    await runLlmChunkingPass(deps, {
+      conversationId: conversation.id,
+      groupJid,
+      knobs,
+      mode: "live",
+      maxWindows: 1,
+    });
+    const revised = originalOpen ? await sliceRepo.getById(originalOpen.id) : undefined;
+
+    expect(revised).toMatchObject({
+      status: "open",
+      denoised_message_ids: JSON.stringify([messageRows[0]?.id, messageRows[1]?.id, messageRows[3]?.id]),
+      indexed_file_id: null,
+    });
+  });
+
+  it("keeps a linked WhatsApp file on an unchanged idle close", async () => {
+    const groupJid = "idle-link@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    for (let index = 0; index < 2; index += 1) {
+      await createConversationRepository(db).insertMessage({
+        conversationId: conversation.id,
+        providerMessageId: `idle-link-${index}`,
+        senderName: "Asha",
+        text: "roadmap update",
+        receivedAt: new Date(Date.parse("2026-07-01T09:00:00.000Z") + index * 60_000).toISOString(),
+      });
+    }
+    const deps = {
+      db,
+      logger: createTestLogger(),
+      generate: async () => JSON.stringify({ segments: [{ start: 1, end: 2, threads: ["roadmap"] }] }),
+    };
+    await runLlmChunkingPass(deps, {
+      conversationId: conversation.id,
+      groupJid,
+      knobs,
+      mode: "live",
+      maxWindows: 1,
+    });
+    const sliceRepo = createConversationSlicesRepository(db);
+    const open = await sliceRepo.getOpenSlice(conversation.id);
+    await seedIndexedFile(db, "linked-idle-file", open?.id ?? "");
+    await db
+      .updateTable("conversation_slices")
+      .set({ indexed_file_id: "linked-idle-file" })
+      .where("id", "=", open?.id ?? "")
+      .execute();
+
+    const closed = await evaluateIdleClose(
+      { ...deps, now: () => Date.parse("2026-07-07T09:00:00.000Z") },
+      { conversationId: conversation.id, knobs, mode: "live" },
+    );
+    const idleClosed = open ? await sliceRepo.getById(open.id) : undefined;
+
+    expect(closed).toBe(true);
+    expect(idleClosed).toMatchObject({ status: "closed", indexed_file_id: "linked-idle-file" });
   });
 
   it("renews Slack stream cursor claims only for the active token", async () => {

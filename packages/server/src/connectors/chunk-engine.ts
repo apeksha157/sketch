@@ -844,6 +844,9 @@ async function applyBoundaryWindow(
     let closed = 0;
     let openSliceId: string | null = null;
     if (planned.length === 1 && previousOpen) {
+      const requeueLinkedFile =
+        previousOpen.indexed_file_id !== null &&
+        parseDenoisedIds(previousOpen).some((id) => !planned[0].denoisedMessageIds.includes(id));
       const updated = await sliceRepo.updateOpenSlice({
         sliceId: previousOpen.id,
         firstMessageId: planned[0].firstMessageId,
@@ -855,6 +858,14 @@ async function applyBoundaryWindow(
         rosterSnapshot,
       });
       if (!updated) throw new ClaimLostError();
+      if (requeueLinkedFile) {
+        const unlinked = await trx
+          .updateTable("conversation_slices")
+          .set({ indexed_file_id: null })
+          .where("id", "=", previousOpen.id)
+          .executeTakeFirst();
+        if (Number(unlinked.numUpdatedRows ?? 0) !== 1) throw new ClaimLostError();
+      }
       await topicRepo?.replaceSliceTopics(updated.id, topicIdsBySegment[0] ?? []);
       openSliceId = updated.id;
     } else {
@@ -864,6 +875,7 @@ async function applyBoundaryWindow(
         let closedSlice: ConversationSliceRow;
         if (index === 0 && previousOpen) {
           const flushKind = originalBoundaryEnds.has(segments[index]?.end ?? -1) ? "boundary" : "force_split";
+          const requeueLinkedFile = previousOpen.indexed_file_id !== null && !sliceHasSameContent(previousOpen, item);
           const closedExisting = await sliceRepo.closeOpenSlice(previousOpen.id, params.adapter.flushReason(flushKind));
           if (!closedExisting) throw new ClaimLostError();
           closedSlice = {
@@ -886,6 +898,7 @@ async function applyBoundaryWindow(
               message_count: item.messageCount,
               denoised_message_ids: JSON.stringify(item.denoisedMessageIds),
               roster_snapshot: rosterSnapshot,
+              ...(requeueLinkedFile ? { indexed_file_id: null } : {}),
             })
             .where("id", "=", previousOpen.id)
             .executeTakeFirst();
