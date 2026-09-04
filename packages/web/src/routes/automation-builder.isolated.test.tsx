@@ -23,6 +23,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getAutomation: vi.fn(),
+  listMcpServers: vi.fn(),
+  listConnections: vi.fn(),
   listConversations: vi.fn(),
   webChatConversations: vi.fn(),
   loadMessages: vi.fn(),
@@ -61,6 +63,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     api: {
+      mcpServers: { list: mocks.listMcpServers, listConnections: mocks.listConnections },
       scheduledTasks: {
         get: mocks.getAutomation,
         conversations: mocks.listConversations,
@@ -2551,6 +2554,44 @@ describe("AutomationBuilderPage", () => {
     await waitFor(() => expect(testButton).not.toBeDisabled());
     expect(await screen.findByText(/second step output/)).toBeInTheDocument();
     expect(mocks.getAutomation).toHaveBeenCalledTimes(3);
+  });
+
+  it("saves a selected Microsoft account and persists an explicit rebind", async () => {
+    const user = userEvent.setup();
+    mocks.saveAutomation.mockImplementation(async (_taskId, request) => {
+      const saved = { ...automation, ...request, revision: request.expectedRevision + 1 };
+      mocks.getAutomation.mockResolvedValue(saved);
+      return saved;
+    });
+    const accountId = "secrets:user-1:microsoft:microsoft-teams-oauth";
+    mocks.listMcpServers.mockResolvedValue([{ id: "canvas", type: "canvas" }]);
+    mocks.listConnections.mockResolvedValue([
+      {
+        id: accountId,
+        appId: "microsoft-teams-oauth",
+        appName: "Teams",
+        accountName: "Personal Teams",
+        externalAccountId: "external-user",
+        externalTenantId: "tenant",
+      },
+    ]);
+    renderBuilder();
+    await user.click(await screen.findByRole("button", { name: "Check rating" }));
+    await user.click(screen.getByRole("button", { name: "Choose Microsoft account" }));
+    await screen.findByRole("option", { name: "Teams — Personal Teams" });
+    await user.selectOptions(screen.getByLabelText("Microsoft account"), accountId);
+    await waitFor(() => expect(mocks.saveAutomation).toHaveBeenCalledTimes(1));
+    expect(
+      mocks.saveAutomation.mock.calls[0][1].steps.find((step: { id: string }) => step.id === "check"),
+    ).toMatchObject({
+      accountIdentityBindings: { [accountId]: { canvasAccountId: accountId } },
+      rebindAccountIds: [accountId],
+    });
+    await user.click(await screen.findByRole("button", { name: "Rebind accounts" }));
+    await waitFor(() => expect(mocks.saveAutomation).toHaveBeenCalledTimes(2));
+    expect(
+      mocks.saveAutomation.mock.calls[1][1].steps.find((step: { id: string }) => step.id === "check"),
+    ).toMatchObject({ rebindAccountIds: [accountId] });
   });
 
   it("keeps structural fields read-only while allowing agent prompt saves", async () => {

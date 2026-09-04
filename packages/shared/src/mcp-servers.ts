@@ -55,6 +55,12 @@ export interface IntegrationConnection {
   healthy?: boolean;
   status: "active" | "error" | "expired";
   accessLevel?: "personal" | "organization";
+  memberUserIds?: string[];
+  accessRevision?: number;
+  capabilityStatus?: "ready" | "additional_permission_required" | "unknown";
+  capabilityMessages?: string[];
+  externalAccountId?: string;
+  externalTenantId?: string;
   visibility?: "private" | "selected_members" | "organization";
   memberGrants?: Array<{
     accountId: string;

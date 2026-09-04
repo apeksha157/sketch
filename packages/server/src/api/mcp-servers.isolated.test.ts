@@ -1534,7 +1534,12 @@ describe("MCP Servers API", () => {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Cookie: memberCookie },
-          body: JSON.stringify({ accessLevel: "organization" }),
+          body: JSON.stringify({
+            accessLevel: "organization",
+            expectedRevision: 2,
+            visibility: "organization",
+            granteeUserIds: [],
+          }),
         },
       );
 
@@ -1544,7 +1549,7 @@ describe("MCP Servers API", () => {
         "secrets:owner:notion:notion",
         "organization",
         "Test Member",
-        undefined,
+        { expectedRevision: 2, visibility: "organization", granteeUserIds: [] },
         {
           workspaceId: server.id,
           userId: expect.any(String),
@@ -1585,7 +1590,12 @@ describe("MCP Servers API", () => {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Cookie: memberCookie },
-          body: JSON.stringify({ accessLevel: "organization" }),
+          body: JSON.stringify({
+            accessLevel: "organization",
+            expectedRevision: 2,
+            visibility: "organization",
+            granteeUserIds: [],
+          }),
         },
       );
       expect(res.status).toBe(200);
@@ -1597,7 +1607,7 @@ describe("MCP Servers API", () => {
         "secrets:owner:notion:notion",
         "organization",
         "Test Member",
-        undefined,
+        { expectedRevision: 2, visibility: "organization", granteeUserIds: [] },
         {
           workspaceId: server.id,
           userId: expect.any(String),
@@ -1640,6 +1650,7 @@ describe("MCP Servers API", () => {
         headers: { "Content-Type": "application/json", Cookie: memberCookie },
         body: JSON.stringify({
           accessLevel: "personal",
+          expectedRevision: 0,
           visibility: "selected_members",
           granteeUserIds: [selected.id],
         }),
@@ -1651,7 +1662,7 @@ describe("MCP Servers API", () => {
         "secrets:owner:github:github",
         "personal",
         "Sketch Member",
-        { visibility: "selected_members", granteeUserIds: [selected.id] },
+        { expectedRevision: 0, visibility: "selected_members", granteeUserIds: [selected.id] },
         { workspaceId: server.id, userId: member.id },
       );
 
@@ -1660,6 +1671,7 @@ describe("MCP Servers API", () => {
         headers: { "Content-Type": "application/json", Cookie: memberCookie },
         body: JSON.stringify({
           accessLevel: "personal",
+          expectedRevision: 0,
           visibility: "selected_members",
           granteeUserIds: [external.id],
         }),
@@ -1710,7 +1722,12 @@ describe("MCP Servers API", () => {
       const res = await app.request(`/api/mcp-servers/${server.id}/connections/pd-1/access`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Cookie: memberCookie },
-        body: JSON.stringify({ accessLevel: "organization" }),
+        body: JSON.stringify({
+          accessLevel: "organization",
+          expectedRevision: 2,
+          visibility: "organization",
+          granteeUserIds: [],
+        }),
       });
       expect(res.status).toBe(400);
 

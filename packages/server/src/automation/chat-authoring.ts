@@ -85,7 +85,7 @@ export function createChatAutomationAuthoring(deps: {
   db: Kysely<DB>;
   authoring: AutomationAuthoringService;
   scheduler: AuthoringScheduler;
-  loadIntegrationProvider: () => Promise<Pick<IntegrationProvider, "isBrokerCapable"> | null>;
+  loadIntegrationProvider: () => Promise<IntegrationProvider | null>;
   encryptionKey?: string;
   validateAgentSkills?: (
     ownerUserId: string,
@@ -197,6 +197,7 @@ export function createChatAutomationAuthoring(deps: {
         supportedTriggerTypes: AUTOMATION_AUTHORING_TRIGGER_TYPES,
         encryptionKey: deps.encryptionKey,
         ...(taskConversationAssociation ? { taskConversationAssociation } : {}),
+        loadIntegrationProvider: deps.loadIntegrationProvider,
       });
     } catch (error) {
       if (error instanceof AutomationValidationError) {
@@ -293,6 +294,7 @@ export function createChatAutomationAuthoring(deps: {
         supportedTriggerTypes: AUTOMATION_AUTHORING_TRIGGER_TYPES,
         encryptionKey: deps.encryptionKey,
         ...(taskConversationAssociation ? { taskConversationAssociation } : {}),
+        loadIntegrationProvider: deps.loadIntegrationProvider,
       });
     } catch (error) {
       if (error instanceof AutomationValidationError) {

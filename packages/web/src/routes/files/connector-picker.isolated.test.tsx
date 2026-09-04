@@ -300,6 +300,7 @@ describe("ConnectorPicker connector capabilities", () => {
                   status: "active",
                   accessLevel: "personal",
                   isOwnedByViewer: true,
+                  canManageAccess: true,
                   createdAt: "2026-01-01T00:00:00Z",
                 },
               ]
@@ -339,6 +340,11 @@ describe("ConnectorPicker connector capabilities", () => {
 
     expect(await screen.findByText("Waiting for sign-in to finish...")).toBeInTheDocument();
     linearConnected = true;
+
+    expect(await screen.findByRole("dialog", { name: "Share Linear" }, { timeout: 3500 })).toBeInTheDocument();
+    expect(importedBodies).toEqual([]);
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Private");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(
       () => expect(importedBodies).toEqual([{ connectorType: "linear", accountId: "secrets:admin-1:linear:linear" }]),

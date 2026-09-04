@@ -10,6 +10,7 @@
 import { resolve } from "node:path";
 import { type SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import { AGENT_BUILT_IN_TOOL_NAMES, VISUAL_ANALYSIS_AGENT_TOOL_NAME } from "@sketch/shared";
+import type { AccountIdentityBinding } from "@sketch/shared";
 import type {
   AutomationArtifact,
   AutomationRunMode,
@@ -341,6 +342,8 @@ export interface RunAgentParams {
   integrationUserId?: string | null;
   integrationUserName?: string | null;
   integrationUserEmail?: string | null;
+  /** Trusted scheduled-run restriction; interactive callers leave undefined. */
+  trustedCanvasAccountBindings?: Record<string, AccountIdentityBinding>;
   slackEntitySyncEnabled?: boolean;
   isAdminReadAllEnabled?: () => Promise<boolean>;
   devToolsEnabled?: boolean;
@@ -935,6 +938,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
       logger,
+      trustedCanvasAccountBindings: params.trustedCanvasAccountBindings,
     });
     logger.info(
       {
@@ -1438,6 +1442,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
       workspaceDir,
       loadIntegrationProvider: params.loadIntegrationProvider,
       logger,
+      trustedCanvasAccountBindings: params.trustedCanvasAccountBindings,
     });
     logger.info(
       {

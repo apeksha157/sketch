@@ -105,6 +105,95 @@ describe("automation persistence", () => {
     await db.destroy();
   });
 
+  it("server-admits account identity metadata and ignores caller-forged values", async () => {
+    await db.insertInto("users").values({ id: "user-1", name: "Owner", email: "owner@example.com" }).execute();
+    const canvasAccountId = "secrets:owner:microsoft:microsoft-teams-oauth";
+    const request = makeDefinition();
+    const agentStep = request.steps[1];
+    if (!agentStep) throw new Error("Missing agent fixture");
+    request.steps[1] = {
+      ...agentStep,
+      accountIdentityBindings: {
+        [canvasAccountId]: { canvasAccountId, accountId: "forged", tenantId: "forged" },
+      },
+    };
+    let externalAccountId = "account-a";
+    const loadIntegrationProvider = async () =>
+      ({
+        providerId: "canvas-provider",
+        listConnections: async (
+          _email: string,
+          _name: string | undefined,
+          workspace?: { workspaceId: string; userId: string },
+        ) => {
+          if (workspace?.workspaceId !== "canvas-provider" || workspace.userId !== "user-1") return [];
+          return [
+            {
+              id: canvasAccountId,
+              appId: "microsoft-teams-oauth",
+              appName: "Teams",
+              status: "active",
+              canUse: true,
+              externalAccountId,
+              externalTenantId: "tenant-a",
+            },
+          ];
+        },
+      }) as never;
+    const result = await createAutomationDefinition({
+      db,
+      request,
+      context: createContext("automation-bound"),
+      brokerCapable: true,
+      loadIntegrationProvider,
+    });
+    expect(result.kind).toBe("saved");
+    const persisted = await getAutomationDefinition({ db, taskId: "automation-bound" });
+    expect(persisted?.steps[1]?.accountIdentityBindings?.[canvasAccountId]).toEqual({
+      canvasAccountId,
+      accountId: "account-a",
+      tenantId: "tenant-a",
+      providerId: "canvas-provider",
+    });
+
+    externalAccountId = "account-b";
+    await updateAutomationDefinition({
+      db,
+      taskId: "automation-bound",
+      patch: { expectedRevision: 0, title: "Unrelated edit" },
+      actor: { userId: "user-1" },
+      brokerCapable: true,
+      loadIntegrationProvider,
+    });
+    expect(
+      (await getAutomationDefinition({ db, taskId: "automation-bound" }))?.steps[1]?.accountIdentityBindings?.[
+        canvasAccountId
+      ]?.accountId,
+    ).toBe("account-a");
+
+    const currentDefinition = await getAutomationDefinition({ db, taskId: "automation-bound" });
+    const boundStep = currentDefinition?.steps[1];
+    if (!currentDefinition || !boundStep) throw new Error("Missing persisted agent step");
+    await updateAutomationDefinition({
+      db,
+      taskId: "automation-bound",
+      patch: {
+        expectedRevision: 1,
+        steps: currentDefinition.steps.map((step) =>
+          step.id === boundStep.id ? { ...step, rebindAccountIds: [canvasAccountId] } : step,
+        ),
+      },
+      actor: { userId: "user-1" },
+      brokerCapable: true,
+      loadIntegrationProvider,
+    });
+    expect(
+      (await getAutomationDefinition({ db, taskId: "automation-bound" }))?.steps[1]?.accountIdentityBindings?.[
+        canvasAccountId
+      ]?.accountId,
+    ).toBe("account-b");
+  });
+
   it("creates the task and step content atomically with server-owned identifiers", async () => {
     const result = await createAutomationDefinition({
       db,

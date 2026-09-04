@@ -47,6 +47,12 @@ type CanvasAccountResponse = {
   dead?: boolean;
   status?: "active" | "error" | "expired";
   accessLevel?: "personal" | "organization";
+  memberUserIds?: string[];
+  accessRevision?: number;
+  capabilityStatus?: "ready" | "additional_permission_required" | "unknown";
+  capabilityMessages?: string[];
+  externalAccountId?: string;
+  externalTenantId?: string;
   visibility?: "private" | "selected_members" | "organization";
   memberGrants?: Array<{
     accountId: string;
@@ -154,7 +160,7 @@ function getConnectionSource(account: CanvasAccountResponse): string {
 }
 
 function canUseConnection(account: CanvasAccountResponse): boolean {
-  if (account.canUse === false) return false;
+  if (account.canUse !== undefined) return account.canUse;
   if (
     getConnectionSource(account) === "canvas_user_secrets" &&
     account.accessLevel === "personal" &&
@@ -220,15 +226,17 @@ export class CanvasProvider implements IntegrationProvider {
     workspaceContext?: IntegrationWorkspaceContext;
     forceRefresh?: boolean;
   }): Promise<CanvasAccessToken> {
+    if (params.integration !== "clickup") {
+      return this.mintCanvasAccessToken(params, this.resolveCredentialPrivateKeyPem());
+    }
     const cacheKey = this.accessTokenCacheKey(params);
     const cached = this.accessTokenCache.get(cacheKey);
     const now = Date.now();
     const expiresAtMs = cached?.token.expiresAt ? Date.parse(cached.token.expiresAt) : 0;
     const providerTokenIsFresh = cached?.token.expiresAt
       ? Number.isFinite(expiresAtMs) && expiresAtMs > now + CACHE_EXPIRY_SAFETY_MS
-      : params.integration === "github" || params.integration === "clickup";
-    const grantIsFresh =
-      params.integration !== "clickup" || Boolean(cached && cached.grantLeaseExpiresAt > now + CACHE_EXPIRY_SAFETY_MS);
+      : true;
+    const grantIsFresh = Boolean(cached && cached.grantLeaseExpiresAt > now + CACHE_EXPIRY_SAFETY_MS);
     if (cached && !params.forceRefresh && providerTokenIsFresh && grantIsFresh) return cached.token;
 
     if (!params.forceRefresh) {
@@ -318,15 +326,13 @@ export class CanvasProvider implements IntegrationProvider {
     }
     const expiresAt = params.integration === "clickup" ? payload.expiresAt : (response.expiresAt ?? payload.expiresAt);
     const token = { accessToken: payload.accessToken, ...(expiresAt ? { expiresAt } : {}) };
-    const cacheKey = this.accessTokenCacheKey(params);
-    const grantExpiresAtMs = response.expiresAt ? Date.parse(response.expiresAt) : Number.NaN;
-    const grantLeaseExpiresAt = Number.isFinite(grantExpiresAtMs)
-      ? Math.min(grantExpiresAtMs, Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS)
-      : Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS;
-    this.accessTokenCache.set(cacheKey, {
-      token,
-      grantLeaseExpiresAt: params.integration === "clickup" ? grantLeaseExpiresAt : Number.POSITIVE_INFINITY,
-    });
+    if (params.integration === "clickup") {
+      const grantExpiresAtMs = response.expiresAt ? Date.parse(response.expiresAt) : Number.NaN;
+      const grantLeaseExpiresAt = Number.isFinite(grantExpiresAtMs)
+        ? Math.min(grantExpiresAtMs, Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS)
+        : Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS;
+      this.accessTokenCache.set(this.accessTokenCacheKey(params), { token, grantLeaseExpiresAt });
+    }
     return token;
   }
 
@@ -358,6 +364,7 @@ export class CanvasProvider implements IntegrationProvider {
       body: JSON.stringify({
         componentKey: request.componentKey,
         configuredProps: request.configuredProps,
+        accountIdentityBinding: request.accountIdentityBinding,
       }),
       signal: combinedSignal,
     });
@@ -600,6 +607,12 @@ export class CanvasProvider implements IntegrationProvider {
           healthy: account.healthy,
           status: account.status ?? (account.dead ? "error" : account.healthy ? "active" : "error"),
           accessLevel: account.accessLevel,
+          memberUserIds: account.memberUserIds,
+          accessRevision: account.accessRevision,
+          capabilityStatus: account.capabilityStatus,
+          capabilityMessages: account.capabilityMessages,
+          externalAccountId: account.externalAccountId,
+          externalTenantId: account.externalTenantId,
           visibility: account.visibility,
           memberGrants: account.memberGrants,
           sharingReason: account.sharingReason,
@@ -638,6 +651,7 @@ export class CanvasProvider implements IntegrationProvider {
     accessLevel: "personal" | "organization",
     userName?: string,
     options?: {
+      expectedRevision?: number;
       visibility?: "private" | "selected_members" | "organization";
       granteeUserIds?: string[];
     },
@@ -648,6 +662,7 @@ export class CanvasProvider implements IntegrationProvider {
       headers: this.headers(userEmail, true, userName, undefined, workspaceContext),
       body: JSON.stringify({
         accessLevel,
+        expectedRevision: options?.expectedRevision,
         ...(options?.visibility ? { visibility: options.visibility } : {}),
         ...(options?.granteeUserIds ? { granteeUserIds: options.granteeUserIds } : {}),
       }),

@@ -1,7 +1,4 @@
-import {
-  isNativeCanvasAppConnection,
-  isOwnedOrPersonalAppConnection,
-} from "@/components/connections/connection-status";
+import { isActiveOwnedAppConnection, isNativeCanvasAppConnection } from "@/components/connections/connection-status";
 import { api } from "@/lib/api";
 import type { IntegrationApp, IntegrationConnection } from "@sketch/shared";
 import { useEffect, useRef } from "react";
@@ -70,6 +67,8 @@ export function ChatIntegrationConnectionFrame({
     let timeoutId: number | null = null;
     const popup = popupWindow;
     let popupClosedAt: number | null = null;
+    let callbackReceived = false;
+    let existingAccountIds = new Set<string>();
     const allowedMessageOrigins = new Set([window.location.origin]);
 
     const updateStatus = (status: ChatThreadIntegrationConnectionStatus) => {
@@ -86,7 +85,10 @@ export function ChatIntegrationConnectionFrame({
     const verifyConnected = async (app: IntegrationApp): Promise<IntegrationConnection | null> => {
       const connections = await api.mcpServers.listConnections(providerId);
       const matchingConnections = connections.filter(
-        (item) => item.appId === app.id && isOwnedOrPersonalAppConnection(item),
+        (item) =>
+          item.appId === app.id &&
+          isActiveOwnedAppConnection(item) &&
+          (callbackReceived || !existingAccountIds.has(item.id)),
       );
       return matchingConnections.find(isNativeCanvasAppConnection) ?? matchingConnections[0] ?? null;
     };
@@ -147,6 +149,8 @@ export function ChatIntegrationConnectionFrame({
 
       try {
         const app = fallbackApp(connection);
+        const existingConnections = await api.mcpServers.listConnections(providerId);
+        existingAccountIds = new Set(existingConnections.filter(isActiveOwnedAppConnection).map((item) => item.id));
         if (cancelled || requestRef.current !== requestId) return;
         const callbackUrl = `${window.location.origin}/integrations/callback?app=${encodeURIComponent(app.id)}`;
         const result = await api.mcpServers.createConnectionIntent(providerId, app.id, callbackUrl, app);
@@ -184,6 +188,7 @@ export function ChatIntegrationConnectionFrame({
       const isSketchCallback = data?.type === "sketch-integration-connected";
       const isCanvasCallback = data?.type === "oauth-success" && (!provider || provider === current.id.toLowerCase());
       if (!isSketchCallback && !isCanvasCallback) return;
+      callbackReceived = true;
       void verifyConnected(current)
         .then((verifiedConnection) => {
           if (verifiedConnection) complete({ ...current, connectionId: verifiedConnection.id }, verifiedConnection);

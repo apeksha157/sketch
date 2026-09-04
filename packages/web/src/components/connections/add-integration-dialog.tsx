@@ -18,7 +18,7 @@ import { Input } from "@sketch/ui/components/input";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppIcon } from "./app-icon";
-import { isNativeCanvasAppConnection, isOwnedOrPersonalAppConnection } from "./connection-status";
+import { isActiveOwnedAppConnection, isNativeCanvasAppConnection } from "./connection-status";
 
 type AddIntegrationStep =
   | { kind: "search" }
@@ -275,10 +275,10 @@ export function AddIntegrationDialog({
       finalizeAfterVerify = false;
       try {
         const connections = await api.mcpServers.listConnections(providerId);
-        const matchingConnections = connections.filter((c) => c.appId === app.id && isOwnedOrPersonalAppConnection(c));
+        const matchingConnections = connections.filter((c) => c.appId === app.id && isActiveOwnedAppConnection(c));
         const connected = matchingConnections.find(isNativeCanvasAppConnection) ?? matchingConnections[0];
         if (cancelledRef.current || oauthAttemptRef.current !== attemptId) return;
-        if (connected) {
+        if (connected && (callbackReceived || !connectedAppIds.has(app.id))) {
           toast.success("App connected successfully!");
           onSuccess({ ...app, connectionId: connected.id }, connected);
           resetAndClose();

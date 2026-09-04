@@ -1407,6 +1407,7 @@ export function scheduledTaskRoutes(
         },
         brokerCapable,
         encryptionKey: options.encryptionKey,
+        loadIntegrationProvider: options.loadIntegrationProvider,
       });
     } catch (err) {
       if (err instanceof AutomationValidationError) {

@@ -1,10 +1,8 @@
 import { GithubAppIcon, LinearAppIcon } from "@/components/connections/app-icon";
-import { GithubIntegrationRow } from "@/components/connections/github-integration-dialog";
-import { LinearIntegrationRow } from "@/components/connections/linear-integration-dialog";
 import { QuietAddButton } from "@/components/quiet-add-button";
-import { type User, api } from "@/lib/api";
+import { api } from "@/lib/api";
 import { GearSixIcon, PlugIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
-import type { CliIntegrationConnection, IntegrationConnection } from "@sketch/shared";
+import type { IntegrationConnection } from "@sketch/shared";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
 import {
@@ -16,10 +14,11 @@ import {
   DialogTitle,
 } from "@sketch/ui/components/dialog";
 import { Skeleton } from "@sketch/ui/components/skeleton";
-import { Switch } from "@sketch/ui/components/switch";
 import { getAbbreviation } from "@sketch/ui/lib/utils";
+import { useQuery } from "@tanstack/react-query";
 import { Fragment, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { IntegrationSharingFields, type SharingMode } from "./integration-sharing-fields";
 
 export function IntegrationsSection({
   connections,
@@ -28,11 +27,6 @@ export function IntegrationsSection({
   orgName,
   onAdd,
   onDisconnect,
-  githubConnection,
-  linearConnection,
-  integrationUsers = [],
-  integrationCurrentUserId = "",
-  integrationIsAdmin = false,
 }: {
   connections: IntegrationConnection[];
   isLoadingConnections: boolean;
@@ -40,11 +34,6 @@ export function IntegrationsSection({
   orgName?: string;
   onAdd: () => void;
   onDisconnect: () => void;
-  githubConnection?: CliIntegrationConnection | null;
-  linearConnection?: CliIntegrationConnection | null;
-  integrationUsers?: User[];
-  integrationCurrentUserId?: string;
-  integrationIsAdmin?: boolean;
 }) {
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [settingsConnection, setSettingsConnection] = useState<IntegrationConnection | null>(null);
@@ -78,7 +67,7 @@ export function IntegrationsSection({
             </div>
           ))}
         </div>
-      ) : connections.length === 0 && !githubConnection && !linearConnection ? (
+      ) : connections.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-brand-accent/[0.04] px-6 pt-8 pb-10 text-center">
           <div className="flex size-12 items-center justify-center rounded-full border border-brand-accent bg-white">
             <PlugIcon size={24} className="text-[#8B7A00]" />
@@ -91,26 +80,6 @@ export function IntegrationsSection({
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
-          {githubConnection && (
-            <GithubIntegrationRow
-              connection={githubConnection}
-              isLast={connections.length === 0 && !linearConnection}
-              users={integrationUsers}
-              currentUserId={integrationCurrentUserId}
-              isAdmin={integrationIsAdmin}
-              onChanged={onDisconnect}
-            />
-          )}
-          {linearConnection && (
-            <LinearIntegrationRow
-              connection={linearConnection}
-              isLast={connections.length === 0}
-              users={integrationUsers}
-              currentUserId={integrationCurrentUserId}
-              isAdmin={integrationIsAdmin}
-              onChanged={onDisconnect}
-            />
-          )}
           {connections.map((connection, i) => (
             <ConnectionRow
               key={connection.id}
@@ -156,7 +125,7 @@ function ConnectionRow({
   const ownerDisplayName = getOwnerDisplayName(connection);
   const connectedAt = connection.connectedAt ?? connection.createdAt;
   const isOrgShared = connection.accessLevel === "organization";
-  const isSharedByAnotherUser = isOrgShared && connection.isOwnedByViewer === false;
+  const isSharedByAnotherUser = connection.isOwnedByViewer === false;
   const canDelete = connection.canDelete !== false && connection.isOwnedByViewer !== false;
   const metadata = [
     isSharedByAnotherUser ? `Owned by ${ownerDisplayName}` : accountLabel,
@@ -187,12 +156,12 @@ function ConnectionRow({
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[15px] font-semibold">{connection.appName}</span>
-          {isOrgShared && (
+          {(isOrgShared || isSharedByAnotherUser || (connection.memberUserIds?.length ?? 0) > 0) && (
             <Badge
               variant="outline"
               className="h-5 shrink-0 rounded-[4px] border-[#5A4F00] bg-brand-accent/15 px-2 py-0 text-[11px] font-semibold text-brand-accent"
             >
-              Org shared
+              {isOrgShared ? "Org shared" : isSharedByAnotherUser ? "Shared with you" : "Selected members"}
             </Badge>
           )}
         </div>
@@ -206,6 +175,11 @@ function ConnectionRow({
             </Fragment>
           ))}
         </span>
+        {connection.capabilityMessages?.map((message) => (
+          <span key={message} className="mt-1 text-xs text-amber-600">
+            {message}
+          </span>
+        ))}
       </div>
 
       <div className="ml-auto grid shrink-0 grid-cols-[5rem_1.75rem_1.75rem] items-center gap-2">
@@ -265,7 +239,7 @@ function ConnectionRow({
   );
 }
 
-function AccessSettingsDialog({
+export function AccessSettingsDialog({
   connection,
   providerId,
   orgName,
@@ -278,92 +252,132 @@ function AccessSettingsDialog({
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
 }) {
-  const [shareWithOrg, setShareWithOrg] = useState(false);
+  const [mode, setMode] = useState<SharingMode>("personal");
+  const [selected, setSelected] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const canManage = connection?.canManageAccess === true;
+  const membersQuery = useQuery({
+    queryKey: ["connection-members", providerId],
+    queryFn: () => api.mcpServers.listConnectionMembers(providerId),
+    enabled: canManage && mode === "members",
+    retry: false,
+  });
 
   useEffect(() => {
-    setShareWithOrg(connection?.accessLevel === "organization");
+    setMode(
+      connection?.visibility === "organization" || connection?.accessLevel === "organization"
+        ? "organization"
+        : connection?.visibility === "selected_members" || connection?.memberUserIds?.length
+          ? "members"
+          : "personal",
+    );
+    setSelected(connection?.memberUserIds ?? connection?.memberGrants?.map((grant) => grant.granteeUserId) ?? []);
+    setSaveError(null);
   }, [connection]);
 
-  if (!connection) {
-    return <Dialog open={false} onOpenChange={onOpenChange} />;
-  }
-
-  const canManageAccess = connection.canManageAccess === true;
-  const desiredAccess = shareWithOrg ? "organization" : "personal";
-  const hasChanged = desiredAccess !== (connection.accessLevel ?? "personal");
-  const ownerDisplayName = getOwnerDisplayName(connection);
-  const isOrgShared = connection.accessLevel === "organization";
-  const isSharedByAnotherUser = isOrgShared && connection.isOwnedByViewer === false;
-  const accountLabel = isSharedByAnotherUser ? null : getAccountDisplayName(connection);
-  const accessCopy =
-    connection.isOwnedByViewer === false
-      ? `${ownerDisplayName} shared this connection with the organization. You can use it, but only the owner can manage access or credentials.`
-      : shareWithOrg
-        ? `Everyone in ${orgName ?? "the organization"} can select and run this connection.`
-        : "Only you can use this connection.";
-
+  if (!connection) return null;
+  const members = (membersQuery.data ?? []).filter((member) => member.id !== connection.ownerUserId);
+  const accessLevel = mode === "organization" ? "organization" : "personal";
+  const memberUserIds = mode === "members" ? selected : [];
+  const visibility = mode === "members" ? "selected_members" : mode === "organization" ? "organization" : "private";
+  const savedMembers = connection.memberUserIds ?? connection.memberGrants?.map((grant) => grant.granteeUserId) ?? [];
+  const changed =
+    accessLevel !== (connection.accessLevel ?? "personal") ||
+    JSON.stringify([...memberUserIds].sort()) !== JSON.stringify([...savedMembers].sort());
+  const valid = mode !== "members" || (selected.length > 0 && !membersQuery.isPending && !membersQuery.isError);
   const save = async () => {
-    if (!canManageAccess || !hasChanged) return;
+    if (!canManage || !changed || !valid || saving) return;
     setSaving(true);
+    setSaveError(null);
     try {
-      await api.mcpServers.updateConnectionAccess(providerId, connection.id, desiredAccess);
-      toast.success("Connection access updated");
+      await api.mcpServers.updateConnectionAccess(providerId, connection.id, accessLevel, {
+        expectedRevision: connection.accessRevision ?? 0,
+        visibility,
+        granteeUserIds: memberUserIds,
+      });
+      toast.success(mode === "personal" ? "This account is now private" : "Sharing updated");
       onSaved();
       onOpenChange(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to update connection access");
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "Sharing could not be saved. Try again.");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Dialog open={!!connection} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <div className="flex items-start gap-3 pr-8">
-            <ConnectionIcon connection={connection} size="lg" />
-            <div className="min-w-0">
-              <DialogTitle className="truncate">{connection.appName}</DialogTitle>
-              <DialogDescription className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                {accountLabel && <span className="max-w-[18rem] truncate">{accountLabel}</span>}
-                {isOrgShared && (
-                  <>
-                    {accountLabel && <span aria-hidden="true">·</span>}
-                    <span>
-                      Owned by: <span className="font-medium text-foreground/80">{ownerDisplayName}</span>
-                    </span>
-                  </>
-                )}
-              </DialogDescription>
-            </div>
-          </div>
+    <Dialog open onOpenChange={(open) => !saving && onOpenChange(open)}>
+      <DialogContent
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 bg-background shadow-none sm:max-w-[30rem] [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:right-4 [&>[data-slot=dialog-close]]:grid [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:place-items-center [&>[data-slot=dialog-close]]:rounded-md [&>[data-slot=dialog-close]]:hover:bg-muted [&>[data-slot=dialog-close]]:focus:ring-foreground/50"
+        showCloseButton={!saving}
+      >
+        <DialogHeader className="px-4 pt-5 pb-4 text-left sm:px-6 sm:pt-6">
+          <DialogTitle className="pr-8 text-xl leading-7">Share {connection.appName}</DialogTitle>
         </DialogHeader>
-
-        <div className="rounded-lg border border-border p-4">
-          <div className="flex items-center justify-between gap-4">
+        <div className="min-h-0 space-y-4 overflow-y-auto px-4 pb-5 sm:px-6 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
+          <div className="flex min-w-0 items-center gap-3">
+            <ConnectionIcon connection={connection} />
             <div className="min-w-0">
-              <p className="text-sm font-medium">Share with organization</p>
-              <p className="mt-1 text-sm text-muted-foreground">{accessCopy}</p>
+              <p className="break-all text-sm text-muted-foreground">
+                {connection.isOwnedByViewer === false
+                  ? `Owned by ${getOwnerDisplayName(connection)}`
+                  : getAccountDisplayName(connection) || "Your connected account"}
+              </p>
             </div>
-            <Switch
-              aria-label="Share with organization"
-              checked={shareWithOrg}
-              onCheckedChange={setShareWithOrg}
-              disabled={!canManageAccess || saving}
-            />
           </div>
+          <DialogDescription className="leading-5">
+            {connection.isOwnedByViewer === false
+              ? `${getOwnerDisplayName(connection)} shared this account with you. Only the owner can manage access.`
+              : "Sharing lets others run actions in Sketch using this account."}
+          </DialogDescription>
+          {canManage ? (
+            <>
+              <IntegrationSharingFields
+                key={connection.id}
+                mode={mode}
+                onModeChange={setMode}
+                selected={selected}
+                onSelectedChange={setSelected}
+                members={members}
+                orgName={orgName}
+                saving={saving}
+                isLoading={membersQuery.isPending}
+                isError={membersQuery.isError}
+                onRetry={() => void membersQuery.refetch()}
+                memberLimit={500}
+              />
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">You can use this account in chats and automations.</p>
+          )}
+          {saveError && (
+            <p role="alert" className="text-sm text-destructive">
+              {saveError}
+            </p>
+          )}
         </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            Cancel
-          </Button>
-          <Button onClick={save} disabled={!canManageAccess || !hasChanged || saving}>
-            {saving ? <SpinnerGapIcon size={14} className="animate-spin" /> : null}
-            Save
-          </Button>
+        <DialogFooter className="border-t border-border px-4 py-4 sm:px-6">
+          <div className="flex w-full justify-end gap-2">
+            <Button
+              variant="ghost"
+              className="h-10 min-w-20 rounded-lg text-muted-foreground hover:text-foreground focus-visible:ring-foreground/50 focus-visible:ring-2"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
+              {canManage ? "Cancel" : "Done"}
+            </Button>
+            {canManage && (
+              <Button
+                className="h-10 min-w-28 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
+                onClick={save}
+                disabled={!changed || !valid || saving}
+              >
+                {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
+                {saving ? "Saving…" : "Save access"}
+              </Button>
+            )}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -97,6 +97,7 @@ const createConnectionIntentSchema = z
 
 const updateConnectionAccessSchema = z.object({
   accessLevel: z.enum(["personal", "organization"]),
+  expectedRevision: z.number().int().nonnegative(),
   visibility: z.enum(["private", "selected_members", "organization"]).optional(),
   granteeUserIds: z.array(z.string().trim().min(1)).max(500).optional(),
 });
@@ -909,30 +910,18 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
     }
 
     try {
-      const accessOptions =
-        parsed.data.visibility !== undefined || parsed.data.granteeUserIds !== undefined
-          ? {
-              visibility: parsed.data.visibility,
-              granteeUserIds: parsed.data.granteeUserIds,
-            }
-          : undefined;
-      const connection = accessOptions
-        ? await provider.updateConnectionAccess(
-            userResult.email,
-            connectionId,
-            parsed.data.accessLevel,
-            userResult.name,
-            accessOptions,
-            sketchWorkspaceContext(c, row.id),
-          )
-        : await provider.updateConnectionAccess(
-            userResult.email,
-            connectionId,
-            parsed.data.accessLevel,
-            userResult.name,
-            undefined,
-            sketchWorkspaceContext(c, row.id),
-          );
+      const connection = await provider.updateConnectionAccess(
+        userResult.email,
+        connectionId,
+        parsed.data.accessLevel,
+        userResult.name,
+        {
+          expectedRevision: parsed.data.expectedRevision,
+          visibility: parsed.data.visibility,
+          granteeUserIds: parsed.data.granteeUserIds,
+        },
+        sketchWorkspaceContext(c, row.id),
+      );
       return c.json({ success: true, connection });
     } catch (err) {
       if (err instanceof CanvasProviderRequestError) {
@@ -940,6 +929,17 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
       }
       throw err;
     }
+  });
+
+  routes.get("/:id/members", async (c) => {
+    const resolved = await resolveProvider(c, mcpServers);
+    if (!resolved.ok) return resolved.response;
+    const userResult = await resolveUserIdentity(c, users);
+    if (!userResult.ok) return userResult.response;
+    const members = (await users.list())
+      .filter((member) => member.id !== c.get("sub"))
+      .map(({ id, name, email }) => ({ id, name, email }));
+    return c.json({ members });
   });
 
   return routes;

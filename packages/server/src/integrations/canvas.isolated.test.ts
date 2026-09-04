@@ -472,7 +472,7 @@ describe("CanvasProvider", () => {
     ]);
   });
 
-  it("omits non-owner personal Canvas accounts even when canUse is incorrectly true", async () => {
+  it("keeps member-shared Canvas accounts when Canvas explicitly grants use", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -480,10 +480,10 @@ describe("CanvasProvider", () => {
           JSON.stringify({
             accounts: [
               {
-                id: "secrets:owner-1:github:github",
+                id: "secrets:owner-1:microsoft:microsoft-outlook-calendar-oauth",
                 source: "canvas_user_secrets",
-                name: "GitHub",
-                app: { name: "GitHub", nameSlug: "github" },
+                name: "Outlook Calendar",
+                app: { name: "Outlook Calendar", nameSlug: "microsoft-outlook-calendar-oauth" },
                 healthy: true,
                 accessLevel: "personal",
                 isOwnedByViewer: false,
@@ -519,7 +519,38 @@ describe("CanvasProvider", () => {
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
     const connections = await provider.listConnections("priya@example.com");
 
-    expect(connections.map((connection) => connection.appId)).toEqual(["slack", "notion"]);
+    expect(connections.map((connection) => connection.appId)).toEqual([
+      "microsoft-outlook-calendar-oauth",
+      "slack",
+      "notion",
+    ]);
+  });
+
+  it.each([false, undefined])("omits member-shared accounts without an explicit grant (%s)", async (canUse) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            accounts: [
+              {
+                id: "secrets:owner:microsoft:microsoft-outlook-calendar-oauth",
+                source: "canvas_user_secrets",
+                name: "Calendar",
+                app: { name: "Calendar", nameSlug: "microsoft-outlook-calendar-oauth" },
+                healthy: true,
+                accessLevel: "personal",
+                isOwnedByViewer: false,
+                canUse,
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    await expect(provider.listConnections("member@example.com")).resolves.toEqual([]);
   });
 
   it("does not infer Canvas ownership solely from canonical secret account IDs", async () => {
@@ -560,7 +591,13 @@ describe("CanvasProvider", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
-    await provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:notion:notion", "organization");
+    await provider.updateConnectionAccess(
+      "priya@example.com",
+      "secrets:owner-1:notion:notion",
+      "organization",
+      undefined,
+      { expectedRevision: 2, visibility: "organization", granteeUserIds: [] },
+    );
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://canvas.example.com/api/canvas-accounts/secrets%3Aowner-1%3Anotion%3Anotion/access",
@@ -571,7 +608,12 @@ describe("CanvasProvider", () => {
           "Content-Type": "application/json",
           "X-User-Email": "priya@example.com",
         },
-        body: JSON.stringify({ accessLevel: "organization" }),
+        body: JSON.stringify({
+          accessLevel: "organization",
+          expectedRevision: 2,
+          visibility: "organization",
+          granteeUserIds: [],
+        }),
         signal: expect.any(AbortSignal),
       },
     );
@@ -595,7 +637,11 @@ describe("CanvasProvider", () => {
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
 
     await expect(
-      provider.updateConnectionAccess("priya@example.com", "pd-account", "organization"),
+      provider.updateConnectionAccess("priya@example.com", "pd-account", "organization", undefined, {
+        expectedRevision: 2,
+        visibility: "organization",
+        granteeUserIds: [],
+      }),
     ).rejects.toMatchObject({
       status: 400,
       code: "BAD_REQUEST",
@@ -823,7 +869,7 @@ describe("CanvasProvider", () => {
   });
 
   it.each(["github", "linear", "clickup"] as const)(
-    "keeps %s OAuth minting cached and isolated by account, workspace, and actor",
+    "keeps %s OAuth minting isolated by account, workspace, and actor",
     async (integration) => {
       const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
       const envelope = encryptForTest(
@@ -871,7 +917,8 @@ describe("CanvasProvider", () => {
       ).resolves.toEqual([expected, expected]);
       await expect(provider.getCanvasAccessToken(request)).resolves.toEqual(expected);
       if (integration === "github") await expect(provider.getGithubAccessToken(request)).resolves.toEqual(expected);
-      expect(fetchMock).toHaveBeenCalledOnce();
+      const initialRequests = integration === "clickup" ? 1 : integration === "github" ? 4 : 3;
+      expect(fetchMock).toHaveBeenCalledTimes(initialRequests);
 
       await provider.getCanvasAccessToken({
         ...request,
@@ -883,8 +930,65 @@ describe("CanvasProvider", () => {
       });
       await provider.getCanvasAccessToken({ ...request, accountId: "account-2" });
       await provider.getCanvasAccessToken({ ...request, forceRefresh: true });
-      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(fetchMock).toHaveBeenCalledTimes(initialRequests + 4);
       expect(JSON.stringify(fetchMock.mock.calls)).not.toContain(`${integration}-minted-token`);
+    },
+  );
+
+  it.each(["github", "linear"] as const)(
+    "reauthorizes %s after personal connections and sharing change",
+    async (integration) => {
+      const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+      let personalConnected = false;
+      let sharedAvailable = true;
+      const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+        const { accountId } = JSON.parse(String(init.body));
+        const useShared = accountId === "shared-account" || !personalConnected;
+        if (useShared && !sharedAvailable) {
+          return new Response(JSON.stringify({ error: "ACCOUNT_ACCESS_DENIED", message: "Sharing revoked" }), {
+            status: 403,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              connectorType: integration,
+              provider: integration,
+              credentialKind: "oauth_access_token",
+              envelope: encryptForTest(
+                {
+                  type: "oauth_access_token",
+                  connectorType: integration,
+                  provider: integration,
+                  accessToken: useShared ? "shared-token" : "personal-token",
+                  ...(integration === "linear" ? { expiresAt: "2099-01-01T00:00:00.000Z" } : {}),
+                },
+                publicKey.export({ format: "pem", type: "spki" }).toString(),
+              ),
+            },
+          }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1", {
+        credentialPrivateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+      });
+      const request = {
+        integration,
+        userEmail: "priya@example.com",
+        workspaceContext: { workspaceId: "provider-1", userId: "user-1" },
+      };
+      await expect(provider.getCanvasAccessToken(request)).resolves.toMatchObject({ accessToken: "shared-token" });
+      personalConnected = true;
+      await expect(provider.getCanvasAccessToken(request)).resolves.toMatchObject({ accessToken: "personal-token" });
+      const explicitShared = { ...request, accountId: "shared-account" };
+      await expect(provider.getCanvasAccessToken(explicitShared)).resolves.toMatchObject({
+        accessToken: "shared-token",
+      });
+      sharedAvailable = false;
+      await expect(provider.getCanvasAccessToken(explicitShared)).rejects.toMatchObject({ status: 403 });
+      await expect(provider.getCanvasAccessToken(request)).resolves.toMatchObject({ accessToken: "personal-token" });
     },
   );
 

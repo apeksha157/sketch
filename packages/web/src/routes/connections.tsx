@@ -12,6 +12,7 @@ import { AddIntegrationDialog } from "@/components/connections/add-integration-d
 import { AddMcpDialog } from "@/components/connections/add-mcp-dialog";
 import { AddProviderDialog, ProviderSelectorDialog } from "@/components/connections/add-provider-dialog";
 import {
+  isActiveOwnedAppConnection,
   isNativeCanvasAppConnection,
   isOwnedOrPersonalAppConnection,
 } from "@/components/connections/connection-status";
@@ -25,7 +26,7 @@ import {
   EnvironmentVariablesSection,
   ShareEnvironmentVariableDialog,
 } from "@/components/connections/environment-variables-section";
-import { IntegrationsSection } from "@/components/connections/integrations-section";
+import { AccessSettingsDialog, IntegrationsSection } from "@/components/connections/integrations-section";
 import { McpServersSection } from "@/components/connections/mcp-servers-section";
 import { RemoveMcpDialog } from "@/components/connections/remove-mcp-dialog";
 import { LoadingSkeleton } from "@/components/connections/shared";
@@ -176,11 +177,7 @@ function removeSearchParams(paramsToRemove: string[]): void {
 }
 
 export function getPersonallyConnectedAppIds(connections: IntegrationConnection[]): Set<string> {
-  return new Set(
-    connections
-      .filter((connection) => isOwnedOrPersonalAppConnection(connection))
-      .map((connection) => connection.appId),
-  );
+  return new Set(connections.filter(isActiveOwnedAppConnection).map((connection) => connection.appId));
 }
 
 function connectionMatchesApp(connection: IntegrationConnection, appId: string): boolean {
@@ -189,7 +186,7 @@ function connectionMatchesApp(connection: IntegrationConnection, appId: string):
 
 function findOwnedConnectionForApp(connections: IntegrationConnection[] | undefined, appId: string) {
   const matchingConnections = (connections ?? []).filter(
-    (connection) => connectionMatchesApp(connection, appId) && isOwnedOrPersonalAppConnection(connection),
+    (connection) => connectionMatchesApp(connection, appId) && isActiveOwnedAppConnection(connection),
   );
   return matchingConnections.find(isNativeCanvasAppConnection) ?? matchingConnections[0] ?? null;
 }
@@ -373,6 +370,7 @@ export function ConnectionsPage() {
   const [showAddIntegrationDialog, setShowAddIntegrationDialog] = useState(false);
   const [showProviderSelector, setShowProviderSelector] = useState(false);
   const [showAddProvider, setShowAddProvider] = useState(false);
+  const [newConnectionAccess, setNewConnectionAccess] = useState<IntegrationConnection | null>(null);
   const [connectorNudge, setConnectorNudge] = useState<ConnectorNudgeSuggestion | null>(null);
 
   const invalidateConnections = useCallback(() => {
@@ -394,6 +392,17 @@ export function ConnectionsPage() {
       return;
     }
   }, []);
+
+  const showConnectionSetup = useCallback(
+    (connection: IntegrationConnection) => {
+      if (connection.canManageAccess && isNativeCanvasAppConnection(connection)) {
+        setNewConnectionAccess(connection);
+      } else {
+        void maybeShowConnectorNudge(connection);
+      }
+    },
+    [maybeShowConnectorNudge],
+  );
 
   useEffect(() => {
     if (connectError) {
@@ -434,7 +443,7 @@ export function ConnectionsPage() {
         setDirectConnectState({ kind: "connected", appId: verifyConnectedAppId, appName: connection.appName });
         toast.success(`${connection.appName} connected`);
         invalidateConnections();
-        void maybeShowConnectorNudge(connection);
+        showConnectionSetup(connection);
       };
 
       const failVerification = (message: string) => {
@@ -501,7 +510,7 @@ export function ConnectionsPage() {
     connectionsQuery.data,
     connectionsQuery.refetch,
     invalidateConnections,
-    maybeShowConnectorNudge,
+    showConnectionSetup,
   ]);
 
   useEffect(() => {
@@ -750,6 +759,20 @@ export function ConnectionsPage() {
         onSuccess={invalidateAll}
       />
 
+      {provider && newConnectionAccess && (
+        <AccessSettingsDialog
+          connection={newConnectionAccess}
+          providerId={provider.id}
+          orgName={setupStatusQuery.data?.orgName ?? undefined}
+          onSaved={invalidateAll}
+          onOpenChange={(open) => {
+            if (open) return;
+            setNewConnectionAccess(null);
+            void maybeShowConnectorNudge(newConnectionAccess);
+          }}
+        />
+      )}
+
       {provider && (
         <AddIntegrationDialog
           open={showAddIntegrationDialog}
@@ -766,7 +789,7 @@ export function ConnectionsPage() {
           initialSearch={requestedAppSearch}
           onSuccess={(_app, connection) => {
             invalidateAll();
-            if (connection) void maybeShowConnectorNudge(connection);
+            if (connection) showConnectionSetup(connection);
           }}
         />
       )}

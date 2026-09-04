@@ -3491,24 +3491,27 @@ export const api = {
         method: "DELETE",
       });
     },
+    async listConnectionMembers(providerId: string) {
+      const res = await request<{ members: Array<{ id: string; name?: string; email?: string }> }>(
+        `/api/mcp-servers/${providerId}/members`,
+      );
+      return res.members;
+    },
     updateConnectionAccess(
       providerId: string,
       connectionId: string,
       accessLevel: "personal" | "organization",
-      options?: {
-        visibility?: "private" | "selected_members" | "organization";
-        granteeUserIds?: string[];
+      options: {
+        expectedRevision: number;
+        visibility: "private" | "selected_members" | "organization";
+        granteeUserIds: string[];
       },
     ) {
       return request<{ success: true; connection: IntegrationConnection | null }>(
         `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/access`,
         {
           method: "PATCH",
-          body: JSON.stringify({
-            accessLevel,
-            ...(options?.visibility ? { visibility: options.visibility } : {}),
-            ...(options?.granteeUserIds ? { granteeUserIds: options.granteeUserIds } : {}),
-          }),
+          body: JSON.stringify({ accessLevel, ...options }),
         },
       );
     },

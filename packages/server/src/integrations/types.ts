@@ -1,4 +1,10 @@
-import type { IntegrationApp, IntegrationConnection, ManagedIntegrationAppId, PageInfo } from "@sketch/shared";
+import type {
+  AccountIdentityBinding,
+  IntegrationApp,
+  IntegrationConnection,
+  ManagedIntegrationAppId,
+  PageInfo,
+} from "@sketch/shared";
 /**
  * Server-side integration types.
  * Shared types (IntegrationApp, IntegrationConnection, PageInfo) are imported
@@ -59,6 +65,7 @@ export interface IntegrationActionRequest {
   userEmail: string;
   componentKey: string;
   configuredProps: Record<string, unknown>;
+  accountIdentityBinding?: AccountIdentityBinding;
   workspaceContext?: IntegrationWorkspaceContext;
 }
 
@@ -93,6 +100,7 @@ export interface IntegrationProvider {
     accessLevel: "personal" | "organization",
     userName?: string,
     options?: {
+      expectedRevision?: number;
       visibility?: "private" | "selected_members" | "organization";
       granteeUserIds?: string[];
     },

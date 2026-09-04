@@ -7,7 +7,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { IntegrationsSection } from "./integrations-section";
 
-const baseConnection = {
+const defaultConnection = {
   providerId: "provider-1",
   appId: "github",
   appName: "GitHub",
@@ -28,7 +28,19 @@ function renderSection(connections: IntegrationConnection[], onDisconnect = vi.f
   );
 }
 
-describe("IntegrationsSection", () => {
+async function chooseAccess(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole("combobox", { name: "Who has access" }));
+  await user.click(await screen.findByRole("option", { name: (label) => label.startsWith(name) }));
+}
+
+async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("textbox", { name: "Add members" }));
+  await user.click(await screen.findByRole("button", { name: `Add ${name}` }));
+}
+
+describe.each(["github", "linear"] as const)("IntegrationsSection %s", (appId) => {
+  const appName = appId === "github" ? "GitHub" : "Linear";
+  const baseConnection = { ...defaultConnection, appId, appName };
   it("renders Canvas access metadata and gates destructive controls", () => {
     renderSection([
       {
@@ -74,7 +86,7 @@ describe("IntegrationsSection", () => {
     expect(screen.queryByText("OAuth")).not.toBeInTheDocument();
     expect(screen.queryByText(/Connected by:/)).not.toBeInTheDocument();
     expect(screen.queryByText("Owner: Tara")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Disconnect GitHub" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: `Disconnect ${appName}` })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Disconnect Notion" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open settings for Notion" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Settings unavailable for Slack" })).toBeDisabled();
@@ -183,15 +195,18 @@ describe("IntegrationsSection", () => {
       },
     ]);
 
-    expect(screen.getByRole("button", { name: "Disconnect GitHub" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: `Disconnect ${appName}` })).toBeDisabled();
   });
 
-  it("saves org sharing only for manageable Canvas-owned accounts", async () => {
+  it("saves selected members only for manageable Canvas-owned accounts", async () => {
     const user = userEvent.setup();
     const onDisconnect = vi.fn();
     let requestBody: unknown;
 
     server.use(
+      http.get("/api/mcp-servers/provider-1/members", () =>
+        HttpResponse.json({ members: [{ id: "member-1", name: "Alex" }] }),
+      ),
       http.patch("/api/mcp-servers/provider-1/connections/:connectionId/access", async ({ request }) => {
         requestBody = await request.json();
         return HttpResponse.json({ success: true, connection: null });
@@ -210,24 +225,150 @@ describe("IntegrationsSection", () => {
           isOwnedByViewer: true,
           canManageAccess: true,
           canDelete: true,
+          accessRevision: 2,
+          memberUserIds: [],
         },
       ],
       onDisconnect,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("Only you can use this connection.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toBeInTheDocument();
+    await chooseAccess(user, "Selected members");
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
 
-    await user.click(screen.getByRole("switch", { name: "Share with organization" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await addMember(user, "Alex");
+    await user.click(screen.getByRole("button", { name: "Save access" }));
 
     await waitFor(() => {
-      expect(requestBody).toEqual({ accessLevel: "organization" });
+      expect(requestBody).toEqual({
+        accessLevel: "personal",
+        expectedRevision: 2,
+        visibility: "selected_members",
+        granteeUserIds: ["member-1"],
+      });
       expect(onDisconnect).toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    ["Entire organization", "personal", [], "organization"],
+    ["Private", "organization", [], "personal"],
+    ["Private", "personal", ["member-1"], "personal"],
+  ] as const)(
+    "saves %s and clears stale individual grants",
+    async (label, previousLevel, previousMembers, accessLevel) => {
+      const user = userEvent.setup();
+      let requestBody: unknown;
+      server.use(
+        http.patch("/api/mcp-servers/provider-1/connections/:connectionId/access", async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({ success: true, connection: null });
+        }),
+        http.get("/api/mcp-servers/provider-1/members", () =>
+          HttpResponse.json({ members: [{ id: "member-1", name: "Alex", email: "alex@example.test" }] }),
+        ),
+      );
+      renderSection([
+        {
+          ...baseConnection,
+          id: "secrets:viewer-1:github:github",
+          source: "canvas_user_secrets",
+          isOwnedByViewer: true,
+          canManageAccess: true,
+          accessLevel: previousLevel,
+          memberUserIds: [...previousMembers],
+          accessRevision: 4,
+        },
+      ]);
+      await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
+      await chooseAccess(user, label);
+      await user.click(screen.getByRole("button", { name: "Save access" }));
+      await waitFor(() =>
+        expect(requestBody).toEqual({
+          accessLevel,
+          expectedRevision: 4,
+          visibility: accessLevel === "organization" ? "organization" : "private",
+          granteeUserIds: [],
+        }),
+      );
+    },
+  );
+
+  it("requires a member in selected mode and keeps the selection on a failed save", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/mcp-servers/provider-1/members", () =>
+        HttpResponse.json({ members: [{ id: "member-1", name: "Alex", email: "alex@example.test" }] }),
+      ),
+      http.patch("/api/mcp-servers/provider-1/connections/:connectionId/access", () =>
+        HttpResponse.json(
+          { error: { code: "CONFLICT", message: "Account sharing changed; reload and try again" } },
+          { status: 409 },
+        ),
+      ),
+    );
+    renderSection([
+      {
+        ...baseConnection,
+        id: "secrets:viewer-1:github:github",
+        source: "canvas_user_secrets",
+        isOwnedByViewer: true,
+        canManageAccess: true,
+        accessLevel: "personal",
+        memberUserIds: [],
+        accessRevision: 4,
+      },
+    ]);
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
+    await chooseAccess(user, "Selected members");
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
+    await addMember(user, "Alex");
+    expect(screen.getByText("alex@example.test")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save access" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Account sharing changed");
+    expect(screen.getByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("loads saved selections, searches by email, and distinguishes empty search results", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/mcp-servers/provider-1/members", () =>
+        HttpResponse.json({
+          members: [
+            { id: "member-1", name: "Alex", email: "alex@example.test" },
+            { id: "member-2", name: "Blair", email: "blair@example.test" },
+          ],
+        }),
+      ),
+    );
+    renderSection([
+      {
+        ...baseConnection,
+        id: "secrets:viewer-1:github:github",
+        source: "canvas_user_secrets",
+        isOwnedByViewer: true,
+        canManageAccess: true,
+        accessLevel: "personal",
+        memberUserIds: ["member-1"],
+        memberGrants: [],
+        accessRevision: 4,
+      },
+    ]);
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Selected members");
+    expect(await screen.findByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Add members" }), "blair@example");
+    expect(screen.getByRole("button", { name: "Add Blair" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
+    await user.clear(screen.getByRole("textbox", { name: "Add members" }));
+    await user.type(screen.getByRole("textbox", { name: "Add members" }), "no-match");
+    expect(screen.getByText("No members match your search.")).toBeInTheDocument();
+    expect(screen.getByText("1 member selected")).toBeInTheDocument();
   });
 
   it("shows non-owner shared Canvas accounts as usable but not manageable", async () => {
@@ -246,19 +387,16 @@ describe("IntegrationsSection", () => {
       },
     ]);
 
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Owned by:/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Tara").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/Tara shared this account with you/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Owner: Tara")).not.toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "Tara shared this connection with the organization. You can use it, but only the owner can manage access or credentials.",
-      ),
+      within(dialog).getByText("Tara shared this account with you. Only the owner can manage access."),
     ).toBeInTheDocument();
-    expect(within(dialog).getByRole("switch", { name: "Share with organization" })).toBeDisabled();
-    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(within(dialog).queryByRole("button", { name: "Save access" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Done" })).toBeEnabled();
   });
 
   it("suppresses email-derived shared account labels in the settings dialog", async () => {
@@ -283,8 +421,7 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for Aimfox" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Owned by:/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("Tanush Yadav").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/Tanush Yadav shared this account with you/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/gmail\.com/)).not.toBeInTheDocument();
     expect(within(dialog).queryByText(/Aimfox Connection/)).not.toBeInTheDocument();
   });
@@ -311,16 +448,13 @@ describe("IntegrationsSection", () => {
     expect(screen.queryByText("Owner: .")).not.toBeInTheDocument();
     expect(screen.queryByText(".")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/Owned by:/)).toBeInTheDocument();
-    expect(within(dialog).getAllByText("teammate").length).toBeGreaterThan(0);
+    expect(within(dialog).getByText(/teammate shared this account with you/)).toBeInTheDocument();
     expect(within(dialog).queryByText("Owner: .")).not.toBeInTheDocument();
     expect(
-      within(dialog).getByText(
-        "teammate shared this connection with the organization. You can use it, but only the owner can manage access or credentials.",
-      ),
+      within(dialog).getByText("teammate shared this account with you. Only the owner can manage access."),
     ).toBeInTheDocument();
   });
 });
