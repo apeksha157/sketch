@@ -182,6 +182,7 @@ export async function runConnectorSync(
       | "WHATSAPP_CHUNK_TICK_MINUTES"
       | "WHATSAPP_CHUNK_IDLE_CLOSE_HOURS"
       | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+      | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
       | "WHATSAPP_CHUNK_MODEL"
       | "WHATSAPP_CHUNK_REASONING_EFFORT"
       | "WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES"
@@ -282,6 +283,9 @@ export async function runConnectorSync(
               chunkProvisionalRefreshMessages:
                 storedScopeConfig.chunkProvisionalRefreshMessages ??
                 appConfig?.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
+              chunkProvisionalRefreshMaxMinutes:
+                storedScopeConfig.chunkProvisionalRefreshMaxMinutes ??
+                appConfig?.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES,
               chunkModel: storedScopeConfig.chunkModel ?? appConfig?.WHATSAPP_CHUNK_MODEL,
               chunkReasoningEffort:
                 storedScopeConfig.chunkReasoningEffort ?? appConfig?.WHATSAPP_CHUNK_REASONING_EFFORT,
@@ -860,6 +864,7 @@ export interface SyncSchedulerDeps {
       | "WHATSAPP_CHUNK_TICK_MINUTES"
       | "WHATSAPP_CHUNK_IDLE_CLOSE_HOURS"
       | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+      | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
       | "WHATSAPP_CHUNK_MODEL"
       | "WHATSAPP_CHUNK_REASONING_EFFORT"
       | "WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES"

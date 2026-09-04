@@ -157,12 +157,16 @@ async function seedSlice(
   };
 }
 
-async function collectEmittedWhatsAppItems(db: Kysely<DB>, options: { emissionRefreshDays?: number; now?: Date } = {}) {
+async function collectEmittedWhatsAppItems(
+  db: Kysely<DB>,
+  options: { emissionRefreshDays?: number; provisionalRefreshMaxMinutes?: number; now?: Date } = {},
+) {
   const items = [];
   for await (const item of emitWhatsAppSyncedItems({
     db,
     logger: fakeLogger(),
     emissionRefreshDays: options.emissionRefreshDays,
+    provisionalRefreshMaxMinutes: options.provisionalRefreshMaxMinutes,
     now: options.now,
   })) {
     items.push(item);
@@ -382,6 +386,184 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       await expect(
         db.selectFrom("indexed_files").select("provider_file_id").where("id", "=", before.id).executeTakeFirstOrThrow(),
       ).resolves.toEqual({ provider_file_id: seeded.sliceId });
+    });
+
+    it("emits changed open content at tier one and upgrades to tier two when the refresh clock expires", async () => {
+      const seeded = await seedSlice(db, {
+        status: "open",
+        verdict: "kept",
+        chunkMinMessages: 1,
+        chunkProvisionalRefreshMessages: 3,
+      });
+      const config = await seedConnectorConfig(db);
+      const initialNow = new Date();
+      const initialTimestamp = initialNow.toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: initialTimestamp })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, initialTimestamp, initialTimestamp);
+      await runConnectorSync(db, config.id, createTestLogger());
+      const initialSlice = await db
+        .selectFrom("conversation_slices")
+        .selectAll()
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const messages = createConversationRepository(db);
+      const third = await messages.insertMessage({
+        conversationId: seeded.conversationId,
+        providerMessageId: `${seeded.groupJid}:tier-one`,
+        senderJid: "15550000002@s.whatsapp.net",
+        senderName: "External Buyer",
+        text: "tier one update",
+        receivedAt: new Date(initialNow.getTime() + 60_000).toISOString(),
+      });
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: third.row.id,
+          ended_at: third.row.receivedAt,
+          message_count: 3,
+          denoised_message_ids: JSON.stringify([
+            initialSlice.first_message_id,
+            initialSlice.last_message_id,
+            third.row.id,
+          ]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const tierOne = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 60_000),
+      });
+
+      expect(tierOne).toHaveLength(1);
+      expect(tierOne[0]?.enrichmentRefresh).toBe("embeddings_only");
+      expect(tierOne[0]?.sourceMeta).toMatchObject({
+        firstMessageId: initialSlice.first_message_id,
+        messageCount: 3,
+        enrichedMessageCount: 2,
+      });
+
+      const fourth = await messages.insertMessage({
+        conversationId: seeded.conversationId,
+        providerMessageId: `${seeded.groupJid}:tier-two-time`,
+        senderJid: "15550000002@s.whatsapp.net",
+        senderName: "External Buyer",
+        text: "time gate update",
+        receivedAt: new Date(initialNow.getTime() + 121 * 60_000).toISOString(),
+      });
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: fourth.row.id,
+          ended_at: fourth.row.receivedAt,
+          message_count: 4,
+          denoised_message_ids: JSON.stringify([
+            initialSlice.first_message_id,
+            initialSlice.last_message_id,
+            third.row.id,
+            fourth.row.id,
+          ]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const tierTwo = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 121 * 60_000),
+      });
+
+      expect(tierTwo).toHaveLength(1);
+      expect(tierTwo[0]?.enrichmentRefresh).toBe("full");
+      expect(tierTwo[0]?.sourceMeta).toMatchObject({
+        firstMessageId: initialSlice.first_message_id,
+        messageCount: 4,
+        enrichedMessageCount: 4,
+      });
+    });
+
+    it("forces tier two when open growth reaches the count gate or the slice shrinks", async () => {
+      const seeded = await seedSlice(db, {
+        status: "open",
+        verdict: "kept",
+        chunkMinMessages: 1,
+        chunkProvisionalRefreshMessages: 3,
+      });
+      const config = await seedConnectorConfig(db);
+      const initialNow = new Date();
+      const initialTimestamp = initialNow.toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: initialTimestamp })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, initialTimestamp, initialTimestamp);
+      await runConnectorSync(db, config.id, createTestLogger());
+      const initialSlice = await db
+        .selectFrom("conversation_slices")
+        .selectAll()
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const messages = createConversationRepository(db);
+      const added = [];
+      for (let index = 0; index < 3; index += 1) {
+        added.push(
+          await messages.insertMessage({
+            conversationId: seeded.conversationId,
+            providerMessageId: `${seeded.groupJid}:count-${index}`,
+            senderJid: "15550000002@s.whatsapp.net",
+            senderName: "External Buyer",
+            text: `count update ${index}`,
+            receivedAt: new Date(initialNow.getTime() + (index + 1) * 60_000).toISOString(),
+          }),
+        );
+      }
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: added[2]?.row.id,
+          ended_at: added[2]?.row.receivedAt,
+          message_count: 5,
+          denoised_message_ids: JSON.stringify([
+            initialSlice.first_message_id,
+            initialSlice.last_message_id,
+            ...added.map((message) => message.row.id),
+          ]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const countRefresh = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 3 * 60_000),
+      });
+
+      expect(countRefresh).toHaveLength(1);
+      expect(countRefresh[0]?.enrichmentRefresh).toBe("full");
+      expect(countRefresh[0]?.sourceMeta).toMatchObject({ messageCount: 5, enrichedMessageCount: 5 });
+
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: initialSlice.first_message_id,
+          ended_at: initialSlice.started_at,
+          message_count: 1,
+          denoised_message_ids: JSON.stringify([initialSlice.first_message_id]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const shrinkRefresh = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 4 * 60_000),
+      });
+
+      expect(shrinkRefresh).toHaveLength(1);
+      expect(shrinkRefresh[0]?.enrichmentRefresh).toBe("full");
+      expect(shrinkRefresh[0]?.sourceMeta).toMatchObject({ messageCount: 1, enrichedMessageCount: 1 });
     });
 
     it("emits zero structural_seed facts for a kept slice with salience structural entities", async () => {

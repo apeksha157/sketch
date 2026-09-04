@@ -8,6 +8,7 @@ import {
   chunkWhatsAppIndexingGroups,
 } from "./whatsapp-chunker";
 import {
+  DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES,
   WHATSAPP_EMISSION_REFRESH_DAYS,
   emitWhatsAppSyncedItems,
   reconcileWhatsAppGroupAcls,
@@ -136,6 +137,9 @@ export function createWhatsAppConnector(): Connector {
         db,
         logger,
         emissionRefreshDays: emissionRefreshDaysFromScopeConfig(scopeConfig),
+        provisionalRefreshMaxMinutes:
+          positiveInteger(scopeConfig.chunkProvisionalRefreshMaxMinutes) ??
+          DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES,
         onSkippedNoScope: () => {
           skippedNoScope += 1;
         },

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
-import { createConnectorRepository } from "../db/repositories/connectors";
+import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
 import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { type WhatsAppGroupIndexingConfig, createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
 import { createWhatsAppIdentityCandidateRepository } from "../db/repositories/whatsapp-identity-candidates";
@@ -31,6 +31,7 @@ import {
 } from "./whatsapp-chunker";
 
 export const DEFAULT_WHATSAPP_SALIENCE_BATCH_LIMIT = 50;
+export const DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES = 120;
 export const WHATSAPP_EMISSION_REFRESH_DAYS = 7;
 
 const PROMPT_VERSION = "whatsapp-emission-v1";
@@ -101,6 +102,14 @@ interface RenderedSlice {
 interface PendingProcessResult {
   status: "kept" | "dropped" | "failed" | "lost";
   candidateObservations: number;
+}
+
+interface WhatsAppEmissionSourceMeta extends Record<string, unknown> {
+  firstMessageId: number;
+  messageCount: number;
+  emittedAt: string;
+  enrichedMessageCount: number;
+  enrichedAt: string;
 }
 
 function emptySummary(batchLimit: number): WhatsAppSalienceRunSummary {
@@ -553,6 +562,22 @@ function renderedMessageCount(content: string | null): number {
   return transcript ? transcript.split("\n").length : 0;
 }
 
+function readWhatsAppEmissionSourceMeta(sourceMeta: string | null): WhatsAppEmissionSourceMeta | null {
+  const parsed = readSourceMeta({ source_meta: sourceMeta });
+  if (
+    !parsed ||
+    !Number.isInteger(parsed.firstMessageId) ||
+    !Number.isInteger(parsed.messageCount) ||
+    typeof parsed.emittedAt !== "string" ||
+    !Number.isInteger(parsed.enrichedMessageCount) ||
+    typeof parsed.enrichedAt !== "string" ||
+    Number.isNaN(Date.parse(parsed.enrichedAt))
+  ) {
+    return null;
+  }
+  return parsed as unknown as WhatsAppEmissionSourceMeta;
+}
+
 /**
  * Why a kept slice produced no synced item. Emission previously reported a bare
  * `emitted: 0` with a single `skippedNoScope` counter, so the far more common
@@ -571,6 +596,8 @@ async function syncedItemForKeptSlice(
   db: Kysely<DB>,
   context: SliceContext,
   logger: Logger,
+  now: Date,
+  provisionalRefreshMaxMinutes: number | undefined,
 ): Promise<{ item: SyncedItem | null; skippedNoScope: boolean; skipReason: WhatsAppEmissionSkipReason | null }> {
   const rendered = await renderSlice(db, context, logger);
   if (rendered.serializedRosterSnapshot !== context.slice.roster_snapshot) {
@@ -591,6 +618,8 @@ async function syncedItemForKeptSlice(
   const titleGroup = sanitizeWhatsAppDisplayText(context.groupName) || "WhatsApp group";
   const content = rendered.content;
   const contentHash = stableContentHash(content);
+  let enrichmentRefresh: "full" | "embeddings_only" = "full";
+  let previousEmission: WhatsAppEmissionSourceMeta | null = null;
   if (context.slice.status === "open") {
     const minMessages = context.chunkMinMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES;
     if (context.slice.message_count < minMessages) {
@@ -609,22 +638,46 @@ async function syncedItemForKeptSlice(
     if (indexedFileId) {
       const existing = await db
         .selectFrom("indexed_files")
-        .select(["content_hash", "content"])
+        .select(["content_hash", "content", "source_meta"])
         .where("id", "=", indexedFileId)
         .executeTakeFirst();
       if (existing?.content_hash === contentHash)
         return { item: null, skippedNoScope: false, skipReason: "unchanged_content" };
-      const previousMessageCount = renderedMessageCount(existing?.content ?? null);
       const refreshMessages =
         context.chunkProvisionalRefreshMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES;
-      if (
-        context.slice.message_count >= previousMessageCount &&
-        context.slice.message_count - previousMessageCount < refreshMessages
-      ) {
-        return { item: null, skippedNoScope: false, skipReason: "below_refresh_threshold" };
+      if (provisionalRefreshMaxMinutes === undefined) {
+        const previousMessageCount = renderedMessageCount(existing?.content ?? null);
+        if (
+          context.slice.message_count >= previousMessageCount &&
+          context.slice.message_count - previousMessageCount < refreshMessages
+        ) {
+          return { item: null, skippedNoScope: false, skipReason: "below_refresh_threshold" };
+        }
+      } else {
+        previousEmission = readWhatsAppEmissionSourceMeta(existing?.source_meta ?? null);
+        if (previousEmission) {
+          const boundaryChanged = context.slice.first_message_id !== previousEmission.firstMessageId;
+          const shrank = context.slice.message_count < previousEmission.messageCount;
+          const countRefreshDue =
+            context.slice.message_count - previousEmission.enrichedMessageCount >= refreshMessages;
+          const timeRefreshDue =
+            now.getTime() - Date.parse(previousEmission.enrichedAt) >= provisionalRefreshMaxMinutes * 60_000;
+          if (!boundaryChanged && !shrank && !countRefreshDue && !timeRefreshDue) {
+            enrichmentRefresh = "embeddings_only";
+          }
+        }
       }
     }
   }
+  const emittedAt = now.toISOString();
+  const sourceMeta: WhatsAppEmissionSourceMeta = {
+    firstMessageId: context.slice.first_message_id,
+    messageCount: context.slice.message_count,
+    emittedAt,
+    enrichedMessageCount:
+      enrichmentRefresh === "full" ? context.slice.message_count : (previousEmission?.enrichedMessageCount ?? 0),
+    enrichedAt: enrichmentRefresh === "full" ? emittedAt : (previousEmission?.enrichedAt ?? emittedAt),
+  };
   return {
     skippedNoScope: false,
     skipReason: null,
@@ -636,6 +689,8 @@ async function syncedItemForKeptSlice(
       contentCategory: "document",
       content,
       sourcePath: sourcePathForSlice(context),
+      sourceMeta,
+      enrichmentRefresh,
       contentHash,
       sourceCreatedAt: context.slice.started_at,
       sourceUpdatedAt: context.slice.ended_at,
@@ -730,6 +785,7 @@ export async function* emitWhatsAppSyncedItems(options: {
   db: Kysely<DB>;
   logger: Logger;
   emissionRefreshDays?: number;
+  provisionalRefreshMaxMinutes?: number;
   now?: Date;
   onSkippedNoScope?: () => void;
   /**
@@ -739,9 +795,16 @@ export async function* emitWhatsAppSyncedItems(options: {
    */
   onSkipReason?: (reason: WhatsAppEmissionSkipReason) => void;
 }): AsyncGenerator<SyncedItem> {
-  const kept = await listKeptSliceContexts(options.db, options.emissionRefreshDays, options.now);
+  const now = options.now ?? new Date();
+  const kept = await listKeptSliceContexts(options.db, options.emissionRefreshDays, now);
   for (const context of kept) {
-    const { item, skippedNoScope, skipReason } = await syncedItemForKeptSlice(options.db, context, options.logger);
+    const { item, skippedNoScope, skipReason } = await syncedItemForKeptSlice(
+      options.db,
+      context,
+      options.logger,
+      now,
+      options.provisionalRefreshMaxMinutes,
+    );
     if (skippedNoScope) options.onSkippedNoScope?.();
     if (skipReason) options.onSkipReason?.(skipReason);
     if (item) yield item;
