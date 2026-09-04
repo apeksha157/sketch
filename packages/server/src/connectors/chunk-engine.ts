@@ -99,14 +99,18 @@ export interface ChunkStreamAdapter {
   loadOpenAndPending(
     db: Kysely<DB>,
     open: ConversationSliceRow | undefined,
+    cursor: ChunkCursorState,
     cap: number,
   ): Promise<{ openRaw: ChunkEngineMessage[]; pendingRaw: ChunkEngineMessage[]; pageFull: boolean }>;
+  tailMessage(db: Kysely<DB>, messageId: number): Promise<ChunkEngineMessage | undefined>;
   isIndexable(message: ChunkEngineMessage): boolean;
   senderLabel(message: ChunkEngineMessage): string;
   order: "effective_time" | "row_id";
   boundaries: "llm" | "single-segment";
+  promptHeader: string;
+  generateLabel(kind: "boundary" | "repair"): string;
   flushReason(kind: "boundary" | "idle" | "force_split"): ConversationSliceFlushReason;
-  rosterSnapshot(trx: Transaction<DB>): Promise<string>;
+  rosterSnapshot(db: Kysely<DB>): Promise<string>;
   usesTopicRegistry: boolean;
   onSliceClosed?(trx: Transaction<DB>, slice: ConversationSliceRow): Promise<void>;
   onBoundaryValidationFailed?(logger: Logger, mode: "live" | "backfill"): void;
@@ -521,7 +525,7 @@ async function loadWindow(
     adapter.conversationId,
     adapter.providerThreadId,
   );
-  const loaded = await adapter.loadOpenAndPending(db, open, adapter.knobs.windowMessages);
+  const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages);
   const rawById = new Map([...loaded.openRaw, ...loaded.pendingRaw].map((message) => [message.id, message]));
   const allRaw = sortMessages([...rawById.values()], adapter);
   const openIds = new Set(parseDenoisedIds(open));
@@ -530,7 +534,9 @@ async function loadWindow(
       adapter.isIndexable(message) &&
       (openIds.size > 0
         ? openIds.has(message.id)
-        : open !== undefined && message.effectiveAt >= open.started_at && message.effectiveAt <= open.ended_at),
+        : open !== undefined &&
+          message.effectiveMs >= effectiveMs(open.started_at) &&
+          message.effectiveMs <= effectiveMs(open.ended_at)),
   );
   const newMessages = allRaw.filter(
     (message) =>
@@ -550,6 +556,7 @@ async function loadWindow(
 }
 
 function renderBoundaryPrompt(
+  promptHeader: string,
   registry: Array<{ name: string; one_liner: string | null }>,
   messages: SortableMessage[],
   openIds: Set<number>,
@@ -564,7 +571,7 @@ function renderBoundaryPrompt(
     })
     .join("\n");
   return [
-    "You are the conversation boundary engine.",
+    promptHeader,
     "Identify contiguous topic segments over the numbered messages.",
     "The OPEN CHUNK messages are atomic context, but its boundary may be revised.",
     'Return JSON only with ordered segments: {"segments":[{"start":1,"end":2,"threads":["topic name"]}]}.',
@@ -578,6 +585,7 @@ function renderBoundaryPrompt(
 
 async function generateBoundarySegments(
   deps: ChunkEngineDeps,
+  adapter: ChunkStreamAdapter,
   prompt: string,
   knobs: ChunkEngineKnobs,
   messageCount: number,
@@ -589,7 +597,7 @@ async function generateBoundarySegments(
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
       maxTokens: 2048,
-      label: "chunkBoundary",
+      label: adapter.generateLabel("boundary"),
     });
     return validateBoundarySegments(firstOutput, messageCount);
   } catch (error) {
@@ -608,7 +616,7 @@ async function generateBoundarySegments(
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
       maxTokens: 2048,
-      label: "chunkBoundaryRepair",
+      label: adapter.generateLabel("repair"),
     });
     return validateBoundarySegments(repairedOutput, messageCount);
   } catch {
@@ -701,6 +709,7 @@ async function applyBoundaryWindow(
   state: BoundaryWindow,
   segments: BoundarySegment[],
   originalBoundaryEnds: ReadonlySet<number>,
+  rosterSnapshot: string,
 ): Promise<ApplyResult> {
   const sortedRaw = state.allRaw;
   const planned = segments.map((segment) =>
@@ -724,13 +733,6 @@ async function applyBoundaryWindow(
     const currentOpen = await sliceRepo.getOpenSlice(params.adapter.conversationId, params.adapter.providerThreadId);
     if (currentOpen?.id !== previousOpen?.id) throw new ClaimLostError();
     await ensureNoOverlap(trx, params.adapter, planned, previousOpen?.id);
-    let rosterSnapshot = previousOpen?.roster_snapshot ?? "[]";
-    try {
-      rosterSnapshot = await params.adapter.rosterSnapshot(trx);
-    } catch {
-      rosterSnapshot = previousOpen?.roster_snapshot ?? "[]";
-    }
-
     const topicRepo = params.adapter.usesTopicRegistry ? createConversationTopicsRepository(trx) : undefined;
     const topicIdsBySegment: string[][] = [];
     for (const item of planned) {
@@ -900,17 +902,22 @@ async function decideAndApply(
           params.adapter.knobs.topicRegistryCap,
         )
       : [];
-    const prompt = renderBoundaryPrompt(registry, state.messages, openIds);
-    initial = await generateBoundarySegments(deps, prompt, params.adapter.knobs, state.messages.length);
+    const prompt = renderBoundaryPrompt(params.adapter.promptHeader, registry, state.messages, openIds);
+    initial = await generateBoundarySegments(deps, params.adapter, prompt, params.adapter.knobs, state.messages.length);
   }
   if (!initial) return undefined;
   const normalized = enforceBoundarySize(initial, state.messages, params.adapter.knobs);
+  let rosterSnapshot = state.open?.roster_snapshot ?? "[]";
+  try {
+    rosterSnapshot = await params.adapter.rosterSnapshot(deps.db);
+  } catch {}
   return applyBoundaryWindow(
     deps,
     params,
     state,
     normalized,
     new Set(initial.slice(0, -1).map((segment) => segment.end)),
+    rosterSnapshot,
   );
 }
 
@@ -1035,12 +1042,18 @@ export async function evaluateIdleClose(
       const tailIds = parseDenoisedIds(open);
       const tailId = tailIds[tailIds.length - 1];
       if (tailId === undefined) return false;
-      const loaded = await params.adapter.loadOpenAndPending(trx, open, params.adapter.knobs.windowMessages);
-      const tail = loaded.openRaw.find((message) => message.id === tailId);
+      let tail: ChunkEngineMessage | undefined;
+      let nextPending: SortableMessage | undefined;
+      if (params.mode === "live") {
+        tail = await params.adapter.tailMessage(trx, tailId);
+      } else {
+        const loaded = await params.adapter.loadOpenAndPending(trx, open, cursor, params.adapter.knobs.windowMessages);
+        tail = loaded.openRaw.find((message) => message.id === tailId);
+        nextPending = sortMessages(loaded.pendingRaw, params.adapter).find((message) =>
+          params.adapter.cursor.isAfterCursor(message, cursor),
+        );
+      }
       if (!tail) return false;
-      const nextPending = sortMessages(loaded.pendingRaw, params.adapter).find((message) =>
-        params.adapter.cursor.isAfterCursor(message, cursor),
-      );
       const idleMs = params.adapter.knobs.idleCloseHours * 60 * 60 * 1000;
       const isIdle =
         params.mode === "live"

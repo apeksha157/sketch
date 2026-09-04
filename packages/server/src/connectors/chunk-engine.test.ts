@@ -1,4 +1,4 @@
-import type { Kysely, Transaction } from "kysely";
+import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConversationSliceRow } from "../db/repositories/conversation-slices";
 import { createConversationRepository } from "../db/repositories/conversations";
@@ -91,10 +91,13 @@ function fakeAdapter(messages: ChunkEngineMessage[], overrides: Partial<ChunkStr
         pageFull: false,
       };
     },
+    tailMessage: async (_db, messageId) => messages.find((message) => message.id === messageId),
     isIndexable: () => true,
     senderLabel: () => "Asha",
     order: "effective_time",
     boundaries: "single-segment",
+    promptHeader: "You are the conversation boundary engine.",
+    generateLabel: (kind) => (kind === "repair" ? "chunkBoundaryRepair" : "chunkBoundary"),
     flushReason: () => "llm_boundary",
     rosterSnapshot: async () => "[]",
     usesTopicRegistry: false,
@@ -185,6 +188,15 @@ describe("chunk engine adapter contract", () => {
     let calls = 0;
     const adapter = fakeAdapter(makeMessages(8), { boundaries: "llm", usesTopicRegistry: true });
 
+    await runChunkingPass(
+      {
+        db,
+        logger: createTestLogger(),
+        generate: async () => JSON.stringify({ segments: [{ start: 1, end: 2, threads: ["thread"] }] }),
+      },
+      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [1, 2] },
+    );
+
     const result = await runChunkingPass(
       {
         db,
@@ -193,16 +205,77 @@ describe("chunk engine adapter contract", () => {
           prompts.push(prompt);
           calls += 1;
           if (calls <= 2) return "not json";
-          return JSON.stringify({ segments: [{ start: 1, end: calls === 3 ? 4 : 8, threads: ["thread"] }] });
+          return JSON.stringify({ segments: [{ start: 1, end: calls === 3 ? 5 : 8, threads: ["thread"] }] });
         },
       },
-      { adapter, mode: "live", maxWindows: 2 },
+      { adapter, mode: "live", maxWindows: 2, pendingMessageIds: [3, 4, 5, 6, 7, 8] },
     );
 
     expect(result.windowsProcessed).toBe(2);
-    expect(prompts[2]?.match(/^\d+\. /gmu)).toHaveLength(4);
-    expect(prompts[3]).toContain("[OPEN CHUNK]");
+    expect(prompts[0]?.match(/\[OPEN CHUNK\]/gu)).toHaveLength(2);
+    expect(prompts[0]?.match(/\[NEW\]/gu)).toHaveLength(6);
+    expect(prompts[2]?.match(/\[OPEN CHUNK\]/gu)).toHaveLength(2);
+    expect(prompts[2]?.match(/\[NEW\]/gu)).toHaveLength(3);
+    expect(prompts[3]?.match(/\[OPEN CHUNK\]/gu)).toHaveLength(5);
+    expect(prompts[3]?.match(/\[NEW\]/gu)).toHaveLength(3);
     expect(prompts[3]?.match(/^\d+\. /gmu)).toHaveLength(8);
+  });
+
+  it("uses the force-split reason for an existing open slice and inserted closed slices", async () => {
+    const adapter = fakeAdapter(makeMessages(6), {
+      knobs: { ...knobs, windowMessages: 5, maxMessages: 2 },
+      flushReason: (kind) => (kind === "force_split" ? "max_size" : "llm_boundary"),
+    });
+
+    await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [1] },
+    );
+    const previousOpen = await db.selectFrom("conversation_slices").select("id").executeTakeFirstOrThrow();
+
+    await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [2, 3, 4, 5, 6] },
+    );
+    const insertedOpen = await db
+      .selectFrom("conversation_slices")
+      .select("id")
+      .where("status", "=", "open")
+      .executeTakeFirstOrThrow();
+    const growResult = await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      { adapter, mode: "live", maxWindows: 1, pendingMessageIds: [6] },
+    );
+    const slices = await db
+      .selectFrom("conversation_slices")
+      .select(["id", "first_message_id", "last_message_id", "flush_reason", "status"])
+      .orderBy("first_message_id")
+      .execute();
+
+    expect(growResult.openSliceId).toBe(insertedOpen.id);
+    expect(slices).toEqual([
+      {
+        id: previousOpen.id,
+        first_message_id: 1,
+        last_message_id: 2,
+        flush_reason: "max_size",
+        status: "closed",
+      },
+      {
+        id: expect.any(String),
+        first_message_id: 3,
+        last_message_id: 4,
+        flush_reason: "max_size",
+        status: "closed",
+      },
+      {
+        id: insertedOpen.id,
+        first_message_id: 5,
+        last_message_id: 6,
+        flush_reason: "llm_boundary",
+        status: "open",
+      },
+    ]);
   });
 
   it("persists the adapter flush reason and requests a roster snapshot for each window", async () => {
@@ -211,7 +284,7 @@ describe("chunk engine adapter contract", () => {
       boundaries: "llm",
       usesTopicRegistry: true,
       flushReason: (kind) => (kind === "boundary" ? "max_age" : "gap"),
-      rosterSnapshot: async (_trx: Transaction<DB>) => {
+      rosterSnapshot: async (_db: Kysely<DB>) => {
         rosterCalls += 1;
         return JSON.stringify({ window: rosterCalls });
       },

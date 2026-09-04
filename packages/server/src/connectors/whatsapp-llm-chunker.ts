@@ -147,6 +147,25 @@ async function listRawMessages(db: Kysely<DB>, conversationId: number): Promise<
   return rows.map((row) => toMessage(row as RawMessageRow));
 }
 
+async function getRawMessage(db: Kysely<DB>, messageId: number): Promise<ChunkEngineMessage | undefined> {
+  const row = await db
+    .selectFrom("conversation_messages")
+    .select([
+      "id",
+      "provider_message_id",
+      "sender_name",
+      "is_bot",
+      "text",
+      "attachments",
+      "provider_timestamp",
+      "received_at",
+      "effective_at",
+    ])
+    .where("id", "=", messageId)
+    .executeTakeFirst();
+  return row ? toMessage(row as RawMessageRow) : undefined;
+}
+
 export function createWhatsAppChunkStreamAdapter(
   deps: WhatsAppLlmChunkerDeps,
   params: { conversationId: number; groupJid: string; knobs: WhatsAppLlmChunkerKnobs },
@@ -157,25 +176,26 @@ export function createWhatsAppChunkStreamAdapter(
     streamKey: null,
     providerThreadId: null,
     cursor,
-    loadOpenAndPending: async (db, open) => {
+    loadOpenAndPending: async (db, open, state) => {
       const allRaw = await listRawMessages(db, params.conversationId);
-      const state = await cursor.get(db);
-      if (!state) throw new Error("WhatsApp LLM chunking cursor was not claimed");
       return {
         openRaw: open ? allRaw : [],
         pendingRaw: allRaw.filter((message) => cursor.isAfterCursor(message, state)),
         pageFull: false,
       };
     },
+    tailMessage: getRawMessage,
     isIndexable: isIndexableWhatsAppChunkMessage,
     senderLabel: (message) => (message as ChunkEngineMessage & { senderName: string }).senderName,
     order: "effective_time",
     boundaries: "llm",
+    promptHeader: "You are the WhatsApp conversation boundary engine.",
+    generateLabel: (kind) => (kind === "repair" ? "whatsappLlmBoundaryRepair" : "whatsappLlmBoundary"),
     flushReason: () => "llm_boundary",
-    rosterSnapshot: async (trx) =>
+    rosterSnapshot: async (db) =>
       (
         await buildWhatsAppRosterSnapshot({
-          db: trx,
+          db,
           groupJid: params.groupJid,
           conversationId: params.conversationId,
           logger: deps.logger,
@@ -190,23 +210,6 @@ export function createWhatsAppChunkStreamAdapter(
         "whatsapp_llm_chunking_skipped",
       ),
     knobs: params.knobs,
-  };
-}
-
-function engineDeps(deps: WhatsAppLlmChunkerDeps): ChunkEngineDeps {
-  return {
-    ...deps,
-    generate: (prompt, opts) =>
-      deps.generate(
-        prompt.replace(
-          "You are the conversation boundary engine.",
-          "You are the WhatsApp conversation boundary engine.",
-        ),
-        {
-          ...opts,
-          label: opts.label === "chunkBoundaryRepair" ? "whatsappLlmBoundaryRepair" : "whatsappLlmBoundary",
-        },
-      ),
   };
 }
 
@@ -253,7 +256,7 @@ export async function runLlmChunkingPass(
   if (actualConversationId !== params.conversationId) {
     return { windowsProcessed: 0, slicesClosed: 0, openSliceId: null, skippedReason: "conversation_not_found" };
   }
-  return runChunkingPass(engineDeps(deps), {
+  return runChunkingPass(deps, {
     adapter: createWhatsAppChunkStreamAdapter(deps, params),
     mode: params.mode,
     maxWindows: params.maxWindows,
@@ -271,7 +274,7 @@ export async function evaluateIdleClose(
     .where("id", "=", params.conversationId)
     .executeTakeFirst();
   if (!conversation) return false;
-  return evaluateChunkIdleClose(engineDeps(deps), {
+  return evaluateChunkIdleClose(deps, {
     adapter: createWhatsAppChunkStreamAdapter(deps, {
       conversationId: params.conversationId,
       groupJid: conversation.provider_conversation_id,
