@@ -185,6 +185,127 @@ it("accepts Teams as a search source filter and returns only Teams files", async
   expect(text).not.toContain("Drive source reachability");
 });
 
+it("reaches Outlook emails through kind: email and keeps chat out of it", async () => {
+  const now = new Date().toISOString();
+  await db
+    .insertInto("connector_configs")
+    .values([
+      {
+        id: "cfg-search-tools-outlook",
+        connector_type: "outlook",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+      {
+        id: "cfg-search-tools-whatsapp",
+        connector_type: "whatsapp",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+      {
+        id: "cfg-search-tools-gmail",
+        connector_type: "gmail",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-outlook-email",
+        connector_config_id: "cfg-search-tools-outlook",
+        provider_file_id: "file-outlook-email",
+        file_name: "Outlook email kind reachability",
+        file_type: "email_message",
+        content_category: "document",
+        source: "outlook",
+        content: "email kind reachability marker",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-whatsapp-chat",
+        connector_config_id: "cfg-search-tools-whatsapp",
+        provider_file_id: "file-whatsapp-chat",
+        file_name: "WhatsApp chat kind reachability",
+        file_type: "conversation",
+        content_category: "document",
+        source: "whatsapp",
+        content: "email kind reachability marker",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-gmail-email",
+        connector_config_id: "cfg-search-tools-gmail",
+        provider_file_id: "file-gmail-email",
+        file_name: "Gmail email kind reachability",
+        file_type: "email_message",
+        content_category: "document",
+        source: "gmail",
+        content: "email kind reachability marker",
+        source_updated_at: now,
+        synced_at: now,
+      },
+    ])
+    .execute();
+
+  const parsed = z
+    .object(searchToolSchema)
+    .parse({ query: "email kind reachability marker", kind: "email", limit: 10 });
+  const result = await handleSearch(parsed, deps());
+  const text = result.content[0]?.text ?? "";
+
+  expect(text).toContain("Outlook email kind reachability");
+  expect(text).toContain("Gmail email kind reachability");
+  expect(text).not.toContain("WhatsApp chat kind reachability");
+
+  const narrowed = z
+    .object(searchToolSchema)
+    .parse({ query: "email kind reachability marker", kind: "email", source: "outlook", limit: 10 });
+  const narrowedResult = await handleSearch(narrowed, deps());
+  const narrowedText = narrowedResult.content[0]?.text ?? "";
+
+  expect(narrowedText).toContain("Outlook email kind reachability");
+  expect(narrowedText).not.toContain("Gmail email kind reachability");
+});
+
+it("keeps the local-specific error for kind=email with source: local", async () => {
+  const parsed = z.object(searchToolSchema).parse({ query: "anything", kind: "email", source: "local" });
+  const result = await handleSearch(parsed, deps());
+  const text = result.content[0]?.text ?? "";
+
+  expect(text).toContain("local files have no kind taxonomy");
+});
+
+it("rejects a kind×source pair that compiles to an empty intersection, naming the right kind", async () => {
+  const parsed = z.object(searchToolSchema).parse({ query: "anything", kind: "message", source: "outlook" });
+  const result = await handleSearch(parsed, deps());
+  const text = result.content[0]?.text ?? "";
+
+  expect(text).toContain("can never match");
+  expect(text).toContain("'email'");
+});
+
+it("lists the applied filters on an empty result instead of a bare no-results line", async () => {
+  const parsed = z.object(searchToolSchema).parse({
+    query: "no such content anywhere",
+    kind: "email",
+    after: "2020-01-01",
+    before: "2020-01-02",
+  });
+  const result = await handleSearch(parsed, deps());
+  const text = result.content[0]?.text ?? "";
+
+  expect(text).toContain("Filters applied: kind=email");
+  expect(text).toContain("Try broader query terms, or relax a filter");
+});
+
 it("normalizes legacy person subtypes in search and context output", async () => {
   await db
     .insertInto("entities")

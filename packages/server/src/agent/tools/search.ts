@@ -4,9 +4,12 @@ import { resolveContentPrincipals } from "../../access/principals";
 import {
   KIND_TO_RULES,
   SEARCHABLE_SOURCES,
+  SEARCH_KINDS,
   filterAccessibleFileIds,
   getFileContent,
+  kindsForSource,
   search,
+  sourcesForKind,
 } from "../../connectors/search";
 import type { DevSearchTraceOrigin, DevSearchTraceStatus } from "../../db/repositories/dev-search-traces";
 import { createEntityRepository } from "../../db/repositories/entities";
@@ -14,7 +17,7 @@ import { createRawContentRepository } from "../../db/repositories/raw-contents";
 import { createSearchTraceCapture } from "./search-trace";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
-export const searchToolDescription = `Search across all indexed knowledge — docs, tasks, meetings, conversations, and workspace files. Uses hybrid search (keyword + semantic) for best results. Automatically surfaces matching entities for context.
+export const searchToolDescription = `Search across all indexed knowledge — docs, tasks, meetings, emails, conversations, and workspace files. Uses hybrid search (keyword + semantic) for best results. Automatically surfaces matching entities for context.
 
 When results mention a specific entity (project, client, person), results linked to that entity are boosted to the top. For hard-scoped search by entity, call SearchEntities first then pass the resolved IDs as \`entityIds\` (use \`entityIdsMode: "and"\` for "with X and Y", \`"or"\` for "from X or Y").
 
@@ -26,8 +29,11 @@ Use this to find information before asking others. Examples:
 - "fetch my latest meeting"  → Search({ kind: "meeting", sortBy: "recency", limit: 3 })
 - "latest meeting with Oliver Wyman and Ohoud"  → SearchEntities then Search({ kind: "meeting", entityIds: [<a>, <b>], sortBy: "recency" })
 - "anything from Oliver or Ohoud lately"  → SearchEntities then Search({ entityIds: [<a>, <b>], entityIdsMode: "or", sortBy: "recency" })
+- "emails from Ranjith yesterday"  → SearchEntities then Search({ kind: "email", entityIds: [<a>], after: "...", before: "..." })
 
-\`kind\` cannot be combined with \`source: "local"\` (local files have no kind taxonomy).`;
+\`query\` is semantic + keyword text — do NOT put operators in it ("OR", "from:", email addresses as filters). To narrow results, prefer filters over query wording. On zero results, broaden the query terms or relax a filter — rewording against the same filters rarely changes the outcome.
+
+\`kind\` and \`source\` are ANDed — pair them consistently (e.g. source "outlook" or "gmail" pairs with kind "email", not "message"; incompatible pairs are rejected). \`kind\` cannot be combined with \`source: "local"\` (local files have no kind taxonomy).`;
 
 export const searchToolSchema = {
   query: z.string().optional().describe("Natural language search query. May be empty when filters are present."),
@@ -43,12 +49,12 @@ export const searchToolSchema = {
       "'and' (default): only files mentioning ALL entities. 'or': files mentioning ANY of them. If 'and' returns nothing, retry with 'or' before declaring no results.",
     ),
   kind: z
-    .enum(["meeting", "doc", "task", "message"])
+    .enum(SEARCH_KINDS)
     .optional()
     .describe(
       "Semantic content kind. meeting=Teams/Fireflies/Otter meeting transcripts, " +
         "doc=Drive/Notion/ClickUp Docs/Linear projects, task=ClickUp tasks/Linear issues, " +
-        "message=conversation/WhatsApp/Slack.",
+        "message=conversation/WhatsApp/Slack chats, email=Outlook/Gmail emails.",
     ),
   source: z.enum(SEARCHABLE_SOURCES).optional().describe("Filter to a specific source. Omit to search all."),
   sortBy: z
@@ -228,6 +234,26 @@ export async function handleSearch(
     );
   }
 
+  /**
+   * A kind whose rules never reach the given source compiles to an empty
+   * intersection — the query cannot match anything regardless of the query
+   * text. Failing loudly here stops the model from retrying keyword
+   * variations against a structurally empty result set.
+   */
+  if (kind && source && source !== "local" && !sourcesForKind(kind).includes(source)) {
+    const kindsForThisSource = kindsForSource(source);
+    const hint =
+      kindsForThisSource.length > 0
+        ? `For source '${source}', use kind ${kindsForThisSource.map((k) => `'${k}'`).join(" or ")} — or drop 'kind'.`
+        : `No kind covers source '${source}' — drop 'kind' and keep only 'source'.`;
+    return done(
+      "empty",
+      `kind '${kind}' only covers sources ${sourcesForKind(kind).join(", ")} — combined with source '${source}' this can never match. ${hint}`,
+      0,
+      `incompatible kind '${kind}' with source '${source}'`,
+    );
+  }
+
   const trimmedQuery = (searchQuery ?? "").trim();
   const callerProvidedEntityIds = !!(entityId || (entityIds && entityIds.length > 0));
   const hasFilter = !!kind || !!source || callerProvidedEntityIds || !!after || !!before;
@@ -319,10 +345,38 @@ export async function handleSearch(
   }
   trace?.rerank(results, rerankApplied, entityFileIds?.size ?? 0);
 
+  /**
+   * On zero file results, tell the model which filters were in force and how
+   * to relax them. Without this, an over-filtered search is indistinguishable
+   * from "no such data", and the model retries query-text variations that
+   * cannot change the outcome.
+   */
+  const emptyResultDiagnostic = () => {
+    const applied: string[] = [];
+    if (kind) applied.push(`kind=${kind}`);
+    if (source) applied.push(`source=${source}`);
+    if (callerProvidedEntityIds) applied.push(`entityIds(${entityIdsMode ?? "and"})`);
+    if (after) applied.push(`after=${after}`);
+    if (before) applied.push(`before=${before}`);
+    if (applied.length === 0) return "";
+    const relax: string[] = [];
+    if (callerProvidedEntityIds && (entityIdsMode ?? "and") === "and") relax.push(`retry with entityIdsMode: "or"`);
+    if (callerProvidedEntityIds) relax.push("drop entityIds (entity linkage on files can be sparse)");
+    if (kind || source) relax.push(`drop '${kind && source ? "kind' or 'source" : kind ? "kind" : "source"}'`);
+    if (after || before) relax.push("widen the date range");
+    const queryAdvice = trimmedQuery
+      ? "Try broader query terms, or relax a filter"
+      : "This search has no query text, so only relaxing a filter can broaden it";
+    return ` Filters applied: ${applied.join(", ")}. ${queryAdvice}: ${relax.join("; ")}.`;
+  };
+
   const agentBlocks: string[] = [];
   if (results.length === 0 && entityMatches.length === 0) {
     const label = trimmedQuery ? `"${trimmedQuery}"` : "the given filters";
-    return done("empty", `No results found for ${label}.`, 0, null);
+    return done("empty", `No results found for ${label}.${emptyResultDiagnostic()}`, 0, null);
+  }
+  if (results.length === 0) {
+    lines.push(`No matching files — only the entities above matched.${emptyResultDiagnostic()}`);
   }
 
   for (const r of results) {

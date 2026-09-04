@@ -27,7 +27,7 @@ import {
 } from "../connectors/enrichment-providers";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { createOpenRouterGenerator } from "../connectors/openrouter-generate";
-import { SEARCHABLE_SOURCES } from "../connectors/search";
+import { SEARCHABLE_SOURCES, SEARCH_KINDS } from "../connectors/search";
 import { mintTasksFromFile } from "../connectors/task-minting";
 import { createDevSearchTraceRepository } from "../db/repositories/dev-search-traces";
 import { createSettingsRepository } from "../db/repositories/settings";
@@ -51,7 +51,7 @@ const searchRunSchema = z.object({
   query: z.string().optional(),
   entityIds: z.array(z.string()).optional(),
   entityIdsMode: z.enum(["and", "or"]).optional(),
-  kind: z.enum(["meeting", "doc", "task", "message"]).optional(),
+  kind: z.enum(SEARCH_KINDS).optional(),
   source: z.enum(SEARCHABLE_SOURCES).optional(),
   sortBy: z.enum(["relevance", "recency"]).optional(),
   after: z.string().optional(),

@@ -109,6 +109,7 @@ function RunSearch({ onRan }: { onRan: (traceId: string) => void }) {
           <option value="doc">doc</option>
           <option value="task">task</option>
           <option value="message">message</option>
+          <option value="email">email</option>
         </select>
         <select
           value={sortBy}

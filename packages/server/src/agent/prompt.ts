@@ -628,7 +628,7 @@ export function buildSystemContext(params: {
       ...sourceList,
       "",
       "Tool chain:",
-      "- **Search** — hybrid keyword + semantic search across all indexed sources. Supports filtering by source, content `kind` (meeting/doc/task/message), date range, and entity scope. Each result includes `sketchId` (for GetFileContent), `providerId` (the external ID integration tools expect), and `url` (when available).",
+      "- **Search** — hybrid keyword + semantic search across all indexed sources. Supports filtering by source, content `kind` (meeting/doc/task/message/email), date range, and entity scope. Each result includes `sketchId` (for GetFileContent), `providerId` (the external ID integration tools expect), and `url` (when available).",
       "- **GetFileContent** — retrieve the content of an indexed file by its `sketchId`. Use when you need the complete document or task detail. " +
         'Pass `view: "full"` for the raw stored version — for meetings this is the complete sentence-by-sentence transcript with speakers and timestamps (paged; follow the footer\'s offset for more).',
       "- **SearchEntities** — find projects, people, teams, companies, and products across connected sources. " +
