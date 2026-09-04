@@ -188,6 +188,7 @@ export interface SyncedItem {
   content: string | null;
   sourcePath: string | null;
   sourceMeta?: Record<string, unknown>;
+  enrichmentRefresh?: "full" | "embeddings_only";
   /**
    * Retrieval-only raw payload (e.g. a full meeting transcript). Persisted to
    * indexed_file_raw_contents, deliberately outside `content` so it never

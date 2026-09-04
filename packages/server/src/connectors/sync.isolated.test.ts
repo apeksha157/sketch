@@ -1308,6 +1308,77 @@ describe("runConnectorSync — ACL sync on unchanged items", () => {
     });
   });
 
+  it("keeps enrichment data and resolved summary state for an embeddings-only content refresh", async () => {
+    db = await createTestDb();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "connector-embeddings-only",
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: JSON.stringify({ type: "oauth", accessToken: "test" }),
+        created_by: "admin",
+        scope_config: JSON.stringify({}),
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "file-embeddings-only",
+        connector_config_id: "connector-embeddings-only",
+        provider_file_id: "provider-embeddings-only",
+        file_name: "conversation.md",
+        file_type: "document",
+        content_category: "document",
+        source: "google_drive",
+        source_path: "/conversation.md",
+        provider_url: null,
+        content: "old content",
+        content_hash: "old-hash",
+        summary: "Resolved summary",
+        summary_status: "done",
+        embedding_status: "done",
+        source_updated_at: "2026-09-05T00:00:00.000Z",
+        synced_at: "2026-09-05T00:00:00.000Z",
+      })
+      .execute();
+
+    async function* mockGen() {
+      yield {
+        providerFileId: "provider-embeddings-only",
+        providerUrl: null,
+        fileName: "conversation.md",
+        fileType: "document",
+        contentCategory: "document" as const,
+        content: "new content",
+        sourcePath: "/conversation.md",
+        sourceMeta: { messageCount: 2 },
+        enrichmentRefresh: "embeddings_only" as const,
+        contentHash: "new-hash",
+        sourceCreatedAt: null,
+        sourceUpdatedAt: "2026-09-05T01:00:00.000Z",
+      } satisfies SyncedItem;
+    }
+    mockConnectorSync.mockReturnValue(mockGen());
+    vi.mocked(clearEnrichmentData).mockClear();
+
+    const result = await runConnectorSync(db, "connector-embeddings-only", logger);
+    const row = await db
+      .selectFrom("indexed_files")
+      .select(["embedding_status", "summary_status", "summary", "source_meta"])
+      .where("id", "=", "file-embeddings-only")
+      .executeTakeFirstOrThrow();
+
+    expect(result.itemsUpdated).toBe(1);
+    expect(clearEnrichmentData).not.toHaveBeenCalled();
+    expect(row).toEqual({
+      embedding_status: "pending",
+      summary_status: "done",
+      summary: "Resolved summary",
+      source_meta: JSON.stringify({ messageCount: 2 }),
+    });
+  });
+
   it("re-seeds person entities for attendees even when content hash is unchanged", async () => {
     // Guards the skip-branch attendees-seed change: a cursor reset (or any
     // sync hitting the content-hash skip path) must now backfill attendee

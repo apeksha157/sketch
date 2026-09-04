@@ -560,6 +560,7 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
       content: string | null;
       sourcePath: string | null;
       sourceMeta?: Record<string, unknown>;
+      enrichmentRefresh?: "full" | "embeddings_only";
       contentHash: string | null;
       sourceCreatedAt: string | null;
       sourceUpdatedAt: string | null;
@@ -606,6 +607,11 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
           data.content === null &&
           existing.content === null &&
           sourceUpdatedAt !== existing.source_updated_at;
+        const embeddingsOnlyContentRefresh =
+          data.enrichmentRefresh === "embeddings_only" &&
+          contentChanged &&
+          !categoryChanged &&
+          !sourceVersionChanged;
         const updates: Record<string, unknown> = {
           provider_file_id: data.providerFileId,
           provider_message_id: data.providerMessageId ?? null,
@@ -628,11 +634,13 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
         if (data.isAllDay !== undefined) updates.is_all_day = data.isAllDay ? 1 : 0;
         if (contentChanged || categoryChanged || sourceVersionChanged) {
           updates.embedding_status = "pending";
-          updates.summary_status = "pending";
           updates.embedding_attempts = 0;
           updates.embedding_next_retry_at = null;
-          updates.summary_attempts = 0;
-          updates.summary_next_retry_at = null;
+          if (!embeddingsOnlyContentRefresh) {
+            updates.summary_status = "pending";
+            updates.summary_attempts = 0;
+            updates.summary_next_retry_at = null;
+          }
         }
 
         await db.updateTable("indexed_files").set(updates).where("id", "=", existing.id).execute();
