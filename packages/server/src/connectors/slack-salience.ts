@@ -56,6 +56,8 @@ interface RenderedSlackSlice {
   accessPrincipals: ReturnType<typeof accessPrincipalsFromRoster>;
 }
 
+class SlackSliceMembershipError extends Error {}
+
 function emptySummary(batchLimit: number): SlackSalienceRunSummary {
   return { batchLimit, pendingConsidered: 0, judged: 0, kept: 0, dropped: 0, failures: 0 };
 }
@@ -71,13 +73,43 @@ function stableContentHash(content: string): string {
  */
 function requireMembership(slice: ConversationSliceRow): number[] {
   if (!slice.denoised_message_ids) {
-    throw new Error(`Slack slice ${slice.id} has no message membership; refusing range fallback`);
+    throw new SlackSliceMembershipError(`Slack slice ${slice.id} has no message membership; refusing range fallback`);
   }
-  const parsed = JSON.parse(slice.denoised_message_ids);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(slice.denoised_message_ids);
+  } catch {
+    throw new SlackSliceMembershipError(`Slack slice ${slice.id} has invalid message membership`);
+  }
   if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((value) => Number.isInteger(value))) {
-    throw new Error(`Slack slice ${slice.id} has invalid message membership`);
+    throw new SlackSliceMembershipError(`Slack slice ${slice.id} has invalid message membership`);
   }
   return parsed as number[];
+}
+
+async function dropInvalidMembership(
+  db: Kysely<DB>,
+  logger: Logger,
+  context: SlackSliceContext,
+  err: SlackSliceMembershipError,
+): Promise<void> {
+  await db
+    .updateTable("conversation_slices")
+    .set({
+      salience_verdict: "dropped",
+      salience_signals: JSON.stringify({
+        promptVersion: SLACK_SALIENCE_PROMPT_VERSION,
+        droppedReason: "invalid_membership",
+      }),
+      salience_claim_token: null,
+      salience_claimed_at: null,
+    })
+    .where("id", "=", context.slice.id)
+    .execute();
+  logger.warn(
+    { err, sliceId: context.slice.id, conversationId: context.conversationId },
+    "Slack slice dead-lettered: invalid message membership",
+  );
 }
 
 function resolveMentionTokens(text: string, displayNameBySlackId: Map<string, string>): string {
@@ -473,6 +505,10 @@ export async function* emitSlackSyncedItems(options: {
     try {
       rendered = await renderSlackSlice(options.db, options.facade, context, options.logger);
     } catch (err) {
+      if (err instanceof SlackSliceMembershipError) {
+        await dropInvalidMembership(options.db, options.logger, context, err);
+        continue;
+      }
       options.logger.warn({ err, sliceId: context.slice.id }, "Slack slice render failed; skipping emission");
       continue;
     }

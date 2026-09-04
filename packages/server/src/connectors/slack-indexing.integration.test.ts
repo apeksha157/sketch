@@ -163,7 +163,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(items).toHaveLength(1);
     });
 
-    it("salience fails closed on a slice without explicit membership", async () => {
+    it("dead-letters a slice without explicit membership", async () => {
       const conversations = createConversationRepository(db);
       const conversation = await conversations.getOrCreate({
         platform: "slack",
@@ -180,24 +180,22 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         denoisedMessageIds: null,
         flushReason: "gap",
         rosterSnapshot: "[]",
+        salienceVerdict: "kept",
       });
 
-      const generator = {
-        generateJSON: async () => ({ salient: true, signals: [], entities: [] }),
-      } as unknown as Parameters<typeof processSlackSalience>[0]["generator"];
-
-      const summary = await processSlackSalience({ db, logger, facade: fakeFacade(), generator });
-      expect(summary.failures).toBe(1);
-      expect(summary.judged).toBe(0);
+      const items = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade() })) items.push(item);
 
       const slice = await db
         .selectFrom("conversation_slices")
-        .select(["salience_verdict", "salience_claim_token", "salience_claimed_at"])
+        .select(["salience_verdict", "salience_signals", "salience_claim_token", "salience_claimed_at"])
         .where("conversation_id", "=", conversation.id)
         .executeTakeFirstOrThrow();
-      expect(slice.salience_verdict).toBeNull();
-      expect(slice.salience_claim_token).not.toBeNull();
-      expect(slice.salience_claimed_at).not.toBeNull();
+      expect(items).toHaveLength(0);
+      expect(slice.salience_verdict).toBe("dropped");
+      expect(slice.salience_signals).toContain("invalid_membership");
+      expect(slice.salience_claim_token).toBeNull();
+      expect(slice.salience_claimed_at).toBeNull();
     });
 
     it("dead-letters slices from channels the bot can no longer access", async () => {
