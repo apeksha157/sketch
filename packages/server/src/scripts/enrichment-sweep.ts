@@ -9,7 +9,7 @@ import { createDatabase } from "../db";
 import { runMigrations } from "../db/migrate";
 import { createConnectorRepository } from "../db/repositories/connectors";
 import type { DB } from "../db/schema";
-import { runEnrichmentSweep } from "../entities/enrichment-sweep";
+import { emptyEnrichmentSweepReport, runEnrichmentSweep } from "../entities/enrichment-sweep";
 import { createLogger } from "../logger";
 import { connectionStringForDbArg, isConnectionString } from "./resolution-eval/db";
 
@@ -75,15 +75,7 @@ async function main(): Promise<void> {
             batch: scope.batch,
           },
         )
-      : {
-          seeded: 0,
-          selected: 0,
-          enriched: 0,
-          notFound: 0,
-          failed: 0,
-          skipped: 0,
-          domainsAttached: 0,
-        };
+      : emptyEnrichmentSweepReport();
     console.log(JSON.stringify(report, null, 2));
   } finally {
     await db.destroy();

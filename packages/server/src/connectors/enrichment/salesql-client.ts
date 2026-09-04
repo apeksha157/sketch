@@ -102,6 +102,11 @@ export class SalesqlClient implements PersonEnrichmentProvider {
     return this.request(`/v1/persons/enrich?${params.toString()}`);
   }
 
+  /**
+   * SalesQL's `/v1/allowance` reports monthly credits
+   * (`credits.emails_and_phones`), not daily calls; one credit is charged per
+   * successful enrichment, so this is the number that runs out.
+   */
   async allowance(): Promise<{ remainingCalls: number | null }> {
     const result = await this.requestAllowance();
     return { remainingCalls: result };
@@ -137,13 +142,10 @@ export class SalesqlClient implements PersonEnrichmentProvider {
       const payload = await response.json();
       if (!payload || typeof payload !== "object") return null;
       const record = payload as Record<string, unknown>;
-      const candidates = [record.remainingCalls, record.remaining_calls, record.remaining, record.credits];
-      for (const candidate of candidates) {
-        const value =
-          typeof candidate === "number" ? candidate : typeof candidate === "string" ? Number(candidate) : Number.NaN;
-        if (Number.isFinite(value)) return value;
-      }
-      return null;
+      const credits = record.credits;
+      const remaining =
+        credits && typeof credits === "object" ? (credits as Record<string, unknown>).emails_and_phones : undefined;
+      return typeof remaining === "number" && Number.isFinite(remaining) ? remaining : null;
     } catch {
       return null;
     }

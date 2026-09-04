@@ -33,6 +33,7 @@ export interface EnrichmentSweepReport {
   failed: number;
   skipped: number;
   domainsAttached: number;
+  creditsRemaining: number | null;
   stoppedOn?: "rate_limited" | "auth";
 }
 
@@ -49,7 +50,7 @@ export interface EnrichmentSweepServiceDeps extends EnrichmentSweepDeps {
   readScope: () => Promise<{ enabled: boolean; dailyCap: number; batch: number } | null>;
 }
 
-function emptyReport(): EnrichmentSweepReport {
+export function emptyEnrichmentSweepReport(): EnrichmentSweepReport {
   return {
     seeded: 0,
     selected: 0,
@@ -58,6 +59,7 @@ function emptyReport(): EnrichmentSweepReport {
     failed: 0,
     skipped: 0,
     domainsAttached: 0,
+    creditsRemaining: null,
   };
 }
 
@@ -166,7 +168,7 @@ export async function runEnrichmentSweep(
   deps: EnrichmentSweepDeps,
   opts: EnrichmentSweepOptions,
 ): Promise<EnrichmentSweepReport> {
-  const report = emptyReport();
+  const report = emptyEnrichmentSweepReport();
   const attemptsRepo = createEnrichmentAttemptsRepository(deps.db, { currentVersion: deps.provider.version });
   const entitiesRepo = deps.entitiesRepo ?? createEntityRepository(deps.db);
   const domainsRepo = deps.domainsRepo ?? createEntityDomainsRepository(deps.db);
@@ -180,6 +182,9 @@ export async function runEnrichmentSweep(
   const limit = Math.max(0, Math.min(opts.batch, opts.limit ?? opts.batch, remaining));
   const rows = await attemptsRepo.selectEligible(deps.provider.name, limit, now);
   report.selected = rows.length;
+  if (rows.length > 0 && deps.provider.allowance) {
+    report.creditsRemaining = (await deps.provider.allowance()).remainingCalls;
+  }
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -310,7 +315,7 @@ export function createEnrichmentSweepService(deps: EnrichmentSweepServiceDeps): 
     if (inflight) return inflight;
     inflight = (async () => {
       const scope = await deps.readScope();
-      if (!scope?.enabled) return emptyReport();
+      if (!scope?.enabled) return emptyEnrichmentSweepReport();
       return runEnrichmentSweep(deps, {
         apply: opts.apply,
         limit: opts.limit,
