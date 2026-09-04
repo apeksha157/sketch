@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.2] -- 2026-09-04
+
+- Adds `email` as a first-class search kind, covering outlook/gmail `email_message` files while `message` remains chat-only to fix silent zero results for kind×source mismatches.
+- Introduces loud error messages for incompatible kind×source pairs, returning specific guidance instead of empty results.
+- Enhances empty result responses with filter details and suggestions for relaxing search criteria.
+- Updates all kind surfaces—tool schema, system prompt, dev search route, and trace UI dropdown—to reflect the new email kind and validation.
+
 ## [1.7.1] -- 2026-09-04
 
 - Adds consistent access dialog for Microsoft, GitHub, and Linear integrations with Private, Selected members, and Entire organization sharing choices; member search appears for selected members; dialog retains failed edits and uses the app's dark surface.
