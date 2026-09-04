@@ -9,6 +9,7 @@ import {
   isNativeCanvasAppConnection,
   isOwnedOrPersonalAppConnection,
 } from "@/components/connections/connection-status";
+import { AccessSettingsDialog } from "@/components/connections/integrations-section";
 import { ConnectorLogo } from "@/components/connector-logos";
 import { QuietAddButton } from "@/components/quiet-add-button";
 import type { ConnectorConfig } from "@/lib/api";
@@ -182,6 +183,7 @@ export function ConnectorPicker({
   const [connectingIntegration, setConnectingIntegration] = useState<IntegrationDefinition | null>(null);
   const [showBrowseAll, setShowBrowseAll] = useState(false);
   const [canvasConnectionPolling, setCanvasConnectionPolling] = useState(false);
+  const [newConnectionAccess, setNewConnectionAccess] = useState<IntegrationConnection | null>(null);
   const auth = useDashboardAuth();
   const isAdmin = auth.role === "admin";
   const setupStatusQuery = useQuery({
@@ -242,8 +244,10 @@ export function ConnectorPicker({
       (canvasConnectionPolling && !nativeCanvasConnection));
 
   useEffect(() => {
-    if (nativeCanvasConnection) setCanvasConnectionPolling(false);
-  }, [nativeCanvasConnection]);
+    if (!nativeCanvasConnection || !canvasConnectionPolling) return;
+    setCanvasConnectionPolling(false);
+    if (nativeCanvasConnection.canManageAccess) setNewConnectionAccess(nativeCanvasConnection);
+  }, [nativeCanvasConnection, canvasConnectionPolling]);
 
   const handleConnectDialogClose = (open: boolean) => {
     if (!open) {
@@ -349,11 +353,11 @@ export function ConnectorPicker({
 
       <ConnectIntegrationDialog
         integration={effectiveConnectingIntegration}
-        open={!!effectiveConnectingIntegration}
+        open={!!effectiveConnectingIntegration && !newConnectionAccess}
         onOpenChange={handleConnectDialogClose}
         onConnected={handleConnected}
         preferCanvasCredentialSource={!!nativeCanvasConnection}
-        canvasConnectionReady={!!nativeCanvasConnection}
+        canvasConnectionReady={!!nativeCanvasConnection && !canvasConnectionPolling && !newConnectionAccess}
         canvasAccountId={nativeCanvasConnection?.id ?? null}
         canvasConnectionLookupPending={canvasConnectionLookupPending}
         onCanvasConnectionStarted={() => {
@@ -361,6 +365,15 @@ export function ConnectorPicker({
           void canvasConnectionsQuery.refetch();
         }}
       />
+      {newConnectionAccess && (
+        <AccessSettingsDialog
+          connection={newConnectionAccess}
+          providerId={newConnectionAccess.providerId}
+          orgName={setupStatusQuery.data?.orgName ?? undefined}
+          onSaved={() => void canvasConnectionsQuery.refetch()}
+          onOpenChange={(open) => !open && setNewConnectionAccess(null)}
+        />
+      )}
     </>
   );
 }

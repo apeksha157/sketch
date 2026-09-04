@@ -226,15 +226,17 @@ export class CanvasProvider implements IntegrationProvider {
     workspaceContext?: IntegrationWorkspaceContext;
     forceRefresh?: boolean;
   }): Promise<CanvasAccessToken> {
+    if (params.integration !== "clickup") {
+      return this.mintCanvasAccessToken(params, this.resolveCredentialPrivateKeyPem());
+    }
     const cacheKey = this.accessTokenCacheKey(params);
     const cached = this.accessTokenCache.get(cacheKey);
     const now = Date.now();
     const expiresAtMs = cached?.token.expiresAt ? Date.parse(cached.token.expiresAt) : 0;
     const providerTokenIsFresh = cached?.token.expiresAt
       ? Number.isFinite(expiresAtMs) && expiresAtMs > now + CACHE_EXPIRY_SAFETY_MS
-      : params.integration === "github" || params.integration === "clickup";
-    const grantIsFresh =
-      params.integration !== "clickup" || Boolean(cached && cached.grantLeaseExpiresAt > now + CACHE_EXPIRY_SAFETY_MS);
+      : true;
+    const grantIsFresh = Boolean(cached && cached.grantLeaseExpiresAt > now + CACHE_EXPIRY_SAFETY_MS);
     if (cached && !params.forceRefresh && providerTokenIsFresh && grantIsFresh) return cached.token;
 
     if (!params.forceRefresh) {
@@ -324,15 +326,13 @@ export class CanvasProvider implements IntegrationProvider {
     }
     const expiresAt = params.integration === "clickup" ? payload.expiresAt : (response.expiresAt ?? payload.expiresAt);
     const token = { accessToken: payload.accessToken, ...(expiresAt ? { expiresAt } : {}) };
-    const cacheKey = this.accessTokenCacheKey(params);
-    const grantExpiresAtMs = response.expiresAt ? Date.parse(response.expiresAt) : Number.NaN;
-    const grantLeaseExpiresAt = Number.isFinite(grantExpiresAtMs)
-      ? Math.min(grantExpiresAtMs, Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS)
-      : Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS;
-    this.accessTokenCache.set(cacheKey, {
-      token,
-      grantLeaseExpiresAt: params.integration === "clickup" ? grantLeaseExpiresAt : Number.POSITIVE_INFINITY,
-    });
+    if (params.integration === "clickup") {
+      const grantExpiresAtMs = response.expiresAt ? Date.parse(response.expiresAt) : Number.NaN;
+      const grantLeaseExpiresAt = Number.isFinite(grantExpiresAtMs)
+        ? Math.min(grantExpiresAtMs, Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS)
+        : Date.now() + CLICKUP_GRANT_REVALIDATION_LEASE_MS;
+      this.accessTokenCache.set(this.accessTokenCacheKey(params), { token, grantLeaseExpiresAt });
+    }
     return token;
   }
 

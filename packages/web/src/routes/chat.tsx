@@ -3,6 +3,7 @@ import {
   isOwnedOrPersonalAppConnection,
 } from "@/components/connections/connection-status";
 import { ConnectorNudgeDialog, type ConnectorNudgeSuggestion } from "@/components/connections/connector-nudge-dialog";
+import { AccessSettingsDialog } from "@/components/connections/integrations-section";
 import { ChatInput } from "@/components/sketch/chat-input";
 import { ChatIntegrationConnectionFrame } from "@/components/sketch/chat-integration-connection-dialog";
 import {
@@ -1026,6 +1027,7 @@ export function ChatPage() {
     Record<string, ChatThreadIntegrationConnectionStatus>
   >({});
   const [connectorNudge, setConnectorNudge] = useState<ConnectorNudgeSuggestion | null>(null);
+  const [newConnectionAccess, setNewConnectionAccess] = useState<IntegrationConnection | null>(null);
   const transport = useMemo(
     () =>
       new DefaultChatTransport<WebChatMessage>({
@@ -1325,7 +1327,11 @@ export function ChatPage() {
     (_app?: IntegrationApp, connection?: IntegrationConnection) => {
       queryClient.invalidateQueries({ queryKey: ["connections"] });
       queryClient.invalidateQueries({ queryKey: ["workspace", "summary"] });
-      if (connection) void maybeShowConnectorNudge(connection);
+      if (connection?.canManageAccess && isNativeCanvasAppConnection(connection)) {
+        setNewConnectionAccess(connection);
+      } else if (connection) {
+        void maybeShowConnectorNudge(connection);
+      }
     },
     [maybeShowConnectorNudge, queryClient],
   );
@@ -1515,6 +1521,19 @@ export function ChatPage() {
         onStatusChange={handleIntegrationConnectionStatusChange}
         onConnected={handleIntegrationConnected}
       />
+
+      {newConnectionAccess && (
+        <AccessSettingsDialog
+          connection={newConnectionAccess}
+          providerId={newConnectionAccess.providerId}
+          onSaved={() => void queryClient.invalidateQueries({ queryKey: ["connections"] })}
+          onOpenChange={(open) => {
+            if (open) return;
+            setNewConnectionAccess(null);
+            void maybeShowConnectorNudge(newConnectionAccess);
+          }}
+        />
+      )}
 
       <ConnectorNudgeDialog
         suggestion={connectorNudge}

@@ -12,6 +12,7 @@ import { AddIntegrationDialog } from "@/components/connections/add-integration-d
 import { AddMcpDialog } from "@/components/connections/add-mcp-dialog";
 import { AddProviderDialog, ProviderSelectorDialog } from "@/components/connections/add-provider-dialog";
 import {
+  isActiveOwnedAppConnection,
   isNativeCanvasAppConnection,
   isOwnedOrPersonalAppConnection,
 } from "@/components/connections/connection-status";
@@ -176,11 +177,7 @@ function removeSearchParams(paramsToRemove: string[]): void {
 }
 
 export function getPersonallyConnectedAppIds(connections: IntegrationConnection[]): Set<string> {
-  return new Set(
-    connections
-      .filter((connection) => isOwnedOrPersonalAppConnection(connection))
-      .map((connection) => connection.appId),
-  );
+  return new Set(connections.filter(isActiveOwnedAppConnection).map((connection) => connection.appId));
 }
 
 function connectionMatchesApp(connection: IntegrationConnection, appId: string): boolean {
@@ -189,7 +186,7 @@ function connectionMatchesApp(connection: IntegrationConnection, appId: string):
 
 function findOwnedConnectionForApp(connections: IntegrationConnection[] | undefined, appId: string) {
   const matchingConnections = (connections ?? []).filter(
-    (connection) => connectionMatchesApp(connection, appId) && isOwnedOrPersonalAppConnection(connection),
+    (connection) => connectionMatchesApp(connection, appId) && isActiveOwnedAppConnection(connection),
   );
   return matchingConnections.find(isNativeCanvasAppConnection) ?? matchingConnections[0] ?? null;
 }

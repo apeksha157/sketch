@@ -1550,6 +1550,7 @@ describe("chat route", () => {
               status: "active",
               accessLevel: "personal",
               isOwnedByViewer: true,
+              canManageAccess: true,
               createdAt: "2026-01-01T00:00:00Z",
             },
           ]
@@ -1584,6 +1585,10 @@ describe("chat route", () => {
       }),
     );
 
+    expect(await screen.findByRole("dialog", { name: "Share GitHub" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Private");
+    expect(screen.queryByRole("textbox", { name: "Add members" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Connected" })).toBeDisabled());
     await waitFor(() => expect(screen.queryByTitle("Connect GitHub")).not.toBeInTheDocument());
   });

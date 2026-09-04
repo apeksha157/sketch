@@ -121,17 +121,24 @@ describe("automation persistence", () => {
     const loadIntegrationProvider = async () =>
       ({
         providerId: "canvas-provider",
-        listConnections: async () => [
-          {
-            id: canvasAccountId,
-            appId: "microsoft-teams-oauth",
-            appName: "Teams",
-            status: "active",
-            canUse: true,
-            externalAccountId,
-            externalTenantId: "tenant-a",
-          },
-        ],
+        listConnections: async (
+          _email: string,
+          _name: string | undefined,
+          workspace?: { workspaceId: string; userId: string },
+        ) => {
+          if (workspace?.workspaceId !== "canvas-provider" || workspace.userId !== "user-1") return [];
+          return [
+            {
+              id: canvasAccountId,
+              appId: "microsoft-teams-oauth",
+              appName: "Teams",
+              status: "active",
+              canUse: true,
+              externalAccountId,
+              externalTenantId: "tenant-a",
+            },
+          ];
+        },
       }) as never;
     const result = await createAutomationDefinition({
       db,

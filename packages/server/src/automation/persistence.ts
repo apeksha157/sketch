@@ -590,7 +590,11 @@ async function admitAccountBindings(params: {
       .where("id", "=", params.createdBy)
       .executeTakeFirst();
     if (!user?.email) throw new Error("Automation creator integration identity is unavailable");
-    connections = await provider.listConnections(user.email);
+    if (!provider.providerId) throw new Error("Integration provider workspace is unavailable");
+    connections = await provider.listConnections(user.email, undefined, {
+      workspaceId: provider.providerId,
+      userId: params.createdBy,
+    });
   }
   return {
     ...requestWithPreservedBindings,

@@ -1,10 +1,8 @@
 import { GithubAppIcon, LinearAppIcon } from "@/components/connections/app-icon";
-import { GithubIntegrationRow } from "@/components/connections/github-integration-dialog";
-import { LinearIntegrationRow } from "@/components/connections/linear-integration-dialog";
 import { QuietAddButton } from "@/components/quiet-add-button";
 import { api } from "@/lib/api";
 import { GearSixIcon, PlugIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
-import type { CliIntegrationConnection, IntegrationConnection } from "@sketch/shared";
+import type { IntegrationConnection } from "@sketch/shared";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
 import {
@@ -29,9 +27,6 @@ export function IntegrationsSection({
   orgName,
   onAdd,
   onDisconnect,
-  githubConnection,
-  linearConnection,
-  integrationIsAdmin = false,
 }: {
   connections: IntegrationConnection[];
   isLoadingConnections: boolean;
@@ -39,9 +34,6 @@ export function IntegrationsSection({
   orgName?: string;
   onAdd: () => void;
   onDisconnect: () => void;
-  githubConnection?: CliIntegrationConnection | null;
-  linearConnection?: CliIntegrationConnection | null;
-  integrationIsAdmin?: boolean;
 }) {
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [settingsConnection, setSettingsConnection] = useState<IntegrationConnection | null>(null);
@@ -75,7 +67,7 @@ export function IntegrationsSection({
             </div>
           ))}
         </div>
-      ) : connections.length === 0 && !githubConnection && !linearConnection ? (
+      ) : connections.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border bg-brand-accent/[0.04] px-6 pt-8 pb-10 text-center">
           <div className="flex size-12 items-center justify-center rounded-full border border-brand-accent bg-white">
             <PlugIcon size={24} className="text-[#8B7A00]" />
@@ -88,22 +80,6 @@ export function IntegrationsSection({
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
-          {githubConnection && (
-            <GithubIntegrationRow
-              connection={githubConnection}
-              isLast={connections.length === 0 && !linearConnection}
-              isAdmin={integrationIsAdmin}
-              onChanged={onDisconnect}
-            />
-          )}
-          {linearConnection && (
-            <LinearIntegrationRow
-              connection={linearConnection}
-              isLast={connections.length === 0}
-              isAdmin={integrationIsAdmin}
-              onChanged={onDisconnect}
-            />
-          )}
           {connections.map((connection, i) => (
             <ConnectionRow
               key={connection.id}

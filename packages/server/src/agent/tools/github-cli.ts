@@ -19,7 +19,9 @@ const schema = {
     .string()
     .min(1)
     .optional()
-    .describe("Opaque Canvas account ID. Omit only when exactly one usable account exists."),
+    .describe(
+      "Opaque Canvas account ID. Omit to prefer your personal account, then a single shared account. Set this when the user explicitly selects a shared account.",
+    ),
   stdin: z
     .string()
     .max(64 * 1024)

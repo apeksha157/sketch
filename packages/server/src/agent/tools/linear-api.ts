@@ -38,7 +38,9 @@ const schema = {
     .min(1)
     .max(256)
     .optional()
-    .describe("Opaque Canvas Linear account ID. Omit only when Canvas can resolve one usable account."),
+    .describe(
+      "Opaque Canvas Linear account ID. Omit to prefer your personal account, then a single shared account. Set this when the user explicitly selects a shared account.",
+    ),
 };
 
 function byteLength(value: string): number {

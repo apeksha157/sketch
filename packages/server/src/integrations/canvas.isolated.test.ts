@@ -869,7 +869,7 @@ describe("CanvasProvider", () => {
   });
 
   it.each(["github", "linear", "clickup"] as const)(
-    "keeps %s OAuth minting cached and isolated by account, workspace, and actor",
+    "keeps %s OAuth minting isolated by account, workspace, and actor",
     async (integration) => {
       const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
       const envelope = encryptForTest(
@@ -917,7 +917,8 @@ describe("CanvasProvider", () => {
       ).resolves.toEqual([expected, expected]);
       await expect(provider.getCanvasAccessToken(request)).resolves.toEqual(expected);
       if (integration === "github") await expect(provider.getGithubAccessToken(request)).resolves.toEqual(expected);
-      expect(fetchMock).toHaveBeenCalledOnce();
+      const initialRequests = integration === "clickup" ? 1 : integration === "github" ? 4 : 3;
+      expect(fetchMock).toHaveBeenCalledTimes(initialRequests);
 
       await provider.getCanvasAccessToken({
         ...request,
@@ -929,8 +930,65 @@ describe("CanvasProvider", () => {
       });
       await provider.getCanvasAccessToken({ ...request, accountId: "account-2" });
       await provider.getCanvasAccessToken({ ...request, forceRefresh: true });
-      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(fetchMock).toHaveBeenCalledTimes(initialRequests + 4);
       expect(JSON.stringify(fetchMock.mock.calls)).not.toContain(`${integration}-minted-token`);
+    },
+  );
+
+  it.each(["github", "linear"] as const)(
+    "reauthorizes %s after personal connections and sharing change",
+    async (integration) => {
+      const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+      let personalConnected = false;
+      let sharedAvailable = true;
+      const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+        const { accountId } = JSON.parse(String(init.body));
+        const useShared = accountId === "shared-account" || !personalConnected;
+        if (useShared && !sharedAvailable) {
+          return new Response(JSON.stringify({ error: "ACCOUNT_ACCESS_DENIED", message: "Sharing revoked" }), {
+            status: 403,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            data: {
+              connectorType: integration,
+              provider: integration,
+              credentialKind: "oauth_access_token",
+              envelope: encryptForTest(
+                {
+                  type: "oauth_access_token",
+                  connectorType: integration,
+                  provider: integration,
+                  accessToken: useShared ? "shared-token" : "personal-token",
+                  ...(integration === "linear" ? { expiresAt: "2099-01-01T00:00:00.000Z" } : {}),
+                },
+                publicKey.export({ format: "pem", type: "spki" }).toString(),
+              ),
+            },
+          }),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1", {
+        credentialPrivateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+      });
+      const request = {
+        integration,
+        userEmail: "priya@example.com",
+        workspaceContext: { workspaceId: "provider-1", userId: "user-1" },
+      };
+      await expect(provider.getCanvasAccessToken(request)).resolves.toMatchObject({ accessToken: "shared-token" });
+      personalConnected = true;
+      await expect(provider.getCanvasAccessToken(request)).resolves.toMatchObject({ accessToken: "personal-token" });
+      const explicitShared = { ...request, accountId: "shared-account" };
+      await expect(provider.getCanvasAccessToken(explicitShared)).resolves.toMatchObject({
+        accessToken: "shared-token",
+      });
+      sharedAvailable = false;
+      await expect(provider.getCanvasAccessToken(explicitShared)).rejects.toMatchObject({ status: 403 });
+      await expect(provider.getCanvasAccessToken(request)).resolves.toMatchObject({ accessToken: "personal-token" });
     },
   );
 

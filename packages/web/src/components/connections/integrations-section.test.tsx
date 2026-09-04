@@ -7,7 +7,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
 import { IntegrationsSection } from "./integrations-section";
 
-const baseConnection = {
+const defaultConnection = {
   providerId: "provider-1",
   appId: "github",
   appName: "GitHub",
@@ -38,7 +38,9 @@ async function addMember(user: ReturnType<typeof userEvent.setup>, name: string)
   await user.click(await screen.findByRole("button", { name: `Add ${name}` }));
 }
 
-describe("IntegrationsSection", () => {
+describe.each(["github", "linear"] as const)("IntegrationsSection %s", (appId) => {
+  const appName = appId === "github" ? "GitHub" : "Linear";
+  const baseConnection = { ...defaultConnection, appId, appName };
   it("renders Canvas access metadata and gates destructive controls", () => {
     renderSection([
       {
@@ -84,7 +86,7 @@ describe("IntegrationsSection", () => {
     expect(screen.queryByText("OAuth")).not.toBeInTheDocument();
     expect(screen.queryByText(/Connected by:/)).not.toBeInTheDocument();
     expect(screen.queryByText("Owner: Tara")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Disconnect GitHub" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: `Disconnect ${appName}` })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Disconnect Notion" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open settings for Notion" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Settings unavailable for Slack" })).toBeDisabled();
@@ -193,7 +195,7 @@ describe("IntegrationsSection", () => {
       },
     ]);
 
-    expect(screen.getByRole("button", { name: "Disconnect GitHub" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: `Disconnect ${appName}` })).toBeDisabled();
   });
 
   it("saves selected members only for manageable Canvas-owned accounts", async () => {
@@ -230,7 +232,7 @@ describe("IntegrationsSection", () => {
       onDisconnect,
     );
 
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Who has access" })).toBeInTheDocument();
@@ -281,7 +283,7 @@ describe("IntegrationsSection", () => {
           accessRevision: 4,
         },
       ]);
-      await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+      await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
       await chooseAccess(user, label);
       await user.click(screen.getByRole("button", { name: "Save access" }));
       await waitFor(() =>
@@ -320,7 +322,7 @@ describe("IntegrationsSection", () => {
         accessRevision: 4,
       },
     ]);
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
     await chooseAccess(user, "Selected members");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     await addMember(user, "Alex");
@@ -356,7 +358,7 @@ describe("IntegrationsSection", () => {
         accessRevision: 4,
       },
     ]);
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
     expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Selected members");
     expect(await screen.findByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
@@ -385,7 +387,7 @@ describe("IntegrationsSection", () => {
       },
     ]);
 
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/Tara shared this account with you/)).toBeInTheDocument();
@@ -446,7 +448,7 @@ describe("IntegrationsSection", () => {
     expect(screen.queryByText("Owner: .")).not.toBeInTheDocument();
     expect(screen.queryByText(".")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/teammate shared this account with you/)).toBeInTheDocument();
