@@ -607,6 +607,53 @@ describe("chunk engine adapter contract", () => {
   });
 
   it("overrides the tick gate when indexable messages follow a full reaction-only page", async () => {
+    const groupJid = "burst-after-reactions@g.us";
+    const groups = createWhatsAppGroupRepository(db);
+    await groups.upsert({
+      jid: groupJid,
+      name: "Burst After Reactions",
+      description: null,
+      updated_at: "2026-07-07T09:00:00.000Z",
+    });
+    const group = await groups.setIndexEnabled(groupJid, true, {
+      chunkMinMessages: 1,
+      chunkWindowMessages: 250,
+      chunkBurstThresholdMessages: 250,
+    });
+    if (!group) throw new Error("Failed to enable burst group");
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    await insertMessagesBatched(
+      db,
+      Array.from({ length: 501 }, (_, index) => ({
+        conversationId: conversation.id,
+        providerMessageId: index < 251 ? `reaction:burst-after-reactions-${index}` : `burst-after-reactions-${index}`,
+        text: index < 251 ? "👍" : "roadmap update",
+        receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+      })),
+    );
+    let generateCalls = 0;
+
+    const result = await chunkWhatsAppIndexingGroups({
+      db,
+      groups: [{ ...group, chunkLastLlmAttemptAt: "2026-07-07T09:55:00.000Z" }],
+      logger: createTestLogger(),
+      now: new Date("2026-07-07T10:00:00.000Z"),
+      llmGenerate: async (prompt) => {
+        generateCalls += 1;
+        const count = prompt.match(/^\d+\. /gmu)?.length ?? 0;
+        return JSON.stringify({ segments: [{ start: 1, end: count, threads: ["roadmap"] }] });
+      },
+    });
+
+    expect(generateCalls).toBeGreaterThan(0);
+    expect(result.messagesProcessed).toBe(501);
+  });
+
+  it("overrides the tick gate when indexable messages follow a full noise page", async () => {
     const groupJid = "burst-after-noise@g.us";
     const groups = createWhatsAppGroupRepository(db);
     await groups.upsert({
@@ -628,10 +675,11 @@ describe("chunk engine adapter contract", () => {
     });
     await insertMessagesBatched(
       db,
-      Array.from({ length: 501 }, (_, index) => ({
+      Array.from({ length: 550 }, (_, index) => ({
         conversationId: conversation.id,
-        providerMessageId: index < 251 ? `reaction:burst-after-noise-${index}` : `burst-after-noise-${index}`,
-        text: index < 251 ? "👍" : "roadmap update",
+        providerMessageId: `burst-after-noise-${index}`,
+        isBot: index < 300,
+        text: index < 300 ? "noise" : "roadmap update",
         receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
       })),
     );
@@ -650,7 +698,7 @@ describe("chunk engine adapter contract", () => {
     });
 
     expect(generateCalls).toBeGreaterThan(0);
-    expect(result.messagesProcessed).toBe(501);
+    expect(result.messagesProcessed).toBe(550);
   });
 
   it("drains a full WhatsApp noise page before slicing indexable rows", async () => {

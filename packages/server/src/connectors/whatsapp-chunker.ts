@@ -510,8 +510,7 @@ async function listMessagesAfterCursor(
   after?: { effectiveAt: string; id: number },
 ): Promise<WhatsAppChunkerMessage[]> {
   const lowerBound = cursorReceivedAtLowerBound(cursor);
-  const open = await createConversationSlicesRepository(db).getOpenSlice(conversationId);
-  const historyStartId = open?.first_message_id ?? openFirstMessageId;
+  const historyStartId = openFirstMessageId;
   let query = db
     .selectFrom("conversation_messages")
     .select([
@@ -569,15 +568,24 @@ async function countPendingDenoisedMessages(
   db: Kysely<DB>,
   conversationId: number,
   cursor: ConversationSliceCursorRow,
-  limit: number,
+  burstThreshold: number,
   openFirstMessageId?: number,
 ): Promise<number> {
+  const pageSize = burstThreshold + 1;
   let count = 0;
   let after: { effectiveAt: string; id: number } | undefined;
   for (let page = 0; page < 4; page += 1) {
-    const messages = await listMessagesAfterCursor(db, conversationId, cursor, limit, openFirstMessageId, true, after);
+    const messages = await listMessagesAfterCursor(
+      db,
+      conversationId,
+      cursor,
+      pageSize,
+      openFirstMessageId,
+      true,
+      after,
+    );
     count += messages.filter(isIndexableWhatsAppChunkMessage).length;
-    if (count >= limit - 1 || messages.length < limit) break;
+    if (count >= burstThreshold || messages.length < pageSize) break;
     const last = messages[messages.length - 1];
     if (!last) break;
     after = { effectiveAt: last.effectiveAt, id: last.id };
@@ -648,7 +656,7 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
   if (!conversation) return emptyRunSummary();
   const repo = createConversationSlicesRepository(db);
   const knobs = resolveWhatsAppLlmChunkerKnobs(group, options.defaultLlmKnobs);
-  const openBeforeIdleClose = await repo.getOpenSlice(conversation.id);
+  const openBeforeIdleClose = await repo.getOpenSlice(conversation.id, null);
   await evaluateIdleClose(
     {
       db,
@@ -694,7 +702,7 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
   }
 
   const lastAttemptMs = group.chunkLastLlmAttemptAt ? Date.parse(group.chunkLastLlmAttemptAt) : Number.NaN;
-  const open = await repo.getOpenSlice(conversation.id);
+  const open = await repo.getOpenSlice(conversation.id, null);
   const burstThreshold = knobs.burstThresholdMessages ?? Math.max(1, knobs.windowMessages - (open?.message_count ?? 0));
   const tickGated = Number.isFinite(lastAttemptMs) && now.getTime() - lastAttemptMs < knobs.tickMinutes * MINUTE_MS;
   const pendingDenoisedMessages = tickGated
@@ -702,8 +710,8 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
         db,
         conversation.id,
         cursor,
-        burstThreshold + 1,
-        openBeforeIdleClose?.first_message_id,
+        burstThreshold,
+        open?.first_message_id ?? openBeforeIdleClose?.first_message_id,
       )
     : 0;
   if (tickGated && pendingDenoisedMessages < burstThreshold) {

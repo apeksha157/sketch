@@ -549,7 +549,8 @@ function isAtOrBefore(
 
 /**
  * The read-only no-hit path preserves the supplied open row; `decideAndApply`
- * revalidates the claim, cursor, and open slice before boundary writes.
+ * revalidates the claim, cursor, and open slice before boundary writes, while
+ * `advanceNoiseCursor` revalidates the claim and cursor before noise-only writes.
  */
 async function repairOrphanedOpenSlice(
   db: Kysely<DB>,
