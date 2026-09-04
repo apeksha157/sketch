@@ -7,6 +7,7 @@ import { createConversationRepository } from "../db/repositories/conversations";
 import type { DB } from "../db/schema";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
 import { createTestDb, createTestPgDb } from "../test-utils";
+import { createSlackIndexingConnector } from "./slack-indexing";
 import { ensureSlackConnectorConfig } from "./slack-provisioning";
 import {
   archiveAllSlackChannelFiles,
@@ -101,6 +102,65 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       await ensureSlackConnectorConfig({ db, logger });
       const configs = await createConnectorRepository(db).findSyncableConfigs({ staleAfterMs: 60_000 });
       expect(configs.some((config) => config.connector_type === "slack")).toBe(true);
+    });
+
+    it("chunks and emits kept slices without running the legacy salience judge", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await createConnectorRepository(db)
+        .findSyncableConfigs({ staleAfterMs: 60_000 })
+        .then((configs) => configs.find((config) => config.connector_type === "slack"));
+      const conversations = createConversationRepository(db);
+      const conversation = await conversations.getOrCreate(
+        { platform: "slack", kind: "channel", providerConversationId: "C1" },
+        "general",
+      );
+      for (let index = 0; index < 2; index += 1) {
+        await conversations.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `engine-${index}`,
+          senderJid: "U0TEAM",
+          senderName: "Roopak",
+          text: `Engine message ${index}`,
+          providerThreadId: `engine-${index}`,
+          providerTimestamp: new Date(Date.parse("2026-09-05T00:00:00.000Z") + index * 60_000).toISOString(),
+          receivedAt: new Date(Date.parse("2026-09-05T00:00:00.000Z") + index * 60_000).toISOString(),
+        });
+      }
+      let legacyJudgeCalls = 0;
+      const connector = createSlackIndexingConnector();
+      const items = [];
+      for await (const item of connector.sync({
+        db,
+        connectorConfigId: config?.id,
+        credentials: { type: "system" },
+        scopeConfig: {},
+        cursor: null,
+        logger,
+        slackIndexing: fakeFacade(),
+        salienceGenerator: {
+          generateJSON: async () => {
+            legacyJudgeCalls += 1;
+            throw new Error("legacy salience judge must not run");
+          },
+        } as never,
+        appConfig: { SLACK_CHUNK_MODEL: "openai/test-boundary", SLACK_CHUNK_REASONING_EFFORT: "low" },
+        slackChunkerGenerate: async (_prompt, opts) => {
+          expect(opts.model).toBe("openai/test-boundary");
+          expect(opts.reasoningEffort).toBe("low");
+          return JSON.stringify({ segments: [{ start: 1, end: 2, threads: ["engine"] }] });
+        },
+      })) {
+        items.push(item);
+      }
+
+      const slices = await db
+        .selectFrom("conversation_slices")
+        .select(["status", "salience_verdict"])
+        .where("conversation_id", "=", conversation.id)
+        .execute();
+      expect(legacyJudgeCalls).toBe(0);
+      expect(slices).toEqual([{ status: "open", salience_verdict: "kept" }]);
+      expect(items).toHaveLength(1);
     });
 
     it("salience fails closed on a slice without explicit membership", async () => {

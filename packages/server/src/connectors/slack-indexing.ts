@@ -1,10 +1,10 @@
-import { chunkSlackConversations } from "./slack-chunker";
+import { configSchema } from "../config";
+import { resolveSlackChunkEngineKnobs } from "./slack-chunk-adapters";
+import { runSlackChunkEngine } from "./slack-chunk-engine-runner";
 import {
-  DEFAULT_SLACK_SALIENCE_BATCH_LIMIT,
   SLACK_EMISSION_REFRESH_DAYS,
   archiveAllSlackChannelFiles,
   emitSlackSyncedItems,
-  processSlackSalience,
   reconcileSlackChannelAcls,
 } from "./slack-salience";
 import type { Connector, ConnectorCredentials, SyncedItem } from "./types";
@@ -15,15 +15,10 @@ function assertSystemCredentials(credentials: ConnectorCredentials): void {
   }
 }
 
-function positiveInteger(value: unknown): number | undefined {
-  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
 /**
  * Indexes Slack channels Sketch is a member of into the knowledge graph:
- * chunk captured messages into per-stream slices, gate them through LLM
- * salience, emit kept slices as indexed files, then reconcile channel ACLs
+ * discover and chunk captured messages into per-stream slices, emit kept
+ * slices as indexed files, then reconcile channel ACLs
  * independent of emission. Membership is the opt-in — there is no per-channel
  * flag or registry.
  */
@@ -43,9 +38,8 @@ export function createSlackIndexingConnector(): Connector {
       connectorConfigId,
       credentials,
       logger,
-      scopeConfig,
       appConfig,
-      salienceGenerator,
+      slackChunkerGenerate,
       slackIndexing,
     }): AsyncGenerator<SyncedItem> {
       assertSystemCredentials(credentials);
@@ -62,14 +56,16 @@ export function createSlackIndexingConnector(): Connector {
         return;
       }
 
-      await chunkSlackConversations({ db, logger });
-
-      await processSlackSalience({
+      const config = configSchema.parse(appConfig ?? {});
+      const knobs = resolveSlackChunkEngineKnobs(config);
+      await runSlackChunkEngine({
         db,
         logger,
-        facade: slackIndexing,
-        generator: salienceGenerator ?? null,
-        batchLimit: positiveInteger(scopeConfig.salienceBatchLimit) ?? DEFAULT_SLACK_SALIENCE_BATCH_LIMIT,
+        generate: slackChunkerGenerate,
+        channelKnobs: knobs.channel,
+        threadKnobs: knobs.thread,
+        discoveryPageRows: config.SLACK_DISCOVERY_PAGE_ROWS,
+        discoveryMaxPages: config.SLACK_DISCOVERY_MAX_PAGES,
       });
 
       let emitted = 0;
@@ -78,7 +74,7 @@ export function createSlackIndexingConnector(): Connector {
         db,
         logger,
         facade: slackIndexing,
-        emissionRefreshDays: positiveInteger(scopeConfig.emissionRefreshDays) ?? SLACK_EMISSION_REFRESH_DAYS,
+        emissionRefreshDays: SLACK_EMISSION_REFRESH_DAYS,
         onSkippedNoScope: () => {
           skippedNoScope += 1;
         },
