@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.3] -- 2026-09-04
+
+- Adds LinkedIn connector via Aimfox, admin-managed with shared workspace key, syncing conversations into the graph as timeline-shaped threads (cold outreach → meeting notes → follow-up) and only indexing threads with a reply.
+- Implements full-inbox sync for Aimfox with a cursor v2 (incremental + budgeted backfill pass) and a stall guard, paging conversations at 100 per request to retrieve all threads.
+- Introduces async SalesQL enrichment sweep for LinkedIn-sourced people, attaching verified emails and phones to turn LinkedIn URLs into contact points and anchoring company domains.
+- Adds SalesQL dedup loop after enrichment, re-resolving people by attached emails to auto-merge with existing entities (when guard passes and `autoMerge` is on) or propose merge verdicts.
+- Adds `person_enrichment_attempts` and `enrichment_daily_usage` tables for the SalesQL work queue, negative cache, and exact daily cap counting.
+- Exposes new admin-only `POST /api/enrichment/runs` endpoint and `scripts/enrichment-sweep.ts` CLI to trigger the enrichment sweep.
+- Adds `scope_config.enrichment` with `enabled`, `dailyCap`, and `batch` to the LinkedIn connector, replacing the removed `SALESQL_ENRICH_ENABLED` and `SALESQL_ENRICH_MAX_PER_SYNC` env vars.
+- Introduces new `autoMerge` scope knob (default `false`) for the SalesQL dedup loop, threading it through the resolver and CLI for audit-ready proposals before enabling automatic merges.
+- Updates the timeline and entity drawer to correctly render LinkedIn conversations and exclude `linkedin_profile` records as timeline rows.
+- Promotes `listWorksAtCompaniesByPerson` to the entity repository for shared use by the enrichment sweep and person materializer.
+
 ## [1.7.2] -- 2026-09-04
 
 - Adds `email` as a first-class search kind, covering outlook/gmail `email_message` files while `message` remains chat-only to fix silent zero results for kind×source mismatches.
