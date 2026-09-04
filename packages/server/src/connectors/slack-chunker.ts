@@ -72,15 +72,26 @@ const JOIN_LEAVE_PATTERN = /^<@U[A-Z0-9]+>\s+has\s+(joined|left)\s+the\s+(channe
  */
 const EMOJI_ONLY_PATTERN =
   /^(?:\s|:[a-z0-9_+-]+:|\p{Extended_Pictographic}|\u{1F3FB}|\u{1F3FC}|\u{1F3FD}|\u{1F3FE}|\u{1F3FF}|[\u{1F1E6}-\u{1F1FF}]|\u{200D}|\u{FE0F}|\u{20E3})+$/u;
-const ATTACHMENT_PLACEHOLDER = "see attached files.";
+export const SLACK_ATTACHMENT_PLACEHOLDER = "see attached files.";
 
-function hasAttachments(attachments: string | null): boolean {
-  if (!attachments) return false;
+export function parseSlackChunkAttachments(attachments: string | null): {
+  hasAttachments: boolean;
+  firstName: string | null;
+} {
+  if (!attachments) return { hasAttachments: false, firstName: null };
   try {
-    const parsed = JSON.parse(attachments);
-    return Array.isArray(parsed) && parsed.length > 0;
+    const parsed = JSON.parse(attachments) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) return { hasAttachments: false, firstName: null };
+    const first = parsed[0];
+    if (!first || typeof first !== "object") return { hasAttachments: true, firstName: null };
+    const name =
+      (first as { originalName?: unknown; name?: unknown }).originalName ?? (first as { name?: unknown }).name;
+    return {
+      hasAttachments: true,
+      firstName: typeof name === "string" && name.trim() ? name.trim() : null,
+    };
   } catch {
-    return false;
+    return { hasAttachments: false, firstName: null };
   }
 }
 
@@ -94,7 +105,11 @@ export function isIndexableSlackChunkMessage(message: SlackChunkerMessage): bool
   if (message.addressedToSketch) return false;
   const trimmed = message.text.trim();
   if (trimmed.length === 0) return false;
-  if (trimmed.toLowerCase() === ATTACHMENT_PLACEHOLDER) return false;
+  if (
+    trimmed.toLowerCase() === SLACK_ATTACHMENT_PLACEHOLDER &&
+    !parseSlackChunkAttachments(message.attachments).hasAttachments
+  )
+    return false;
   if (JOIN_LEAVE_PATTERN.test(trimmed)) return false;
   if (EMOJI_ONLY_PATTERN.test(trimmed)) return false;
   return true;

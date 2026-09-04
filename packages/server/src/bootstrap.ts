@@ -33,6 +33,7 @@ import { parseLinkedinEnrichmentScope } from "./connectors/enrichment/scope";
 import { migrateManagedConnectorCredentialsToCanvas } from "./connectors/managed-credential-migration";
 import { createOpenRouterGenerator } from "./connectors/openrouter-generate";
 import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
+import { repairSlackChunkStreamsOnStartup } from "./connectors/slack-chunk-adapters";
 import { ensureSlackConnectorConfig } from "./connectors/slack-provisioning";
 import { archiveAllSlackChannelFiles } from "./connectors/slack-salience";
 import { startSyncScheduler } from "./connectors/sync";
@@ -215,6 +216,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
   // 2. Database
   const db = await createDatabase(config);
   await runMigrations(db);
+  await repairSlackChunkStreamsOnStartup(db, logger);
   logger.info("Database ready");
 
   configureMaterializeDefaults({

@@ -58,12 +58,33 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_CHUNK_TICK_MINUTES).toBe(30);
         expect(result.data.WHATSAPP_CHUNK_IDLE_CLOSE_HOURS).toBe(96);
         expect(result.data.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES).toBe(15);
+        expect(result.data.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES).toBe(120);
         expect(result.data.WHATSAPP_CHUNK_MODEL).toBeNull();
         expect(result.data.WHATSAPP_CHUNK_REASONING_EFFORT).toBe("high");
         expect(result.data.WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES).toBeNull();
         expect(result.data.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP).toBe(30);
         expect(result.data.WHATSAPP_CHUNK_GROUP_WORKER_POOL).toBe(4);
         expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(4);
+        expect(result.data.SLACK_CHUNK_WINDOW_MESSAGES).toBe(250);
+        expect(result.data.SLACK_CHUNK_WINDOW_TOKENS).toBe(7500);
+        expect(result.data.SLACK_CHUNK_MIN_MESSAGES).toBe(10);
+        expect(result.data.SLACK_CHUNK_TARGET_MESSAGES).toBe(40);
+        expect(result.data.SLACK_CHUNK_MAX_MESSAGES).toBe(80);
+        expect(result.data.SLACK_CHUNK_MAX_TOKENS).toBe(1500);
+        expect(result.data.SLACK_THREAD_MIN_MESSAGES).toBe(1);
+        expect(result.data.SLACK_CHUNK_TICK_MINUTES).toBe(30);
+        expect(result.data.SLACK_CHUNK_IDLE_CLOSE_HOURS).toBe(96);
+        expect(result.data.SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES).toBe(20);
+        expect(result.data.SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES).toBe(120);
+        expect(result.data.SLACK_CHUNK_MODEL).toBeNull();
+        expect(result.data.SLACK_CHUNK_REASONING_EFFORT).toBe("high");
+        expect(result.data.SLACK_CHUNK_BURST_THRESHOLD_MESSAGES).toBeNull();
+        expect(result.data.SLACK_CHUNK_TOPIC_REGISTRY_CAP).toBe(30);
+        expect(result.data.SLACK_CHUNK_MAX_WINDOWS_PER_RUN).toBe(8);
+        expect(result.data.SLACK_CHUNK_CHANNEL_WORKER_POOL).toBe(4);
+        expect(result.data.SLACK_DISCOVERY_PAGE_ROWS).toBe(5000);
+        expect(result.data.SLACK_DISCOVERY_MAX_PAGES).toBe(20);
+        expect(result.data.SLACK_EMISSION_LEGACY_PER_RUN).toBe(200);
         expect(result.data.WHATSAPP_SLICE_GAP_MINUTES).toBe(25);
         expect(result.data.WHATSAPP_SLICE_MAX_AGE_MINUTES).toBe(120);
         expect(result.data.WHATSAPP_SLICE_MAX_MESSAGES).toBe(50);
@@ -213,12 +234,33 @@ describe("configSchema", () => {
         WHATSAPP_CHUNK_TICK_MINUTES: "45",
         WHATSAPP_CHUNK_IDLE_CLOSE_HOURS: "72",
         WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES: "20",
+        WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: "90",
         WHATSAPP_CHUNK_MODEL: "gpt-5.6-luna",
         WHATSAPP_CHUNK_REASONING_EFFORT: "medium",
         WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES: "50",
         WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP: "25",
         WHATSAPP_CHUNK_GROUP_WORKER_POOL: "3",
         WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN: "6",
+        SLACK_CHUNK_WINDOW_MESSAGES: "201",
+        SLACK_CHUNK_WINDOW_TOKENS: "6001",
+        SLACK_CHUNK_MIN_MESSAGES: "11",
+        SLACK_CHUNK_TARGET_MESSAGES: "36",
+        SLACK_CHUNK_MAX_MESSAGES: "76",
+        SLACK_CHUNK_MAX_TOKENS: "1401",
+        SLACK_THREAD_MIN_MESSAGES: "2",
+        SLACK_CHUNK_TICK_MINUTES: "46",
+        SLACK_CHUNK_IDLE_CLOSE_HOURS: "73",
+        SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES: "21",
+        SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: "91",
+        SLACK_CHUNK_MODEL: "openai/gpt-5.6-luna",
+        SLACK_CHUNK_REASONING_EFFORT: "medium",
+        SLACK_CHUNK_BURST_THRESHOLD_MESSAGES: "51",
+        SLACK_CHUNK_TOPIC_REGISTRY_CAP: "26",
+        SLACK_CHUNK_MAX_WINDOWS_PER_RUN: "7",
+        SLACK_CHUNK_CHANNEL_WORKER_POOL: "5",
+        SLACK_DISCOVERY_PAGE_ROWS: "4000",
+        SLACK_DISCOVERY_MAX_PAGES: "19",
+        SLACK_EMISSION_LEGACY_PER_RUN: "199",
       });
 
       expect(result.success).toBe(true);
@@ -232,12 +274,33 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_CHUNK_TICK_MINUTES).toBe(45);
         expect(result.data.WHATSAPP_CHUNK_IDLE_CLOSE_HOURS).toBe(72);
         expect(result.data.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES).toBe(20);
+        expect(result.data.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES).toBe(90);
         expect(result.data.WHATSAPP_CHUNK_MODEL).toBe("gpt-5.6-luna");
         expect(result.data.WHATSAPP_CHUNK_REASONING_EFFORT).toBe("medium");
         expect(result.data.WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES).toBe(50);
         expect(result.data.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP).toBe(25);
         expect(result.data.WHATSAPP_CHUNK_GROUP_WORKER_POOL).toBe(3);
         expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(6);
+        expect(result.data.SLACK_CHUNK_WINDOW_MESSAGES).toBe(201);
+        expect(result.data.SLACK_CHUNK_WINDOW_TOKENS).toBe(6001);
+        expect(result.data.SLACK_CHUNK_MIN_MESSAGES).toBe(11);
+        expect(result.data.SLACK_CHUNK_TARGET_MESSAGES).toBe(36);
+        expect(result.data.SLACK_CHUNK_MAX_MESSAGES).toBe(76);
+        expect(result.data.SLACK_CHUNK_MAX_TOKENS).toBe(1401);
+        expect(result.data.SLACK_THREAD_MIN_MESSAGES).toBe(2);
+        expect(result.data.SLACK_CHUNK_TICK_MINUTES).toBe(46);
+        expect(result.data.SLACK_CHUNK_IDLE_CLOSE_HOURS).toBe(73);
+        expect(result.data.SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES).toBe(21);
+        expect(result.data.SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES).toBe(91);
+        expect(result.data.SLACK_CHUNK_MODEL).toBe("openai/gpt-5.6-luna");
+        expect(result.data.SLACK_CHUNK_REASONING_EFFORT).toBe("medium");
+        expect(result.data.SLACK_CHUNK_BURST_THRESHOLD_MESSAGES).toBe(51);
+        expect(result.data.SLACK_CHUNK_TOPIC_REGISTRY_CAP).toBe(26);
+        expect(result.data.SLACK_CHUNK_MAX_WINDOWS_PER_RUN).toBe(7);
+        expect(result.data.SLACK_CHUNK_CHANNEL_WORKER_POOL).toBe(5);
+        expect(result.data.SLACK_DISCOVERY_PAGE_ROWS).toBe(4000);
+        expect(result.data.SLACK_DISCOVERY_MAX_PAGES).toBe(19);
+        expect(result.data.SLACK_EMISSION_LEGACY_PER_RUN).toBe(199);
       }
     });
 

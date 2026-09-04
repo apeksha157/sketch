@@ -711,6 +711,7 @@ export interface ConversationSlicesTable {
   provider_thread_id: string | null;
   status: Generated<string>;
   facts_enriched_content_hash: string | null;
+  legacy_unjudged_at: Generated<string | null>;
   created_at: Generated<string>;
 }
 
@@ -730,6 +731,8 @@ export interface ConversationSliceStreamCursorsTable {
   last_message_id: number | null;
   claim_token: string | null;
   claimed_at: string | null;
+  pending_since: Generated<string | null>;
+  llm_last_attempt_at: Generated<string | null>;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }

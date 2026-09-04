@@ -25,6 +25,7 @@ import { settleContainersFromProviderFacts } from "../entities/container-settlem
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
+import { createChunkGenerate } from "./chunk-generate";
 import type { ConsolidatedLoopAgenticGenerator } from "./consolidated-loop";
 import { resolveConnectorCredentials } from "./credential-providers";
 import { reconcileDanglingCrmRollups, refreshCrmActivityRollups } from "./crm-rollup";
@@ -402,10 +403,7 @@ export async function runConnectorSync(
             logger: syncLogger,
           })
         : null;
-    const whatsappChunkerGenerate = salienceGenerator
-      ? (prompt: string, opts: Parameters<NonNullable<typeof salienceGenerator>["generate"]>[1]) =>
-          salienceGenerator.generate(prompt, opts)
-      : undefined;
+    const whatsappChunkerGenerate = createChunkGenerate(salienceGenerator);
 
     for await (const item of connector.sync({
       db,
