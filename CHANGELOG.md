@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.0] -- 2026-09-04
+
+- Routes GitHub and Linear through Canvas-managed OAuth, replacing legacy PATs and API keys with short-lived access tokens that never enter model context, logs, or shell environment; adds GitHub CLI file-exfiltration hardening, exact child-process environment allowlist, and fail-closed availability across both agent runtimes.
+- Adds ClickUp as a Canvas-managed OAuth integration with a capability-gated skill, managed `clickup_api` adapter, and skill-led webhook lifecycle using encrypted signing-secret custody, raw-body HMAC verification, durable deduplication, and endpoint-generation fencing.
+- Retires PAT (`skp_`) tokens from the public MCP in favor of OAuth-only access, revoking existing PAT rows while preserving audit history.
+- Builds the consolidated extraction loop in shadow mode, replacing the legacy 4-call extraction chain with a single agentic OpenRouter call per file that uses the four judge views as tools; adds a link-authority guard that demotes resolutions to entity ids not offered in the prompt or tool results, catching model fabrications.
+- Adds deterministic backlog sweep over the review queue that re-walks ledger replay, unique exact match, and T2 context-adjacency rungs over every pending row with zero LLM calls, resolving 100 of 342 rows (54 exact, 46 adjacency) on the validation snapshot.
+- Introduces agentic judge drain over the ambiguous docket in shadow posture, putting one LLM call per contested row the sweep could not decide with dup-contamination callouts, link-authority guard, and verdicts filed as pending `graph_verdicts` for human approval.
+- Ships the 3.1 adjudicator series: merge verdicts get a machine lifecycle (corroboration → veto window → retired) with unordered merge-pair identity, post-sync cross-source co-occurrence triggers, dry-streak aging, and a daily resolver pass that owns the full loop end to end; removes the `autoApply` branch from the curation propose tool in favor of per-kind gated auto-approve behind the resolver.
+- Ports verdict review UX onto the reconcile drawer pattern with two-column comparison for merge proposals, band rows matching the org-review row anatomy, human-readable verdict titles, and dry-run gating carried through the drawer.
+- Fixes automation builder loops by stopping after four consecutive identical failures while allowing successful repeated reads, keeping active runs alive after transport cancellation, persisting reason-specific interruption data, and renewing the authoring lease at the existing heartbeat cadence.
+- Caps Fireflies rate-limit waits at two minutes with typed `FirefliesRateLimitError` instead of sleeping until quota reset, preventing one connector from starving the entire post-sync graph pipeline.
+- Adds settled-detail markers for Fireflies transcripts so incremental syncs skip re-fetching transcript details for files already carrying summary content and contacts, eliminating redundant API calls on every 30-minute tick.
+- Enables full sentence-by-sentence Fireflies transcript retrieval via `view: "full"` on both the agent `GetFileContent` and MCP `sketch_get_file_content` surfaces, stored in a new `indexed_file_raw_contents` table deliberately outside the content-hash and embedding pipeline.
+- Extends graph verdicts with a review/mention subject family (`link_to`, `dismiss`) targeting durable mention keys rather than queue-row ids, with guarded revert and supersession of prior awaiting verdicts.
+- Adds four summarized judge views (entity summary, candidate lookup, pairwise evidence, file context) budget-fitted to ≤2,000 chars for the agentic judge loop.
+- Seeds a `sketch-machine` principal so machine sweeps stop attributing to the oldest admin; adds `resolution_decisions` backfill script for historical confirmed rows.
+- Increases automation builder total tool-call budget from 20 to 48 while preserving the ten-minute elapsed deadline, 24-turn limit, and repeated-call guard.
+- Keeps automation builder SSE streams alive with a 15-second `: keep-alive` comment heartbeat, clearing the timer on all stream exit paths.
+
 ## [1.6.0] -- 2026-09-02
 
 - Replaces MinHash/LSH similarity with bounded edit-distance matching for typo-class entity candidates, drops the dead adjudicator and backfill pipeline, netting −1,773 lines while preserving recreate determinism.
