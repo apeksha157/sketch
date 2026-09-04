@@ -70,6 +70,7 @@ export function ChatIntegrationConnectionFrame({
     let timeoutId: number | null = null;
     const popup = popupWindow;
     let popupClosedAt: number | null = null;
+    const allowedMessageOrigins = new Set([window.location.origin]);
 
     const updateStatus = (status: ChatThreadIntegrationConnectionStatus) => {
       latestStatusRef.current = status;
@@ -151,6 +152,14 @@ export function ChatIntegrationConnectionFrame({
         const result = await api.mcpServers.createConnectionIntent(providerId, app.id, callbackUrl, app);
         if (cancelled || requestRef.current !== requestId) return;
         activeAppRef.current = result.app;
+        const redirect = new URL(result.redirectUrl, window.location.origin);
+        allowedMessageOrigins.add(redirect.origin);
+        const callbackUrlFromRedirect = redirect.searchParams.get("redirect_uri");
+        if (callbackUrlFromRedirect) {
+          try {
+            allowedMessageOrigins.add(new URL(callbackUrlFromRedirect).origin);
+          } catch {}
+        }
         if (!popup || popup.closed) {
           fail("Sketch could not open the connection window. Allow popups and try again.");
           return;
@@ -164,14 +173,17 @@ export function ChatIntegrationConnectionFrame({
     };
 
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      const data = event.data as { type?: unknown; message?: unknown } | null;
+      if (!popup || event.source !== popup || !allowedMessageOrigins.has(event.origin)) return;
+      const data = event.data as { type?: unknown; message?: unknown; provider?: unknown } | null;
       if (data?.type === "sketch-integration-connect-error") {
         fail(typeof data.message === "string" ? data.message : "Connection was not completed. Please try again.");
         return;
       }
-      if (data?.type !== "sketch-integration-connected") return;
       const current = activeAppRef.current ?? fallbackApp(connection);
+      const provider = typeof data?.provider === "string" ? data.provider.trim().toLowerCase() : "";
+      const isSketchCallback = data?.type === "sketch-integration-connected";
+      const isCanvasCallback = data?.type === "oauth-success" && (!provider || provider === current.id.toLowerCase());
+      if (!isSketchCallback && !isCanvasCallback) return;
       void verifyConnected(current)
         .then((verifiedConnection) => {
           if (verifiedConnection) complete({ ...current, connectionId: verifiedConnection.id }, verifiedConnection);

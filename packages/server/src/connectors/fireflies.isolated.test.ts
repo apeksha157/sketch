@@ -11,7 +11,12 @@
  */
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createFirefliesConnector } from "./fireflies";
+import {
+  FirefliesRateLimitError,
+  createFirefliesConnector,
+  formatTranscriptSentences,
+  parseRetryAfterMs,
+} from "./fireflies";
 import { type NameResolver, type SyncedItem, toEmailPrincipals } from "./types";
 
 const silentLogger = pino({ level: "silent" });
@@ -475,5 +480,239 @@ describe("Fireflies request rate limiting", () => {
       10,
     );
     expect(item?.providerFileId).toBe("t-rate-limit");
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  it("parses delay-seconds form", () => {
+    expect(parseRetryAfterMs("120")).toBe(120_000);
+  });
+
+  it("parses date forms relative to now", () => {
+    const now = Date.parse("2026-09-03T12:00:00.000Z");
+    expect(parseRetryAfterMs("2026-09-03T12:10:00.000Z", now)).toBe(10 * 60 * 1000);
+    expect(parseRetryAfterMs("Thu, 03 Sep 2026 12:05:00 GMT", now)).toBe(5 * 60 * 1000);
+  });
+
+  it("clamps past dates to zero", () => {
+    const now = Date.parse("2026-09-03T12:00:00.000Z");
+    expect(parseRetryAfterMs("2026-09-03T11:00:00.000Z", now)).toBe(0);
+  });
+
+  it("returns null for absent or malformed input", () => {
+    expect(parseRetryAfterMs(null)).toBeNull();
+    expect(parseRetryAfterMs("")).toBeNull();
+    expect(parseRetryAfterMs("soon-ish")).toBeNull();
+  });
+
+  it("rejects numeric-looking values that are not plain delay-seconds", () => {
+    expect(parseRetryAfterMs("-1")).toBeNull();
+    expect(parseRetryAfterMs("+1")).toBeNull();
+    expect(parseRetryAfterMs("1.5")).toBeNull();
+  });
+});
+
+describe("Fireflies rate-limit failure modes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Run a sync against a fetch stub and capture the terminal error. */
+  async function syncError(mockFetch: (callCount: number) => Response): Promise<unknown> {
+    let calls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      calls++;
+      return mockFetch(calls);
+    });
+    const connector = createFirefliesConnector({ minRequestIntervalMs: 0 });
+    try {
+      for await (const _item of connector.sync({
+        credentials: { type: "api_key", api_key: "test" },
+        scopeConfig: {},
+        cursor: null,
+        logger: pino({ level: "silent" }),
+        ownerEmail: null,
+        resolveNameToEmail: undefined,
+      })) {
+        // drain
+      }
+      return null;
+    } catch (err) {
+      return err;
+    }
+  }
+
+  it("throws a typed quota error when a 429 Retry-After exceeds the cap", async () => {
+    const err = await syncError(
+      () => new Response("rate limited", { status: 429, headers: { "Retry-After": "35531" } }),
+    );
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
+    expect((err as FirefliesRateLimitError).message).toContain("35531");
+  });
+
+  it("throws a typed quota error when a GraphQL retry-after date exceeds the cap", async () => {
+    const retryDate = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
+    const err = await syncError(
+      () =>
+        new Response(
+          JSON.stringify({ data: null, errors: [{ message: `too many requests, retry after ${retryDate}` }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
+    expect((err as FirefliesRateLimitError).message).toContain(retryDate);
+  });
+
+  it("recognizes a GraphQL rate limit that is not the first error in the list", async () => {
+    const retryDate = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
+    const err = await syncError(
+      () =>
+        new Response(
+          JSON.stringify({
+            data: null,
+            errors: [
+              { message: "some other validation error" },
+              { message: `too many requests, retry after ${retryDate}` },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(true);
+  });
+
+  it("throws a typed non-quota error when 429 retries are exhausted within the cap", async () => {
+    const err = await syncError(() => new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }));
+    expect(err).toBeInstanceOf(FirefliesRateLimitError);
+    expect((err as FirefliesRateLimitError).quotaExhausted).toBe(false);
+  });
+
+  it("sleeps and retries when the wait is exactly at the cap", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        calls++;
+        if (calls === 1) {
+          return new Response("rate limited", { status: 429, headers: { "Retry-After": "120" } });
+        }
+        return new Response(JSON.stringify({ data: { contacts: [] } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+      const connector = createFirefliesConnector({ minRequestIntervalMs: 0 });
+      const drain = (async () => {
+        for await (const _item of connector.sync({
+          credentials: { type: "api_key", api_key: "test" },
+          scopeConfig: {},
+          cursor: null,
+          logger: pino({ level: "silent" }),
+          ownerEmail: null,
+          resolveNameToEmail: undefined,
+        })) {
+          // drain
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(121_000);
+      await drain;
+      expect(calls).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("formatTranscriptSentences", () => {
+  it("formats speaker lines with mm:ss stamps, parsing string start_times", () => {
+    const text = formatTranscriptSentences([
+      { speaker_name: "Sanaa", text: "Hello there", start_time: "65.4" },
+      { speaker_name: "Himanshu", text: "Hi", start_time: 9 },
+    ]);
+    expect(text).toBe("## Transcript\n[01:05] Sanaa: Hello there\n[00:09] Himanshu: Hi");
+  });
+
+  it("degrades per field: unusable start_time drops the stamp, null speaker becomes Unknown, blank text drops the line", () => {
+    const text = formatTranscriptSentences([
+      { speaker_name: "Sanaa", text: "No stamp", start_time: null },
+      { speaker_name: null, text: "Who said this", start_time: "3" },
+      { speaker_name: "Ghost", text: "   ", start_time: "4" },
+    ]);
+    expect(text).toBe("## Transcript\nSanaa: No stamp\n[00:03] Unknown: Who said this");
+  });
+
+  it("returns null when no sentence carries usable text (empty, null, or all-blank input)", () => {
+    expect(formatTranscriptSentences(null)).toBeNull();
+    expect(formatTranscriptSentences([])).toBeNull();
+    expect(formatTranscriptSentences([{ speaker_name: "A", text: null, start_time: "1" }])).toBeNull();
+    expect(formatTranscriptSentences([{ speaker_name: "A", text: "  ", start_time: "1" }])).toBeNull();
+  });
+});
+
+describe("Fireflies sync yields rawContent transcripts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockDetail(sentences: unknown): void {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse((init as RequestInit).body as string) as { query: string };
+      if (body.query.includes("transcripts(")) {
+        const transcripts =
+          body.query && JSON.parse((init as RequestInit).body as string).variables.skip === 0
+            ? [
+                {
+                  id: "t1",
+                  title: "Meeting t1",
+                  date: Date.now(),
+                  duration: 600,
+                  organizer_email: "a@example.com",
+                  participants: ["a@example.com"],
+                  transcript_url: null,
+                },
+              ]
+            : [];
+        return new Response(JSON.stringify({ data: { transcripts } }), { status: 200 });
+      }
+      if (body.query.includes("transcript(id:")) {
+        return new Response(
+          JSON.stringify({ data: { transcript: { summary: { overview: "o" }, speakers: [], sentences } } }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    });
+  }
+
+  async function firstItem(): Promise<SyncedItem> {
+    const connector = createFirefliesConnector({ minRequestIntervalMs: 0 });
+    for await (const item of connector.sync({
+      credentials: { type: "api_key", api_key: "test" },
+      scopeConfig: {},
+      cursor: new Date().toISOString(),
+      logger: silentLogger,
+    })) {
+      return item;
+    }
+    throw new Error("sync yielded nothing");
+  }
+
+  it("sets rawContent when the detail query returns usable sentences, without touching content or the marker shape", async () => {
+    mockDetail([{ speaker_name: "Sanaa", text: "Full sentence", start_time: "1" }]);
+    const item = await firstItem();
+    expect(item.rawContent).toEqual({ kind: "transcript", content: "## Transcript\n[00:01] Sanaa: Full sentence" });
+    expect(item.content).not.toContain("Full sentence");
+    const marker = (item.sourceMeta as { detail: Record<string, unknown> }).detail;
+    expect(Object.keys(marker).sort()).toEqual(["attempts", "contactsLoaded", "fetchedAt", "summaryObserved"]);
+  });
+
+  it("omits rawContent when sentences are null or all-blank", async () => {
+    mockDetail([{ speaker_name: "A", text: "   ", start_time: null }]);
+    expect((await firstItem()).rawContent).toBeUndefined();
+    mockDetail(null);
+    expect((await firstItem()).rawContent).toBeUndefined();
   });
 });

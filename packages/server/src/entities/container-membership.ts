@@ -3,7 +3,11 @@ import type { Kysely, Selectable } from "kysely";
 import type { Logger } from "pino";
 import { createEntityRepository, normalizeContactPointValue } from "../db/repositories/entities";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
-import { type StoreGraphVerdictInput, createGraphVerdictRepository } from "../db/repositories/graph-verdicts";
+import {
+  GRAPH_VERDICT_ACTIVE_STATUSES,
+  type StoreGraphVerdictInput,
+  createGraphVerdictRepository,
+} from "../db/repositories/graph-verdicts";
 import { createMembershipSuppressionRepository } from "../db/repositories/membership-suppressions";
 import type { ConnectorConfigsTable, ContainersTable, DB, IndexedFilesTable } from "../db/schema";
 import { filesForContainer, prepareFilesForContainerMatching } from "./container-file-matcher";
@@ -391,7 +395,7 @@ async function shouldProposeMaturityVerdict(
     .where("subject_container_id", "=", containerId)
     .where("superseded_at", "is", null)
     .execute();
-  if (rows.some((row) => row.status === "awaiting_human" || row.status === "approved")) return false;
+  if (rows.some((row) => (GRAPH_VERDICT_ACTIVE_STATUSES as readonly string[]).includes(row.status))) return false;
   for (const row of rows) {
     const evidence = parseEvidenceJson(row.evidence_json);
     const maturity = evidence.maturity;

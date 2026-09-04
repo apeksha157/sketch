@@ -46,6 +46,7 @@ const EMPTY_ACCESS: IntegrationAccessResult = {
  */
 export async function startIntegrationAccess(params: {
   userEmail: string | null;
+  workspaceUserId?: string | null;
   claudeConfigDir: string;
   workspaceDir: string;
   loadIntegrationProvider: () => Promise<IntegrationProvider | null>;
@@ -57,7 +58,11 @@ export async function startIntegrationAccess(params: {
   const provider = await params.loadIntegrationProvider();
   if (!provider) return EMPTY_ACCESS;
 
-  const spec = provider.getBrokerSpec({ userEmail, claudeConfigDir });
+  const workspaceContext =
+    params.workspaceUserId && provider.providerId
+      ? { workspaceId: provider.providerId, userId: params.workspaceUserId }
+      : undefined;
+  const spec = provider.getBrokerSpec({ userEmail, claudeConfigDir, workspaceContext });
   if (!spec) return EMPTY_ACCESS;
   const blocked = new Set(
     (spec.credentialEnv.CANVAS_BLOCKED_APP_IDS ?? "")

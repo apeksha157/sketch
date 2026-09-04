@@ -72,10 +72,12 @@ import { startNormalizationBackfill } from "./entities/normalization-backfill";
 import { isPersonalOrSharedDomain } from "./entities/personal-domains";
 import type { ProposeEntityType } from "./entities/propose";
 import { startQueueDrainSequence } from "./entities/queue-run";
+import { createResolverPassService } from "./entities/resolver-pass";
 import { createApp } from "./http";
+import { listAvailableManagedIntegrations } from "./integrations/availability";
 import { createCliIntegrationService } from "./integrations/cli/service";
 import { buildMcpConfig, createProvider } from "./integrations/factory";
-import type { IntegrationProvider, IntegrationStatus } from "./integrations/types";
+import { type IntegrationProvider, type IntegrationStatus, getIntegrationActor } from "./integrations/types";
 import { LocalClaudeSessionService } from "./local-devices/claude-sessions";
 import { LocalDeviceGateway } from "./local-devices/gateway";
 import { createLogger } from "./logger";
@@ -279,10 +281,21 @@ export async function createServer(config: Config, options?: CreateServerOptions
   const operationalAlertsRepo = createOperationalAlertsRepository(db);
   const operationalAlertService = createOperationalAlertService({ alerts: operationalAlertsRepo, logger });
   const agentEnvironmentVariables = createAgentEnvironmentVariableRepository(db, config.ENCRYPTION_KEY);
+  let managedIntegrationProviderLoader: () => Promise<IntegrationProvider | null> = async () => null;
   const cliIntegrations = createCliIntegrationService({
     db,
     encryptionKey: config.ENCRYPTION_KEY,
     environmentVariables: agentEnvironmentVariables,
+    getAvailableManagedIntegrations: async (ownerUserId) => {
+      const owner = await users.findById(ownerUserId);
+      if (!owner?.email) return new Set();
+      return listAvailableManagedIntegrations({
+        loadIntegrationProvider: managedIntegrationProviderLoader,
+        userEmail: owner.email,
+        currentUserId: ownerUserId,
+        logger,
+      });
+    },
   });
   await backfillFilesConnectorCredentialEncryption(db, config.ENCRYPTION_KEY, logger);
   await runManagedSeed(config, settingsRepo, users);
@@ -392,13 +405,26 @@ export async function createServer(config: Config, options?: CreateServerOptions
         pricing,
         providerCtx,
         enrichedParams,
-        () => runAgent(enrichedParams),
+        async () => {
+          const { userId, userEmail } = getIntegrationActor(enrichedParams);
+          const availableManagedIntegrations =
+            enrichedParams.availableManagedIntegrations ??
+            (userEmail && userId
+              ? await listAvailableManagedIntegrations({
+                  loadIntegrationProvider: managedIntegrationProviderLoader,
+                  userEmail,
+                  currentUserId: userId,
+                  logger,
+                })
+              : new Set());
+          return runAgent({ ...enrichedParams, availableManagedIntegrations });
+        },
         config.AGENT_RUN_WATCHDOG_MS,
       ),
     );
   };
   const trackedRunAgent = (params: RunAgentParams): Promise<RunAgentResult> =>
-    runTrackedAgent(params, limitAgentExecution);
+    runTrackedAgent(params, (work) => interactiveAgentRunLimiter.run(work, { signal: params.abortController?.signal }));
   const trackedScheduledRunAgent = (
     params: RunAgentParams,
     admission?: AgentRunAdmissionOptions,
@@ -779,15 +805,36 @@ export async function createServer(config: Config, options?: CreateServerOptions
    * an accidental HTTP call fails loudly rather than silently treating
    * skill-mode rows as unconfigured.
    */
+  let cachedIntegrationProvider: { key: string; provider: IntegrationProvider } | null = null;
   const getIntegrationStatus = async (): Promise<IntegrationStatus> => {
     const row = await mcpServersRepo.findIntegrationProvider();
-    if (!row || row.type == null) return { kind: "absent" };
+    if (!row || row.type == null) {
+      cachedIntegrationProvider = null;
+      return { kind: "absent" };
+    }
     try {
+      const cacheKey = `${row.id}\0${row.type}\0${row.api_url ?? ""}\0${row.credentials}`;
+      if (cachedIntegrationProvider?.key === cacheKey) {
+        return { kind: "ok", provider: cachedIntegrationProvider.provider };
+      }
+      const provider = createProvider(row.type, row.api_url ?? "", row.credentials, row.id, {
+        ...(config.CANVAS_CREDENTIAL_PRIVATE_KEY_PEM
+          ? { credentialPrivateKeyPem: config.CANVAS_CREDENTIAL_PRIVATE_KEY_PEM }
+          : {}),
+        ...(config.CANVAS_CREDENTIAL_PRIVATE_KEY_PATH
+          ? { credentialPrivateKeyPath: config.CANVAS_CREDENTIAL_PRIVATE_KEY_PATH }
+          : {}),
+        ...(config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID
+          ? { credentialPublicKeyId: config.CANVAS_CREDENTIAL_PUBLIC_KEY_ID }
+          : {}),
+      });
+      cachedIntegrationProvider = { key: cacheKey, provider };
       return {
         kind: "ok",
-        provider: createProvider(row.type, row.api_url ?? "", row.credentials, row.id),
+        provider,
       };
     } catch (err) {
+      cachedIntegrationProvider = null;
       logger.error(
         { err, serverId: row.id, type: row.type, event: "integration_provider_load_failed" },
         "Failed to instantiate integration provider",
@@ -812,6 +859,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     const status = await getIntegrationStatus();
     return status.kind === "ok" ? status.provider : null;
   };
+  managedIntegrationProviderLoader = loadIntegrationProvider;
 
   const webhookEndpoints = createWebhookEndpointRepository(db);
   const batchSize = 500;
@@ -964,6 +1012,30 @@ export async function createServer(config: Config, options?: CreateServerOptions
           intervalMs: config.WEEKLY_MINT_INTERVAL_MS,
         })
       : null;
+  const consolidatedLoopSettings =
+    config.CONSOLIDATED_LOOP_MODE === "shadow" ? (weeklyMintSettings ?? (await settingsRepo.get())) : null;
+  const consolidatedLoopOpenRouter =
+    config.CONSOLIDATED_LOOP_MODE === "shadow"
+      ? resolveOpenRouterEnrichmentConfig(consolidatedLoopSettings, config.OPENROUTER_API_KEY)
+      : null;
+  const consolidatedLoopModel =
+    config.CONSOLIDATED_LOOP_MODE === "shadow"
+      ? (config.CONSOLIDATED_LOOP_MODEL ??
+        config.PROJECT_MINTING_MODEL ??
+        consolidatedLoopOpenRouter?.openRouterModel ??
+        "openai/gpt-5.6-luna")
+      : null;
+  const consolidatedLoopAgenticGenerator =
+    config.CONSOLIDATED_LOOP_MODE === "shadow" && consolidatedLoopOpenRouter?.openRouterApiKey
+      ? createOpenRouterGenerator(consolidatedLoopOpenRouter.openRouterApiKey, {
+          model: consolidatedLoopModel,
+          reasoningEffort: "medium",
+          timeoutMs: 300_000,
+        })
+      : null;
+  if (config.CONSOLIDATED_LOOP_MODE === "shadow" && !consolidatedLoopAgenticGenerator) {
+    logger.warn("CONSOLIDATED_LOOP_MODE=shadow requires an OpenRouter API key; consolidated loop shadow disabled");
+  }
   if (
     backgroundWork &&
     externalStartup &&
@@ -971,8 +1043,36 @@ export async function createServer(config: Config, options?: CreateServerOptions
   ) {
     weeklyMint?.start();
   }
+  const resolverOpenRouter =
+    config.RESOLVER_PASS_MODE === "live"
+      ? resolveOpenRouterEnrichmentConfig(weeklyMintSettings ?? (await settingsRepo.get()), config.OPENROUTER_API_KEY)
+      : null;
+  const resolverGenerator = resolverOpenRouter?.openRouterApiKey
+    ? createOpenRouterGenerator(resolverOpenRouter.openRouterApiKey, {
+        model: config.CONSOLIDATED_LOOP_MODEL ?? resolverOpenRouter.openRouterModel ?? null,
+        reasoningEffort: "medium",
+        timeoutMs: 300_000,
+      })
+    : null;
+  const resolverPass =
+    config.RESOLVER_PASS_MODE === "live"
+      ? createResolverPassService({
+          db,
+          logger,
+          generateAgenticJSON: resolverGenerator?.generateAgenticJSON ?? null,
+          model: config.CONSOLIDATED_LOOP_MODEL ?? resolverOpenRouter?.openRouterModel ?? null,
+          intervalMs: config.RESOLVER_PASS_INTERVAL_MS,
+          drainLimit: config.RESOLVER_DRAIN_LIMIT,
+          autoApplyKinds: config.RESOLVER_AUTO_APPLY_KINDS,
+        })
+      : null;
+  if (backgroundWork && externalStartup) resolverPass?.start();
   const syncScheduler = backgroundWork
-    ? startSyncScheduler(db, logger, 30 * 60 * 1000, { appConfig: config, slackIndexingFacade })
+    ? startSyncScheduler(db, logger, 30 * 60 * 1000, {
+        appConfig: config,
+        slackIndexingFacade,
+        consolidatedLoopAgenticGenerator,
+      })
     : null;
   if (backgroundWork && (await settingsRepo.get())?.slack_bot_token) {
     await ensureSlackConnectorConfig({ db, encryptionKey: config.ENCRYPTION_KEY, logger });
@@ -1405,6 +1505,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     await slackEntitySync.stop();
     await userEntityLinkSweep.stop();
     await weeklyMint?.stop();
+    await resolverPass?.stop();
     whatsappWindowKeepAliveJob?.stop();
     if (backgroundWork) {
       agentScheduler.stop();

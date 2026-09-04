@@ -290,13 +290,13 @@ export function AccessSettingsDialog({
 
   useEffect(() => {
     setMode(
-      connection?.accessLevel === "organization"
+      connection?.visibility === "organization" || connection?.accessLevel === "organization"
         ? "organization"
-        : connection?.memberUserIds?.length
+        : connection?.visibility === "selected_members" || connection?.memberUserIds?.length
           ? "members"
           : "personal",
     );
-    setSelected(connection?.memberUserIds ?? []);
+    setSelected(connection?.memberUserIds ?? connection?.memberGrants?.map((grant) => grant.granteeUserId) ?? []);
     setSaveError(null);
   }, [connection]);
 
@@ -304,22 +304,22 @@ export function AccessSettingsDialog({
   const members = (membersQuery.data ?? []).filter((member) => member.id !== connection.ownerUserId);
   const accessLevel = mode === "organization" ? "organization" : "personal";
   const memberUserIds = mode === "members" ? selected : [];
+  const visibility = mode === "members" ? "selected_members" : mode === "organization" ? "organization" : "private";
+  const savedMembers = connection.memberUserIds ?? connection.memberGrants?.map((grant) => grant.granteeUserId) ?? [];
   const changed =
     accessLevel !== (connection.accessLevel ?? "personal") ||
-    JSON.stringify([...memberUserIds].sort()) !== JSON.stringify([...(connection.memberUserIds ?? [])].sort());
+    JSON.stringify([...memberUserIds].sort()) !== JSON.stringify([...savedMembers].sort());
   const valid = mode !== "members" || (selected.length > 0 && !membersQuery.isPending && !membersQuery.isError);
   const save = async () => {
     if (!canManage || !changed || !valid || saving) return;
     setSaving(true);
     setSaveError(null);
     try {
-      await api.mcpServers.updateConnectionAccess(
-        providerId,
-        connection.id,
-        accessLevel,
-        connection.accessRevision ?? 0,
-        memberUserIds,
-      );
+      await api.mcpServers.updateConnectionAccess(providerId, connection.id, accessLevel, {
+        expectedRevision: connection.accessRevision ?? 0,
+        visibility,
+        granteeUserIds: memberUserIds,
+      });
       toast.success(mode === "personal" ? "This account is now private" : "Sharing updated");
       onSaved();
       onOpenChange(false);

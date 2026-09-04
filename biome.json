@@ -9,7 +9,8 @@
       "**/.build/**",
       "**/resolution-eval/reports/**",
       ".planning/**",
-      ".scratch/**"
+      ".scratch/**",
+      "**/eval-consolidated-loop-reports/**"
     ]
   },
   "organizeImports": { "enabled": true },

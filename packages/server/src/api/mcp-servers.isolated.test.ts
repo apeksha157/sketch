@@ -594,13 +594,13 @@ describe("MCP Servers API", () => {
   // --- POST /api/mcp-servers/:id/connections/intents ---
 
   describe("POST /api/mcp-servers/:id/connections/intents", () => {
-    it("routes Canvas GitHub intents to the CLI integration without calling Canvas", async () => {
+    it("initiates Canvas GitHub connections through the provider", async () => {
       await seedAdmin(db);
       const server = await createCanvasProviderServer(db);
       const mockProvider = {
         type: "canvas",
         listApps: vi.fn(),
-        initiateConnection: vi.fn(),
+        initiateConnection: vi.fn().mockResolvedValue({ redirectUrl: "https://auth.example.com/github" }),
         listConnections: vi.fn(),
         removeConnection: vi.fn(),
         isBrokerCapable: () => false,
@@ -618,19 +618,22 @@ describe("MCP Servers API", () => {
         body: JSON.stringify({ appId: "github" }),
       });
 
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ error: { code: "CLI_INTEGRATION" } });
-      expect(mockProvider.initiateConnection).not.toHaveBeenCalled();
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        app: { id: "github", name: "Github", description: "" },
+        redirectUrl: "https://auth.example.com/github",
+      });
+      expect(mockProvider.initiateConnection).toHaveBeenCalled();
       expect(mockProvider.listApps).not.toHaveBeenCalled();
     });
 
-    it("routes Canvas Linear intents to managed setup without calling Canvas", async () => {
+    it("initiates Canvas Linear connections through the provider", async () => {
       await seedAdmin(db);
       const server = await createCanvasProviderServer(db);
       const mockProvider = {
         type: "canvas",
         listApps: vi.fn(),
-        initiateConnection: vi.fn(),
+        initiateConnection: vi.fn().mockResolvedValue({ redirectUrl: "https://auth.example.com/linear" }),
         listConnections: vi.fn(),
         removeConnection: vi.fn(),
         isBrokerCapable: () => false,
@@ -648,11 +651,12 @@ describe("MCP Servers API", () => {
         body: JSON.stringify({ appId: "linear" }),
       });
 
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        error: { code: "CLI_INTEGRATION", setupUrl: "/integrations?connect=linear" },
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        app: { id: "linear", name: "Linear", description: "" },
+        redirectUrl: "https://auth.example.com/linear",
       });
-      expect(mockProvider.initiateConnection).not.toHaveBeenCalled();
+      expect(mockProvider.initiateConnection).toHaveBeenCalled();
       expect(mockProvider.listApps).not.toHaveBeenCalled();
     });
 
@@ -1282,7 +1286,10 @@ describe("MCP Servers API", () => {
       const body = await res.json();
       expect(body.connections).toHaveLength(1);
       expect(body.connections[0].appName).toBe("Slack");
-      expect(mockProvider.listConnections).toHaveBeenCalledWith("member@test.com", "Test Member");
+      expect(mockProvider.listConnections).toHaveBeenCalledWith("member@test.com", "Test Member", {
+        workspaceId: server.id,
+        userId: expect.any(String),
+      });
     });
 
     it("fills shared connection owner names from Sketch users when Canvas omits them", async () => {
@@ -1403,7 +1410,10 @@ describe("MCP Servers API", () => {
 
       const body = await res.json();
       expect(body.success).toBe(true);
-      expect(mockProvider.removeConnection).toHaveBeenCalledWith("member@test.com", "conn-1", "Test Member");
+      expect(mockProvider.removeConnection).toHaveBeenCalledWith("member@test.com", "conn-1", "Test Member", {
+        workspaceId: server.id,
+        userId: expect.any(String),
+      });
     });
 
     it("rejects deleting non-owner shared Canvas connections", async () => {
@@ -1524,7 +1534,12 @@ describe("MCP Servers API", () => {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Cookie: memberCookie },
-          body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
+          body: JSON.stringify({
+            accessLevel: "organization",
+            expectedRevision: 2,
+            visibility: "organization",
+            granteeUserIds: [],
+          }),
         },
       );
 
@@ -1533,9 +1548,12 @@ describe("MCP Servers API", () => {
         "member@test.com",
         "secrets:owner:notion:notion",
         "organization",
-        2,
-        [],
         "Test Member",
+        { expectedRevision: 2, visibility: "organization", granteeUserIds: [] },
+        {
+          workspaceId: server.id,
+          userId: expect.any(String),
+        },
       );
     });
 
@@ -1572,7 +1590,12 @@ describe("MCP Servers API", () => {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Cookie: memberCookie },
-          body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
+          body: JSON.stringify({
+            accessLevel: "organization",
+            expectedRevision: 2,
+            visibility: "organization",
+            granteeUserIds: [],
+          }),
         },
       );
       expect(res.status).toBe(200);
@@ -1583,10 +1606,85 @@ describe("MCP Servers API", () => {
         "member@test.com",
         "secrets:owner:notion:notion",
         "organization",
-        2,
-        [],
         "Test Member",
+        { expectedRevision: 2, visibility: "organization", granteeUserIds: [] },
+        {
+          workspaceId: server.id,
+          userId: expect.any(String),
+        },
       );
+    });
+
+    it("accepts only local Sketch workspace users as selected grantees", async () => {
+      await seedAdmin(db);
+      const users = createUserRepository(db);
+      const member = await users.create({ name: "Sketch Member", email: "member@test.com" });
+      const selected = await users.create({ name: "Selected Sketch User", email: "selected@test.com" });
+      const external = await users.create({
+        name: "External User",
+        email: "external@test.com",
+        type: "external",
+      });
+      const secret = await getJwtSecret(db);
+      const token = await signJwt(member.id, "member", secret);
+      const memberCookie = `sketch_session=${token}`;
+      const server = await createCanvasProviderServer(db);
+      const mockProvider = {
+        type: "canvas",
+        listApps: vi.fn(),
+        initiateConnection: vi.fn(),
+        listConnections: vi.fn(),
+        removeConnection: vi.fn(),
+        updateConnectionAccess: vi.fn().mockResolvedValue(null),
+        isBrokerCapable: () => false,
+        getBrokerSpec: () => null,
+      };
+
+      const { createProvider } = await import("../integrations/factory");
+      vi.mocked(createProvider).mockReturnValue(mockProvider);
+      const app = createApp(db, createTestConfig({}));
+      const endpoint = `/api/mcp-servers/${server.id}/connections/secrets%3Aowner%3Agithub%3Agithub/access`;
+
+      const accepted = await app.request(endpoint, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Cookie: memberCookie },
+        body: JSON.stringify({
+          accessLevel: "personal",
+          expectedRevision: 0,
+          visibility: "selected_members",
+          granteeUserIds: [selected.id],
+        }),
+      });
+
+      expect(accepted.status).toBe(200);
+      expect(mockProvider.updateConnectionAccess).toHaveBeenCalledWith(
+        "member@test.com",
+        "secrets:owner:github:github",
+        "personal",
+        "Sketch Member",
+        { expectedRevision: 0, visibility: "selected_members", granteeUserIds: [selected.id] },
+        { workspaceId: server.id, userId: member.id },
+      );
+
+      const rejected = await app.request(endpoint, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Cookie: memberCookie },
+        body: JSON.stringify({
+          accessLevel: "personal",
+          expectedRevision: 0,
+          visibility: "selected_members",
+          granteeUserIds: [external.id],
+        }),
+      });
+
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Selected members must be Sketch workspace users",
+        },
+      });
+      expect(mockProvider.updateConnectionAccess).toHaveBeenCalledTimes(1);
     });
 
     it("returns Canvas validation errors in the Sketch error shape", async () => {
@@ -1624,7 +1722,12 @@ describe("MCP Servers API", () => {
       const res = await app.request(`/api/mcp-servers/${server.id}/connections/pd-1/access`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Cookie: memberCookie },
-        body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
+        body: JSON.stringify({
+          accessLevel: "organization",
+          expectedRevision: 2,
+          visibility: "organization",
+          granteeUserIds: [],
+        }),
       });
       expect(res.status).toBe(400);
 

@@ -879,6 +879,23 @@ describe("runAgent AI SDK runtime path", () => {
     ]);
   });
 
+  it.each([null, undefined])("fails closed before ClickUp discovery when the owner's email is %s", async (email) => {
+    const loadIntegrationProvider = vi.fn();
+    await expect(
+      runAgent(
+        makeRunParams(textModel(), {
+          currentUserId: "viewer",
+          userEmail: "viewer@example.test",
+          integrationUserId: "owner",
+          integrationUserEmail: email,
+          agentSkillIds: ["clickup"],
+          loadIntegrationProvider,
+        }),
+      ),
+    ).rejects.toThrow("ClickUp access could not be verified");
+    expect(loadIntegrationProvider).not.toHaveBeenCalled();
+  });
+
   it("passes brokered integration env vars into AI SDK Bash and cleans up after success", async () => {
     const cliPath = join(workspace, "fake-canvas-cli.cjs");
     const outputPath = join(workspace, "broker-success.json");

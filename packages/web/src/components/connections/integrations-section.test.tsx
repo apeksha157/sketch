@@ -241,7 +241,12 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Save access" }));
 
     await waitFor(() => {
-      expect(requestBody).toEqual({ accessLevel: "personal", expectedRevision: 2, memberUserIds: ["member-1"] });
+      expect(requestBody).toEqual({
+        accessLevel: "personal",
+        expectedRevision: 2,
+        visibility: "selected_members",
+        granteeUserIds: ["member-1"],
+      });
       expect(onDisconnect).toHaveBeenCalled();
     });
   });
@@ -279,7 +284,14 @@ describe("IntegrationsSection", () => {
       await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
       await chooseAccess(user, label);
       await user.click(screen.getByRole("button", { name: "Save access" }));
-      await waitFor(() => expect(requestBody).toEqual({ accessLevel, expectedRevision: 4, memberUserIds: [] }));
+      await waitFor(() =>
+        expect(requestBody).toEqual({
+          accessLevel,
+          expectedRevision: 4,
+          visibility: accessLevel === "organization" ? "organization" : "private",
+          granteeUserIds: [],
+        }),
+      );
     },
   );
 
@@ -340,6 +352,7 @@ describe("IntegrationsSection", () => {
         canManageAccess: true,
         accessLevel: "personal",
         memberUserIds: ["member-1"],
+        memberGrants: [],
         accessRevision: 4,
       },
     ]);

@@ -45,6 +45,7 @@ function runParams(params: {
   agentAllowedTools?: string[] | null;
   agentEnv?: Record<string, string>;
   agentSkillIds?: string[] | null;
+  availableManagedIntegrations?: RunAgentParams["availableManagedIntegrations"];
 }): RunAgentParams {
   return {
     workspaceDir: params.workspaceDir,
@@ -52,6 +53,7 @@ function runParams(params: {
     agentAllowedTools: params.agentAllowedTools,
     agentEnv: params.agentEnv,
     agentSkillIds: params.agentSkillIds,
+    availableManagedIntegrations: params.availableManagedIntegrations,
   } as RunAgentParams;
 }
 
@@ -233,20 +235,26 @@ describe("agent runtime skills", () => {
     expect(skillTool.description).toContain("- research: Org research");
   });
 
-  it("requires the declared environment before loading a managed skill", async () => {
+  it("requires managed availability rather than legacy credential environment", async () => {
     await writeSkill(
       orgSkillsDir,
       "github",
       "---\nprovider-type: cli:github\nrequires-env:\n  - GH_TOKEN\n---\nGitHub body",
     );
     const provider = new DefaultAgentRuntimeSkillsProvider();
-    const unavailableTools = await provider.createSkillTool(runParams({ workspaceDir, claudeConfigDir: orgClaudeDir }));
+    const unavailableTools = await provider.createSkillTool(
+      runParams({ workspaceDir, claudeConfigDir: orgClaudeDir, agentEnv: { GH_TOKEN: "legacy-token" } }),
+    );
     await expect(executeTool(unavailableTools, "Skill", { skill: "github" })).rejects.toThrow(
       "integration is not connected",
     );
 
     const availableTools = await provider.createSkillTool(
-      runParams({ workspaceDir, claudeConfigDir: orgClaudeDir, agentEnv: { GH_TOKEN: "token" } }),
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        availableManagedIntegrations: new Set(["github"]),
+      }),
     );
     await expect(executeTool(availableTools, "Skill", { skill: "github" })).resolves.toContain("GitHub body");
   });
@@ -263,11 +271,58 @@ describe("agent runtime skills", () => {
         workspaceDir,
         claudeConfigDir: orgClaudeDir,
         agentSkillIds: ["GitHub CLI"],
-        agentEnv: { GH_TOKEN: "token" },
+        availableManagedIntegrations: new Set(["github"]),
       }),
     );
 
     await expect(executeTool(tools, "Skill", { skill: "GitHub CLI" })).resolves.toContain("GitHub body");
+  });
+
+  it("gates Canvas-account skills without falling back to legacy credentials", async () => {
+    await writeSkill(
+      orgSkillsDir,
+      "linear",
+      "---\nname: Linear\ncanvas-account: linear\nrequires-env:\n  - LINEAR_API_KEY\n---\nLinear body",
+    );
+    const provider = new DefaultAgentRuntimeSkillsProvider();
+    const unavailableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        agentEnv: { LINEAR_API_KEY: "legacy-key" },
+      }),
+    );
+    await expect(executeTool(unavailableTools, "Skill", { skill: "Linear" })).rejects.toThrow(
+      "integration is not connected",
+    );
+
+    const availableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        agentEnv: { LINEAR_API_KEY: "legacy-key" },
+        availableManagedIntegrations: new Set(["linear"]),
+      }),
+    );
+    await expect(executeTool(availableTools, "Skill", { skill: "Linear" })).resolves.toContain("Linear body");
+  });
+
+  it("requires managed ClickUp availability before loading the skill", async () => {
+    await writeSkill(orgSkillsDir, "clickup", "---\nname: ClickUp\nmanaged-integration: clickup\n---\nClickUp body");
+    const provider = new DefaultAgentRuntimeSkillsProvider();
+    const unavailableTools = await provider.createSkillTool(runParams({ workspaceDir, claudeConfigDir: orgClaudeDir }));
+    await expect(executeTool(unavailableTools, "Skill", { skill: "ClickUp" })).rejects.toThrow(
+      "access could not be verified",
+    );
+
+    const availableTools = await provider.createSkillTool(
+      runParams({
+        workspaceDir,
+        claudeConfigDir: orgClaudeDir,
+        availableManagedIntegrations: new Set(["clickup"]),
+      }),
+    );
+    await expect(executeTool(availableTools, "Skill", { skill: "ClickUp" })).resolves.toContain("ClickUp body");
   });
 
   it("returns the selected skill body and keeps the skill directory readable", async () => {

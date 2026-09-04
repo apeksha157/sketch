@@ -25,6 +25,7 @@ import { settleContainersFromProviderFacts } from "../entities/container-settlem
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
+import type { ConsolidatedLoopAgenticGenerator } from "./consolidated-loop";
 import { resolveConnectorCredentials } from "./credential-providers";
 import { reconcileDanglingCrmRollups, refreshCrmActivityRollups } from "./crm-rollup";
 import { isEmailSyncedItem, persistEnvelopeMetadata, recordSuppressedEmailRecord } from "./email";
@@ -197,6 +198,7 @@ export async function runConnectorSync(
       | "MICROSOFT_TENANT"
       | "OPENROUTER_API_KEY"
       | "CONTAINER_CLASSIFICATION_MODE"
+      | "CONSOLIDATED_LOOP_MODE"
     >
   >,
   options: RunConnectorSyncOptions = {},
@@ -487,6 +489,7 @@ export async function runConnectorSync(
           item,
           existingHashes,
           encryptionKey: appConfig?.ENCRYPTION_KEY,
+          logger: syncLogger,
         });
 
         if (itemResult.kind === "skipped_empty") {
@@ -753,6 +756,7 @@ export interface SyncSchedulerDeps {
   downloadImage?: (providerFileId: string, connectorConfigId: string) => Promise<{ buffer: Buffer; mimeType: string }>;
   /** Slack API facade for the slack-indexing connector; built in bootstrap. */
   slackIndexingFacade?: SlackIndexingFacade | null;
+  consolidatedLoopAgenticGenerator?: ConsolidatedLoopAgenticGenerator | null;
   appConfig?: Partial<
     Pick<
       Config,
@@ -791,6 +795,7 @@ export interface SyncSchedulerDeps {
       | "ENCRYPTION_KEY"
       | "OPENROUTER_API_KEY"
       | "CONTAINER_CLASSIFICATION_MODE"
+      | "CONSOLIDATED_LOOP_MODE"
     >
   >;
 }
@@ -954,6 +959,8 @@ export async function runScheduledEnrichment(db: Kysely<DB>, logger: Logger, dep
       geminiMaxRpm: deps?.appConfig?.GEMINI_MAX_RPM,
       geminiMaxRetries: deps?.appConfig?.GEMINI_MAX_RETRIES,
       downloadImage: deps?.downloadImage,
+      consolidatedLoopMode: deps?.appConfig?.CONSOLIDATED_LOOP_MODE,
+      consolidatedLoopAgenticGenerator: deps?.consolidatedLoopAgenticGenerator,
       maxFilesPerRun: SCHEDULED_ENRICHMENT_MAX_FILES_PER_RUN,
       timeBudgetMs: SCHEDULED_ENRICHMENT_TIME_BUDGET_MS,
     });

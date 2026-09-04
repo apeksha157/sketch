@@ -97,6 +97,18 @@ describe("graph verdicts panel", () => {
       http.get("/api/graph-verdicts/runs/run-1234abcd/verdicts", () =>
         HttpResponse.json({ verdicts: [verdictFixture({ status })] }),
       ),
+      http.get("/api/entities/ent-dash", () =>
+        HttpResponse.json({
+          entity: {
+            id: "ent-dash",
+            name: "Falcon Dashboard",
+            sourceType: "project",
+            mentionCount: 12,
+            aliases: [],
+            contactPoints: [],
+          },
+        }),
+      ),
       http.post("/api/graph-verdicts/gv-1/approval", () => {
         decisions.push("approval");
         status = "approved";
@@ -137,10 +149,11 @@ describe("graph verdicts panel", () => {
 
     expect(screen.queryByTestId("graph-verdict-apply")).toBeNull();
     await waitFor(() => expect(decisions).toContain("dry-run"));
-    await screen.findByText("entity_merges");
+    await screen.findByTestId("graph-verdict-target");
 
     const primary = screen.getByTestId("graph-verdict-approve");
-    await waitFor(() => expect(primary).toHaveTextContent("Approve & apply"));
+    expect(primary).toHaveTextContent("Merge into Falcon Dashboard");
+    await waitFor(() => expect(primary).toBeEnabled());
     await userEvent.click(primary);
     await waitFor(() => expect(decisions).toContain("approval"));
     await waitFor(() => expect(decisions).toContain("apply"));
@@ -241,6 +254,9 @@ describe("graph verdicts panel", () => {
     await screen.findByText("Fix onboarding drop-off");
     expect(screen.getByText("team")).toBeInTheDocument();
     await waitFor(() => expect(decisions).toContain("dry-run"));
+    await screen.findByText(/1 container classified/);
+    expect(screen.queryByText("containers")).toBeNull();
+    await userEvent.click(screen.getByTestId("graph-verdict-counts-toggle"));
     await screen.findByText("containers");
 
     const primary = screen.getByTestId("graph-verdict-approve");

@@ -199,6 +199,7 @@ export function createTestConfig(overrides: Partial<Config> = {}): Config {
     MAX_FILE_SIZE_MB: 20,
     MAX_UPLOAD_SIZE_MB: 50,
     BIRTH_GATE_DRY_RUN: true,
+    CONSOLIDATED_LOOP_MODE: "off",
     DEV_TOOLS_ENABLED: false,
     GRAPH_CURATION_TOOLS_ENABLED: false,
     CONTAINER_CLASSIFICATION_MODE: "off",

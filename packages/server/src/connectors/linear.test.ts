@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createContainerRepository } from "../db/repositories/containers";
 import { createTestDb } from "../test-utils";
 import { createLinearConnector } from "./linear";
-import type { ContainerObservation, EntitySeed, SyncedItem } from "./types";
+import type { AccessTokenProvider, ContainerObservation, ContainerTarget, EntitySeed, SyncedItem } from "./types";
 
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify({ data }), {
@@ -41,6 +41,8 @@ function routeLinearRequest(
 async function drainSync(
   connector: ReturnType<typeof createLinearConnector>,
   opts: {
+    accessTokenProvider?: AccessTokenProvider;
+    containerTargetOverrides?: Record<string, ContainerTarget>;
     scopeConfig?: Record<string, unknown>;
     cursor?: string | null;
     onEntitySeed?: (seed: EntitySeed) => Promise<void>;
@@ -50,6 +52,8 @@ async function drainSync(
   const items: SyncedItem[] = [];
   for await (const item of connector.sync({
     credentials: { type: "api_key", api_key: "test-key" },
+    accessTokenProvider: opts.accessTokenProvider,
+    containerTargetOverrides: opts.containerTargetOverrides,
     scopeConfig: opts.scopeConfig ?? {},
     cursor: opts.cursor ?? null,
     logger: (await import("pino")).default({ level: "silent" }),
@@ -285,6 +289,67 @@ describe("Linear project sync observes dormant containers", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("preserves managed OAuth authorization, container observations, and ignored project overrides together", async () => {
+    const accessTokenProvider = vi.fn<AccessTokenProvider>().mockResolvedValue({ accessToken: "canvas-token" });
+    fetchSpy.mockImplementation(async (_url: unknown, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer canvas-token");
+      return routeLinearRequest(String(init?.body ?? ""), {
+        teams: () =>
+          jsonResponse({
+            teams: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [{ id: "team-eng", name: "Engineering", key: "ENG", members: { nodes: [] } }],
+            },
+          }),
+        projects: () =>
+          jsonResponse({
+            projects: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: ["project-ignored", "project-kept"].map((id) => ({
+                id,
+                name: id,
+                description: "Project content",
+                url: `https://linear.example/${id}`,
+                state: "started",
+                lead: null,
+                startDate: null,
+                targetDate: null,
+                teams: { nodes: [{ id: "team-eng", name: "Engineering", key: "ENG" }] },
+                createdAt: "2026-08-01T00:00:00.000Z",
+                updatedAt: "2026-08-02T00:00:00.000Z",
+              })),
+            },
+          }),
+      });
+    });
+    const observations: ContainerObservation[] = [];
+    const seeds: EntitySeed[] = [];
+    const items = await drainSync(createLinearConnector(), {
+      accessTokenProvider,
+      containerTargetOverrides: { "project-ignored": "ignore" },
+      onContainerObservation: async (observation) => {
+        observations.push(observation);
+      },
+      onEntitySeed: async (seed) => {
+        seeds.push(seed);
+      },
+    });
+
+    expect(accessTokenProvider).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(observations.map((observation) => observation.externalId)).toEqual([
+      "team-eng",
+      "project-ignored",
+      "project-kept",
+    ]);
+    expect(seeds.map((seed) => seed.sourceId)).toEqual(["team-eng", "project-kept"]);
+    expect(items.map((item) => item.providerFileId)).toEqual([
+      "team-team-eng",
+      "project-project-ignored",
+      "project-project-kept",
+    ]);
   });
 
   it("observes dormant projects under a cursor without re-seeding or re-yielding them", async () => {

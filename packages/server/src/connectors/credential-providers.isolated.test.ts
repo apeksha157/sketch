@@ -84,6 +84,13 @@ describe("connector credential providers", () => {
     },
   );
 
+  it("keeps ClickUp Files on the local API-token path", () => {
+    expect(credentialProviders.isCanvasConnector("clickup")).toBe(false);
+    expect(
+      credentialProviders.isLocalConnectorBlockedInCanvasMode({ CONNECTOR_CREDENTIAL_SOURCE: "canvas" }, "clickup"),
+    ).toBe(false);
+  });
+
   it("decrypts Canvas OAuth credentials and preserves token metadata", async () => {
     const provider = new credentialProviders.CanvasConnectorCredentialProvider({
       db: {} as never,

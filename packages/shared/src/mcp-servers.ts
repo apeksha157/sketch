@@ -12,6 +12,18 @@ export interface McpServerRecord {
   updatedAt: string;
 }
 
+export const CANVAS_NATIVE_INTEGRATION_APP_IDS = ["github", "linear"] as const;
+
+function normalizeIntegrationAppId(value: string): string {
+  return value.trim().toLowerCase().replaceAll("_", "-");
+}
+
+const canvasNativeIntegrationAppIds = new Set<string>(CANVAS_NATIVE_INTEGRATION_APP_IDS);
+
+export function isCanvasNativeIntegrationAppId(value: string | undefined): boolean {
+  return value ? canvasNativeIntegrationAppIds.has(normalizeIntegrationAppId(value)) : false;
+}
+
 /** Execution path used by an integration catalog result. */
 export type IntegrationExecutionMode = "canvas" | "cli" | "api";
 
@@ -49,6 +61,17 @@ export interface IntegrationConnection {
   capabilityMessages?: string[];
   externalAccountId?: string;
   externalTenantId?: string;
+  visibility?: "private" | "selected_members" | "organization";
+  memberGrants?: Array<{
+    accountId: string;
+    orgId: string;
+    workspaceId?: string;
+    granteeUserId: string;
+    grantedByUserId: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  sharingReason?: "owner" | "selected_member" | "organization";
   ownerUserId?: string;
   ownerName?: string;
   isOwnedByViewer?: boolean;

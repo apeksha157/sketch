@@ -141,7 +141,6 @@ export function ConnectIntegrationDialog({
     integration?.type === "outlook_calendar" ||
     integration?.type === "teams" ||
     integration?.type === "fireflies" ||
-    integration?.type === "clickup" ||
     integration?.type === "notion" ||
     integration?.type === "linear";
   const oauthProviderName = isMicrosoft ? "Microsoft" : "Google";

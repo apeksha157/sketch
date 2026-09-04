@@ -234,6 +234,24 @@ export interface LlmUsageEventsTable {
   cost_usd: number | null;
 }
 
+export interface ExtractionStagesTable {
+  id: string;
+  indexed_file_id: string;
+  content_hash: string | null;
+  extractor_version: string;
+  status: string;
+  staged_json: string;
+  model: string | null;
+  rounds: number | null;
+  tool_calls: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cost_usd: number | null;
+  duration_ms: number | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
 export interface EntityNameEmbeddingsTable {
   entity_id: string;
   embedding: string;
@@ -250,6 +268,15 @@ export interface DocumentChunksTable {
   chunk_index: number;
   content: string;
   token_count: number | null;
+}
+
+export interface IndexedFileRawContentsTable {
+  indexed_file_id: string;
+  kind: string;
+  content: string;
+  char_length: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DocumentTimeframesTable {
@@ -1008,6 +1035,11 @@ export interface GraphVerdictsTable {
   decided_at: string | null;
   decided_by_user_id: string | null;
   applied_ledger_ref: string | null;
+  veto_until: string | null;
+  corroboration_json: string | null;
+  retired_reason: string | null;
+  dry_streak: Generated<number>;
+  merge_pair_key: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -1369,6 +1401,26 @@ export interface WeeklyMintRunsTable {
   started_at: Generated<string>;
   completed_at: string | null;
   error: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+export interface ResolverRunsTable {
+  id: string;
+  run_key: string;
+  lease_token: string | null;
+  status: string;
+  heartbeat_at: string | null;
+  sweep_linked: Generated<number>;
+  drain_filed: Generated<number>;
+  aged_retired: Generated<number>;
+  approved_auto: Generated<number>;
+  applied: Generated<number>;
+  bounced_drift: Generated<number>;
+  summary_json: string | null;
+  error: string | null;
+  started_at: Generated<string>;
+  completed_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -1930,6 +1982,9 @@ export interface WebhookEndpointsTable {
   id: string;
   task_id: string;
   status: string;
+  verification_json: Generated<string | null>;
+  signing_secret_encrypted: Generated<string | null>;
+  source_binding: Generated<string | null>;
   generation: Generated<number>;
   created_at: Generated<string>;
   updated_at: Generated<string>;
@@ -2056,10 +2111,12 @@ export interface DB {
   access_scope_members: AccessScopeMembersTable;
   connector_files: ConnectorFilesTable;
   document_chunks: DocumentChunksTable;
+  indexed_file_raw_contents: IndexedFileRawContentsTable;
   document_timeframes: DocumentTimeframesTable;
   chunk_embeddings: ChunkEmbeddingsTable;
   file_embeddings: FileEmbeddingsTable;
   llm_usage_events: LlmUsageEventsTable;
+  extraction_stages: ExtractionStagesTable;
   entity_name_embeddings: EntityNameEmbeddingsTable;
   entity_review_queue_embeddings: EntityReviewQueueEmbeddingsTable;
   user_provider_identities: UserProviderIdentitiesTable;
@@ -2129,6 +2186,7 @@ export interface DB {
   weekly_mint_candidates: WeeklyMintCandidatesTable;
   weekly_mint_run_events: WeeklyMintRunEventsTable;
   weekly_mint_runs: WeeklyMintRunsTable;
+  resolver_runs: ResolverRunsTable;
   weekly_mint_traces: WeeklyMintTracesTable;
   entity_mentions: EntityMentionsTable;
   agent_runs: AgentRunsTable;

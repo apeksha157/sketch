@@ -27,6 +27,7 @@ import type { DB } from "../db/schema";
 import type { IntegrationProvider } from "../integrations/types";
 import { normalizeScheduleTriggerSteps } from "../scheduler/trigger-metadata";
 import {
+  AutomationValidationError,
   buildAutomationDefinition,
   isAutomationPlaceholderDraft,
   isLegacyMaterializedAutomationPlaceholderRow,
@@ -39,6 +40,8 @@ import {
   type AutomationTaskConversationAssociation,
   upsertAutomationTaskConversationAssociation,
 } from "./task-conversations";
+import { assertWebhookEndpointReady } from "./webhook-bindings";
+import { lastWebhookDeliveryMetadata } from "./webhook-endpoints";
 
 export interface AutomationCreateContext {
   id?: string;
@@ -125,6 +128,7 @@ export interface AutomationDeletionScheduler {
 
 export type AutomationDeletionResult =
   | { kind: "deleted" }
+  | { kind: "webhook_cleanup_required" }
   | { kind: "not_found" }
   | { kind: "access_denied" }
   | { kind: "locked"; lock: AutomationTaskLockRow }
@@ -159,10 +163,33 @@ async function ensureWebhookEndpoint(
   db: Kysely<DB>,
   taskId: string,
   request: AutomationBuilderSaveRequest,
+  encryptionKey?: string,
 ): Promise<void> {
   const repository = createWebhookEndpointRepository(db);
+  const endpoint = await repository.getByTaskId(taskId);
+  if (endpoint?.source_binding != null && !hasWebhookTrigger(request)) {
+    throw new AutomationValidationError([
+      {
+        code: "WEBHOOK_CLEANUP_REQUIRED",
+        message: "Delete the remote webhook through its provider API before changing the webhook trigger.",
+      },
+    ]);
+  }
   if (hasWebhookTrigger(request)) {
     await repository.ensureForTask(taskId);
+    if (request.status === "active") {
+      try {
+        await assertWebhookEndpointReady(db, taskId, encryptionKey);
+      } catch {
+        throw new AutomationValidationError([
+          {
+            code: "WEBHOOK_NOT_READY",
+            message:
+              "Complete or reconcile the signed webhook through its provider API before activating this automation.",
+          },
+        ]);
+      }
+    }
     return;
   }
   await repository.deactivateForTask(taskId);
@@ -427,10 +454,11 @@ export async function getAutomationDefinition(params: {
 }): Promise<AutomationDefinition | null> {
   const row = await createScheduledTaskRepository(params.db).getById(params.taskId);
   if (!row) return null;
-  const [stepContentRows, runRows, webhookEndpoint] = await Promise.all([
+  const [stepContentRows, runRows, webhookEndpoint, webhookLastDelivery] = await Promise.all([
     createAutomationStepContentRepository(params.db).getByTask(params.taskId),
     createAutomationRunsRepository(params.db).list(params.taskId),
     createWebhookEndpointRepository(params.db, params.encryptionKey).getByTaskId(params.taskId),
+    lastWebhookDeliveryMetadata(params.db, params.taskId),
   ]);
   return buildAutomationDefinition({
     row,
@@ -439,6 +467,7 @@ export async function getAutomationDefinition(params: {
     webhookBaseUrl: params.webhookBaseUrl,
     webhookPort: params.webhookPort,
     webhookEndpoint,
+    webhookLastDelivery,
   });
 }
 
@@ -460,7 +489,7 @@ export async function deleteAutomation(params: {
 }): Promise<AutomationDeletionResult> {
   let databaseResult: Extract<
     AutomationDeletionResult,
-    { kind: "deleted" | "not_found" | "access_denied" | "locked" | "lease_stale" }
+    { kind: "deleted" | "not_found" | "access_denied" | "locked" | "lease_stale" | "webhook_cleanup_required" }
   >;
   try {
     databaseResult = await params.db.transaction().execute(async (trx) => {
@@ -483,6 +512,14 @@ export async function deleteAutomation(params: {
       });
       if (lease.kind === "conflict") return { kind: "locked" as const, lock: lease.lock };
       if (lease.kind === "stale") return { kind: "lease_stale" as const, lock: lease.lock };
+
+      await trx
+        .updateTable("scheduled_tasks")
+        .set({ revision: sql<number>`revision` })
+        .where("id", "=", params.taskId)
+        .execute();
+      const endpoint = await createWebhookEndpointRepository(trx).getByTaskId(params.taskId);
+      if (endpoint?.source_binding != null) return { kind: "webhook_cleanup_required" as const };
 
       await createScheduledTaskConversationRepository(trx).deleteByTaskId(params.taskId);
       await createAutomationStepContentRepository(trx).deleteByTaskId(params.taskId);
@@ -665,7 +702,7 @@ export async function updateAutomationDefinition(params: {
     }
 
     await replaceStepContent(trx, params.taskId, request);
-    await ensureWebhookEndpoint(trx, params.taskId, request);
+    await ensureWebhookEndpoint(trx, params.taskId, request, params.encryptionKey);
     if (params.taskConversationAssociation) {
       await upsertAutomationTaskConversationAssociation(trx, {
         taskId: params.taskId,
@@ -733,7 +770,7 @@ export async function createAutomationDefinition(params: {
     };
     const created = await createScheduledTaskRepository(trx).add(task);
     await replaceStepContent(trx, id, request);
-    await ensureWebhookEndpoint(trx, id, request);
+    await ensureWebhookEndpoint(trx, id, request, params.encryptionKey);
     if (params.taskConversationAssociation) {
       await upsertAutomationTaskConversationAssociation(trx, {
         taskId: id,
@@ -806,6 +843,8 @@ export async function createAutomationDraft(params: {
           runsRepo.list(candidate.id),
         ]);
         if (!isAutomationPlaceholderDraft({ row: candidate, stepContentRows, runRows })) continue;
+        const endpoint = await createWebhookEndpointRepository(trx).getByTaskId(candidate.id);
+        if (endpoint?.source_binding != null) continue;
         const builderConversations = await conversationsRepo.listByTaskAndTranscriptUser(candidate.id, createdBy, {
           kind: "builder",
         });

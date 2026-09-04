@@ -220,6 +220,11 @@ import * as m217 from "./migrations/217-machine-principal";
 import * as m218 from "./migrations/218-resolution-decisions";
 import * as m219 from "./migrations/219-mention-verdicts";
 import * as m220 from "./migrations/220-retire-pats";
+import * as m221 from "./migrations/221-extraction-stages";
+import * as m222 from "./migrations/222-webhook-verification";
+import * as m223 from "./migrations/223-verdict-lifecycle";
+import * as m224 from "./migrations/224-resolver-runs";
+import * as m225 from "./migrations/225-indexed-file-raw-contents";
 import type { DB } from "./schema";
 
 /**
@@ -449,6 +454,11 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "218-resolution-decisions": m218,
           "219-mention-verdicts": m219,
           "220-retire-pats": m220,
+          "221-extraction-stages": m221,
+          "222-webhook-verification": m222,
+          "223-verdict-lifecycle": m223,
+          "224-resolver-runs": m224,
+          "225-indexed-file-raw-contents": m225,
         };
       },
     },

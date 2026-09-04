@@ -7,6 +7,7 @@ import type { Config } from "../config";
 import { createMcpServerRepository } from "../db/repositories/mcp-servers";
 import type { DB } from "../db/schema";
 import { CanvasProvider, type CanvasSketchConnectorType } from "../integrations/canvas";
+import type { IntegrationWorkspaceContext } from "../integrations/types";
 import { decryptCredentialEnvelope } from "./credential-envelope";
 import { parseCredentials } from "./sync-utils";
 import type { AccessTokenProvider, ConnectorCredentials, ConnectorType, OAuthCredentials } from "./types";
@@ -82,7 +83,6 @@ const CANVAS_CONNECTOR_TYPE_VALUES = [
   "outlook_calendar",
   "teams",
   "fireflies",
-  "clickup",
   "notion",
   "linear",
 ] as const satisfies readonly CanvasSketchConnectorType[];
@@ -96,6 +96,7 @@ export const CANVAS_OAUTH_CONNECTOR_TYPES = [
   "outlook",
   "outlook_calendar",
   "teams",
+  "linear",
 ] as const satisfies readonly ConnectorType[];
 
 const CANVAS_OAUTH_CONNECTORS = new Set<ConnectorType>(CANVAS_OAUTH_CONNECTOR_TYPES);
@@ -149,7 +150,7 @@ export function hasCanvasCredentialImportConfig(config?: CredentialProviderConfi
 }
 
 export function assertCanvasCredentialImportConfigured(config?: CredentialProviderConfig): void {
-  const privateKeyPem = getPrivateKeyPem(config ?? {});
+  const privateKeyPem = getCanvasCredentialPrivateKeyPem(config ?? {});
   createPrivateKey(privateKeyPem);
 }
 
@@ -178,7 +179,7 @@ export async function connectorCredentialSourceStatus(params: {
   };
 }
 
-function getPrivateKeyPem(config: CredentialProviderConfig): string {
+export function getCanvasCredentialPrivateKeyPem(config: CredentialProviderConfig): string {
   const fromEnv = config.CANVAS_CREDENTIAL_PRIVATE_KEY_PEM?.trim();
   if (fromEnv) return fromEnv.replace(/\\n/g, "\n");
 
@@ -315,13 +316,14 @@ export class CanvasConnectorCredentialProvider implements ConnectorCredentialPro
     accountId?: string;
     userName?: string | null;
     userOrgRole?: "admin" | "member";
+    workspaceContext?: IntegrationWorkspaceContext;
   }): Promise<ConnectorCredentials> {
     if (!params.userEmail) {
       throw new Error("Canvas credential source requires a user email");
     }
 
     const provider = await this.loadProvider();
-    const privateKeyPem = getPrivateKeyPem(this.deps.appConfig);
+    const privateKeyPem = getCanvasCredentialPrivateKeyPem(this.deps.appConfig);
     const response = await provider.mintConnectorCredential({
       userEmail: params.userEmail,
       connectorType: toCanvasConnectorType(params.connectorType),
@@ -329,6 +331,7 @@ export class CanvasConnectorCredentialProvider implements ConnectorCredentialPro
       accountId: params.accountId,
       userName: params.userName ?? undefined,
       userOrgRole: params.userOrgRole,
+      workspaceContext: params.workspaceContext,
     });
     const payload = parseCanvasCredentialPayload(decryptCredentialEnvelope<unknown>(response.envelope, privateKeyPem));
     validateCanvasCredentialResponse({

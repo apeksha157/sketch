@@ -5,8 +5,11 @@ import { createWriteAgentOutputTool } from "./tools/agent-output";
 import { createManageAutomationSharesTool } from "./tools/automation-shares";
 import { createReadChatHistoryTool } from "./tools/chat-history";
 import { ChatHistoryAccessResolver } from "./tools/chat-search";
+import { createClickUpApiTool } from "./tools/clickup-api";
 import { createSearchDeliveryTargetsTool } from "./tools/delivery-targets";
+import { createGithubCliTool } from "./tools/github-cli";
 import { createInboxWorkflowTools } from "./tools/inbox-workflows";
+import { createLinearApiTool } from "./tools/linear-api";
 import { createListFollowupsTool } from "./tools/list-followups";
 import { createListTasksTool } from "./tools/list-tasks";
 import { createLocalClaudeSessionTool } from "./tools/local-claude-session";
@@ -56,6 +59,8 @@ export function createSketchMcpToolDefinitions(deps: SketchMcpDeps) {
     createSendFileToChatTool(deps, absWorkspace),
     createReadChatHistoryTool(deps, chatHistoryAccess),
     createProviderConfigTool(deps),
+    ...(deps.availableManagedIntegrations?.has("github") ? [createGithubCliTool(deps)] : []),
+    ...(deps.availableManagedIntegrations?.has("linear") ? [createLinearApiTool(deps)] : []),
     createSearchDeliveryTargetsTool(deps),
     createLocalRunCommandTool(deps),
     createLocalClaudeSessionTool(deps),
@@ -134,6 +139,7 @@ export function createSketchMcpToolDefinitions(deps: SketchMcpDeps) {
     ...createSearchTools(deps),
     createListFollowupsTool(deps),
     createListTasksTool(deps),
+    ...(deps.availableManagedIntegrations?.has("clickup") ? [createClickUpApiTool(deps)] : []),
     ...(deps.questionCollector && (deps.responseSurface === "web" || channelQuestionInteractionsAvailable(deps))
       ? [createAskUserQuestionTool(deps), createAskUserQuestionsTool(deps)]
       : []),

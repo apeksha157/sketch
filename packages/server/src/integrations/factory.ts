@@ -7,7 +7,7 @@
  * (type, apiUrl, credentials JSON, providerId) rather than a raw row,
  * so callers can pass values from the unified table.
  */
-import { CanvasProvider } from "./canvas";
+import { CanvasProvider, type CanvasProviderOptions } from "./canvas";
 import { canvasCredentialsSchema } from "./types";
 import type { IntegrationProvider } from "./types";
 
@@ -16,12 +16,13 @@ export function createProvider(
   apiUrl: string,
   credentials: string,
   providerId: string,
+  options: CanvasProviderOptions = {},
 ): IntegrationProvider {
   const parsed = JSON.parse(credentials);
   switch (type) {
     case "canvas": {
       const creds = canvasCredentialsSchema.parse(parsed);
-      return new CanvasProvider(apiUrl, creds.apiKey, providerId);
+      return new CanvasProvider(apiUrl, creds.apiKey, providerId, options);
     }
     default:
       throw new Error(`Provider type "${type}" is not yet implemented`);

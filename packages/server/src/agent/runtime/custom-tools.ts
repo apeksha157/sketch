@@ -7,6 +7,7 @@ import {
   collectIntegrationCardsFromProgressEvents,
   projectToolResultForProgressLog,
 } from "../../integrations/cards";
+import { getIntegrationActor } from "../../integrations/types";
 import { AuxCostCollector, sumAuxCost } from "../aux-cost";
 import type { RunAgentParams } from "../runner";
 import { createSketchMcpToolDefinitions } from "../sketch-tools";
@@ -82,7 +83,8 @@ function toRuntimeInputSchema(sdkTool: RuntimeSdkMcpToolDefinition) {
 }
 
 function mcpToModelOutput({ output }: Parameters<ToolToModelOutput>[0]): ReturnType<ToolToModelOutput> {
-  const result = output as { content?: unknown };
+  const result = output as { content?: unknown; isError?: boolean };
+  if (result.isError === true) return { type: "error-json", value: result as JSONValue };
 
   if (!("content" in result) || !Array.isArray(result.content)) {
     return { type: "json", value: result as JSONValue };
@@ -109,7 +111,10 @@ function toAiSdkTool(sdkTool: RuntimeSdkMcpToolDefinition) {
   return tool({
     description: sdkTool.description,
     inputSchema: toRuntimeInputSchema(sdkTool),
-    execute: async (input) => sdkTool.handler(input, {}),
+    execute: async (input, options) => {
+      options.abortSignal?.throwIfAborted();
+      return sdkTool.handler(input, { signal: options.abortSignal });
+    },
     toModelOutput: mcpToModelOutput,
   });
 }
@@ -137,19 +142,20 @@ export function createAgentRuntimeCustomToolEffects(): AgentRuntimeCustomToolEff
         kind: "tool_result",
         toolName: event.name,
         input: event.input,
-        output: projectToolResultForProgressLog(event.error ? event.error : event.result),
+        output: projectToolResultForProgressLog(event.result ?? event.error),
         isError: event.error !== undefined,
       });
     },
     async collectIntegrationCards(params) {
       if (params.contextType === "scheduled_task") return;
+      const { userId: integrationUserId, userEmail: integrationUserEmail } = getIntegrationActor(params);
       await collectIntegrationCardsFromProgressEvents({
         events: integrationProgressEvents,
         loadIntegrationProvider: params.loadIntegrationProvider,
         cliIntegrations: params.cliIntegrations,
-        currentUserId: params.integrationUserId === undefined ? params.currentUserId : params.integrationUserId,
+        currentUserId: integrationUserId,
         collector: integrationConnectionCollector,
-        userEmail: params.integrationUserEmail === undefined ? (params.userEmail ?? null) : params.integrationUserEmail,
+        userEmail: integrationUserEmail,
         userName: params.integrationUserName === undefined ? params.userName : params.integrationUserName,
       });
     },
@@ -191,6 +197,10 @@ function buildSketchMcpDeps(params: RunAgentParams, deps: AgentRuntimeCustomTool
     db: params.db,
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,
+    availableManagedIntegrations: params.availableManagedIntegrations,
+    integrationUserId: params.integrationUserId,
+    integrationUserEmail: params.integrationUserEmail,
+    getCanvasAccessToken: params.getCanvasAccessToken,
     validateAgentSkills: params.validateAgentSkills,
     taskContext: params.taskContext,
     currentAutomation: params.currentAutomation ?? params.taskContext?.currentAutomation,

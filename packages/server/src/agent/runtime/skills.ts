@@ -1,6 +1,6 @@
 import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { parseCliSkillFrontmatter } from "@sketch/shared";
+import { managedIntegrationAppId, parseCliSkillFrontmatter } from "@sketch/shared";
 import { type Tool, type ToolSet, tool } from "ai";
 import { z } from "zod/v4";
 import type { Logger } from "../../logger";
@@ -321,6 +321,7 @@ async function loadSkillsFromDir(params: {
       id: entry.name,
       name: entry.name,
       ...(displayName ? { displayName } : {}),
+      ...(frontMatter["managed-integration"] ? { managedIntegration: frontMatter["managed-integration"] } : {}),
       ...(cliFrontMatter?.providerType ? { providerType: cliFrontMatter.providerType } : {}),
       requiresEnv: cliFrontMatter?.requiresEnv ?? [],
       description,
@@ -409,6 +410,21 @@ function skillToModelOutput({ output }: Parameters<ToolToModelOutput>[0]): Retur
   return { type: "content", value: [{ type: "text", text: String(output) }] };
 }
 
+function managedIntegrationForSkill(skill: AgentRuntimeSkillDescriptor) {
+  for (const candidate of [
+    skill.frontMatter["canvas-account"],
+    skill.frontMatter["managed-integration"],
+    skill.name,
+    skill.id,
+    skill.displayName,
+  ]) {
+    if (!candidate) continue;
+    const appId = managedIntegrationAppId(candidate.replace(/\s+cli$/i, ""));
+    if (appId) return appId;
+  }
+  return null;
+}
+
 export class DefaultAgentRuntimeSkillsProvider implements AgentRuntimeSkillsProvider {
   async createSkillTool(params: RunAgentParams): Promise<ToolSet> {
     if (!agentAllowsSkill(params.agentAllowedTools)) return {};
@@ -443,7 +459,15 @@ export class DefaultAgentRuntimeSkillsProvider implements AgentRuntimeSkillsProv
         execute: async ({ skill }: { skill: string }) => {
           const selected = byName.get(skill.trim().toLowerCase());
           if (!selected) throw new Error(`Skill not found: ${skill}`);
-          const missingEnv = selected.requiresEnv.filter((name) => !params.agentEnv?.[name]);
+          const managedIntegration = managedIntegrationForSkill(selected);
+          if (managedIntegration && !params.availableManagedIntegrations?.has(managedIntegration)) {
+            throw new Error(
+              managedIntegration === "clickup"
+                ? `Skill "${selected.name}" is unavailable because ClickUp access could not be verified for this run. Existing connections were not changed.`
+                : `Skill "${selected.name}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,
+            );
+          }
+          const missingEnv = managedIntegration ? [] : selected.requiresEnv.filter((name) => !params.agentEnv?.[name]);
           if (missingEnv.length > 0) {
             throw new Error(
               `Skill "${selected.name}" is unavailable because its integration is not connected. Reconnect it from Integrations in Sketch.`,

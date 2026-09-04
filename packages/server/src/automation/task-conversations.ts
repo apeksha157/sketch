@@ -13,7 +13,7 @@ import {
 } from "../db/repositories/scheduled-task-conversations";
 import type { DB } from "../db/schema";
 import type { TaskContext } from "../scheduler/types";
-import { acquireOrRenewLock, releaseLock } from "./lock-service";
+import { LOCK_TTL_MS, acquireOrRenewLock, releaseLock } from "./lock-service";
 
 export type { ScheduledTaskConversationKind } from "../db/repositories/scheduled-task-conversations";
 
@@ -155,7 +155,22 @@ async function claimAuthoringLease(
   transcriptUserId: string,
   clientSessionId = LEGACY_LOCK_SESSION_ID,
   generation?: number,
+  renewOnly = false,
 ): Promise<{ acquired: boolean; stale: boolean; lock: AutomationTaskConversationLockSummary }> {
+  if (renewOnly) {
+    const now = Date.now();
+    const held =
+      generation === undefined
+        ? undefined
+        : await createAutomationLocksRepository(db).touchIfUserGeneration({
+            taskId,
+            userId: transcriptUserId,
+            generation,
+            now: new Date(now).toISOString(),
+            expiresAt: new Date(now + LOCK_TTL_MS).toISOString(),
+          });
+    return { acquired: Boolean(held), stale: !held, lock: summarizeBuilderLock(held, transcriptUserId) };
+  }
   const existing = await createAutomationLocksRepository(db).getByTaskId(taskId);
   if (
     existing &&
@@ -414,7 +429,7 @@ export function createAutomationTaskConversationService(db: Kysely<DB>) {
       taskId: string,
       conversationId: string,
       transcriptUserId: string,
-      lease?: { clientSessionId?: string; generation?: number },
+      lease?: { clientSessionId?: string; generation?: number; renewOnly?: boolean },
     ): Promise<BuilderConversationAccessResult> {
       return db.transaction().execute(async (trx) => {
         const trxRepo = createScheduledTaskConversationRepository(trx);
@@ -432,6 +447,7 @@ export function createAutomationTaskConversationService(db: Kysely<DB>) {
           transcriptUserId,
           lease?.clientSessionId,
           lease?.generation,
+          lease?.renewOnly,
         );
         if (claimed.stale) return { kind: "stale" as const, lock: claimed.lock };
         if (!claimed.acquired) return { kind: "locked" as const, lock: claimed.lock };

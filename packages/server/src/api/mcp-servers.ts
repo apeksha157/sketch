@@ -13,14 +13,12 @@ import { z } from "zod";
 import type { createMcpServerRepository } from "../db/repositories/mcp-servers";
 import type { createUserRepository } from "../db/repositories/users";
 import { CanvasProviderRequestError } from "../integrations/canvas";
-import {
-  canvasBlockedIntegrationMessage,
-  isCanvasBlockedAppId,
-  isCanvasBlockedConnectionId,
-  managedCliIntegrationAppId,
-} from "../integrations/cli/policy";
 import { createProvider } from "../integrations/factory";
-import { type IntegrationProvider, canvasCredentialsSchema } from "../integrations/types";
+import {
+  type IntegrationProvider,
+  type IntegrationWorkspaceContext,
+  canvasCredentialsSchema,
+} from "../integrations/types";
 import { denyIfNotAdmin } from "./auth-helpers";
 
 type McpServerRepo = ReturnType<typeof createMcpServerRepository>;
@@ -100,11 +98,8 @@ const createConnectionIntentSchema = z
 const updateConnectionAccessSchema = z.object({
   accessLevel: z.enum(["personal", "organization"]),
   expectedRevision: z.number().int().nonnegative(),
-  memberUserIds: z.array(z.string().min(1)).max(500).default([]),
-});
-const updateConnectionMembersSchema = z.object({
-  expectedRevision: z.number().int().nonnegative(),
-  memberUserIds: z.array(z.string().min(1)).max(500),
+  visibility: z.enum(["private", "selected_members", "organization"]).optional(),
+  granteeUserIds: z.array(z.string().trim().min(1)).max(500).optional(),
 });
 
 const CONNECTION_INTENT_APP_LIMIT = 50;
@@ -228,6 +223,35 @@ async function resolveUserIdentity(
     };
   }
   return { ok: true, email: user.email, name: user.name ?? undefined };
+}
+
+function sketchWorkspaceContext(
+  c: import("hono").Context,
+  providerId: string,
+): IntegrationWorkspaceContext | undefined {
+  const userId = c.get("sub");
+  return userId ? { workspaceId: providerId, userId } : undefined;
+}
+
+async function validateSketchWorkspaceGrantees(
+  c: import("hono").Context,
+  users: UserRepo,
+  visibility: "private" | "selected_members" | "organization" | undefined,
+  granteeUserIds: string[] | undefined,
+): Promise<Response | null> {
+  if (visibility !== "selected_members") return null;
+  const ids = [...new Set(granteeUserIds ?? [])];
+  if (ids.length === 0) {
+    return c.json({ error: { code: "VALIDATION_ERROR", message: "Select at least one Sketch workspace member" } }, 400);
+  }
+  const members = await Promise.all(ids.map((id) => users.findById(id)));
+  if (members.some((member) => !member || member.type === "external")) {
+    return c.json(
+      { error: { code: "VALIDATION_ERROR", message: "Selected members must be Sketch workspace users" } },
+      400,
+    );
+  }
+  return null;
 }
 
 function serializeServer(row: {
@@ -455,18 +479,6 @@ async function initiateConnectionForApp(params: {
   app: IntegrationApp;
   callbackUrl?: string;
 }): Promise<{ ok: true; redirectUrl: string } | { ok: false; status: number; code: string; message: string }> {
-  if (
-    params.provider.type === "canvas" &&
-    (isCanvasBlockedAppId(params.app.id) || isCanvasBlockedAppId(params.app.name))
-  ) {
-    return {
-      ok: false,
-      status: 409,
-      code: "CLI_INTEGRATION",
-      message: canvasBlockedIntegrationMessage(),
-    };
-  }
-
   try {
     const result = await params.provider.initiateConnection(
       params.userEmail,
@@ -593,28 +605,6 @@ function isAccessControlledConnection(connection: IntegrationConnection): boolea
 
 function canDisconnectConnection(connection: IntegrationConnection): boolean {
   return connection.canDelete !== false && connection.isOwnedByViewer !== false;
-}
-
-function isCanvasBlockedConnection(connection: IntegrationConnection): boolean {
-  return (
-    isCanvasBlockedAppId(connection.appId) ||
-    isCanvasBlockedAppId(connection.appName) ||
-    isCanvasBlockedConnectionId(connection.id)
-  );
-}
-
-function canvasBlockedConnectionResponse(c: import("hono").Context, appId?: string) {
-  const managedAppId = appId ? managedCliIntegrationAppId(appId) : null;
-  return c.json(
-    {
-      error: {
-        code: "CLI_INTEGRATION",
-        message: canvasBlockedIntegrationMessage(),
-        setupUrl: `/integrations?connect=${managedAppId ?? "github"}`,
-      },
-    },
-    409,
-  );
 }
 
 export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
@@ -783,11 +773,7 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
 
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
     const result = await provider.listApps(query, limit, after);
-    const apps =
-      row.type === "canvas"
-        ? result.apps.filter((app) => !isCanvasBlockedAppId(app.id) && !isCanvasBlockedAppId(app.name))
-        : result.apps;
-    return c.json({ apps, pageInfo: result.pageInfo });
+    return c.json({ apps: result.apps, pageInfo: result.pageInfo });
   });
 
   routes.post("/:id/connections", async (c) => {
@@ -807,9 +793,6 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
 
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
     const fallbackApp = fallbackConnectionIntentApp(parsed.data);
-    if (row.type === "canvas" && (isCanvasBlockedAppId(fallbackApp.id) || isCanvasBlockedAppId(fallbackApp.name))) {
-      return canvasBlockedConnectionResponse(c, fallbackApp.id || fallbackApp.name);
-    }
     const result = await resolveConnectionIntent({
       provider,
       userEmail: userResult.email,
@@ -819,8 +802,6 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
       callbackUrl: parsed.data.callbackUrl,
     });
     if (!result.ok) {
-      if (result.code === "CLI_INTEGRATION")
-        return canvasBlockedConnectionResponse(c, fallbackApp.id || fallbackApp.name);
       return c.json({ error: { code: result.code, message: result.message } }, jsonErrorStatus(result.status));
     }
     return c.json({ redirectUrl: result.redirectUrl });
@@ -843,9 +824,6 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
 
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
     const fallbackApp = fallbackConnectionIntentApp(parsed.data);
-    if (row.type === "canvas" && (isCanvasBlockedAppId(fallbackApp.id) || isCanvasBlockedAppId(fallbackApp.name))) {
-      return canvasBlockedConnectionResponse(c, fallbackApp.id || fallbackApp.name);
-    }
     const result = await resolveConnectionIntent({
       provider,
       userEmail: userResult.email,
@@ -855,8 +833,6 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
       callbackUrl: parsed.data.callbackUrl,
     });
     if (!result.ok) {
-      if (result.code === "CLI_INTEGRATION")
-        return canvasBlockedConnectionResponse(c, fallbackApp.id || fallbackApp.name);
       return c.json({ error: { code: result.code, message: result.message } }, jsonErrorStatus(result.status));
     }
     return c.json({ app: result.app, redirectUrl: result.redirectUrl });
@@ -871,10 +847,12 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
     if (!userResult.ok) return userResult.response;
 
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
-    const connections = await provider.listConnections(userResult.email, userResult.name);
-    const visibleConnections =
-      row.type === "canvas" ? connections.filter((connection) => !isCanvasBlockedConnection(connection)) : connections;
-    const enrichedConnections = await enrichConnectionOwnerNames(visibleConnections, users);
+    const connections = await provider.listConnections(
+      userResult.email,
+      userResult.name,
+      sketchWorkspaceContext(c, row.id),
+    );
+    const enrichedConnections = await enrichConnectionOwnerNames(connections, users);
     return c.json({ connections: enrichedConnections });
   });
 
@@ -887,20 +865,18 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
     if (!userResult.ok) return userResult.response;
 
     const connectionId = c.req.param("connectionId");
-    if (row.type === "canvas" && isCanvasBlockedConnectionId(connectionId)) {
-      return canvasBlockedConnectionResponse(c);
-    }
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
-    const connections = await provider.listConnections(userResult.email, userResult.name);
+    const connections = await provider.listConnections(
+      userResult.email,
+      userResult.name,
+      sketchWorkspaceContext(c, row.id),
+    );
     const connection = connections.find((item) => item.id === connectionId);
-    if (connection && row.type === "canvas" && isCanvasBlockedConnection(connection)) {
-      return canvasBlockedConnectionResponse(c);
-    }
     if (connection && isAccessControlledConnection(connection) && !canDisconnectConnection(connection)) {
       return c.json({ error: { code: "FORBIDDEN", message: "Only the owner can disconnect this app" } }, 403);
     }
 
-    await provider.removeConnection(userResult.email, connectionId, userResult.name);
+    await provider.removeConnection(userResult.email, connectionId, userResult.name, sketchWorkspaceContext(c, row.id));
     return c.json({ success: true });
   });
 
@@ -919,16 +895,16 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
     const userResult = await resolveUserIdentity(c, users);
     if (!userResult.ok) return userResult.response;
 
+    const invalidGrantees = await validateSketchWorkspaceGrantees(
+      c,
+      users,
+      parsed.data.visibility,
+      parsed.data.granteeUserIds,
+    );
+    if (invalidGrantees) return invalidGrantees;
+
     const connectionId = c.req.param("connectionId");
-    if (row.type === "canvas" && isCanvasBlockedConnectionId(connectionId)) {
-      return canvasBlockedConnectionResponse(c);
-    }
     const provider = createProvider(row.type, row.api_url, row.credentials, row.id);
-    if (row.type === "canvas") {
-      const connections = (await provider.listConnections(userResult.email, userResult.name)) ?? [];
-      const connection = connections.find((item) => item.id === connectionId);
-      if (connection && isCanvasBlockedConnection(connection)) return canvasBlockedConnectionResponse(c);
-    }
     if (!provider.updateConnectionAccess) {
       return c.json({ error: { code: "BAD_REQUEST", message: "Provider does not support connection access" } }, 400);
     }
@@ -938,9 +914,13 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
         userResult.email,
         connectionId,
         parsed.data.accessLevel,
-        parsed.data.expectedRevision,
-        parsed.data.memberUserIds,
         userResult.name,
+        {
+          expectedRevision: parsed.data.expectedRevision,
+          visibility: parsed.data.visibility,
+          granteeUserIds: parsed.data.granteeUserIds,
+        },
+        sketchWorkspaceContext(c, row.id),
       );
       return c.json({ success: true, connection });
     } catch (err) {
@@ -956,44 +936,10 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
     if (!resolved.ok) return resolved.response;
     const userResult = await resolveUserIdentity(c, users);
     if (!userResult.ok) return userResult.response;
-    const provider = createProvider(resolved.row.type, resolved.row.api_url, resolved.row.credentials, resolved.row.id);
-    if (!provider.listOrganizationMembers)
-      return c.json({ error: { code: "BAD_REQUEST", message: "Provider does not support member listing" } }, 400);
-    const members = await provider.listOrganizationMembers(userResult.email, userResult.name);
+    const members = (await users.list())
+      .filter((member) => member.id !== c.get("sub"))
+      .map(({ id, name, email }) => ({ id, name, email }));
     return c.json({ members });
-  });
-
-  routes.put("/:id/connections/:connectionId/members", async (c) => {
-    const resolved = await resolveProvider(c, mcpServers);
-    if (!resolved.ok) return resolved.response;
-    const parsed = updateConnectionMembersSchema.safeParse(await c.req.json());
-    if (!parsed.success)
-      return c.json(
-        { error: { code: "VALIDATION_ERROR", message: parsed.error.issues[0]?.message ?? "Invalid request" } },
-        400,
-      );
-    const userResult = await resolveUserIdentity(c, users);
-    if (!userResult.ok) return userResult.response;
-    const provider = createProvider(resolved.row.type, resolved.row.api_url, resolved.row.credentials, resolved.row.id);
-    if (!provider.updateConnectionMembers)
-      return c.json(
-        { error: { code: "BAD_REQUEST", message: "Provider does not support selected-member access" } },
-        400,
-      );
-    try {
-      const connection = await provider.updateConnectionMembers(
-        userResult.email,
-        c.req.param("connectionId"),
-        parsed.data.expectedRevision,
-        parsed.data.memberUserIds,
-        userResult.name,
-      );
-      return c.json({ success: true, connection });
-    } catch (err) {
-      if (err instanceof CanvasProviderRequestError)
-        return c.json({ error: { code: err.code, message: err.message } }, err.status as JsonErrorStatus);
-      throw err;
-    }
   });
 
   return routes;

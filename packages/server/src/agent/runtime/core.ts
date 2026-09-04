@@ -70,11 +70,17 @@ function objectInput(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
 }
 
+/** MCP handlers report domain failures as result envelopes rather than thrown exceptions. */
+function mcpToolError(output: unknown): Error | undefined {
+  if (!output || typeof output !== "object" || !("isError" in output) || output.isError !== true) return undefined;
+  return new Error("MCP tool reported failure; inspect the stored tool result.");
+}
+
 function matchesSuccessfulToolResult(predicate: (tool: { name: string; input: unknown; output: unknown }) => boolean) {
   return ({ steps }: { steps: Array<StepResult<ToolSet>> }) =>
     steps.at(-1)?.toolResults.some((toolResult) => {
       const result = toolResult as { type?: string; toolName: string; input: unknown; output: unknown };
-      if (result.type === "tool-error") return false;
+      if (result.type === "tool-error" || mcpToolError(result.output)) return false;
       return predicate({ name: result.toolName, input: result.input, output: result.output });
     }) ?? false;
 }
@@ -271,7 +277,7 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
     },
     onToolExecutionEnd: async (event) => {
       const toolOutput = event.toolOutput;
-      const toolError = toolOutput.type === "tool-error" ? toolOutput.error : undefined;
+      const toolError = toolOutput.type === "tool-error" ? toolOutput.error : mcpToolError(toolOutput.output);
       await params.events?.onToolEnd?.({
         name: event.toolCall.toolName,
         input: objectInput(event.toolCall.input),

@@ -14,7 +14,10 @@
  * Rate limit: 50 req/min on paid plans. We stay conservative.
  */
 import { createHash } from "node:crypto";
+import type { Kysely } from "kysely";
 import pino, { type Logger } from "pino";
+import { readSourceMeta } from "../db/repositories/connectors";
+import type { DB } from "../db/schema";
 import { normalizeName } from "../entities/name-keys";
 import { type AmbiguityAwareMap, createAmbiguityAwareMap } from "./ambiguity-map";
 import {
@@ -35,6 +38,58 @@ const MIN_REQUEST_INTERVAL_MS = 1500;
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * Longest rate-limit wait we honor inline. Fireflies signals daily-quota
+ * exhaustion as a rate limit whose retry date is the next quota reset (seen in
+ * prod: a 9.9-hour wait). Sleeping that long inside a sync run starves the
+ * whole scheduled sync cycle — post-sync graph pipeline, enrichment, and the
+ * next tick all wait on it — so anything over this cap fails the sync instead.
+ */
+const MAX_RATE_LIMIT_WAIT_MS = 2 * 60 * 1000;
+
+/**
+ * Terminal rate-limit failure. `quotaExhausted` distinguishes a provider-dated
+ * wait beyond {@link MAX_RATE_LIMIT_WAIT_MS} (daily quota gone until reset)
+ * from plain retry exhaustion. Callers that normally swallow request errors
+ * (contacts directory) must rethrow this type: retrying other requests on the
+ * same key just burns more quota.
+ */
+export class FirefliesRateLimitError extends Error {
+  readonly quotaExhausted: boolean;
+  readonly retryAfterRaw: string | null;
+
+  constructor(message: string, opts: { quotaExhausted: boolean; retryAfterRaw: string | null }) {
+    super(message);
+    this.name = "FirefliesRateLimitError";
+    this.quotaExhausted = opts.quotaExhausted;
+    this.retryAfterRaw = opts.retryAfterRaw;
+  }
+}
+
+/**
+ * Parse a Retry-After value into a wait in ms. Accepts the HTTP delay-seconds
+ * form and date forms (HTTP-date or ISO, which Fireflies embeds in GraphQL
+ * error messages). Returns null for absent/malformed input so callers fall
+ * back to exponential backoff instead of looping on a NaN comparison; past
+ * dates clamp to 0.
+ */
+export function parseRetryAfterMs(raw: string | null | undefined, now: number = Date.now()): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    return Number.isFinite(seconds * 1000) ? seconds * 1000 : null;
+  }
+  // A numeric-looking value that is not plain digits ("-1", "+1", "1.5") is a
+  // malformed delay, not a date — Date.parse would happily read it as an
+  // ancient year and turn it into an immediate retry.
+  if (/^[+-]?\d+(\.\d+)?$/.test(trimmed)) return null;
+  const date = Date.parse(trimmed);
+  if (Number.isNaN(date)) return null;
+  return Math.max(date - now, 0);
+}
 
 /**
  * Fireflies' GraphQL `fromDate` filters transcripts by meeting start time
@@ -112,6 +167,15 @@ interface FirefliesTranscript {
   } | null;
   /** Speaker diarization result — populated by the per-transcript detail query. */
   speakers?: FirefliesSpeaker[];
+  /** Sentence-level transcript — populated by the per-transcript detail query. */
+  sentences?: FirefliesSentence[] | null;
+}
+
+/** Fireflies types start_time as a String in their schema; treat every field as unreliable. */
+interface FirefliesSentence {
+  speaker_name: string | null;
+  text: string | null;
+  start_time: string | number | null;
 }
 
 interface FirefliesContact {
@@ -178,11 +242,20 @@ function makeFirefliesRequest(
     }
 
     if (response.status === 429) {
-      if (attempt >= MAX_RETRIES) {
-        throw new Error(`Fireflies API rate limited after ${MAX_RETRIES} attempts`);
+      const retryAfterRaw = response.headers.get("Retry-After");
+      const waitMs = parseRetryAfterMs(retryAfterRaw) ?? RETRY_BASE_MS * 2 ** (attempt - 1);
+      if (waitMs > MAX_RATE_LIMIT_WAIT_MS) {
+        throw new FirefliesRateLimitError(
+          `Fireflies API quota exhausted; provider says retry after ${retryAfterRaw ?? "unknown"}`,
+          { quotaExhausted: true, retryAfterRaw },
+        );
       }
-      const retryAfter = response.headers.get("Retry-After");
-      const waitMs = retryAfter ? Number.parseInt(retryAfter, 10) * 1000 : 10_000;
+      if (attempt >= MAX_RETRIES) {
+        throw new FirefliesRateLimitError(
+          `Fireflies API rate limited after ${MAX_RETRIES} attempts${retryAfterRaw ? ` (provider retry-after: ${retryAfterRaw})` : ""}`,
+          { quotaExhausted: false, retryAfterRaw },
+        );
+      }
       logger.debug({ waitMs }, "Rate limited, waiting");
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       return firefliesRequest(query, variables, apiKey, logger, attempt + 1);
@@ -205,17 +278,27 @@ function makeFirefliesRequest(
     const result = (await response.json()) as { data: T; errors?: Array<{ message: string }> };
 
     if (result.errors && result.errors.length > 0) {
-      const msg = result.errors[0].message;
-      // Rate limit can arrive as a GraphQL error with a retry-after date in the message
-      if (msg.toLowerCase().includes("too many requests") && attempt < MAX_RETRIES) {
-        const match = msg.match(/retry after (.+?)(?:\s*\(|$)/i);
-        let waitMs: number;
-        if (match) {
-          const retryDate = new Date(match[1]).getTime();
-          waitMs = Math.max(retryDate - Date.now(), RETRY_BASE_MS) + 1000;
-        } else {
-          waitMs = RETRY_BASE_MS * 2 ** (attempt - 1);
+      // Rate limit can arrive as a GraphQL error with a retry-after date in the
+      // message — and not necessarily as the first error in the list.
+      const rateLimitMsg = result.errors.find((e) => e.message.toLowerCase().includes("too many requests"))?.message;
+      if (rateLimitMsg !== undefined) {
+        const retryAfterRaw = rateLimitMsg.match(/retry after (.+?)(?:\s*\(|$)/i)?.[1]?.trim() ?? null;
+        const parsed = parseRetryAfterMs(retryAfterRaw);
+        // The cap applies to the provider's own wait; the +1s scheduling buffer
+        // is added only to the sleep so an exactly-at-cap wait still retries.
+        if (parsed !== null && parsed > MAX_RATE_LIMIT_WAIT_MS) {
+          throw new FirefliesRateLimitError(
+            `Fireflies API quota exhausted; provider says retry after ${retryAfterRaw ?? "unknown"}`,
+            { quotaExhausted: true, retryAfterRaw },
+          );
         }
+        if (attempt >= MAX_RETRIES) {
+          throw new FirefliesRateLimitError(
+            `Fireflies API rate limited after ${MAX_RETRIES} attempts${retryAfterRaw ? ` (provider retry-after: ${retryAfterRaw})` : ""}`,
+            { quotaExhausted: false, retryAfterRaw },
+          );
+        }
+        const waitMs = parsed === null ? RETRY_BASE_MS * 2 ** (attempt - 1) : Math.max(parsed, RETRY_BASE_MS) + 1000;
         logger.warn({ attempt, waitMs }, "Fireflies rate limited (GraphQL), retrying");
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         return firefliesRequest(query, variables, apiKey, logger, attempt + 1);
@@ -263,6 +346,39 @@ function formatTranscriptContent(transcript: FirefliesTranscript): string {
   }
 
   return parts.join("\n");
+}
+
+/**
+ * Format sentence-level transcript as retrieval-only plain text. Returns null
+ * when no sentence carries usable text, so callers never persist a raw row
+ * that would suppress the summary fallback. start_time is a String in the
+ * Fireflies schema — parse defensively and omit the timestamp when unusable.
+ */
+export function formatTranscriptSentences(sentences: FirefliesSentence[] | null | undefined): string | null {
+  if (!sentences || sentences.length === 0) return null;
+  const lines: string[] = [];
+  for (const sentence of sentences) {
+    const text = typeof sentence.text === "string" ? sentence.text.trim() : "";
+    if (!text) continue;
+    const speaker =
+      typeof sentence.speaker_name === "string" && sentence.speaker_name.trim()
+        ? sentence.speaker_name.trim()
+        : "Unknown";
+    const seconds =
+      typeof sentence.start_time === "number"
+        ? sentence.start_time
+        : Number.parseFloat(String(sentence.start_time ?? ""));
+    const stamp = Number.isFinite(seconds) && seconds >= 0 ? `[${formatTimestamp(seconds)}] ` : "";
+    lines.push(`${stamp}${speaker}: ${text}`);
+  }
+  if (lines.length === 0) return null;
+  return `## Transcript\n${lines.join("\n")}`;
+}
+
+function formatTimestamp(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 /**
@@ -377,13 +493,17 @@ function transcriptToSyncedItem(
   contactsByName: AmbiguityAwareMap<string, string>,
   ownerEmail: string | null,
   resolveNameToEmail: NameResolver | undefined,
+  detailMarker: FirefliesDetailMarker,
 ): SyncedItem {
   const content = formatTranscriptContent(transcript);
+  const transcriptText = formatTranscriptSentences(transcript.sentences);
   const date = new Date(transcript.date);
 
   const { attendees, accessValues } = buildPeople(transcript, contacts, contactsByName, ownerEmail, resolveNameToEmail);
 
   return {
+    sourceMeta: { detail: { ...detailMarker } },
+    ...(transcriptText !== null ? { rawContent: { kind: "transcript" as const, content: transcriptText } } : {}),
     providerFileId: transcript.id,
     providerUrl: transcript.transcript_url,
     fileName: transcript.title,
@@ -422,7 +542,7 @@ query Transcripts($limit: Int, $skip: Int, $fromDate: DateTime) {
   }
 }`;
 
-/** Fetch a single transcript's summary + speakers by ID. */
+/** Fetch a single transcript's summary + speakers + full transcript by ID. */
 const TRANSCRIPT_DETAIL_QUERY = `
 query Transcript($id: String!) {
   transcript(id: $id) {
@@ -435,6 +555,11 @@ query Transcript($id: String!) {
     speakers {
       id
       name
+    }
+    sentences {
+      speaker_name
+      text
+      start_time
     }
   }
 }`;
@@ -478,7 +603,7 @@ async function fetchContactsMap(
   apiKey: string,
   logger: Logger,
   firefliesRequest: FirefliesRequestFn,
-): Promise<{ byEmail: Map<string, string>; byName: AmbiguityAwareMap<string, string> }> {
+): Promise<{ byEmail: Map<string, string>; byName: AmbiguityAwareMap<string, string>; loaded: boolean }> {
   const byEmail = new Map<string, string>();
   const byName = createAmbiguityAwareMap<string, string>();
 
@@ -498,9 +623,152 @@ async function fetchContactsMap(
       byName.add(normalizeName(c.name), email);
     }
   } catch (err) {
+    // A terminal rate limit is not a degraded-but-workable state: every further
+    // request on this key burns quota that is already gone. Fail the sync.
+    if (err instanceof FirefliesRateLimitError) throw err;
     logger.warn({ err }, "Fireflies contacts directory fetch failed; proceeding without name fallback");
+    return { byEmail, byName, loaded: false };
   }
-  return { byEmail, byName };
+  return { byEmail, byName, loaded: true };
+}
+
+/**
+ * Per-transcript detail-fetch state, persisted in the indexed file's
+ * `source_meta.detail`. Bounds how much quota a transcript can consume across
+ * incremental syncs: the detail query re-runs only until the marker settles.
+ *
+ * Settled means either the detail response carried summary content while the
+ * contacts directory was loaded (full-fidelity attendee resolution ran), or
+ * MAX_DETAIL_ATTEMPTS fetches happened — a terminal cutoff, so a transcript
+ * that never grows a summary costs at most 4 detail calls instead of one per
+ * tick for the whole overlap window. A summary arriving after the cutoff, or
+ * detail state settled by a sibling connector config on the shared file row,
+ * is only recovered via cursor reset — accepted tradeoffs, see
+ * .planning/connectors/to-be-developed/FIREFLIES_QUOTA_RESILIENCE.md.
+ */
+interface FirefliesDetailMarker {
+  fetchedAt: string;
+  attempts: number;
+  summaryObserved: boolean;
+  contactsLoaded: boolean;
+  nextRetryAt?: string;
+}
+
+const MAX_DETAIL_ATTEMPTS = 4;
+
+/** Backoff before re-detailing an unsettled transcript: after attempt N, wait DETAIL_RETRY_BACKOFF_MS[N-1]. */
+const DETAIL_RETRY_BACKOFF_MS = [60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
+
+function isMarkerSettled(marker: FirefliesDetailMarker): boolean {
+  return (marker.summaryObserved && marker.contactsLoaded) || marker.attempts >= MAX_DETAIL_ATTEMPTS;
+}
+
+/**
+ * Parse `source_meta.detail`; malformed or wrong-shape input reads as "no
+ * marker" (re-detail). `attempts` must be a non-negative integer within sane
+ * bounds — a negative or fractional value would index off the backoff table,
+ * and an arbitrary large one would settle a marker that never earned it.
+ */
+function readDetailMarker(sourceMeta: Record<string, unknown> | null): FirefliesDetailMarker | null {
+  const detail = sourceMeta?.detail;
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
+  const m = detail as Record<string, unknown>;
+  if (
+    typeof m.attempts !== "number" ||
+    !Number.isInteger(m.attempts) ||
+    m.attempts < 0 ||
+    m.attempts > 1000 ||
+    typeof m.fetchedAt !== "string" ||
+    typeof m.summaryObserved !== "boolean" ||
+    typeof m.contactsLoaded !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    fetchedAt: m.fetchedAt,
+    attempts: m.attempts,
+    summaryObserved: m.summaryObserved,
+    contactsLoaded: m.contactsLoaded,
+    nextRetryAt: typeof m.nextRetryAt === "string" ? m.nextRetryAt : undefined,
+  };
+}
+
+function hasSummaryContent(summary: FirefliesTranscript["summary"]): boolean {
+  if (!summary) return false;
+  const fields = [summary.overview, summary.shorthand_bullet, summary.action_items];
+  const hasText = (v: unknown): boolean => typeof v === "string" && v.trim().length > 0;
+  return fields.some((f) => (Array.isArray(f) ? f.some(hasText) : hasText(f)));
+}
+
+function buildDetailMarker(
+  transcript: FirefliesTranscript,
+  prior: FirefliesDetailMarker | null,
+  contactsLoaded: boolean,
+  now: number,
+): FirefliesDetailMarker {
+  const attempts = (prior?.attempts ?? 0) + 1;
+  const marker: FirefliesDetailMarker = {
+    fetchedAt: new Date(now).toISOString(),
+    attempts,
+    summaryObserved: hasSummaryContent(transcript.summary),
+    contactsLoaded,
+  };
+  if (!isMarkerSettled(marker)) {
+    const backoffMs = DETAIL_RETRY_BACKOFF_MS[Math.min(attempts, DETAIL_RETRY_BACKOFF_MS.length) - 1];
+    marker.nextRetryAt = new Date(now + backoffMs).toISOString();
+  }
+  return marker;
+}
+
+/** Prior state of a transcript already known to this connector config. */
+interface KnownTranscriptState {
+  archived: boolean;
+  marker: FirefliesDetailMarker | null;
+}
+
+/**
+ * Load prior detail state for every Fireflies file linked to this connector
+ * config. The join goes through `connector_files` because file ownership is
+ * many-to-many across configs — filtering on `indexed_files.connector_config_id`
+ * would miss rows created by a sibling Fireflies config and rows whose link to
+ * this config was later removed.
+ */
+async function loadKnownTranscriptStates(
+  db: Kysely<DB>,
+  connectorConfigId: string,
+): Promise<Map<string, KnownTranscriptState>> {
+  const rows = await db
+    .selectFrom("connector_files")
+    .innerJoin("indexed_files", "indexed_files.id", "connector_files.indexed_file_id")
+    .select(["indexed_files.provider_file_id", "indexed_files.is_archived", "indexed_files.source_meta"])
+    .where("connector_files.connector_config_id", "=", connectorConfigId)
+    .where("indexed_files.source", "=", "fireflies")
+    .execute();
+
+  const out = new Map<string, KnownTranscriptState>();
+  for (const row of rows) {
+    if (!row.provider_file_id) continue;
+    out.set(row.provider_file_id, {
+      archived: Boolean(row.is_archived),
+      marker: readDetailMarker(readSourceMeta(row)),
+    });
+  }
+  return out;
+}
+
+/**
+ * Decide whether a listed transcript needs its detail query this run.
+ * Only incremental syncs pass `knownStates` — on a full sync every listed
+ * transcript must be yielded, because cursor-less snapshot reconciliation
+ * archives files that are not re-seen.
+ */
+function shouldFetchDetail(state: KnownTranscriptState | undefined, now: number): boolean {
+  if (!state) return true;
+  if (state.archived) return true;
+  if (!state.marker) return true;
+  if (isMarkerSettled(state.marker)) return false;
+  if (state.marker.nextRetryAt && Date.parse(state.marker.nextRetryAt) > now) return false;
+  return true;
 }
 
 async function* syncTranscripts(
@@ -510,11 +778,18 @@ async function* syncTranscripts(
   resolveNameToEmail: NameResolver | undefined,
   logger: Logger,
   firefliesRequest: FirefliesRequestFn,
+  knownStates: Map<string, KnownTranscriptState> | null,
 ): AsyncGenerator<SyncedItem> {
   let skip = 0;
-  let totalTranscripts = 0;
+  let listed = 0;
+  let detailed = 0;
+  let skipped = 0;
 
-  const { byEmail: contacts, byName: contactsByName } = await fetchContactsMap(apiKey, logger, firefliesRequest);
+  const {
+    byEmail: contacts,
+    byName: contactsByName,
+    loaded: contactsLoaded,
+  } = await fetchContactsMap(apiKey, logger, firefliesRequest);
   logger.debug(
     { contactsCount: contacts.size, contactsByNameCount: contactsByName.size, ownerEmail, fromDate },
     "Fireflies contacts directory loaded",
@@ -531,26 +806,40 @@ async function* syncTranscripts(
     }
 
     for (const transcript of data.transcripts) {
-      // Fetch summary + speakers separately — neither available in bulk list query
+      listed++;
+      const now = Date.now();
+      const state = knownStates?.get(transcript.id);
+      if (knownStates && !shouldFetchDetail(state, now)) {
+        skipped++;
+        continue;
+      }
+
+      // Fetch summary + speakers + sentences separately — none available in bulk list query
       const detailData = await firefliesRequest<{
-        transcript: { summary: FirefliesTranscript["summary"]; speakers: FirefliesSpeaker[] | null } | null;
+        transcript: {
+          summary: FirefliesTranscript["summary"];
+          speakers: FirefliesSpeaker[] | null;
+          sentences: FirefliesSentence[] | null;
+        } | null;
       }>(TRANSCRIPT_DETAIL_QUERY, { id: transcript.id }, apiKey, logger);
 
       transcript.summary = detailData.transcript?.summary ?? null;
       transcript.speakers = detailData.transcript?.speakers ?? [];
+      transcript.sentences = detailData.transcript?.sentences ?? null;
 
-      yield transcriptToSyncedItem(transcript, contacts, contactsByName, ownerEmail, resolveNameToEmail);
-      totalTranscripts++;
+      const marker = buildDetailMarker(transcript, state?.marker ?? null, contactsLoaded, now);
+      yield transcriptToSyncedItem(transcript, contacts, contactsByName, ownerEmail, resolveNameToEmail, marker);
+      detailed++;
     }
 
     // If we got fewer than PAGE_SIZE, we've reached the end
     hasMore = data.transcripts.length >= PAGE_SIZE;
 
     skip += PAGE_SIZE;
-    logger.debug({ transcriptsProcessed: totalTranscripts, skip }, "Transcripts page complete");
+    logger.debug({ transcriptsProcessed: detailed, skip }, "Transcripts page complete");
   }
 
-  logger.info({ totalTranscripts }, "Transcripts sync complete");
+  logger.info({ listed, detailed, skipped, totalTranscripts: detailed }, "Transcripts sync complete");
 }
 
 /**
@@ -591,10 +880,25 @@ export function createFirefliesConnector(options: FirefliesConnectorOptions = {}
       await firefliesRequest(USER_QUERY, {}, apiKey, pino({ level: "silent" }));
     },
 
-    async *sync({ credentials, cursor, scopeConfig, ownerEmail, resolveNameToEmail, logger }) {
+    async *sync({ db, connectorConfigId, credentials, cursor, scopeConfig, ownerEmail, resolveNameToEmail, logger }) {
       const apiKey = getApiKey(credentials);
       const fromDate = incrementalFromDate(cursor, resolveOverlapMs(scopeConfig));
-      yield* syncTranscripts(apiKey, fromDate, ownerEmail ?? null, resolveNameToEmail, logger, firefliesRequest);
+      // Detail-skip applies only to incremental syncs: a cursor-less full sync
+      // must yield everything it lists, or snapshot reconciliation would
+      // archive the unyielded files.
+      const knownStates =
+        db && connectorConfigId && fromDate !== undefined
+          ? await loadKnownTranscriptStates(db, connectorConfigId)
+          : null;
+      yield* syncTranscripts(
+        apiKey,
+        fromDate,
+        ownerEmail ?? null,
+        resolveNameToEmail,
+        logger,
+        firefliesRequest,
+        knownStates,
+      );
     },
 
     async getCursor() {

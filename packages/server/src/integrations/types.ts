@@ -1,4 +1,10 @@
-import type { AccountIdentityBinding, IntegrationApp, IntegrationConnection, PageInfo } from "@sketch/shared";
+import type {
+  AccountIdentityBinding,
+  IntegrationApp,
+  IntegrationConnection,
+  ManagedIntegrationAppId,
+  PageInfo,
+} from "@sketch/shared";
 /**
  * Server-side integration types.
  * Shared types (IntegrationApp, IntegrationConnection, PageInfo) are imported
@@ -10,6 +16,39 @@ import { z } from "zod";
 export type { IntegrationApp, IntegrationConnection, PageInfo };
 
 export type IntegrationUserOrgRole = "admin" | "member";
+
+export interface IntegrationWorkspaceContext {
+  workspaceId: string;
+  userId: string;
+}
+
+/** Explicit integration identities, including nulls, never inherit fields from the viewer. */
+export function getIntegrationActor(params: {
+  currentUserId?: string | null;
+  userEmail?: string | null;
+  integrationUserId?: string | null;
+  integrationUserEmail?: string | null;
+}) {
+  const overridden = params.integrationUserId !== undefined || params.integrationUserEmail !== undefined;
+  return {
+    userId: (overridden ? params.integrationUserId : params.currentUserId) ?? null,
+    userEmail: (overridden ? params.integrationUserEmail : params.userEmail) ?? null,
+  };
+}
+
+export type CanvasManagedIntegration = ManagedIntegrationAppId;
+
+export interface CanvasAccessToken {
+  accessToken: string;
+  expiresAt?: string;
+}
+
+export interface CanvasAccessTokenRequest {
+  integration: CanvasManagedIntegration;
+  accountId?: string;
+  workspaceContext?: IntegrationWorkspaceContext;
+  forceRefresh?: boolean;
+}
 
 export interface BrokerSpec {
   /** Absolute path to the real CLI binary the broker will spawn. */
@@ -27,6 +66,7 @@ export interface IntegrationActionRequest {
   componentKey: string;
   configuredProps: Record<string, unknown>;
   accountIdentityBinding?: AccountIdentityBinding;
+  workspaceContext?: IntegrationWorkspaceContext;
 }
 
 export interface IntegrationProvider {
@@ -41,27 +81,30 @@ export interface IntegrationProvider {
     callbackUrl: string,
     userName?: string,
     userOrgRole?: IntegrationUserOrgRole,
+    workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<{ redirectUrl: string }>;
-  listConnections(userEmail: string, userName?: string): Promise<IntegrationConnection[]>;
-  removeConnection(userEmail: string, connectionId: string, userName?: string): Promise<void>;
-  listOrganizationMembers?(
+  listConnections(
     userEmail: string,
     userName?: string,
-  ): Promise<Array<{ id: string; name?: string; email?: string }>>;
-  updateConnectionMembers?(
+    workspaceContext?: IntegrationWorkspaceContext,
+  ): Promise<IntegrationConnection[]>;
+  removeConnection(
     userEmail: string,
     connectionId: string,
-    expectedRevision: number,
-    memberUserIds: string[],
     userName?: string,
-  ): Promise<IntegrationConnection | null>;
+    workspaceContext?: IntegrationWorkspaceContext,
+  ): Promise<void>;
   updateConnectionAccess?(
     userEmail: string,
     connectionId: string,
     accessLevel: "personal" | "organization",
-    expectedRevision: number,
-    memberUserIds: string[],
     userName?: string,
+    options?: {
+      expectedRevision?: number;
+      visibility?: "private" | "selected_members" | "organization";
+      granteeUserIds?: string[];
+    },
+    workspaceContext?: IntegrationWorkspaceContext,
   ): Promise<IntegrationConnection | null>;
   /**
    * Static capability check: does this provider type expose a brokered CLI?
@@ -73,8 +116,25 @@ export interface IntegrationProvider {
    * Returns a broker spec when this provider exposes a brokered CLI to the agent,
    * or null for HTTP-only providers (no CLI surface).
    */
-  getBrokerSpec(params: { userEmail: string | null; claudeConfigDir: string }): BrokerSpec | null;
+  getBrokerSpec(params: {
+    userEmail: string | null;
+    claudeConfigDir: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+  }): BrokerSpec | null;
   executeAction?(request: IntegrationActionRequest, signal?: AbortSignal): Promise<unknown>;
+  getCanvasAccessToken?(params: {
+    integration: CanvasManagedIntegration;
+    userEmail: string;
+    accountId?: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+    forceRefresh?: boolean;
+  }): Promise<CanvasAccessToken>;
+  getGithubAccessToken?(params: {
+    userEmail: string;
+    accountId?: string;
+    workspaceContext?: IntegrationWorkspaceContext;
+    forceRefresh?: boolean;
+  }): Promise<CanvasAccessToken>;
 }
 
 /**

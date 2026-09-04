@@ -2,11 +2,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CliIntegrationConnection, WebChatQuestion, WebChatQuestionBatch } from "@sketch/shared";
+import { simulateReadableStream } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunAgentParams } from "../agent/runner";
+import { createAgentRunLimiter } from "../agent/concurrency-limiter";
+import { type RunAgentParams, runAgent as runRealAgent } from "../agent/runner";
+import { DEFAULT_AGENT_RUNTIME_COST_TABLE } from "../agent/runtime/pricing";
 import { getSessionId, saveSessionId } from "../agent/sessions";
+import { ensureWorkspace } from "../agent/workspace";
 import { signJwt } from "../auth/jwt";
 import { hashPassword } from "../auth/password";
 import { createAutomationDraft } from "../automation/persistence";
@@ -27,6 +32,7 @@ function makeAgentResult(finalText = "Hello from Sketch", pendingUploads: string
     messageSent: true,
     sessionId: "sess-web-1",
     costUsd: 0.01,
+    auxCostUsd: 0,
     pendingUploads,
     durationMs: 0,
     durationApiMs: 0,
@@ -1583,7 +1589,12 @@ describe("web chat API", () => {
     const otherSession = await app.request("/api/web-chat?conversationId=builder-lease", {
       method: "POST",
       headers,
-      body: JSON.stringify({ ...message, clientSessionId: "builder-session-b", generation: 1 }),
+      body: JSON.stringify({
+        ...message,
+        messages: message.messages.map((item) => ({ ...item, id: "builder-lease-next-turn" })),
+        clientSessionId: "builder-session-b",
+        generation: 1,
+      }),
     });
     expect(otherSession.status).toBe(200);
     await otherSession.text();
@@ -1652,6 +1663,7 @@ describe("web chat API", () => {
       kind: "builder",
     });
     const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      await params.onRunStart?.();
       const signal = params.abortController?.signal;
       if (!signal) throw new Error("Missing builder abort signal");
       if (!signal.aborted) {
@@ -1683,11 +1695,72 @@ describe("web chat API", () => {
     const streamText = await res.text();
     expect(runAgent).toHaveBeenCalledOnce();
     expect(runAgent.mock.calls[0]?.[0].abortController?.signal.aborted).toBe(true);
-    expect(streamText).toContain("I paused this turn before it could continue.");
+    expect(streamText).toContain("This turn reached its execution time limit.");
     expect(webChatStreamChunks(streamText)).toContainEqual(expect.objectContaining({ type: "data-interruption" }));
   });
 
-  it("stops repeated builder tool calls with a resumable terminal response", async () => {
+  it.each(["successful reads", "changed errors", "edit/verify progress"])(
+    "allows repeated %s to finish",
+    async (scenario) => {
+      const admin = await seedAdmin(db);
+      await createScheduledTaskConversationRepository(db).upsert({
+        taskId: "task-builder-loop",
+        conversationId: "builder-loop",
+        transcriptUserId: admin.id,
+        kind: "builder",
+      });
+      const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+        for (let index = 0; index < 4; index += 1) {
+          await params.onProgressEvent({
+            kind: "tool_use",
+            toolName: "mcp__sketch__ManageScheduledTasks",
+            input: { action: "get", task_id: "task-builder-loop" },
+          });
+          await params.onToolResult?.({
+            toolName: "mcp__sketch__ManageScheduledTasks",
+            input: { action: "get", task_id: "task-builder-loop" },
+            output: { revision: scenario === "changed errors" ? index : 1 },
+            isError: scenario !== "successful reads",
+          });
+          if (scenario === "edit/verify progress") {
+            await params.onToolResult?.({
+              toolName: "Edit",
+              input: { file_path: "draft.json", old_string: String(index), new_string: String(index + 1) },
+              output: "Saved",
+              isError: false,
+            });
+          }
+        }
+        expect(params.abortController?.signal.aborted).toBe(false);
+        return makeAgentResult("Verified the saved automation.");
+      });
+      const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+        logger: createTestLogger(),
+        runAgent,
+        buildMcpServers: vi.fn().mockResolvedValue({}),
+        scheduler: makeBuilderScheduler("task-builder-loop", admin.id),
+      });
+      const cookie = await login(app);
+
+      const res = await app.request("/api/web-chat?conversationId=builder-loop", {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "Continue configuring this automation",
+          automationTaskId: "task-builder-loop",
+          clientSessionId: "builder-loop-session",
+          generation: 1,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const streamText = await res.text();
+      expect(streamText).toContain("Verified the saved automation.");
+      expect(streamText).not.toContain('"type":"data-interruption"');
+    },
+  );
+
+  it("stops identical failing builder tool calls with a resumable terminal response", async () => {
     const admin = await seedAdmin(db);
     await createScheduledTaskConversationRepository(db).upsert({
       taskId: "task-builder-loop",
@@ -1699,8 +1772,14 @@ describe("web chat API", () => {
       for (let index = 0; index < 4; index += 1) {
         await params.onProgressEvent({
           kind: "tool_use",
-          toolName: "mcp__sketch__ManageScheduledTasks",
-          input: { action: "get", task_id: "task-builder-loop" },
+          toolName: "mcp__sketch__github_cli",
+          input: { accountId: "default", args: ["issue", "list"] },
+        });
+        await params.onToolResult?.({
+          toolName: "mcp__sketch__github_cli",
+          input: { accountId: "default", args: ["issue", "list"] },
+          output: { isError: true, content: [{ type: "text", text: "Invalid Canvas-owned account id." }] },
+          isError: true,
         });
       }
       expect(params.abortController?.signal.aborted).toBe(true);
@@ -1727,16 +1806,243 @@ describe("web chat API", () => {
 
     expect(res.status).toBe(200);
     const streamText = await res.text();
-    expect(streamText).toContain("I paused this turn before it could continue.");
+    expect(streamText).toContain("The same tool request failed four times without progress.");
     expect(webChatStreamChunks(streamText)).toContainEqual(expect.objectContaining({ type: "data-interruption" }));
     const transcript = JSON.parse(await readFile(webChatTranscriptPath(dataDir, admin.id, "builder-loop"), "utf-8"));
     expect(transcript.messages.at(-1)).toMatchObject({
       role: "assistant",
       parts: expect.arrayContaining([
-        expect.objectContaining({ type: "text", text: expect.stringContaining("tell me to continue") }),
+        expect.objectContaining({ type: "text", text: expect.stringContaining("Tell me to continue") }),
         expect.objectContaining({ type: "data-interruption" }),
       ]),
     });
+  });
+
+  it.each([false, true])("runs the real builder runtime with MCP failures=%s", async (failing) => {
+    const admin = await seedAdmin(db);
+    const config = createTestConfig({ DATA_DIR: dataDir });
+    const workspaceDir = await ensureWorkspace(config, admin.id);
+    await writeFile(join(workspaceDir, "fixture.txt"), "Saved fixture state");
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-real-loop",
+      conversationId: "builder-real-loop",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const usage = {
+      inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 2, text: 2, reasoning: undefined },
+    };
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [
+        ...Array.from({ length: 5 }, (_, index) => ({
+          stream: simulateReadableStream({
+            initialDelayInMs: null,
+            chunkDelayInMs: null,
+            chunks: [
+              {
+                type: "tool-call" as const,
+                toolCallId: `call-${index}`,
+                toolName: failing ? "mcp__sketch__SendMessage" : "Read",
+                input: JSON.stringify(
+                  failing ? { recipientUserId: "fixture-recipient", message: "fixture" } : { file_path: "fixture.txt" },
+                ),
+              },
+              { type: "finish" as const, finishReason: { unified: "tool-calls" as const, raw: undefined }, usage },
+            ],
+          }),
+        })),
+        {
+          stream: simulateReadableStream({
+            initialDelayInMs: null,
+            chunkDelayInMs: null,
+            chunks: [
+              { type: "text-start", id: "done" },
+              { type: "text-delta", id: "done", delta: "Verified all five reads." },
+              { type: "text-end", id: "done" },
+              { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage },
+            ],
+          }),
+        },
+      ],
+    });
+    const results: boolean[] = [];
+    const app = createApp(db, config, {
+      logger: createTestLogger(),
+      scheduler: makeBuilderScheduler("task-real-loop", admin.id),
+      runAgent: (params) =>
+        runRealAgent({
+          ...params,
+          agentRuntime: "aisdk",
+          agentRuntimeProvider: {
+            provider: "anthropic",
+            modelId: "claude-sonnet-4-6",
+            model,
+            costTable: DEFAULT_AGENT_RUNTIME_COST_TABLE,
+            preparePrompt: (input) => ({
+              instructions: input.systemPrompt,
+              messages: input.messages ?? [{ role: "user", content: input.prompt }],
+            }),
+          },
+          onToolResult: async (event) => {
+            results.push(event.isError);
+            await params.onToolResult?.(event);
+          },
+        }),
+    });
+    const cookie = await login(app);
+    const response = await app.request("/api/web-chat?conversationId=builder-real-loop", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Inspect the fixture",
+        automationTaskId: "task-real-loop",
+        clientSessionId: "fixture-session",
+        generation: 1,
+      }),
+    });
+    const stream = await response.text();
+    expect(results).toEqual(Array(failing ? 4 : 5).fill(failing));
+    expect(stream).toContain(failing ? "repeated_tool_call_limit" : "Verified all five reads.");
+    const session = await db
+      .selectFrom("chat_sessions")
+      .select("session_id")
+      .where("workspace_key", "=", admin.id)
+      .where("runtime", "=", "aisdk")
+      .executeTakeFirstOrThrow();
+    const saved = await db
+      .selectFrom("agent_messages")
+      .select("content")
+      .where("session_id", "=", session.session_id)
+      .execute();
+    expect(JSON.stringify(saved)).toContain(failing ? "error-json" : "Saved fixture state");
+  });
+
+  it.each(["transient", "lost"])("handles a %s lease result at runtime admission", async (failure) => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-renewal",
+      conversationId: "builder-renewal",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const runAgent = vi.fn(async (params: RunAgentParams) => {
+      if (failure === "lost") {
+        await db
+          .updateTable("automation_task_locks")
+          .set({ generation: 2 })
+          .where("task_id", "=", "task-renewal")
+          .execute();
+        await params.onRunStart?.();
+      } else {
+        const transaction = vi.spyOn(db, "transaction").mockImplementationOnce(() => {
+          throw new Error("transient database error");
+        });
+        try {
+          await params.onRunStart?.();
+        } finally {
+          transaction.mockRestore();
+        }
+      }
+      return makeAgentResult("Finished after the transient renewal error.");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      scheduler: makeBuilderScheduler("task-renewal", admin.id),
+    });
+    const cookie = await login(app);
+    const res = await app.request("/api/web-chat?conversationId=builder-renewal", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Continue",
+        automationTaskId: "task-renewal",
+        clientSessionId: "renew-session",
+        generation: 1,
+      }),
+    });
+    const stream = await res.text();
+    expect(stream).toContain(
+      failure === "lost" ? '"reason":"lease_lost"' : "Finished after the transient renewal error.",
+    );
+    expect(runAgent.mock.calls[0]?.[0].abortController?.signal.aborted).toBe(failure === "lost");
+  });
+
+  it("starts the builder deadline after global admission and permits Stop while queued", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-queued",
+      conversationId: "builder-queued",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const logger = createTestLogger();
+    const limiter = createAgentRunLimiter({ limit: 1, queue: "interactive", logger });
+    const releaseSlot = deferred<void>();
+    const occupyingRun = limiter.run(() => releaseSlot.promise);
+    const queued = deferred<RunAgentParams>();
+    const started = vi.fn();
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir, AUTOMATION_BUILDER_MAX_ELAPSED_MS: 17_777 }), {
+      logger,
+      scheduler: makeBuilderScheduler("task-queued", admin.id),
+      runAgent: (params) => {
+        queued.resolve(params);
+        return limiter.run(
+          async () => {
+            await params.onRunStart?.();
+            started();
+            return makeAgentResult("Admitted and finished");
+          },
+          { signal: params.abortController?.signal },
+        );
+      },
+    });
+    const cookie = await login(app);
+    const body = {
+      message: "Continue",
+      automationTaskId: "task-queued",
+      clientSessionId: "queued-session",
+      generation: 1,
+    };
+    try {
+      const response = await app.request("/api/web-chat?conversationId=builder-queued", {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      await queued.promise;
+      expect(limiter.snapshot().waiting).toBe(1);
+      expect(timer.mock.calls.some((call) => call[1] === 17_777)).toBe(false);
+      const stop = await app.request(
+        "/api/web-chat/conversations/builder-queued/interruptions?automationTaskId=task-queued",
+        {
+          method: "POST",
+          headers: { Cookie: cookie, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      expect(await stop.json()).toMatchObject({ interrupted: true });
+      expect(await response.text()).toContain('"reason":"user_stop"');
+      expect(started).not.toHaveBeenCalled();
+      releaseSlot.resolve();
+      await occupyingRun;
+      const admitted = await app.request("/api/web-chat?conversationId=builder-queued", {
+        method: "POST",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(await admitted.text()).toContain("Admitted and finished");
+      expect(started).toHaveBeenCalledOnce();
+      expect(timer.mock.calls.some((call) => call[1] === 17_777)).toBe(true);
+    } finally {
+      releaseSlot.resolve();
+      await occupyingRun;
+      timer.mockRestore();
+    }
   });
 
   it("allows a valid builder turn to exceed the former 20-call budget", async () => {
@@ -3879,60 +4185,94 @@ describe("web chat API", () => {
     await res.text();
   });
 
-  it("cancels a builder agent run when its response stream is cancelled", async () => {
-    const admin = await seedAdmin(db);
-    await createScheduledTaskConversationRepository(db).upsert({
-      taskId: "task-builder-cancel",
-      conversationId: "builder-cancel",
-      transcriptUserId: admin.id,
-      kind: "builder",
-    });
-    const paramsSeen = deferred<RunAgentParams>();
-    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
-      paramsSeen.resolve(params);
-      await new Promise((_resolve, reject) => {
-        params.abortController?.signal.addEventListener("abort", () => reject(new Error("Builder stream cancelled")), {
-          once: true,
+  it.each(["request", "stream"])(
+    "keeps a builder run alive after %s disconnect and reconciles without replay",
+    async (disconnect) => {
+      const admin = await seedAdmin(db);
+      await createScheduledTaskConversationRepository(db).upsert({
+        taskId: "task-builder-cancel",
+        conversationId: "builder-cancel",
+        transcriptUserId: admin.id,
+        kind: "builder",
+      });
+      const paramsSeen = deferred<RunAgentParams>();
+      const finish = deferred<void>();
+      const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+        paramsSeen.resolve(params);
+        await finish.promise;
+        return makeAgentResult("Finished once while the display was disconnected.");
+      });
+      const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+        logger: createTestLogger(),
+        runAgent,
+        buildMcpServers: vi.fn().mockResolvedValue({}),
+        scheduler: makeBuilderScheduler("task-builder-cancel", admin.id),
+      });
+      const cookie = await login(app);
+
+      const requestController = new AbortController();
+      const res = await app.request("/api/web-chat?conversationId=builder-cancel", {
+        method: "POST",
+        signal: requestController.signal,
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              id: "retry-safe-turn",
+              role: "user",
+              parts: [{ type: "text", text: "Continue configuring this automation" }],
+            },
+          ],
+          automationTaskId: "task-builder-cancel",
+          clientSessionId: "builder-cancel-session",
+          generation: 1,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const params = await paramsSeen.promise;
+      if (disconnect === "request") requestController.abort();
+      else await res.body?.cancel();
+      expect(params.abortController?.signal.aborted).toBe(false);
+      const retry = () =>
+        app.request("/api/web-chat?conversationId=builder-cancel", {
+          method: "POST",
+          headers: { Cookie: cookie, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messages: [
+              {
+                id: "retry-safe-turn",
+                role: "user",
+                parts: [{ type: "text", text: "Continue configuring this automation" }],
+              },
+            ],
+            automationTaskId: "task-builder-cancel",
+            clientSessionId: "builder-cancel-session",
+            generation: 1,
+          }),
+        });
+      expect((await retry()).status).toBe(409);
+      finish.resolve();
+      await vi.waitFor(async () => {
+        const transcript = JSON.parse(
+          await readFile(webChatTranscriptPath(dataDir, admin.id, "builder-cancel"), "utf-8"),
+        );
+        expect(transcript.messages.at(-1)).toMatchObject({
+          role: "assistant",
+          parts: expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: "Finished once while the display was disconnected." }),
+          ]),
         });
       });
-      return makeAgentResult("Should not finish");
-    });
-    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
-      logger: createTestLogger(),
-      runAgent,
-      buildMcpServers: vi.fn().mockResolvedValue({}),
-      scheduler: makeBuilderScheduler("task-builder-cancel", admin.id),
-    });
-    const cookie = await login(app);
-
-    const res = await app.request("/api/web-chat?conversationId=builder-cancel", {
-      method: "POST",
-      headers: { Cookie: cookie, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: "Continue configuring this automation",
-        automationTaskId: "task-builder-cancel",
-        clientSessionId: "builder-cancel-session",
-        generation: 1,
-      }),
-    });
-
-    expect(res.status).toBe(200);
-    const params = await paramsSeen.promise;
-    await res.body?.cancel();
-    expect(params.abortController?.signal.aborted).toBe(true);
-    await vi.waitFor(async () => {
-      const transcript = JSON.parse(
-        await readFile(webChatTranscriptPath(dataDir, admin.id, "builder-cancel"), "utf-8"),
-      );
-      expect(transcript.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        parts: expect.arrayContaining([
-          expect.objectContaining({ type: "text", text: expect.stringContaining("tell me to continue") }),
-          expect.objectContaining({ type: "data-interruption" }),
-        ]),
+      const reconnected = await app.request("/api/web-chat/messages?conversationId=builder-cancel", {
+        headers: { Cookie: cookie },
       });
-    });
-  });
+      expect(await reconnected.text()).toContain("Finished once while the display was disconnected.");
+      expect((await retry()).status).toBe(409);
+      expect(runAgent).toHaveBeenCalledOnce();
+      if (disconnect === "request") await res.text();
+    },
+  );
 
   it("interrupts the active web chat agent run for a conversation", async () => {
     const admin = await seedAdmin(db);
@@ -4002,6 +4342,115 @@ describe("web chat API", () => {
         },
       },
     ]);
+  });
+
+  it("honors explicit builder Stop and prevents another run until active tools settle", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-stop-active",
+      conversationId: "builder-stop-active",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const paramsSeen = deferred<RunAgentParams>();
+    const finishTool = deferred<void>();
+    const runAgent = vi.fn(async (params: RunAgentParams) => {
+      await params.onRunStart?.();
+      paramsSeen.resolve(params);
+      await finishTool.promise;
+      return makeAgentResult("The tool settled after Stop");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      scheduler: makeBuilderScheduler("task-stop-active", admin.id),
+    });
+    const cookie = await login(app);
+    const headers = { Cookie: cookie, "Content-Type": "application/json" };
+    const body = {
+      message: "Continue",
+      automationTaskId: "task-stop-active",
+      clientSessionId: "stop-session",
+      generation: 1,
+    };
+    const post = () =>
+      app.request("/api/web-chat?conversationId=builder-stop-active", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+    const response = await post();
+    const params = await paramsSeen.promise;
+    try {
+      const stopUrl = "/api/web-chat/conversations/builder-stop-active/interruptions?automationTaskId=task-stop-active";
+      const stale = await app.request(stopUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...body, generation: 2 }),
+      });
+      expect(stale.status).toBe(409);
+      expect(params.abortController?.signal.aborted).toBe(false);
+      const stopped = await app.request(stopUrl, { method: "POST", headers, body: JSON.stringify(body) });
+      expect(await stopped.json()).toMatchObject({ interrupted: true });
+      expect(params.abortController?.signal.reason).toBe("user_stop");
+      const stoppedAgain = await app.request(stopUrl, { method: "POST", headers, body: JSON.stringify(body) });
+      expect(await stoppedAgain.json()).toMatchObject({ interrupted: true });
+      expect((await post()).status).toBe(409);
+    } finally {
+      finishTool.resolve();
+    }
+    expect(await response.text()).toContain('"reason":"user_stop"');
+    const saved = await app.request("/api/web-chat/messages?conversationId=builder-stop-active", { headers });
+    const transcript = await saved.json();
+    expect(transcript.messages.filter((message: { role: string }) => message.role === "assistant")).toHaveLength(1);
+    expect(JSON.stringify(transcript)).toContain('"reason":"user_stop"');
+    expect(runAgent).toHaveBeenCalledOnce();
+  });
+
+  it.each(["tool_call_limit", "step_limit", "runtime_error"])("persists the builder's %s diagnosis", async (reason) => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-limits",
+      conversationId: "builder-limits",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const runAgent = vi.fn(async (params: RunAgentParams) => {
+      await params.onRunStart?.();
+      if (reason === "runtime_error") throw new Error("fixture provider error");
+      const result = makeAgentResult();
+      if (reason === "step_limit")
+        return { ...result, rawUsage: { ...result.rawUsage, stopReason: "tool_use", numTurns: 24 } };
+      for (let index = 0; index < 49; index += 1) {
+        await params.onProgressEvent({
+          kind: "tool_use",
+          toolName: "Read",
+          input: { file_path: `fixture-${index}.txt` },
+        });
+      }
+      return result;
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      scheduler: makeBuilderScheduler("task-limits", admin.id),
+    });
+    const cookie = await login(app);
+    const response = await app.request("/api/web-chat?conversationId=builder-limits", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Continue",
+        automationTaskId: "task-limits",
+        clientSessionId: "limit-session",
+        generation: 1,
+      }),
+    });
+    expect(await response.text()).toContain(`"reason":"${reason}"`);
+    const saved = await app.request("/api/web-chat/messages?conversationId=builder-limits", {
+      headers: { Cookie: cookie },
+    });
+    expect(await saved.text()).toContain(`"reason":"${reason}"`);
   });
 
   it("requires the exact authoring lease when interrupting builder chat", async () => {

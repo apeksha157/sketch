@@ -1,13 +1,17 @@
-import { type Kysely, sql } from "kysely";
+import type { Kysely } from "kysely";
+import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAlias } from "../db/repositories/entity-alias-rows";
+import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/machine-principal";
 import type { DB, EntityAliasProvenance } from "../db/schema";
 import { handleProposeGraphVerdicts } from "../mcp/curation/propose-graph-verdicts";
 import { createTestPgDb } from "../test-utils";
 import { parseAliasesString } from "./materialize-json";
 import { normalizeName } from "./name-keys";
+import { approveGatedKinds, runExecutorLeg } from "./resolver-pass";
 
-const USER_ID = "cleanup-pr14-user";
+const EPOCH = "1970-01-01T00:00:00.000Z";
+const logger = pino({ level: "silent" });
 
 type ProposeResult = {
   stored: number;
@@ -22,10 +26,6 @@ type ProposeResult = {
     disposition: string;
   }>;
 };
-
-async function seedUser(db: Kysely<DB>): Promise<void> {
-  await sql`INSERT INTO users (id, name) VALUES (${USER_ID}, 'Cleanup PR14 User')`.execute(db);
-}
 
 async function seedEntity(
   db: Kysely<DB>,
@@ -90,19 +90,33 @@ async function aliasRowCount(db: Kysely<DB>, entityId: string, alias: string): P
   return rows.length;
 }
 
-describe("auto-applied remove_alias graph verdict proposals", () => {
+async function proposeAsMachine(db: Kysely<DB>, verdicts: unknown[]): Promise<ProposeResult> {
+  return parseJsonResult<ProposeResult>(
+    await handleProposeGraphVerdicts({ verdicts } as Parameters<typeof handleProposeGraphVerdicts>[0], db, {
+      userId: MACHINE_PRINCIPAL_USER_ID,
+      tokenId: "token-pr14",
+    }),
+  );
+}
+
+async function runGatedExecutor(db: Kysely<DB>): Promise<{ approved: string[]; applied: number }> {
+  const gated = await approveGatedKinds(db, { kinds: ["remove_alias"], since: EPOCH });
+  const executor = await runExecutorLeg(db, logger);
+  return { approved: gated.approved, applied: executor.applied };
+}
+
+describe("resolver executor remove_alias gating (formerly propose autoApply)", () => {
   let db: Kysely<DB>;
 
   beforeEach(async () => {
     db = await createTestPgDb();
-    await seedUser(db);
   }, 30000);
 
   afterEach(async () => {
     await db.destroy();
   });
 
-  it("auto-applies mint-model alias removals while parking human-confirmed aliases", async () => {
+  it("applies mint-model alias removals through the executor while parking human-confirmed aliases", async () => {
     await seedEntity(db, {
       id: "machine-alias-subject",
       name: "Machine Alias Subject",
@@ -118,43 +132,33 @@ describe("auto-applied remove_alias graph verdict proposals", () => {
     await seedAlias(db, { entityId: "machine-alias-subject", alias: "Machine Mess", provenance: "mint_model" });
     await seedAlias(db, { entityId: "human-alias-subject", alias: "Human Signal", provenance: "human_confirmed" });
 
-    const proposed = parseJsonResult<ProposeResult>(
-      await handleProposeGraphVerdicts(
-        {
-          autoApply: true,
-          verdicts: [
-            {
-              action: "remove_alias",
-              subjectEntityId: "machine-alias-subject",
-              targetName: "Machine Mess",
-              reason: "Remove model-created alias.",
-            },
-            {
-              action: "remove_alias",
-              subjectEntityId: "human-alias-subject",
-              targetName: "Human Signal",
-              reason: "This should still require human review.",
-            },
-          ],
-        },
-        db,
-        { userId: USER_ID, tokenId: "token-pr14" },
-      ),
-    );
+    const proposed = await proposeAsMachine(db, [
+      {
+        action: "remove_alias",
+        subjectEntityId: "machine-alias-subject",
+        targetName: "Machine Mess",
+        reason: "Remove model-created alias.",
+      },
+      {
+        action: "remove_alias",
+        subjectEntityId: "human-alias-subject",
+        targetName: "Human Signal",
+        reason: "This should still require human review.",
+      },
+    ]);
+    expect(proposed).toMatchObject({ stored: 2, bounced: 0, summary: "awaiting_human=2 bounced=0" });
+    expect(proposed.results.map((row) => row.disposition)).toEqual(["awaiting_human", "awaiting_human"]);
 
-    expect(proposed).toMatchObject({
-      stored: 2,
-      bounced: 0,
-      summary: "autoApplied=1 awaiting_human=1 bounced=0 auto_apply_failed=0",
-    });
-    expect(proposed.results.map((row) => row.disposition)).toEqual(["autoApplied", "awaiting_human"]);
+    const { approved, applied } = await runGatedExecutor(db);
+    expect(approved).toEqual([proposed.results[0]?.verdictId]);
+    expect(applied).toBe(1);
     await expect(
       db
         .selectFrom("graph_verdicts")
         .select(["status", "decided_by_user_id"])
         .where("id", "=", proposed.results[0]?.verdictId ?? "")
         .executeTakeFirstOrThrow(),
-    ).resolves.toEqual({ status: "applied", decided_by_user_id: USER_ID });
+    ).resolves.toEqual({ status: "applied", decided_by_user_id: MACHINE_PRINCIPAL_USER_ID });
     await expect(entityAliases(db, "machine-alias-subject")).resolves.toEqual(["Stable Name"]);
     await expect(aliasRowCount(db, "machine-alias-subject", "Machine Mess")).resolves.toBe(0);
     await expect(
@@ -187,30 +191,19 @@ describe("auto-applied remove_alias graph verdict proposals", () => {
       aliases: ["Blob Only"],
     });
 
-    const proposed = parseJsonResult<ProposeResult>(
-      await handleProposeGraphVerdicts(
-        {
-          autoApply: true,
-          verdicts: [
-            {
-              action: "remove_alias",
-              subjectEntityId: "blob-only-alias-subject",
-              targetName: "Blob Only",
-              reason: "Unknown alias provenance must be reviewed.",
-            },
-          ],
-        },
-        db,
-        { userId: USER_ID, tokenId: "token-pr14" },
-      ),
-    );
+    const proposed = await proposeAsMachine(db, [
+      {
+        action: "remove_alias",
+        subjectEntityId: "blob-only-alias-subject",
+        targetName: "Blob Only",
+        reason: "Unknown alias provenance must be reviewed.",
+      },
+    ]);
+    expect(proposed).toMatchObject({ stored: 1, bounced: 0, summary: "awaiting_human=1 bounced=0" });
 
-    expect(proposed).toMatchObject({
-      stored: 1,
-      bounced: 0,
-      summary: "autoApplied=0 awaiting_human=1 bounced=0 auto_apply_failed=0",
-    });
-    expect(proposed.results[0]).toMatchObject({ disposition: "awaiting_human" });
+    const { approved, applied } = await runGatedExecutor(db);
+    expect(approved).toEqual([]);
+    expect(applied).toBe(0);
     await expect(
       db
         .selectFrom("graph_verdicts")
@@ -222,7 +215,7 @@ describe("auto-applied remove_alias graph verdict proposals", () => {
     await expect(aliasRowCount(db, "blob-only-alias-subject", "Blob Only")).resolves.toBe(0);
   });
 
-  it("auto-applies only eligible removals in mixed batches and reports each disposition", async () => {
+  it("applies only eligible removals in mixed batches and never touches other kinds", async () => {
     await seedEntity(db, {
       id: "mixed-machine-alias",
       name: "Mixed Machine Alias",
@@ -239,46 +232,43 @@ describe("auto-applied remove_alias graph verdict proposals", () => {
     });
     await seedAlias(db, { entityId: "mixed-machine-alias", alias: "Legacy Mess", provenance: "legacy" });
 
-    const proposed = parseJsonResult<ProposeResult>(
-      await handleProposeGraphVerdicts(
-        {
-          autoApply: true,
-          verdicts: [
-            {
-              action: "remove_alias",
-              subjectEntityId: "mixed-machine-alias",
-              targetName: "Legacy Mess",
-              reason: "Remove legacy machine mess.",
-            },
-            {
-              action: "merge_into",
-              subjectEntityId: "mixed-merge-source",
-              targetEntityId: "mixed-merge-target",
-              reason: "Merge still needs approval.",
-            },
-            {
-              action: "remove_alias",
-              subjectEntityId: "mixed-bounced-alias",
-              targetName: "Missing Alias",
-              reason: "This should bounce.",
-            },
-          ],
-        },
-        db,
-        { userId: USER_ID, tokenId: "token-pr14" },
-      ),
-    );
-
+    const proposed = await proposeAsMachine(db, [
+      {
+        action: "remove_alias",
+        subjectEntityId: "mixed-machine-alias",
+        targetName: "Legacy Mess",
+        reason: "Remove legacy machine mess.",
+      },
+      {
+        action: "merge_into",
+        subjectEntityId: "mixed-merge-source",
+        targetEntityId: "mixed-merge-target",
+        reason: "Merge still needs corroboration.",
+      },
+      {
+        action: "remove_alias",
+        subjectEntityId: "mixed-bounced-alias",
+        targetName: "Missing Alias",
+        reason: "This should bounce.",
+      },
+    ]);
     expect(proposed).toMatchObject({
       stored: 2,
       bounced: 1,
-      summary: "autoApplied=1 awaiting_human=1 bounced=1 auto_apply_failed=0",
+      summary: "awaiting_human=1 bounced=1 pending_corroboration=1",
     });
-    expect(proposed.results.map((row) => row.disposition)).toEqual(["autoApplied", "awaiting_human", "bounced"]);
+    expect(proposed.results.map((row) => row.disposition)).toEqual([
+      "awaiting_human",
+      "pending_corroboration",
+      "bounced",
+    ]);
     expect(proposed.results[2]).toMatchObject({
       validationStatus: "failed",
       validationReason: "alias_not_found",
     });
+
+    const { applied } = await runGatedExecutor(db);
+    expect(applied).toBe(1);
     await expect(
       db
         .selectFrom("graph_verdicts")
@@ -292,7 +282,7 @@ describe("auto-applied remove_alias graph verdict proposals", () => {
         .orderBy("subject_entity_id", "asc")
         .execute(),
     ).resolves.toEqual([
-      { action: "merge_into", status: "awaiting_human", validation_reason: null },
+      { action: "merge_into", status: "pending_corroboration", validation_reason: null },
       { action: "remove_alias", status: "bounced", validation_reason: "alias_not_found" },
       { action: "remove_alias", status: "applied", validation_reason: null },
     ]);

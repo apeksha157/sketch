@@ -1,4 +1,9 @@
-import { VISUAL_ANALYSIS_AGENT_TOOL_NAME, cliIntegrationAppDefinitions } from "@sketch/shared";
+import {
+  type ManagedIntegrationAppId,
+  VISUAL_ANALYSIS_AGENT_TOOL_NAME,
+  cliIntegrationAppDefinitions,
+  managedIntegrationName,
+} from "@sketch/shared";
 import type { Attachment, AttachmentPromptOptions } from "../files";
 import { formatAttachmentsForPrompt, isImageAttachment } from "../files";
 
@@ -351,16 +356,27 @@ function sourceLabel(source: string): { label: string; noun: string } {
   return SOURCE_LABELS[source] ?? { label: source, noun: "items" };
 }
 
-export function buildRuntimeCapabilitiesContext(agentEnv?: Record<string, string>): string {
+export function buildRuntimeCapabilitiesContext(
+  agentEnv?: Record<string, string>,
+  availableManagedIntegrations: ReadonlySet<ManagedIntegrationAppId> = new Set(),
+): string {
   const available = Object.values(cliIntegrationAppDefinitions)
+    .filter((definition) => definition.id !== "github" && definition.id !== "linear")
     .filter((definition) => definition.credentialFields.every((field) => Boolean(agentEnv?.[field.envName])))
     .map((definition) => definition.name);
+  if (availableManagedIntegrations.has("clickup"))
+    available.push(`${managedIntegrationName("clickup")} (Sketch clickup_api)`);
   if (agentEnv?.CANVAS_CLI) available.unshift("Canvas");
+  const sketchManaged = [
+    ...(availableManagedIntegrations.has("github") ? ["GitHub (Sketch github_cli)"] : []),
+    ...(availableManagedIntegrations.has("linear") ? ["Linear (Sketch linear_api)"] : []),
+  ];
+  const capabilityNames = [...available, ...sketchManaged];
   return [
     "## Runtime Capabilities",
     "",
-    available.length > 0
-      ? `Available managed skill integrations for this run: ${available.join(", ")}. Load the matching skill and follow its provider-specific API or CLI instructions.`
+    capabilityNames.length > 0
+      ? `Available managed skill integrations for this run: ${capabilityNames.join(", ")}. Load the matching skill and follow its provider-specific API or CLI instructions.`
       : "No managed skill integrations are available for this run. If a task requires one, check the provider configuration before asking the user to connect or request access in Sketch Integrations.",
     "Never claim that an integration is unavailable or recommend reconnecting unless a provider, configuration, or connection check in the current turn supports that conclusion.",
   ].join("\n");
@@ -377,6 +393,7 @@ export function buildSystemContext(params: {
   visionAnalysisEnabled?: boolean;
   automationAuthoringEnabled?: boolean;
   automationBuilderChat?: boolean;
+  availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;
 }): string {
   const sections: string[] = [];
 
@@ -501,8 +518,21 @@ export function buildSystemContext(params: {
     "Do not include a separate 'connect these apps' section, raw integration URLs, or repeated connect instructions in your own answer. Sketch appends the concrete setup card/link when one is available.",
     "Do not tell the user how to use the setup card/link. Sketch renders the actionable setup UI outside your text.",
     "Do not describe card or link rendering mechanics. Answer from the returned app/account status.",
-    "GitHub is a managed integration in Sketch. When GitHub is available, load the GitHub skill and use gh; never route GitHub through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
-    "Linear is a managed API integration in Sketch. When Linear is available, load the Linear skill and use its GraphQL API; never route Linear through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
+    ...(params.availableManagedIntegrations?.has("github")
+      ? [
+          "GitHub is a managed integration in Sketch. Load the GitHub skill and use the github_cli tool; Canvas is only the OAuth vault and account-selection authority. Never route GitHub through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
+        ]
+      : []),
+    ...(params.availableManagedIntegrations?.has("linear")
+      ? [
+          "Linear is a managed API integration in Sketch. Load the Linear skill and use its GraphQL API through the linear_api tool; Canvas is only the OAuth vault and account-selection authority. Do not route Linear through Canvas actions. As a safety rule, never route Linear through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
+        ]
+      : []),
+    ...(params.availableManagedIntegrations?.has("clickup")
+      ? [
+          "ClickUp is a managed API integration in Sketch. When ClickUp is available, load the ClickUp skill and use clickup_api; the skill also covers API-created native webhook automations. Never route ClickUp agent work through Canvas tools, Canvas MCP, or $CANVAS_CLI.",
+        ]
+      : []),
   );
 
   sections.push(
@@ -599,7 +629,8 @@ export function buildSystemContext(params: {
       "",
       "Tool chain:",
       "- **Search** — hybrid keyword + semantic search across all indexed sources. Supports filtering by source, content `kind` (meeting/doc/task/message), date range, and entity scope. Each result includes `sketchId` (for GetFileContent), `providerId` (the external ID integration tools expect), and `url` (when available).",
-      "- **GetFileContent** — retrieve the full content of an indexed file by its `sketchId`. Use when you need the complete document, transcript, or task detail.",
+      "- **GetFileContent** — retrieve the content of an indexed file by its `sketchId`. Use when you need the complete document or task detail. " +
+        'Pass `view: "full"` for the raw stored version — for meetings this is the complete sentence-by-sentence transcript with speakers and timestamps (paged; follow the footer\'s offset for more).',
       "- **SearchEntities** — find projects, people, teams, companies, and products across connected sources. " +
         "Pass multiple name variations to maximize matches. Returns entity IDs.",
       "- **GetEntityContext** — get a cross-source timeline of mentions for an entity (from SearchEntities).",

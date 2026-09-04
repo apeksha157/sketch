@@ -581,7 +581,16 @@ export interface ProjectMintingAcceptance {
   taskParentUpdates: number;
 }
 
-export type GraphVerdictStatus = "awaiting_human" | "bounced" | "approved" | "rejected" | "applied" | "reverted";
+export type GraphVerdictStatus =
+  | "awaiting_human"
+  | "bounced"
+  | "approved"
+  | "rejected"
+  | "applied"
+  | "reverted"
+  | "pending_corroboration"
+  | "veto_window"
+  | "retired";
 
 export interface GraphVerdictRun {
   id: string;
@@ -627,6 +636,10 @@ export interface GraphVerdict {
   decidedAt: string | null;
   decidedByUserId: string | null;
   appliedLedgerRef: string | null;
+  vetoUntil: string | null;
+  corroboration: unknown;
+  retiredReason: string | null;
+  dryStreak: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -634,7 +647,7 @@ export interface GraphVerdict {
 export interface GraphVerdictApplication {
   verdictId: string;
   dryRun: boolean;
-  status: "approved" | "awaiting_human" | "applied";
+  status: "approved" | "awaiting_human" | "pending_corroboration" | "veto_window" | "applied";
   ledgerRef: string | null;
   wouldChange: Record<string, number>;
   plan: {
@@ -3484,29 +3497,21 @@ export const api = {
       );
       return res.members;
     },
-    updateConnectionMembers(
-      providerId: string,
-      connectionId: string,
-      expectedRevision: number,
-      memberUserIds: string[],
-    ) {
-      return request<{ success: true; connection: IntegrationConnection | null }>(
-        `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/members`,
-        { method: "PUT", body: JSON.stringify({ expectedRevision, memberUserIds }) },
-      );
-    },
     updateConnectionAccess(
       providerId: string,
       connectionId: string,
       accessLevel: "personal" | "organization",
-      expectedRevision: number,
-      memberUserIds: string[],
+      options: {
+        expectedRevision: number;
+        visibility: "private" | "selected_members" | "organization";
+        granteeUserIds: string[];
+      },
     ) {
       return request<{ success: true; connection: IntegrationConnection | null }>(
         `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/access`,
         {
           method: "PATCH",
-          body: JSON.stringify({ accessLevel, expectedRevision, memberUserIds }),
+          body: JSON.stringify({ accessLevel, ...options }),
         },
       );
     },
@@ -3920,7 +3925,9 @@ export const api = {
   },
   graphVerdicts: {
     listOpen() {
-      return request<{ verdicts: GraphVerdict[] }>("/api/graph-verdicts?status=awaiting_human,approved");
+      return request<{ verdicts: GraphVerdict[] }>(
+        "/api/graph-verdicts?status=awaiting_human,approved,pending_corroboration,veto_window",
+      );
     },
     listRuns() {
       return request<{ runs: GraphVerdictRun[] }>("/api/graph-verdicts/runs");

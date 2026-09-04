@@ -135,94 +135,6 @@ describe("ConnectionsPage direct connect", () => {
     expect(screen.getByRole("button", { name: "Set up provider" })).toBeInTheDocument();
   });
 
-  it("shows saved GitHub access first and updates without a Canvas provider", async () => {
-    const user = userEvent.setup();
-    const credentialBodies: unknown[] = [];
-    const shareBodies: unknown[] = [];
-    const githubConnection = {
-      id: "github-1",
-      appId: "github",
-      appName: "GitHub",
-      executionMode: "cli",
-      ownerUserId: "u1",
-      accountLogin: "octocat",
-      accountExternalId: "123",
-      accountAvatarUrl: null,
-      accountType: "User",
-      status: "active",
-      verifiedAt: "2026-01-01T00:00:00Z",
-      lastVerificationError: null,
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
-      isOwnedByViewer: true,
-      canUse: true,
-      canManage: true,
-      shares: [{ type: "user", id: "u3" }],
-    };
-    server.use(
-      http.get("/api/setup/status", () =>
-        HttpResponse.json({ completed: true, currentStep: 4, orgName: "Acme", llmConnected: true }),
-      ),
-      http.get("/api/mcp-servers", () => HttpResponse.json({ servers: [] })),
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "github",
-              name: "GitHub",
-              description: "Use GitHub through Sketch.",
-              executionMode: "cli",
-              connected: true,
-              connectionId: "github-1",
-            },
-          ],
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [githubConnection] })),
-      http.get("/api/users", () =>
-        HttpResponse.json({
-          users: [
-            { id: "u1", name: "Owner", email: "owner@example.com", type: "human" },
-            { id: "u2", name: "Recipient", email: "recipient@example.com", type: "human" },
-            { id: "u3", name: "Existing recipient", email: "existing@example.com", type: "human" },
-          ],
-        }),
-      ),
-      http.patch("/api/integration-apps/github/connections/github-1/credential", async ({ request }) => {
-        credentialBodies.push(await request.json());
-        return HttpResponse.json({ connection: githubConnection });
-      }),
-      http.put("/api/integration-apps/github/connections/github-1/shares", async ({ request }) => {
-        const body = (await request.json()) as { targets: unknown[] };
-        shareBodies.push(body);
-        return HttpResponse.json({ connection: { ...githubConnection, shares: body.targets } });
-      }),
-    );
-
-    renderWithProviders(<ConnectionsPage />);
-
-    await user.click(await screen.findByRole("button", { name: "Open settings for GitHub" }));
-    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-    expect(await screen.findByRole("button", { name: "Remove Existing recipient" })).toBeInTheDocument();
-    await user.click(screen.getByText("Connection settings"));
-    await user.type(screen.getByLabelText("Replacement GitHub token"), "ghp_updated");
-    await user.click(screen.getByRole("button", { name: "Replace token" }));
-    await waitFor(() => expect(credentialBodies).toEqual([{ token: "ghp_updated" }]));
-
-    await addMember(user, "Recipient");
-    expect(screen.getByRole("button", { name: "Save access" })).toBeEnabled();
-    await chooseAccess(user, "Entire organization");
-    await user.click(screen.getByRole("button", { name: "Save access" }));
-    await waitFor(() =>
-      expect(shareBodies).toEqual([
-        {
-          targets: [{ type: "org", id: "default" }],
-        },
-      ]),
-    );
-    expect(screen.queryByRole("dialog", { name: /^Share / })).not.toBeInTheDocument();
-  });
-
   it("does not start a new intent for an already connected app", async () => {
     const intent = vi.fn();
     setupCommonHandlers([
@@ -425,162 +337,29 @@ describe("ConnectionsPage direct connect", () => {
     expect(connectionRequests).toBeGreaterThanOrEqual(3);
   });
 
-  it("connects GitHub through the local PAT wizard instead of Canvas", async () => {
-    const user = userEvent.setup();
-    const connectBodies: unknown[] = [];
+  it("connects GitHub through Canvas OAuth", async () => {
+    const intentBodies: unknown[] = [];
     setupCommonHandlers();
+    window.history.replaceState({}, "", "/integrations?connect=github");
     server.use(
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "github",
-              name: "GitHub",
-              description: "Use GitHub through Sketch.",
-              icon: "https://github.com/favicon.svg",
-              executionMode: "cli",
-              connected: false,
-              connectionId: null,
-            },
-          ],
-          executionMode: "cli",
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [] })),
-      http.get("/api/mcp-servers/provider-1/apps", () =>
-        HttpResponse.json({ apps: [], pageInfo: { endCursor: null, hasMore: false } }),
-      ),
-      http.post("/api/integration-apps/github/connections", async ({ request }) => {
-        connectBodies.push(await request.json());
-        return HttpResponse.json(
-          {
-            connection: {
-              id: "cli-1",
-              appId: "github",
-              appName: "GitHub",
-              executionMode: "cli",
-              ownerUserId: "owner-1",
-              accountLogin: "octocat",
-              accountExternalId: "123",
-              accountAvatarUrl: null,
-              accountType: "User",
-              status: "active",
-              verifiedAt: "2026-01-01T00:00:00Z",
-              lastVerificationError: null,
-              createdAt: "2026-01-01T00:00:00Z",
-              updatedAt: "2026-01-01T00:00:00Z",
-              canManage: true,
-              shares: [],
-            },
-          },
-          { status: 201 },
-        );
-      }),
-      http.put("/api/integration-apps/github/connections/cli-1/shares", () =>
-        HttpResponse.json({ connection: { status: "active", accountLogin: "octocat", shares: [] } }),
-      ),
-    );
-
-    renderWithProviders(<ConnectionsPage />);
-
-    expect(screen.queryByText("GitHub CLI")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Add integration" })).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Add integration" }));
-    await user.click(await screen.findByRole("button", { name: /GitHub/ }));
-    expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Create a GitHub personal access token" })).toBeInTheDocument();
-
-    const tokenInput = await screen.findByLabelText("Personal access token");
-    await user.type(tokenInput, "ghp_test_token");
-    await user.click(screen.getByRole("button", { name: "Connect GitHub" }));
-    await waitFor(() => expect(connectBodies).toHaveLength(1));
-
-    expect(await screen.findByText("@octocat")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("ghp_test_token")).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: /^Share / })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Private");
-    await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(connectBodies).toEqual([{ token: "ghp_test_token", targets: [] }]);
-  });
-
-  it("closes Linear access management after saving a share", async () => {
-    const user = userEvent.setup();
-    const shareBodies: unknown[] = [];
-    const linearConnection = {
-      id: "linear-1",
-      appId: "linear",
-      appName: "Linear",
-      executionMode: "api",
-      ownerUserId: "u1",
-      accountLogin: "Ada Lovelace",
-      accountExternalId: "usr_1",
-      accountAvatarUrl: null,
-      accountType: "User",
-      status: "active",
-      verifiedAt: "2026-01-01T00:00:00Z",
-      lastVerificationError: null,
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
-      isOwnedByViewer: true,
-      canUse: true,
-      canManage: true,
-      shares: [],
-    };
-    setupCommonHandlers();
-    server.use(
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "linear",
-              name: "Linear",
-              description: "Use Linear through Sketch.",
-              icon: "https://linear.app/favicon.svg",
-              executionMode: "api",
-              connected: true,
-              connectionId: "linear-1",
-            },
-          ],
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [linearConnection] })),
-      http.get("/api/users", () =>
-        HttpResponse.json({
-          users: [
-            { id: "u1", name: "Owner", email: "owner@example.com", type: "human" },
-            { id: "u2", name: "Recipient", email: "recipient@example.com", type: "human" },
-          ],
-        }),
-      ),
-      http.put("/api/integration-apps/linear/connections/linear-1/shares", async ({ request }) => {
-        shareBodies.push(await request.json());
+      http.post("/api/mcp-servers/provider-1/connections/intents", async ({ request }) => {
+        intentBodies.push(await request.json());
         return HttpResponse.json({
-          connection: {
-            ...linearConnection,
-            shares: [{ type: "user", id: "u2" }],
-          },
+          app: { id: "github", name: "GitHub", description: "Source control" },
+          redirectUrl: "#github-oauth",
         });
       }),
     );
 
     renderWithProviders(<ConnectionsPage />);
 
-    await user.click(await screen.findByRole("button", { name: "Open settings for Linear" }));
-    expect(await screen.findByRole("dialog", { name: /^Share / })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-    await chooseAccess(user, "Selected members");
-    await addMember(user, "Recipient");
-
-    await user.click(screen.getByRole("button", { name: "Save access" }));
-
-    await waitFor(() =>
-      expect(shareBodies).toEqual([
-        {
-          targets: [{ type: "user", id: "u2" }],
-        },
-      ]),
-    );
-    expect(screen.queryByRole("dialog", { name: /^Share / })).not.toBeInTheDocument();
+    expect(await screen.findByText("Opening GitHub")).toBeInTheDocument();
+    await waitFor(() => expect(intentBodies).toHaveLength(1));
+    expect(intentBodies[0]).toMatchObject({
+      appId: "github",
+      callbackUrl: `${window.location.origin}/integrations/callback?app=github`,
+    });
+    await waitFor(() => expect(window.location.hash).toBe("#github-oauth"));
   });
 
   it("shows callback errors without starting a new intent", async () => {
