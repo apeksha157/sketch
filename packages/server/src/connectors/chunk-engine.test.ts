@@ -14,6 +14,7 @@ import {
   runChunkingPass,
 } from "./chunk-engine";
 import { createWhatsAppChunkStreamAdapter, runLlmChunkingPass } from "./whatsapp-llm-chunker";
+import { chunkWhatsAppIndexingGroups } from "./whatsapp-chunker";
 
 const knobs = {
   windowMessages: 20,
@@ -495,6 +496,55 @@ describe("chunk engine adapter contract", () => {
     expect(otherStreamResult.windowsProcessed).toBe(1);
     expect(sameStreamResult.skippedReason).toBe("overlap_guard");
     expect(Math.max(...providerThreadPredicateCounts)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("drains a full WhatsApp noise page before slicing indexable rows", async () => {
+    const groupJid = "noise-drain@g.us";
+    const groups = createWhatsAppGroupRepository(db);
+    await groups.upsert({
+      jid: groupJid,
+      name: "Noise Drain",
+      description: null,
+      updated_at: "2026-07-07T09:00:00.000Z",
+    });
+    const group = await groups.setIndexEnabled(groupJid, true, { chunkMinMessages: 1, chunkWindowMessages: 210 });
+    if (!group) throw new Error("Failed to enable noise drain group");
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    await db.transaction().execute(async (trx) => {
+      const messages = createConversationRepository(trx);
+      for (let index = 0; index < 305; index += 1) {
+        await messages.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `noise-drain-${index}`,
+          senderName: index < 300 ? "Bot" : "Asha",
+          isBot: index < 300,
+          text: index < 300 ? "noise" : "roadmap update",
+          receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+        });
+      }
+    });
+    const result = await chunkWhatsAppIndexingGroups({
+      db,
+      groups: [group],
+      logger: createTestLogger(),
+      now: new Date("2026-07-07T10:00:00.000Z"),
+      llmGenerate: async (prompt) => {
+        const count = [...prompt.matchAll(/^\d+\. \[/gmu)].length;
+        return JSON.stringify({ segments: [{ start: 1, end: count, threads: ["roadmap"] }] });
+      },
+    });
+    const slice = await db
+      .selectFrom("conversation_slices")
+      .select(["message_count", "denoised_message_ids"])
+      .where("conversation_id", "=", conversation.id)
+      .executeTakeFirst();
+
+    expect(result.messagesProcessed).toBe(305);
+    expect(slice).toEqual({ message_count: 5, denoised_message_ids: JSON.stringify([301, 302, 303, 304, 305]) });
   });
 
   it("renews Slack stream cursor claims only for the active token", async () => {

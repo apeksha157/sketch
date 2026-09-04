@@ -662,7 +662,7 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
   const denoisedMessages = messages.filter(isIndexableWhatsAppChunkMessage);
   const lateArrivals = await countLateArrivals(db, conversation.id, cursor);
   if (lateArrivals > 0) logger.info({ conversationId: conversation.id, lateArrivals }, "late_arrival_skipped");
-  if (denoisedMessages.length === 0 || !options.llmGenerate) {
+  if (messages.length === 0 || !options.llmGenerate) {
     return { ...emptyRunSummary(), conversationsProcessed: 1, lateArrivals };
   }
 

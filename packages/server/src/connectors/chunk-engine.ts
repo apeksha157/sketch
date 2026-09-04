@@ -213,6 +213,7 @@ interface SortableMessage extends ChunkEngineMessage {
 interface BoundaryWindow {
   open: ConversationSliceRow | undefined;
   cursor: ChunkCursorState;
+  pageFull: boolean;
   allRaw: SortableMessage[];
   openMessages: SortableMessage[];
   newMessages: SortableMessage[];
@@ -526,6 +527,18 @@ function takeWindowSuffix(
   return suffix;
 }
 
+function isAtOrBefore(
+  adapter: ChunkStreamAdapter,
+  message: Pick<SortableMessage, "effectiveAt" | "id">,
+  bound: Pick<SortableMessage, "effectiveAt" | "id">,
+): boolean {
+  return (
+    (adapter.order === "row_id" && message.id <= bound.id) ||
+    (adapter.order === "effective_time" &&
+      (message.effectiveAt < bound.effectiveAt ||
+        (message.effectiveAt === bound.effectiveAt && message.id <= bound.id)))
+  );
+}
 async function loadWindow(
   db: Kysely<DB>,
   adapter: ChunkStreamAdapter,
@@ -564,6 +577,7 @@ async function loadWindow(
   return {
     open,
     cursor,
+    pageFull: loaded.pageFull,
     allRaw,
     openMessages,
     newMessages,
@@ -744,6 +758,13 @@ async function applyBoundaryWindow(
     state.newMessages.find((message) => message.id === state.messages[state.messages.length - 1]?.id) ??
     state.newMessages[0];
   const cursorMessage = state.messages[state.messages.length - 1];
+  const messagesProcessed = cursorMessage
+    ? state.allRaw.filter(
+        (message) =>
+          params.adapter.cursor.isAfterCursor(message, state.cursor) &&
+          isAtOrBefore(params.adapter, message, cursorMessage),
+      ).length
+    : 0;
   const applyResult = await deps.db.transaction().execute(async (trx) => {
     const sliceRepo = createConversationSlicesRepository(trx);
     const currentCursor = await params.adapter.cursor.get(trx);
@@ -888,7 +909,7 @@ async function applyBoundaryWindow(
     return {
       closed,
       openSliceId,
-      messagesProcessed: state.messages.length - state.openMessages.length,
+      messagesProcessed,
       shrunkIndexedFileId: shrank,
     };
   });
@@ -997,17 +1018,15 @@ export async function runChunkingPass(
       const pendingRaw = state.allRaw.filter(
         (message) =>
           params.adapter.cursor.isAfterCursor(message, state.cursor) &&
-          (!params.pendingUntil ||
-            (params.adapter.order === "row_id"
-              ? message.id <= params.pendingUntil.id
-              : message.effectiveAt < params.pendingUntil.effectiveAt ||
-                (message.effectiveAt === params.pendingUntil.effectiveAt && message.id <= params.pendingUntil.id))),
+          (!params.pendingUntil || isAtOrBefore(params.adapter, message, params.pendingUntil)),
       );
       if (state.newMessages.length === 0) {
         const lastPendingRaw = pendingRaw[pendingRaw.length - 1];
         if (lastPendingRaw) {
           await advanceNoiseCursor(deps, params.adapter, claimToken, state.cursor, lastPendingRaw);
+          messagesProcessed += pendingRaw.length;
         }
+        if (state.pageFull) continue;
         break;
       }
 
