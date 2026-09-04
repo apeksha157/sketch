@@ -292,6 +292,7 @@ export async function runLlmChunkingPass(
   windowsProcessed: number;
   slicesClosed: number;
   messagesProcessed: number;
+  pendingRemaining: boolean;
   openSliceId: string | null;
   skippedReason?: string;
 }> {
@@ -301,6 +302,7 @@ export async function runLlmChunkingPass(
       windowsProcessed: 0,
       slicesClosed: 0,
       messagesProcessed: 0,
+      pendingRemaining: false,
       openSliceId: null,
       skippedReason: "conversation_not_found",
     };

@@ -186,6 +186,7 @@ export async function runConnectorSync(
       | "WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES"
       | "WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP"
       | "WHATSAPP_CHUNK_GROUP_WORKER_POOL"
+      | "WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN"
       | "SLACK_ENTITY_SYNC"
       | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"
@@ -269,6 +270,8 @@ export async function runConnectorSync(
                 storedScopeConfig.chunkTopicRegistryCap ?? appConfig?.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP,
               chunkGroupWorkerPool:
                 storedScopeConfig.chunkGroupWorkerPool ?? appConfig?.WHATSAPP_CHUNK_GROUP_WORKER_POOL,
+              chunkMaxWindowsPerRun:
+                storedScopeConfig.chunkMaxWindowsPerRun ?? appConfig?.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN,
               salienceBatchLimit: storedScopeConfig.salienceBatchLimit ?? appConfig?.WHATSAPP_SALIENCE_BATCH_LIMIT,
               emissionRefreshDays: storedScopeConfig.emissionRefreshDays ?? appConfig?.WHATSAPP_EMISSION_REFRESH_DAYS,
               backfillGraphPageMessages:
@@ -823,6 +826,7 @@ export interface SyncSchedulerDeps {
       | "WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES"
       | "WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP"
       | "WHATSAPP_CHUNK_GROUP_WORKER_POOL"
+      | "WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN"
       | "MICROSOFT_CLIENT_ID"
       | "MICROSOFT_CLIENT_SECRET"
       | "MICROSOFT_TENANT"

@@ -59,6 +59,7 @@ export interface ChunkEngineKnobs {
   burstThresholdMessages: number | null;
   topicRegistryCap: number;
   groupWorkerPool: number;
+  maxWindowsPerRun?: number;
 }
 
 export interface ChunkPendingBound {
@@ -976,6 +977,7 @@ function emptyResult(openSliceId: string | null, skippedReason?: string) {
     windowsProcessed: 0,
     slicesClosed: 0,
     messagesProcessed: 0,
+    pendingRemaining: false,
     openSliceId,
     ...(skippedReason ? { skippedReason } : {}),
   };
@@ -993,6 +995,7 @@ export async function runChunkingPass(
   windowsProcessed: number;
   slicesClosed: number;
   messagesProcessed: number;
+  pendingRemaining: boolean;
   openSliceId: string | null;
   skippedReason?: string;
 }> {
@@ -1008,12 +1011,16 @@ export async function runChunkingPass(
   let windowsProcessed = 0;
   let slicesClosed = 0;
   let messagesProcessed = 0;
+  let budgetUsed = 0;
+  let lastPageFull = false;
   let openSliceId: string | null = null;
   let skippedReason: string | undefined;
-  const maxWindows = Math.max(1, params.maxWindows ?? Number.MAX_SAFE_INTEGER);
+  const maxWindows = Math.max(1, params.maxWindows ?? params.adapter.knobs.maxWindowsPerRun ?? 8);
   try {
-    while (windowsProcessed < maxWindows) {
+    while (budgetUsed < maxWindows) {
       const state = await loadWindow(deps.db, params.adapter, params.pendingUntil);
+      budgetUsed += 1;
+      lastPageFull = state.pageFull;
       openSliceId = state.open?.id ?? null;
       const pendingRaw = state.allRaw.filter(
         (message) =>
@@ -1059,9 +1066,11 @@ export async function runChunkingPass(
       slicesClosed += firstApplied.closed;
       messagesProcessed += firstApplied.messagesProcessed;
       openSliceId = firstApplied.openSliceId;
-      if (windowsProcessed >= maxWindows) break;
+      if (budgetUsed >= maxWindows) break;
 
       const secondState = await loadWindow(deps.db, params.adapter, params.pendingUntil);
+      budgetUsed += 1;
+      lastPageFull = secondState.pageFull;
       const secondApplied = await decideAndApply(deps, { adapter: params.adapter, claimToken }, secondState);
       if (!secondApplied) {
         skippedReason = "boundary_validation_failed";
@@ -1080,10 +1089,17 @@ export async function runChunkingPass(
   } finally {
     await params.adapter.cursor.release(deps.db, { claimToken });
   }
+  const finalCursor = await params.adapter.cursor.get(deps.db);
+  const pendingRemaining =
+    lastPageFull ||
+    (budgetUsed >= maxWindows &&
+      finalCursor !== undefined &&
+      (await params.adapter.nextPendingMessage(deps.db, finalCursor, params.pendingUntil)) !== undefined);
   return {
     windowsProcessed,
     slicesClosed,
     messagesProcessed,
+    pendingRemaining,
     openSliceId,
     ...(skippedReason ? { skippedReason } : {}),
   };

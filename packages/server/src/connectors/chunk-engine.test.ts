@@ -547,6 +547,59 @@ describe("chunk engine adapter contract", () => {
     expect(slice).toEqual({ message_count: 5, denoised_message_ids: JSON.stringify([301, 302, 303, 304, 305]) });
   });
 
+  it("caps a WhatsApp backlog per run and resumes from the cursor", async () => {
+    const groupJid = "run-budget@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    await db.transaction().execute(async (trx) => {
+      const messages = createConversationRepository(trx);
+      for (let index = 0; index < 700; index += 1) {
+        await messages.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `run-budget-${index}`,
+          senderName: "Asha",
+          text: "roadmap update",
+          receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+        });
+      }
+    });
+    let generateCalls = 0;
+    const deps = {
+      db,
+      logger: createTestLogger(),
+      generate: async (prompt: string) => {
+        generateCalls += 1;
+        const messageCount = prompt.match(/^\d+\. /gmu)?.length ?? 0;
+        return JSON.stringify({ segments: [{ start: 1, end: messageCount, threads: ["roadmap"] }] });
+      },
+    };
+    const budgetKnobs = { ...knobs, windowMessages: 250, maxWindowsPerRun: 2 };
+
+    const first = await runLlmChunkingPass(deps, {
+      conversationId: conversation.id,
+      groupJid,
+      knobs: budgetKnobs,
+      mode: "live",
+    });
+    const firstCursor = await createConversationSlicesRepository(db).getCursor(conversation.id);
+    const second = await runLlmChunkingPass(deps, {
+      conversationId: conversation.id,
+      groupJid,
+      knobs: budgetKnobs,
+      mode: "live",
+    });
+    const secondCursor = await createConversationSlicesRepository(db).getCursor(conversation.id);
+
+    expect(generateCalls).toBe(3);
+    expect(first).toMatchObject({ windowsProcessed: 2, pendingRemaining: true });
+    expect(firstCursor?.last_message_id).toBeLessThan(700);
+    expect(second).toMatchObject({ windowsProcessed: 1, pendingRemaining: false });
+    expect(secondCursor?.last_message_id).toBe(700);
+  });
+
   it("renews Slack stream cursor claims only for the active token", async () => {
     const store = createStreamChunkCursorStore(1, "channel");
     const claimed = await store.claim(db, {

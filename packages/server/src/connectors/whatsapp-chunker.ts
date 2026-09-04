@@ -44,6 +44,7 @@ export const DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES = 15;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_REASONING_EFFORT = "high" as const;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_TOPIC_REGISTRY_CAP = 30;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL = 4;
+export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN = 8;
 
 const MINUTE_MS = 60 * 1000;
 const DEFAULT_CLAIM_STALE_MS = 5 * MINUTE_MS;
@@ -74,6 +75,7 @@ export interface WhatsAppLlmChunkerKnobs {
   burstThresholdMessages: number | null;
   topicRegistryCap: number;
   groupWorkerPool: number;
+  maxWindowsPerRun?: number;
 }
 
 export interface WhatsAppLlmChunkerGroupOverrides {
@@ -295,6 +297,11 @@ export function resolveWhatsAppLlmChunkerKnobs(
       group.chunkGroupWorkerPool,
       defaults.groupWorkerPool,
       DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL,
+    ),
+    maxWindowsPerRun: resolvePositiveInteger(
+      undefined,
+      defaults.maxWindowsPerRun,
+      DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN,
     ),
   };
 }
@@ -588,7 +595,15 @@ async function runLlmChunkingWithBackoff(
   options: ChunkWhatsAppGroupOptions,
   params: Parameters<typeof runLlmChunkingPass>[1],
 ): Promise<Awaited<ReturnType<typeof runLlmChunkingPass>>> {
-  if (!options.llmGenerate) return { windowsProcessed: 0, slicesClosed: 0, messagesProcessed: 0, openSliceId: null };
+  if (!options.llmGenerate) {
+    return {
+      windowsProcessed: 0,
+      slicesClosed: 0,
+      messagesProcessed: 0,
+      pendingRemaining: false,
+      openSliceId: null,
+    };
+  }
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await runLlmChunkingPass(

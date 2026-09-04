@@ -57,6 +57,7 @@ function llmChunkerDefaultsFromScopeConfig(scopeConfig: Record<string, unknown>)
     burstThresholdMessages: positiveInteger(scopeConfig.chunkBurstThresholdMessages) ?? null,
     topicRegistryCap: positiveInteger(scopeConfig.chunkTopicRegistryCap),
     groupWorkerPool: positiveInteger(scopeConfig.chunkGroupWorkerPool),
+    maxWindowsPerRun: positiveInteger(scopeConfig.chunkMaxWindowsPerRun),
   };
 }
 

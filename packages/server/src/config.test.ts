@@ -63,6 +63,7 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES).toBeNull();
         expect(result.data.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP).toBe(30);
         expect(result.data.WHATSAPP_CHUNK_GROUP_WORKER_POOL).toBe(4);
+        expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(8);
         expect(result.data.WHATSAPP_SLICE_GAP_MINUTES).toBe(25);
         expect(result.data.WHATSAPP_SLICE_MAX_AGE_MINUTES).toBe(120);
         expect(result.data.WHATSAPP_SLICE_MAX_MESSAGES).toBe(50);
@@ -217,6 +218,7 @@ describe("configSchema", () => {
         WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES: "50",
         WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP: "25",
         WHATSAPP_CHUNK_GROUP_WORKER_POOL: "3",
+        WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN: "6",
       });
 
       expect(result.success).toBe(true);
@@ -235,6 +237,7 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES).toBe(50);
         expect(result.data.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP).toBe(25);
         expect(result.data.WHATSAPP_CHUNK_GROUP_WORKER_POOL).toBe(3);
+        expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(6);
       }
     });
 
