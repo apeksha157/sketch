@@ -421,8 +421,7 @@ export async function runConnectorSync(
             logger: syncLogger,
           })
         : null;
-    const whatsappChunkerGenerate = createChunkGenerate(salienceGenerator);
-    const slackChunkerGenerate = createChunkGenerate(salienceGenerator);
+    const chunkGenerate = createChunkGenerate(salienceGenerator);
 
     for await (const item of connector.sync({
       db,
@@ -435,8 +434,8 @@ export async function runConnectorSync(
       ownerEmail,
       resolveNameToEmail,
       salienceGenerator,
-      whatsappChunkerGenerate,
-      slackChunkerGenerate,
+      whatsappChunkerGenerate: chunkGenerate,
+      slackChunkerGenerate: chunkGenerate,
       slackIndexing: options.slackIndexingFacade ?? null,
       appConfig: {
         SLACK_ENTITY_SYNC: appConfig?.SLACK_ENTITY_SYNC,
