@@ -20,6 +20,8 @@ export type ExistingContentHashMap = Map<
     contentIsNull: boolean;
     sourceUpdatedAt: string | null;
     rollupGroupId: string | null;
+    sourceMeta: Record<string, unknown> | null;
+    threadId: string | null;
   }
 >;
 
@@ -72,6 +74,8 @@ export async function loadExistingContentHashes(
       "content_category",
       "source_updated_at",
       "rollup_group_id",
+      "source_meta",
+      "thread_id",
       sql<number>`CASE WHEN content IS NULL THEN 1 ELSE 0 END`.as("content_is_null"),
     ])
     .where("source", "=", connectorType)
@@ -93,10 +97,22 @@ export async function loadExistingContentHashes(
         contentIsNull: Number(f.content_is_null) === 1,
         sourceUpdatedAt: f.source_updated_at,
         rollupGroupId: f.rollup_group_id,
+        sourceMeta: parseSourceMeta(f.source_meta),
+        threadId: f.thread_id,
       });
     }
   }
   return existingHashes;
+}
+
+function parseSourceMeta(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

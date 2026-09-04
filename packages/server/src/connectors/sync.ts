@@ -48,7 +48,7 @@ import { type PostSyncGraphInputCollector, createPostSyncGraphInputCollector } f
 import { getPostSyncCoordinator } from "./post-sync-coordinator";
 import { getConnector } from "./registry";
 import { emitFactsForSyncedItem } from "./sync-facts";
-import { getSyncIdentityForItem, syncIdentityKey } from "./sync-identity";
+import { getSyncIdentity, getSyncIdentityForItem, syncIdentityKey } from "./sync-identity";
 import { loadExistingContentHashes, processSyncedItem } from "./sync-item";
 import { buildSyncNameResolver } from "./sync-name-resolution";
 import { reconcileConnectorSync, removeConnectorSourceItems } from "./sync-reconcile";
@@ -167,6 +167,7 @@ export async function runConnectorSync(
       | "OUTLOOK_MAX_INFLIGHT"
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
+      | "CONTACT_POINT_DEFAULT_REGION"
       | "WHATSAPP_SLICE_GAP_MINUTES"
       | "WHATSAPP_SLICE_MAX_AGE_MINUTES"
       | "WHATSAPP_SLICE_MAX_MESSAGES"
@@ -283,7 +284,13 @@ export async function runConnectorSync(
               backfillGraphOpenFactsMax:
                 storedScopeConfig.backfillGraphOpenFactsMax ?? appConfig?.WHATSAPP_BACKFILL_GRAPH_OPEN_FACTS_MAX,
             }
-          : storedScopeConfig;
+          : config.connector_type === "linkedin_aimfox"
+            ? {
+                ...storedScopeConfig,
+                contactPointDefaultRegion:
+                  storedScopeConfig.contactPointDefaultRegion ?? appConfig?.CONTACT_POINT_DEFAULT_REGION,
+              }
+            : storedScopeConfig;
   const owner = await userRepo.findById(config.created_by);
   const ownerEmail = owner?.email ?? null;
 
@@ -477,6 +484,12 @@ export async function runConnectorSync(
         result.itemsArchived += removal.itemsDeleted;
         for (const indexedFileId of removal.affectedIndexedFileIds) affectedIndexedFileIds.add(indexedFileId);
       },
+      getExistingItemState: (providerFileId) => {
+        const state = existingHashes.get(
+          syncIdentityKey(getSyncIdentity({ connectorConfigId: config.id, connectorType, providerFileId })),
+        );
+        return state ? { sourceMeta: state.sourceMeta, threadId: state.threadId } : null;
+      },
     })) {
       try {
         seenSyncIdentityKeys.add(syncIdentityKey(getSyncIdentityForItem(item, config.id, connectorType)));
@@ -493,6 +506,7 @@ export async function runConnectorSync(
         });
 
         if (itemResult.kind === "skipped_empty") {
+          await connector.onItemResult?.({ item, persisted: false, error: "empty synced item" });
           continue;
         }
 
@@ -520,6 +534,8 @@ export async function runConnectorSync(
           generator: llmTaskGenerator,
         });
 
+        await connector.onItemResult?.({ item, persisted: true });
+
         if (itemResult.kind === "unchanged") {
           result.itemsProcessed++;
           progress.itemsProcessed = result.itemsProcessed;
@@ -546,6 +562,7 @@ export async function runConnectorSync(
         await new Promise((resolve) => setTimeout(resolve, 50));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        await connector.onItemResult?.({ item, persisted: false, error: message });
         result.errors.push({ fileId: item.providerFileId, error: message });
         syncLogger.warn({ err, providerFileId: item.providerFileId }, "Failed to process item");
       }
@@ -773,6 +790,7 @@ export interface SyncSchedulerDeps {
       | "OUTLOOK_MAX_INFLIGHT"
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
+      | "CONTACT_POINT_DEFAULT_REGION"
       | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"
       | "WHATSAPP_CHUNK_WINDOW_MESSAGES"

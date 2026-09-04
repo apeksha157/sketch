@@ -1,11 +1,20 @@
-export function normalizePhoneLike(value: string): string {
+import { type PhoneCountryCode, getSupportedPhoneCountries, normalizePhoneNumberToE164 } from "@sketch/shared";
+
+const PHONE_COUNTRY_CODES = new Set(getSupportedPhoneCountries().map(({ country }) => country));
+
+export function normalizePhoneCountryCode(value: string | null | undefined): PhoneCountryCode | undefined {
+  const normalized = value?.trim().toUpperCase() as PhoneCountryCode | undefined;
+  return normalized && PHONE_COUNTRY_CODES.has(normalized) ? normalized : undefined;
+}
+
+export function normalizePhoneLike(value: string, country?: PhoneCountryCode): string {
   const trimmed = value.trim();
-  const compact = trimmed.replace(/[\s().-]/g, "");
-  const withPlus = compact.startsWith("00") ? `+${compact.slice(2)}` : compact;
-  if (!/^\+[1-9]\d{7,14}$/.test(withPlus)) {
-    throw new Error("Phone contact points must be E.164, for example +14155551234");
-  }
-  return withPlus;
+  const international = trimmed.startsWith("00") ? `+${trimmed.slice(2)}` : trimmed;
+  const normalized = normalizePhoneNumberToE164(international, country);
+  if (normalized) return normalized;
+  const compact = international.replace(/[\s().-]/g, "");
+  if (/^\+[1-9]\d{7,14}$/.test(compact)) return compact;
+  throw new Error("Phone contact points must be E.164, for example +14155551234");
 }
 
 export function normalizeWhatsAppIdentityPhone(value: string | null | undefined): string | null {

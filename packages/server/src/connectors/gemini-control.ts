@@ -1,3 +1,5 @@
+import { acquireRpmSlot, resetRpmPacerForTests } from "./rpm-pacer";
+
 export type GeminiSleep = (ms: number) => Promise<void>;
 export type GeminiNow = () => number;
 
@@ -21,11 +23,6 @@ export class GeminiHttpError extends Error {
   }
 }
 
-type Limiter = {
-  nextAt: number;
-  tail: Promise<void>;
-};
-
 type ValidationCacheEntry = {
   apiKey: string;
   status: "valid" | "invalid" | "unknown";
@@ -36,7 +33,6 @@ const DEFAULT_MAX_RPM = 60;
 const DEFAULT_MAX_RETRIES = 4;
 const VALIDATION_TTL_MS = 10 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
-const limiterByQuotaIdentity = new Map<string, Limiter>();
 const validationByQuotaIdentity = new Map<string, ValidationCacheEntry>();
 
 function defaultSleep(ms: number): Promise<void> {
@@ -60,20 +56,7 @@ function normalizeOptions(apiKey: string, options?: GeminiClientOptions) {
 
 async function acquireGeminiSlot(apiKey: string, options?: GeminiClientOptions): Promise<void> {
   const opts = normalizeOptions(apiKey, options);
-  const intervalMs = Math.ceil(60000 / opts.maxRpm);
-  let limiter = limiterByQuotaIdentity.get(opts.quotaIdentity);
-  if (!limiter) {
-    limiter = { nextAt: 0, tail: Promise.resolve() };
-    limiterByQuotaIdentity.set(opts.quotaIdentity, limiter);
-  }
-
-  const run = limiter.tail.then(async () => {
-    const waitMs = Math.max(0, limiter.nextAt - opts.now());
-    if (waitMs > 0) await opts.sleep(waitMs);
-    limiter.nextAt = opts.now() + intervalMs;
-  });
-  limiter.tail = run.catch(() => {});
-  await run;
+  await acquireRpmSlot(`gemini:${opts.quotaIdentity}`, { maxRpm: opts.maxRpm, sleep: opts.sleep, now: opts.now });
 }
 
 function retryDelayMs(attempt: number): number {
@@ -170,6 +153,6 @@ export async function runGeminiRequest<T>(
 }
 
 export function resetGeminiControlsForTests(): void {
-  limiterByQuotaIdentity.clear();
+  resetRpmPacerForTests();
   validationByQuotaIdentity.clear();
 }

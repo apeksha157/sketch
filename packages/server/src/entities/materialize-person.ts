@@ -1,5 +1,6 @@
 import { whereLiveEntity } from "../db/repositories/entities";
 import { inferAffiliationFromEmail } from "./affiliations";
+import { materializeLinkedinAimfoxPersonSeed } from "./linkedin-aimfox-resolution";
 import { registerEntity } from "./materialize-deps";
 import { isString, readJsonObject } from "./materialize-json";
 import { createMentionFromFact } from "./materialize-mentions";
@@ -25,6 +26,9 @@ export async function materializePersonSeed(
   const triggeredByUserId = deps.resolveOwner(fact);
   if (!triggeredByUserId) return { kind: "skipped_missing_owner", reason: "missing_fact_owner" };
   const raw = readJsonObject(fact.raw);
+  if (fact.subject_source === "aimfox") {
+    return materializeLinkedinAimfoxPersonSeed(deps, fact, raw);
+  }
   const subtype = raw.subtype === "internal" ? "internal" : "external";
   const result = await proposeEntity(
     {

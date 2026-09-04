@@ -15,6 +15,7 @@ export { createOutlookCalendarConnector } from "./outlook-calendar";
 export { createClickUpConnector } from "./clickup";
 export { createNotionConnector } from "./notion";
 export { createLinearConnector } from "./linear";
+export { createLinkedinAimfoxConnector } from "./linkedin-aimfox";
 export { createFirefliesConnector } from "./fireflies";
 export { createOtterConnector } from "./otter";
 export { runConnectorSync, runAllSyncs, runScheduledEnrichment, startSyncScheduler } from "./sync";

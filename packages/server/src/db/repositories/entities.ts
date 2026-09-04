@@ -986,7 +986,7 @@ export function createEntityRepository(db: Kysely<DB>) {
       const value = normalizeContactPointValue(data.kind, data.value);
       const now = new Date().toISOString();
 
-      await db.transaction().execute(async (trx) => {
+      const persist = async (trx: Kysely<DB>) => {
         const manualPrimary =
           data.source === "manual"
             ? undefined
@@ -1050,7 +1050,13 @@ export function createEntityRepository(db: Kysely<DB>) {
             }),
           )
           .execute();
-      });
+      };
+
+      if (db.isTransaction) {
+        await persist(db);
+      } else {
+        await db.transaction().execute(persist);
+      }
 
       return db
         .selectFrom("entity_contact_points")

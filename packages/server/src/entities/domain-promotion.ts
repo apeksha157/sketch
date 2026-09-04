@@ -136,6 +136,7 @@ export async function finalizeLinkedDomainCandidates(db: Kysely<DB>, reviewId: s
     .innerJoin("entity_candidates", "entity_candidates.id", "entity_review_domain_candidates.domain_candidate_id")
     .selectAll("entity_candidates")
     .where("entity_review_domain_candidates.review_id", "=", reviewId)
+    .where("entity_candidates.type", "=", "domain_observation")
     .execute();
 
   for (const candidate of rows) {

@@ -20,6 +20,7 @@ export type IntegrationType =
   | "linear"
   | "fireflies"
   | "otter"
+  | "linkedin_aimfox"
   | "zoho_crm"
   | "whatsapp";
 
@@ -499,6 +500,34 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       "Sketch validates the Otter session and syncs recent owned and shared transcripts",
     ],
     perUserAuth: true,
+    requiresOAuthClientSetup: false,
+  },
+  {
+    type: "linkedin_aimfox",
+    name: "LinkedIn (Aimfox)",
+    description: "LinkedIn profiles and conversation threads",
+    category: "Communication",
+    color: "#0A66C2",
+    authType: "api_key",
+    authFields: [
+      {
+        key: "api_key",
+        label: "Aimfox API Key",
+        type: "password",
+        placeholder: "...",
+        helpText: "API key for the Aimfox workspace that owns the LinkedIn accounts.",
+      },
+    ],
+    scopeLabel: "accounts",
+    scopeType: "none",
+    itemNoun: "conversations",
+    credentialUrl: "https://app.aimfox.com/",
+    connectSteps: [
+      "Open your Aimfox workspace settings",
+      "Copy the workspace API key",
+      "Paste the key below; all LinkedIn accounts connected to that key will sync",
+    ],
+    perUserAuth: false,
     requiresOAuthClientSetup: false,
   },
   {

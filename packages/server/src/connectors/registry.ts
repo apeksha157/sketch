@@ -18,6 +18,7 @@ import { createGmailConnector } from "./gmail";
 import { createGoogleCalendarConnector } from "./google-calendar";
 import { createGoogleDriveConnector } from "./google-drive";
 import { createLinearConnector } from "./linear";
+import { createLinkedinAimfoxConnector } from "./linkedin-aimfox";
 import { createNotionConnector } from "./notion";
 import { createOtterConnector } from "./otter";
 import { createOutlookConnector } from "./outlook";
@@ -37,6 +38,7 @@ export const connectorFactories: Record<ConnectorType, () => Connector> = {
   clickup: createClickUpConnector,
   notion: createNotionConnector,
   linear: createLinearConnector,
+  linkedin_aimfox: createLinkedinAimfoxConnector,
   fireflies: createFirefliesConnector,
   otter: createOtterConnector,
   zoho_crm: createZohoCrmConnector,

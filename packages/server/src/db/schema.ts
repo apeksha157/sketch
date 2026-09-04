@@ -1626,6 +1626,8 @@ export interface EntityReviewEvidenceTable {
 export interface EntityReviewDomainCandidatesTable {
   review_id: string;
   domain_candidate_id: string;
+  company_slug: Generated<string | null>;
+  company_linkedin_url: Generated<string | null>;
   created_at: Generated<string>;
 }
 

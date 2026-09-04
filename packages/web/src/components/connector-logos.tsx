@@ -191,6 +191,22 @@ export function WhatsAppLogo({ size = 16, className, style }: LogoProps) {
   );
 }
 
+export function LinkedInLogo({ size = 16, className, style }: LogoProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      width={size}
+      height={size}
+      className={className}
+      style={style}
+      aria-hidden="true"
+    >
+      <path d="M5.37 7.34H1.12V21h4.25V7.34ZM3.25 1A2.47 2.47 0 1 0 3.25 5.94 2.47 2.47 0 0 0 3.25 1ZM21 13.17c0-4.12-2.2-6.04-5.14-6.04-2.37 0-3.43 1.3-4.02 2.22V7.34H7.6V21h4.24v-6.77c0-1.78.34-3.5 2.54-3.5 2.17 0 2.2 2.03 2.2 3.62V21H21v-7.83Z" />
+    </svg>
+  );
+}
+
 export function ConnectorLogo({
   type,
   size = 16,
@@ -224,6 +240,8 @@ export function ConnectorLogo({
       return <LinearLogo {...props} />;
     case "otter":
       return <OtterLogo {...props} />;
+    case "linkedin_aimfox":
+      return <LinkedInLogo {...props} />;
     case "zoho_crm":
       return <ZohoLogo {...props} />;
     case "whatsapp":

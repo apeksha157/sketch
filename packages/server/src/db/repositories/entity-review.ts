@@ -277,6 +277,8 @@ export function createEntityReviewRepo(db: Kysely<DB>) {
             occurrence_count: 1,
             status: "pending",
             triggered_by_user_id: input.triggeredByUserId,
+            seed_source: input.seedSource ?? null,
+            seed_source_id: input.seedSourceId ?? null,
           })
           .execute();
 

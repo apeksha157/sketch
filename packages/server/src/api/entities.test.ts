@@ -2866,6 +2866,88 @@ describe("Entity drawer routes", () => {
     expect(items[0].crmActivity).toEqual({ activityType: "task", hasBody: false });
     expect(body.totalCount).toBe(1);
   });
+
+  it("GET /api/entities/:id/timeline keeps record-type files off the timeline", async () => {
+    await seedEntity("li-person", "Miles U.", "person");
+    const now = new Date().toISOString();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "cfg-linkedin-timeline",
+        connector_type: "linkedin_aimfox",
+        auth_type: "api_key",
+        credentials: "{}",
+        created_by: adminId,
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values([
+        {
+          id: "li-profile",
+          connector_config_id: "cfg-linkedin-timeline",
+          provider_file_id: "linkedin:acct:profile:lead",
+          file_name: "LinkedIn profile - Miles U.",
+          file_type: "linkedin_profile",
+          content_category: "structured",
+          source: "linkedin_aimfox",
+          content_hash: "hash-li-profile",
+          is_archived: 0,
+          synced_at: now,
+          source_updated_at: "2026-05-27T20:00:00.000Z",
+        },
+        {
+          id: "li-segment",
+          connector_config_id: "cfg-linkedin-timeline",
+          provider_file_id: "linkedin:acct:urn:segment-0",
+          file_name: "LinkedIn: Member <> Miles U. · 2026-05-27",
+          file_type: "linkedin_conversation",
+          content_category: "document",
+          source: "linkedin_aimfox",
+          content_hash: "hash-li-segment",
+          is_archived: 0,
+          synced_at: now,
+          source_created_at: "2026-05-27T19:55:00.000Z",
+          source_updated_at: "2026-05-27T20:00:00.000Z",
+        },
+        {
+          id: "li-untyped",
+          connector_config_id: "cfg-linkedin-timeline",
+          provider_file_id: "untyped-file",
+          file_name: "Untyped note",
+          file_type: null,
+          content_category: "document",
+          source: "linkedin_aimfox",
+          content_hash: "hash-li-untyped",
+          is_archived: 0,
+          synced_at: now,
+          source_updated_at: "2026-05-26T20:00:00.000Z",
+        },
+      ])
+      .execute();
+    await db
+      .insertInto("entity_mentions")
+      .values(
+        ["li-profile", "li-segment", "li-untyped"].map((fileId) => ({
+          id: `m-${fileId}`,
+          entity_id: "li-person",
+          indexed_file_id: fileId,
+          chunk_index: -1,
+          context_snippet: "Miles U.",
+          confidence: "EXTRACTED",
+          source: "linkedin_aimfox",
+          relation: "mentioned",
+          mentioned_at: now,
+        })),
+      )
+      .execute();
+
+    const res = await app.request("/api/entities/li-person/timeline", { headers: { Cookie: adminCookie } });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { groups: Array<{ items: Array<{ fileId: string }> }> };
+    expect(body.groups.flatMap((g) => g.items).map((item) => item.fileId)).toEqual(["li-segment", "li-untyped"]);
+  });
 });
 
 describe("PATCH /api/entities/:id parentEntityId + list hierarchy fields", () => {

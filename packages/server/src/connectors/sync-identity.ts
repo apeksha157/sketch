@@ -1,6 +1,11 @@
 import type { ConnectorType, SyncedItem } from "./types";
 
-const CONNECTOR_SCOPED_PROVIDER_FILE_ID_TYPES = new Set<string>(["google_calendar", "outlook_calendar", "teams"]);
+const CONNECTOR_SCOPED_PROVIDER_FILE_ID_TYPES = new Set<string>([
+  "google_calendar",
+  "outlook_calendar",
+  "teams",
+  "linkedin_aimfox",
+]);
 
 export type SyncIdentity =
   | { kind: "provider_message_id"; connectorConfigId: string; providerMessageId: string }

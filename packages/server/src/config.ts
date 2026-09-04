@@ -155,6 +155,17 @@ export const configSchema = z.object({
     .transform((v) => v === "true" || v === "1"),
   SYNC_MAX_RECONCILE_RATIO: z.coerce.number().min(0).max(1).default(0.5),
 
+  CONTACT_POINT_DEFAULT_REGION: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    z.string().trim().length(2).toUpperCase().optional(),
+  ),
+  SALESQL_API_KEY: z.preprocess((value) => (value === "" ? undefined : value), z.string().optional()),
+  SALESQL_ENRICH_ENABLED: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((value) => value === "true" || value === "1"),
+  SALESQL_ENRICH_MAX_PER_SYNC: z.coerce.number().int().min(0).default(25),
+
   // Slack mode
   SLACK_MODE: z.enum(["socket", "http"]).default("socket"),
   SLACK_SIGNING_SECRET: z.string().optional(),

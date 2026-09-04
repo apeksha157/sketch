@@ -37,6 +37,7 @@ import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/users";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../db/schema";
 import { inferAffiliationFromEmail } from "./affiliations";
 import { finalizeLinkedDomainCandidates } from "./domain-promotion";
+import { finalizeLinkedinCompanyContinuations } from "./linkedin-company-continuation";
 import {
   type MaterializeResult,
   buildMaterializeDeps,
@@ -949,8 +950,10 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
 
     if (row.entity_type === "company") {
       await finalizeLinkedDomainCandidates(trxCtx.db, row.id, target.id);
+      await finalizeLinkedinCompanyContinuations(trxCtx.db, row.id, target.id, trxCtx.logger);
     }
     await writeReviewSourceRef(trxCtx, row, target.id);
+    await rematerializeAimfoxEvidence(trxCtx, row, evidence);
     await reviveDeferredRelationsForEntity(trxCtx, target);
     await recordResolutionLink(trxCtx, row, target, evidence, { decider: "human" });
 
@@ -976,8 +979,8 @@ export async function confirmReview(ctx: ResolveCtx, reviewId: string, opts: Con
  *
  * Explicit non-goals: alias teach, birth-time rename, stale-entity merge
  * collapse, auto-resolution short-circuit, picked-different rejection
- * bookkeeping, held-email attach plus affiliation inference, and linked-domain
- * candidate finalization. Promotion to `machine_confirmed` and durable
+ * bookkeeping, and held-email attach plus affiliation inference. Promotion to
+ * `machine_confirmed`, company-review continuation finalization, and durable
  * resolution-ledger writes are in scope.
  */
 export async function linkReviewRowToExistingEntity(
@@ -1020,7 +1023,12 @@ export async function linkReviewRowToExistingEntity(
     });
     await materializeEvidence(trxCtx, target, evidence, "confirmed");
     await rematerializeHeldLlmEvidence(trxCtx, row, evidence);
+    if (row.entity_type === "company") {
+      await finalizeLinkedDomainCandidates(trxCtx.db, row.id, target.id);
+      await finalizeLinkedinCompanyContinuations(trxCtx.db, row.id, target.id, trxCtx.logger);
+    }
     await writeReviewSourceRef(trxCtx, row, target.id);
+    await rematerializeAimfoxEvidence(trxCtx, row, evidence);
     await reviveDeferredRelationsForEntity(trxCtx, target);
 
     const refreshedRow = await markResolvedOrThrow(trxCtx, row, "confirmed", target.id, {
@@ -1067,12 +1075,47 @@ async function findReResolveMatches(ctx: ResolveTxnCtx, row: QueueRow, excludeEn
 }
 
 async function writeReviewSourceRef(ctx: ResolveTxnCtx, row: QueueRow, entityId: string): Promise<void> {
-  if (!row.source || !row.source_id) return;
-  await ctx.entityRepo.upsertSourceRef({
-    entityId,
-    source: row.source,
-    sourceId: row.source_id,
-  });
+  if (row.source && row.source_id) {
+    await ctx.entityRepo.upsertSourceRef({
+      entityId,
+      source: row.source,
+      sourceId: row.source_id,
+    });
+  }
+  if (row.seed_source && row.seed_source_id) {
+    await ctx.entityRepo.upsertSourceRef({
+      entityId,
+      source: row.seed_source,
+      sourceId: row.seed_source_id,
+    });
+  }
+}
+
+async function rematerializeAimfoxEvidence(ctx: ResolveTxnCtx, row: QueueRow, evidence: EvidenceRow[]): Promise<void> {
+  if (row.entity_type !== "person" || row.source !== "aimfox" || !row.source_id) return;
+  const fileIds = [...new Set(evidence.map((item) => item.indexed_file_id))];
+  if (fileIds.length === 0) return;
+  const facts = await ctx.db
+    .selectFrom("indexed_file_facts")
+    .selectAll()
+    .where("indexed_file_id", "in", fileIds)
+    .where("fact_type", "in", ["person_seed", "contact_point"])
+    .where("subject_source", "=", "aimfox")
+    .where("subject_source_id", "=", row.source_id)
+    .where("deleted_at", "is", null)
+    .orderBy(sql`CASE WHEN fact_type = 'person_seed' THEN 0 ELSE 1 END`)
+    .orderBy("id")
+    .execute();
+  const deps = await buildMaterializeDeps(ctx.db);
+  for (const fact of facts) {
+    const result = await materializeFromFact(deps, fact);
+    if (!shouldMarkHeldFactMaterialized(result)) continue;
+    await ctx.db
+      .updateTable("indexed_file_facts")
+      .set({ materialized_at: ctx.now })
+      .where("id", "=", fact.id)
+      .execute();
+  }
 }
 
 function resolutionSource(
@@ -1284,8 +1327,10 @@ export async function rejectReview(ctx: ResolveCtx, reviewId: string, opts: Reje
 
     if (row.entity_type === "company") {
       await finalizeLinkedDomainCandidates(trxCtx.db, row.id, target.id);
+      await finalizeLinkedinCompanyContinuations(trxCtx.db, row.id, target.id, trxCtx.logger);
     }
     await writeReviewSourceRef(trxCtx, row, target.id);
+    await rematerializeAimfoxEvidence(trxCtx, row, evidence);
     await reviveDeferredRelationsForEntity(trxCtx, target);
 
     // 6. Mark resolved.

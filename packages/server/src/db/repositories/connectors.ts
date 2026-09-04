@@ -223,7 +223,12 @@ const CRM_ACTIVITY_FILE_TYPES_SQL = sql.join(
   ["crm_task", "crm_call", "crm_event", "crm_meeting", "crm_note"].map((t) => sql`${t}`),
 );
 
-const CONNECTOR_SCOPED_PROVIDER_FILE_ID_SOURCES = new Set<string>(["google_calendar", "outlook_calendar", "teams"]);
+const CONNECTOR_SCOPED_PROVIDER_FILE_ID_SOURCES = new Set<string>([
+  "google_calendar",
+  "outlook_calendar",
+  "teams",
+  "linkedin_aimfox",
+]);
 
 /**
  * The Files-list (browse) visibility rule, Gmail-style:
