@@ -155,9 +155,6 @@ export const configSchema = z.object({
     .transform((v) => v === "true" || v === "1"),
   SYNC_MAX_RECONCILE_RATIO: z.coerce.number().min(0).max(1).default(0.5),
 
-  LINKEDIN_AIMFOX_MAX_INFLIGHT: z.coerce.number().int().min(1).max(16).default(3),
-  LINKEDIN_AIMFOX_MAX_RPM: z.coerce.number().int().min(1).default(60),
-  LINKEDIN_AIMFOX_BACKFILL_BUDGET: z.coerce.number().int().min(1).default(100),
   CONTACT_POINT_DEFAULT_REGION: z.preprocess(
     (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
     z.string().trim().length(2).toUpperCase().optional(),

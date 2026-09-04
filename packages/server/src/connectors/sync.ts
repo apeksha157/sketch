@@ -167,9 +167,6 @@ export async function runConnectorSync(
       | "OUTLOOK_MAX_INFLIGHT"
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
-      | "LINKEDIN_AIMFOX_BACKFILL_BUDGET"
-      | "LINKEDIN_AIMFOX_MAX_INFLIGHT"
-      | "LINKEDIN_AIMFOX_MAX_RPM"
       | "CONTACT_POINT_DEFAULT_REGION"
       | "WHATSAPP_SLICE_GAP_MINUTES"
       | "WHATSAPP_SLICE_MAX_AGE_MINUTES"
@@ -290,9 +287,6 @@ export async function runConnectorSync(
           : config.connector_type === "linkedin_aimfox"
             ? {
                 ...storedScopeConfig,
-                backfillBudget: storedScopeConfig.backfillBudget ?? appConfig?.LINKEDIN_AIMFOX_BACKFILL_BUDGET,
-                maxInflight: storedScopeConfig.maxInflight ?? appConfig?.LINKEDIN_AIMFOX_MAX_INFLIGHT,
-                maxRpm: storedScopeConfig.maxRpm ?? appConfig?.LINKEDIN_AIMFOX_MAX_RPM,
                 contactPointDefaultRegion:
                   storedScopeConfig.contactPointDefaultRegion ?? appConfig?.CONTACT_POINT_DEFAULT_REGION,
               }
@@ -796,9 +790,6 @@ export interface SyncSchedulerDeps {
       | "OUTLOOK_MAX_INFLIGHT"
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
-      | "LINKEDIN_AIMFOX_BACKFILL_BUDGET"
-      | "LINKEDIN_AIMFOX_MAX_INFLIGHT"
-      | "LINKEDIN_AIMFOX_MAX_RPM"
       | "CONTACT_POINT_DEFAULT_REGION"
       | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"

@@ -195,11 +195,11 @@ describe("LinkedIn Aimfox connector API", () => {
       connectorType: "linkedin_aimfox",
       authType: "api_key",
       credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
-      scopeConfig: JSON.stringify({ accountIds: ["acct-1"] }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], maxRpm: 100_000 }),
       createdBy: userId,
     });
 
-    const result = await runConnectorSync(db, config.id, createTestLogger(), { LINKEDIN_AIMFOX_MAX_RPM: 100_000 });
+    const result = await runConnectorSync(db, config.id, createTestLogger());
     const updated = await repo.findConfigById(config.id);
 
     expect(result).toMatchObject({ itemsProcessed: 0, itemsCreated: 0, itemsUpdated: 0, errors: [] });
@@ -268,11 +268,11 @@ describe("LinkedIn Aimfox connector API", () => {
       connectorType: "linkedin_aimfox",
       authType: "api_key",
       credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
-      scopeConfig: JSON.stringify({ accountIds: ["acct-1"] }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], maxRpm: 100_000 }),
       createdBy: userId,
     });
 
-    const result = await runConnectorSync(db, config.id, createTestLogger(), { LINKEDIN_AIMFOX_MAX_RPM: 100_000 });
+    const result = await runConnectorSync(db, config.id, createTestLogger());
     const updated = await repo.findConfigById(config.id);
 
     expect(result.itemsProcessed).toBe(2);
@@ -337,18 +337,18 @@ describe("LinkedIn Aimfox connector API", () => {
       connectorType: "linkedin_aimfox",
       authType: "api_key",
       credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
-      scopeConfig: JSON.stringify({ accountIds: ["acct-1"] }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], maxRpm: 100_000 }),
       createdBy: userId,
     });
 
-    const first = await runConnectorSync(db, config.id, createTestLogger(), { LINKEDIN_AIMFOX_MAX_RPM: 100_000 });
+    const first = await runConnectorSync(db, config.id, createTestLogger());
     const hashAfterFirst = await db
       .selectFrom("indexed_files")
       .select(["provider_file_id", "content_hash"])
       .where("connector_config_id", "=", config.id)
       .orderBy("provider_file_id")
       .execute();
-    const second = await runConnectorSync(db, config.id, createTestLogger(), { LINKEDIN_AIMFOX_MAX_RPM: 100_000 });
+    const second = await runConnectorSync(db, config.id, createTestLogger());
     const files = await db
       .selectFrom("indexed_files")
       .select(["provider_file_id", "content_hash"])

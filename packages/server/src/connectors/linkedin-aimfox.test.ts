@@ -909,9 +909,9 @@ describe("LinkedIn Aimfox conversation ingest", () => {
         }),
       ),
     });
-    const config = await createLinkedinTestConfig(db);
+    const config = await createLinkedinTestConfig(db, { backfillBudget: 2 });
 
-    await runLinkedinTestSync(db, config.id, { backfillBudget: 2 });
+    await runLinkedinTestSync(db, config.id);
 
     expect(await personCount(db)).toBe(2);
     expect(
@@ -926,7 +926,7 @@ describe("LinkedIn Aimfox conversation ingest", () => {
     });
 
     const secondFrom = fetchSpy.mock.calls.length;
-    await runLinkedinTestSync(db, config.id, { backfillBudget: 2 });
+    await runLinkedinTestSync(db, config.id);
 
     expect(await personCount(db)).toBe(3);
     expect(
@@ -937,7 +937,7 @@ describe("LinkedIn Aimfox conversation ingest", () => {
     expect(await storedAccountCursor(db, config.id)).toMatchObject({ backfillDone: true });
 
     const thirdFrom = fetchSpy.mock.calls.length;
-    await runLinkedinTestSync(db, config.id, { backfillBudget: 2 });
+    await runLinkedinTestSync(db, config.id);
 
     expect(leadDetailUrls(fetchSpy, thirdFrom).map((url) => url.split("/leads/")[1])).toEqual(["lead-3"]);
   });
@@ -970,9 +970,9 @@ describe("LinkedIn Aimfox conversation ingest", () => {
       ],
       { conversations: [old, recent], messages: { "urn:conversation:recent": recentMessages } },
     );
-    const config = await createLinkedinTestConfig(db);
+    const config = await createLinkedinTestConfig(db, { backfillBudget: 1 });
 
-    const first = await runLinkedinTestSync(db, config.id, { backfillBudget: 1 });
+    const first = await runLinkedinTestSync(db, config.id);
 
     expect(first).toMatchObject({ itemsCreated: 2, errors: [] });
     expect(await personCount(db)).toBe(1);
@@ -988,7 +988,7 @@ describe("LinkedIn Aimfox conversation ingest", () => {
       }),
     );
     const secondFrom = fetchSpy.mock.calls.length;
-    const second = await runLinkedinTestSync(db, config.id, { backfillBudget: 1 });
+    const second = await runLinkedinTestSync(db, config.id);
 
     expect(second).toMatchObject({ itemsProcessed: 4, itemsCreated: 2, itemsUpdated: 2, errors: [] });
     expect(await personCount(db)).toBe(2);
@@ -1581,8 +1581,8 @@ async function collectSyncItems(db: Kysely<DB>) {
 }
 
 async function drainSync(db: Kysely<DB>, opts?: { backfillBudget?: number; accountIds?: string[] }) {
-  const config = await createLinkedinTestConfig(db, { accountIds: opts?.accountIds });
-  const result = await runLinkedinTestSync(db, config.id, opts);
+  const config = await createLinkedinTestConfig(db, opts);
+  const result = await runLinkedinTestSync(db, config.id);
   return {
     ...result,
     errors: result.errors.map((error) => ({ itemId: error.fileId, error: error.error })),
@@ -1605,22 +1605,23 @@ async function ensureLinkedinTestUser(db: Kysely<DB>): Promise<void> {
     .execute();
 }
 
-async function createLinkedinTestConfig(db: Kysely<DB>, opts?: { accountIds?: string[] }) {
+async function createLinkedinTestConfig(db: Kysely<DB>, opts?: { accountIds?: string[]; backfillBudget?: number }) {
   await ensureLinkedinTestUser(db);
   return createConnectorRepository(db).createConfig({
     connectorType: "linkedin_aimfox",
     authType: "api_key",
     credentials: JSON.stringify({ type: "api_key", api_key: "key" }),
-    scopeConfig: JSON.stringify({ accountIds: opts?.accountIds ?? ["acct-1"] }),
+    scopeConfig: JSON.stringify({
+      accountIds: opts?.accountIds ?? ["acct-1"],
+      maxRpm: 100_000,
+      ...(opts?.backfillBudget ? { backfillBudget: opts.backfillBudget } : {}),
+    }),
     createdBy: "linkedin-test-user",
   });
 }
 
-async function runLinkedinTestSync(db: Kysely<DB>, configId: string, opts?: { backfillBudget?: number }) {
-  return runConnectorSync(db, configId, createTestLogger(), {
-    LINKEDIN_AIMFOX_BACKFILL_BUDGET: opts?.backfillBudget,
-    LINKEDIN_AIMFOX_MAX_RPM: 100_000,
-  });
+async function runLinkedinTestSync(db: Kysely<DB>, configId: string) {
+  return runConnectorSync(db, configId, createTestLogger());
 }
 
 async function storedAccountCursor(db: Kysely<DB>, configId: string) {
