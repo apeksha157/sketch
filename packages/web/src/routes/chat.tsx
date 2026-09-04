@@ -1133,11 +1133,7 @@ export function ChatPage() {
       enabled: hasCanvasIntegrationConnectionCards,
     })),
   });
-  const cliUsersQuery = useQuery({
-    queryKey: ["users", "chat-github"],
-    queryFn: () => api.users.list(),
-    enabled: githubSetupOpen || linearSetupOpen,
-  });
+
   const providerLoading = hasCanvasIntegrationConnectionCards && serversQuery.isLoading;
   const connectedAppIds = useMemo(
     () =>
@@ -1592,8 +1588,6 @@ export function ChatPage() {
       <GithubIntegrationDialog
         open={githubSetupOpen}
         onOpenChange={setGithubSetupOpen}
-        users={cliUsersQuery.data?.users ?? []}
-        currentUserId={dashboardAuth.userId ?? ""}
         isAdmin={dashboardAuth.role === "admin"}
         onSuccess={handleGithubIntegrationSuccess}
       />
@@ -1601,8 +1595,6 @@ export function ChatPage() {
       <LinearIntegrationDialog
         open={linearSetupOpen}
         onOpenChange={setLinearSetupOpen}
-        users={cliUsersQuery.data?.users ?? []}
-        currentUserId={dashboardAuth.userId ?? ""}
         isAdmin={dashboardAuth.role === "admin"}
         onSuccess={handleLinearIntegrationSuccess}
       />

@@ -192,30 +192,25 @@ describe("ConnectionsPage direct connect", () => {
     renderWithProviders(<ConnectionsPage />);
 
     await user.click(await screen.findByRole("button", { name: "Open settings for GitHub" }));
-    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
-    const existingRecipient = screen.getByRole("button", { name: /Existing recipient/ });
-    const recipient = screen.getByRole("button", { name: /Recipient recipient@example.com/ });
-    expect(existingRecipient.compareDocumentPosition(recipient) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(await screen.findByRole("checkbox", { name: "Existing recipient" })).toBeChecked();
+    await user.click(screen.getByText("Connection settings"));
     await user.type(screen.getByLabelText("Replacement GitHub token"), "ghp_updated");
     await user.click(screen.getByRole("button", { name: "Replace token" }));
     await waitFor(() => expect(credentialBodies).toEqual([{ token: "ghp_updated" }]));
 
-    await user.click(screen.getByRole("button", { name: /Recipient/ }));
-    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Everyone in the organization/ }));
-    await user.click(screen.getByRole("button", { name: "Save access" }));
+    await user.click(screen.getByRole("checkbox", { name: "Recipient" }));
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+    await user.click(screen.getByRole("radio", { name: "Entire organization" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(shareBodies).toEqual([
         {
-          targets: [
-            { type: "user", id: "u3" },
-            { type: "user", id: "u2" },
-            { type: "org", id: "default" },
-          ],
+          targets: [{ type: "org", id: "default" }],
         },
       ]),
     );
-    expect(screen.queryByRole("dialog", { name: "Manage GitHub" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Share integration" })).not.toBeInTheDocument();
   });
 
   it("does not start a new intent for an already connected app", async () => {
@@ -423,7 +418,6 @@ describe("ConnectionsPage direct connect", () => {
   it("connects GitHub through the local PAT wizard instead of Canvas", async () => {
     const user = userEvent.setup();
     const connectBodies: unknown[] = [];
-    const verificationBodies: unknown[] = [];
     setupCommonHandlers();
     server.use(
       http.get("/api/integration-apps", () =>
@@ -446,12 +440,6 @@ describe("ConnectionsPage direct connect", () => {
       http.get("/api/mcp-servers/provider-1/apps", () =>
         HttpResponse.json({ apps: [], pageInfo: { endCursor: null, hasMore: false } }),
       ),
-      http.post("/api/integration-apps/github/verification", async ({ request }) => {
-        verificationBodies.push(await request.json());
-        return HttpResponse.json({
-          identity: { externalId: "123", login: "octocat", avatarUrl: null, accountType: "User" },
-        });
-      }),
       http.post("/api/integration-apps/github/connections", async ({ request }) => {
         connectBodies.push(await request.json());
         return HttpResponse.json(
@@ -471,6 +459,7 @@ describe("ConnectionsPage direct connect", () => {
               lastVerificationError: null,
               createdAt: "2026-01-01T00:00:00Z",
               updatedAt: "2026-01-01T00:00:00Z",
+              canManage: true,
               shares: [],
             },
           },
@@ -493,96 +482,15 @@ describe("ConnectionsPage direct connect", () => {
 
     const tokenInput = await screen.findByLabelText("Personal access token");
     await user.type(tokenInput, "ghp_test_token");
-    await user.click(screen.getByRole("button", { name: "Verify and continue" }));
-    await waitFor(() => expect(verificationBodies).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: "Save access" }));
+    await user.click(screen.getByRole("button", { name: "Connect GitHub" }));
     await waitFor(() => expect(connectBodies).toHaveLength(1));
 
     expect(await screen.findByText("@octocat")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("ghp_test_token")).not.toBeInTheDocument();
-    expect(verificationBodies).toEqual([{ token: "ghp_test_token" }]);
+    expect(screen.getByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Only you" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Done" }));
     expect(connectBodies).toEqual([{ token: "ghp_test_token", targets: [] }]);
-  });
-
-  it("offers only organization and member access for GitHub", async () => {
-    const user = userEvent.setup();
-    setupCommonHandlers();
-    server.use(
-      http.get("/api/integration-apps", () =>
-        HttpResponse.json({
-          apps: [
-            {
-              id: "github",
-              name: "GitHub",
-              description: "Use GitHub through Sketch.",
-              icon: "https://github.com/favicon.svg",
-              executionMode: "cli",
-              connected: false,
-              connectionId: null,
-            },
-          ],
-          executionMode: "cli",
-        }),
-      ),
-      http.get("/api/integration-apps/connections", () => HttpResponse.json({ connections: [] })),
-      http.get("/api/mcp-servers/provider-1/apps", () =>
-        HttpResponse.json({ apps: [], pageInfo: { endCursor: null, hasMore: false } }),
-      ),
-      http.get("/api/users", () =>
-        HttpResponse.json({
-          users: [
-            {
-              id: "u1",
-              name: "Alice Smith",
-              email: "alice@example.com",
-              type: "human",
-            },
-            {
-              id: "u2",
-              name: "Bob Jones",
-              email: "bob@example.com",
-              type: "human",
-            },
-          ],
-        }),
-      ),
-      http.post("/api/integration-apps/github/verification", () =>
-        HttpResponse.json({
-          identity: { externalId: "123", login: "octocat", avatarUrl: null, accountType: "User" },
-        }),
-      ),
-    );
-
-    renderWithProviders(<ConnectionsPage />);
-    await user.click(await screen.findByRole("button", { name: "Add integration" }));
-    await user.click(await screen.findByRole("button", { name: /GitHub/ }));
-    await user.type(await screen.findByLabelText("Personal access token"), "ghp_test_token");
-    await user.click(screen.getByRole("button", { name: "Verify and continue" }));
-
-    expect(await screen.findByText("Organization")).toBeInTheDocument();
-    expect(screen.getByText("Members")).toBeInTheDocument();
-    expect(screen.queryByText("Slack channels")).not.toBeInTheDocument();
-    expect(screen.queryByText("WhatsApp groups")).not.toBeInTheDocument();
-    expect(screen.getByText("0 selected")).toBeInTheDocument();
-
-    const search = screen.getByRole("textbox", { name: "Search access targets" });
-    await user.type(search, "bob@example.com");
-    expect(screen.getByRole("button", { name: /Bob Jones/ })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Alice Smith/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Bob Jones/ }));
-    expect(screen.getByText("1 selected")).toBeInTheDocument();
-    expect(screen.getByText("You and 1 shared target can use this connection.")).toBeInTheDocument();
-
-    await user.clear(search);
-    await user.click(screen.getByRole("button", { name: /Everyone in the organization/ }));
-    expect(screen.getByText("2 selected")).toBeInTheDocument();
-
-    const overlay = document.querySelector('[data-slot="dialog-overlay"]');
-    expect(overlay).toBeInTheDocument();
-    fireEvent.pointerDown(overlay as HTMLElement);
-    fireEvent.pointerUp(overlay as HTMLElement);
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(screen.getByText("2 selected")).toBeInTheDocument();
   });
 
   it("closes Linear access management after saving a share", async () => {
@@ -639,10 +547,7 @@ describe("ConnectionsPage direct connect", () => {
         return HttpResponse.json({
           connection: {
             ...linearConnection,
-            shares: [
-              { type: "user", id: "u2" },
-              { type: "org", id: "default" },
-            ],
+            shares: [{ type: "user", id: "u2" }],
           },
         });
       }),
@@ -651,24 +556,21 @@ describe("ConnectionsPage direct connect", () => {
     renderWithProviders(<ConnectionsPage />);
 
     await user.click(await screen.findByRole("button", { name: "Open settings for Linear" }));
-    expect(await screen.findByRole("dialog", { name: "Manage Linear" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Recipient/ }));
-    expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Everyone in the organization/ }));
-    await user.click(screen.getByRole("button", { name: "Save access" }));
+    expect(await screen.findByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: "Selected members" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Recipient" }));
+
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() =>
       expect(shareBodies).toEqual([
         {
-          targets: [
-            { type: "user", id: "u2" },
-            { type: "org", id: "default" },
-          ],
+          targets: [{ type: "user", id: "u2" }],
         },
       ]),
     );
-    expect(screen.queryByRole("dialog", { name: "Manage Linear" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Share integration" })).not.toBeInTheDocument();
   });
 
   it("shows callback errors without starting a new intent", async () => {

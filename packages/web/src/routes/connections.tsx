@@ -732,8 +732,6 @@ export function ConnectionsPage() {
                 isLoadingConnections={connectionsQuery.isLoading || cliConnectionsQuery.isLoading}
                 githubConnection={githubConnection}
                 linearConnection={linearConnection}
-                integrationUsers={usersQuery.data?.users ?? []}
-                integrationCurrentUserId={auth.userId ?? ""}
                 integrationIsAdmin={auth.role === "admin"}
                 onAdd={() => {
                   setRequestedAppConnect(null);
@@ -895,8 +893,6 @@ export function ConnectionsPage() {
       <GithubIntegrationDialog
         open={showGithubSetup}
         onOpenChange={setShowGithubSetup}
-        users={usersQuery.data?.users ?? []}
-        currentUserId={auth.userId ?? ""}
         isAdmin={auth.role === "admin"}
         onSuccess={invalidateAll}
       />
@@ -904,8 +900,6 @@ export function ConnectionsPage() {
       <LinearIntegrationDialog
         open={showLinearSetup}
         onOpenChange={setShowLinearSetup}
-        users={usersQuery.data?.users ?? []}
-        currentUserId={auth.userId ?? ""}
         isAdmin={auth.role === "admin"}
         onSuccess={invalidateAll}
       />

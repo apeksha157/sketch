@@ -2,9 +2,8 @@ import { GithubAppIcon, LinearAppIcon } from "@/components/connections/app-icon"
 import { GithubIntegrationRow } from "@/components/connections/github-integration-dialog";
 import { LinearIntegrationRow } from "@/components/connections/linear-integration-dialog";
 import { QuietAddButton } from "@/components/quiet-add-button";
-import { ScopeCheckbox } from "@/components/scope-picker";
-import { type User, api } from "@/lib/api";
-import { GearSixIcon, MagnifyingGlassIcon, PlugIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
+import { api } from "@/lib/api";
+import { GearSixIcon, PlugIcon, SpinnerGapIcon, TrashIcon } from "@phosphor-icons/react";
 import type { CliIntegrationConnection, IntegrationConnection } from "@sketch/shared";
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
@@ -16,13 +15,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@sketch/ui/components/dialog";
-import { Input } from "@sketch/ui/components/input";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { getAbbreviation } from "@sketch/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { RadioGroup } from "radix-ui";
-import { Fragment, useEffect, useId, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { IntegrationSharingFields, type SharingMode } from "./integration-sharing-fields";
 
 export function IntegrationsSection({
   connections,
@@ -33,8 +31,6 @@ export function IntegrationsSection({
   onDisconnect,
   githubConnection,
   linearConnection,
-  integrationUsers = [],
-  integrationCurrentUserId = "",
   integrationIsAdmin = false,
 }: {
   connections: IntegrationConnection[];
@@ -45,8 +41,6 @@ export function IntegrationsSection({
   onDisconnect: () => void;
   githubConnection?: CliIntegrationConnection | null;
   linearConnection?: CliIntegrationConnection | null;
-  integrationUsers?: User[];
-  integrationCurrentUserId?: string;
   integrationIsAdmin?: boolean;
 }) {
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
@@ -98,8 +92,6 @@ export function IntegrationsSection({
             <GithubIntegrationRow
               connection={githubConnection}
               isLast={connections.length === 0 && !linearConnection}
-              users={integrationUsers}
-              currentUserId={integrationCurrentUserId}
               isAdmin={integrationIsAdmin}
               onChanged={onDisconnect}
             />
@@ -108,8 +100,6 @@ export function IntegrationsSection({
             <LinearIntegrationRow
               connection={linearConnection}
               isLast={connections.length === 0}
-              users={integrationUsers}
-              currentUserId={integrationCurrentUserId}
               isAdmin={integrationIsAdmin}
               onChanged={onDisconnect}
             />
@@ -273,8 +263,6 @@ function ConnectionRow({
   );
 }
 
-type SharingMode = "personal" | "members" | "organization";
-
 export function AccessSettingsDialog({
   connection,
   providerId,
@@ -290,10 +278,8 @@ export function AccessSettingsDialog({
 }) {
   const [mode, setMode] = useState<SharingMode>("personal");
   const [selected, setSelected] = useState<string[]>([]);
-  const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const modeId = useId();
   const canManage = connection?.canManageAccess === true;
   const membersQuery = useQuery({
     queryKey: ["connection-members", providerId],
@@ -311,31 +297,17 @@ export function AccessSettingsDialog({
           : "personal",
     );
     setSelected(connection?.memberUserIds ?? []);
-    setSearch("");
     setSaveError(null);
   }, [connection]);
 
   if (!connection) return null;
   const members = (membersQuery.data ?? []).filter((member) => member.id !== connection.ownerUserId);
-  const query = search.trim().toLowerCase();
-  const visible = members.filter(
-    (member) => !query || `${member.name ?? ""} ${member.email ?? ""}`.toLowerCase().includes(query),
-  );
   const accessLevel = mode === "organization" ? "organization" : "personal";
   const memberUserIds = mode === "members" ? selected : [];
   const changed =
     accessLevel !== (connection.accessLevel ?? "personal") ||
     JSON.stringify([...memberUserIds].sort()) !== JSON.stringify([...(connection.memberUserIds ?? [])].sort());
   const valid = mode !== "members" || (selected.length > 0 && !membersQuery.isPending && !membersQuery.isError);
-  const choices = [
-    { value: "personal", label: "Only you", description: "Keep this account private." },
-    { value: "members", label: "Selected members", description: "Choose people from your organization." },
-    {
-      value: "organization",
-      label: "Entire organization",
-      description: `Everyone in ${orgName || "your organization"}, including new members.`,
-    },
-  ] as const;
   const save = async () => {
     if (!canManage || !changed || !valid || saving) return;
     setSaving(true);
@@ -386,129 +358,20 @@ export function AccessSettingsDialog({
           </div>
           {canManage ? (
             <>
-              <div className="space-y-2">
-                <p id={`${modeId}-label`} className="text-sm font-medium">
-                  Who can use this account?
-                </p>
-                <RadioGroup.Root
-                  value={mode}
-                  onValueChange={(value) => setMode(value as SharingMode)}
-                  aria-labelledby={`${modeId}-label`}
-                  disabled={saving}
-                  className="space-y-1"
-                >
-                  {choices.map((choice) => (
-                    <label
-                      key={choice.value}
-                      htmlFor={`${modeId}-${choice.value}`}
-                      className={`flex cursor-pointer items-start gap-3 rounded-md p-3 transition-colors motion-reduce:transition-none ${mode === choice.value ? "bg-muted/60" : "hover:bg-muted/30"} ${saving ? "pointer-events-none opacity-60" : ""}`}
-                    >
-                      <RadioGroup.Item
-                        id={`${modeId}-${choice.value}`}
-                        value={choice.value}
-                        aria-label={choice.label}
-                        className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border border-muted-foreground text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=checked]:border-foreground"
-                      >
-                        <RadioGroup.Indicator className="size-2 rounded-full bg-foreground" />
-                      </RadioGroup.Item>
-                      <span className="min-w-0 space-y-0.5">
-                        <span className="block text-sm font-medium">{choice.label}</span>
-                        <span className="block text-sm text-muted-foreground">{choice.description}</span>
-                      </span>
-                    </label>
-                  ))}
-                </RadioGroup.Root>
-              </div>
-              {mode === "members" && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium">Members</p>
-                    <span className="text-sm text-muted-foreground" aria-live="polite">
-                      {selected.length} selected
-                    </span>
-                  </div>
-                  <div className="relative">
-                    <MagnifyingGlassIcon
-                      size={16}
-                      aria-hidden
-                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                    />
-                    <Input
-                      aria-label="Search members"
-                      placeholder="Search by name or email"
-                      value={search}
-                      onChange={(event) => setSearch(event.target.value)}
-                      className="h-10 pl-9"
-                      disabled={saving}
-                    />
-                  </div>
-                  {membersQuery.isPending ? (
-                    <div aria-label="Loading members" className="space-y-2">
-                      {[1, 2, 3].map((id) => (
-                        <Skeleton key={id} className="h-12 w-full rounded-md" />
-                      ))}
-                    </div>
-                  ) : membersQuery.isError ? (
-                    <div role="alert" className="space-y-2 text-sm">
-                      <p>Members could not be loaded.</p>
-                      <Button variant="outline" size="sm" onClick={() => void membersQuery.refetch()}>
-                        Try again
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="max-h-52 overflow-y-auto rounded-lg border border-border">
-                      {visible.map((member) => (
-                        <label
-                          key={member.id}
-                          className={`flex min-h-14 w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none hover:bg-muted/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring ${selected.includes(member.id) ? "bg-muted/40" : ""} ${saving ? "pointer-events-none opacity-60" : ""}`}
-                        >
-                          <input
-                            type="checkbox"
-                            className="sr-only"
-                            checked={selected.includes(member.id)}
-                            aria-label={member.name || member.email || member.id}
-                            disabled={saving || (!selected.includes(member.id) && selected.length >= 500)}
-                            onChange={() =>
-                              setSelected((current) =>
-                                current.includes(member.id)
-                                  ? current.filter((id) => id !== member.id)
-                                  : [...current, member.id],
-                              )
-                            }
-                          />
-                          <span
-                            aria-hidden
-                            className={selected.includes(member.id) ? undefined : "[&>span]:border-muted-foreground"}
-                          >
-                            <ScopeCheckbox checked={selected.includes(member.id)} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block break-words text-sm font-medium">
-                              {member.name || member.email || member.id}
-                            </span>
-                            {member.name && member.email && (
-                              <span className="block break-all text-sm text-muted-foreground">{member.email}</span>
-                            )}
-                          </span>
-                        </label>
-                      ))}
-                      {visible.length === 0 && (
-                        <p className="px-3 py-5 text-sm text-muted-foreground">
-                          {query
-                            ? "No members match your search."
-                            : "No other members yet. Invite someone to your organization to share this account."}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {selected.length === 0 && (
-                    <p className="text-sm text-muted-foreground">Select at least one member, or choose Only you.</p>
-                  )}
-                </div>
-              )}
-              <p className="text-sm text-muted-foreground">
-                Shared actions run as this account. You keep control of its access.
-              </p>
+              <IntegrationSharingFields
+                key={connection.id}
+                mode={mode}
+                onModeChange={setMode}
+                selected={selected}
+                onSelectedChange={setSelected}
+                members={members}
+                orgName={orgName}
+                saving={saving}
+                isLoading={membersQuery.isPending}
+                isError={membersQuery.isError}
+                onRetry={() => void membersQuery.refetch()}
+                memberLimit={500}
+              />
             </>
           ) : (
             <p className="text-sm text-muted-foreground">You can use this account in chats and automations.</p>
