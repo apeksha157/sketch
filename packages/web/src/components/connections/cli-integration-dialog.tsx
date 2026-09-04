@@ -93,7 +93,7 @@ export function CliIntegrationDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem]"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem] [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:right-4 [&>[data-slot=dialog-close]]:grid [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:place-items-center [&>[data-slot=dialog-close]]:rounded-md [&>[data-slot=dialog-close]]:hover:bg-muted [&>[data-slot=dialog-close]]:focus:ring-foreground/50"
         showCloseButton={!saving}
       >
         <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
@@ -128,6 +128,7 @@ export function CliIntegrationDialog({
               <Label htmlFor={`${appId}-credential`}>{app.label}</Label>
               <Input
                 id={`${appId}-credential`}
+                className="h-10 rounded-lg shadow-none focus-visible:border-muted-foreground focus-visible:ring-foreground/20 focus-visible:ring-2"
                 type="password"
                 value={credential}
                 onChange={(event) => setCredential(event.target.value)}
@@ -146,11 +147,21 @@ export function CliIntegrationDialog({
               </p>
             )}
           </div>
-          <DialogFooter className="border-t border-border px-6 py-4">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+          <DialogFooter className="flex-row justify-end border-t border-border px-4 py-4 sm:px-6">
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-10 min-w-20 rounded-lg text-muted-foreground hover:text-foreground focus-visible:ring-foreground/50 focus-visible:ring-2"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={!credential.trim() || saving}>
+            <Button
+              type="submit"
+              className="h-10 min-w-28 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
+              disabled={!credential.trim() || saving}
+            >
               {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
               {saving ? "Connecting…" : `Connect ${app.name}`}
             </Button>
@@ -241,7 +252,7 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
   return (
     <Dialog open onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem]"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem] [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:right-4 [&>[data-slot=dialog-close]]:grid [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:place-items-center [&>[data-slot=dialog-close]]:rounded-md [&>[data-slot=dialog-close]]:hover:bg-muted [&>[data-slot=dialog-close]]:focus:ring-foreground/50"
         showCloseButton={!saving}
       >
         <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
@@ -296,6 +307,7 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
                     </p>
                     <Input
                       aria-label={`Replacement ${app.name} ${app.credential}`}
+                      className="h-10 rounded-lg shadow-none focus-visible:border-muted-foreground focus-visible:ring-foreground/20 focus-visible:ring-2"
                       type="password"
                       value={credential}
                       onChange={(event) => setCredential(event.target.value)}
@@ -306,6 +318,7 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
                     <div className="flex flex-wrap gap-2">
                       <Button
                         variant="outline"
+                        className="h-10 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2"
                         disabled={!credential.trim() || saving}
                         onClick={() =>
                           void run(async () => {
@@ -324,6 +337,7 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
                       </Button>
                       <Button
                         variant="outline"
+                        className="h-10 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2"
                         disabled={saving}
                         onClick={() =>
                           void run(async () => {
@@ -342,7 +356,7 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
                     </p>
                     <Button
                       variant="ghost"
-                      className="text-destructive hover:text-destructive"
+                      className="h-10 rounded-lg text-destructive hover:text-destructive focus-visible:ring-foreground/50 focus-visible:ring-2"
                       disabled={saving}
                       onClick={() => {
                         if (!window.confirm(`Disconnect ${app.name} from Sketch?`)) return;
@@ -368,11 +382,17 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
         </div>
         <DialogFooter className="border-t border-border px-4 py-4 sm:px-6">
           <div className="flex w-full justify-end gap-2">
-            <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>
+            <Button
+              variant="ghost"
+              className="h-10 min-w-20 rounded-lg text-muted-foreground hover:text-foreground focus-visible:ring-foreground/50 focus-visible:ring-2"
+              disabled={saving}
+              onClick={() => onOpenChange(false)}
+            >
               {(justConnected && !changed) || !canManage ? "Done" : "Cancel"}
             </Button>
             {canManage && (
               <Button
+                className="h-10 min-w-28 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
                 disabled={!changed || !valid || saving}
                 onClick={() =>
                   void run(async () => {

@@ -53,7 +53,7 @@ export function IntegrationSharingFields({
         onValueChange={(value) => onModeChange(value as SharingMode)}
         aria-label="Who can use this account?"
         disabled={saving}
-        className="flex gap-1 rounded-lg bg-muted/60 p-1"
+        className="flex gap-1 rounded-lg border border-border bg-muted/50 p-1"
       >
         {choices.map((choice) => (
           <RadioGroup.Item
@@ -61,7 +61,7 @@ export function IntegrationSharingFields({
             value={choice.value}
             aria-label={choice.name}
             disabled={choice.value === "organization" && !canShareOrganization}
-            className="flex-1 rounded-md px-1.5 py-2 text-sm font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/50 data-[state=checked]:bg-background data-[state=checked]:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-9 flex-1 rounded-md border border-transparent px-1.5 text-sm font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none hover:bg-accent/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground/50 data-[state=checked]:border-border data-[state=checked]:bg-background data-[state=checked]:text-foreground dark:data-[state=checked]:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
             {choice.label}
           </RadioGroup.Item>
@@ -96,7 +96,7 @@ export function IntegrationSharingFields({
               placeholder="Search by name or email"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="h-10 pl-9"
+              className="h-10 rounded-lg pl-9 text-sm shadow-none focus-visible:border-muted-foreground focus-visible:ring-foreground/20 focus-visible:ring-2"
               disabled={saving}
             />
           </div>
@@ -114,11 +114,11 @@ export function IntegrationSharingFields({
               </Button>
             </div>
           ) : (
-            <div className="max-h-48 divide-y divide-border overflow-y-auto overscroll-contain [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
+            <div className="max-h-48 space-y-1 overflow-y-auto overscroll-contain [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
               {visible.map((member) => (
                 <label
                   key={member.id}
-                  className={`flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-md px-2 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none hover:bg-muted/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring ${selected.includes(member.id) ? "bg-muted" : ""} ${saving ? "pointer-events-none opacity-60" : ""}`}
+                  className={`flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors motion-reduce:transition-none hover:bg-accent/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-foreground/50 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 ${selected.includes(member.id) ? "bg-muted" : ""} ${saving ? "pointer-events-none" : ""}`}
                 >
                   <input
                     type="checkbox"
@@ -146,7 +146,7 @@ export function IntegrationSharingFields({
                   </span>
                   <span
                     aria-hidden
-                    className={selected.includes(member.id) ? undefined : "[&>span]:border-muted-foreground"}
+                    className={`flex size-5 shrink-0 items-center justify-center [&>span]:size-4.5 [&>span]:rounded-sm ${selected.includes(member.id) ? "" : "[&>span]:border-muted-foreground"}`}
                   >
                     <ScopeCheckbox checked={selected.includes(member.id)} />
                   </span>

@@ -333,7 +333,7 @@ export function AccessSettingsDialog({
   return (
     <Dialog open onOpenChange={(open) => !saving && onOpenChange(open)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem]"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem] [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:right-4 [&>[data-slot=dialog-close]]:grid [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:place-items-center [&>[data-slot=dialog-close]]:rounded-md [&>[data-slot=dialog-close]]:hover:bg-muted [&>[data-slot=dialog-close]]:focus:ring-foreground/50"
         showCloseButton={!saving}
       >
         <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
@@ -384,11 +384,20 @@ export function AccessSettingsDialog({
         </div>
         <DialogFooter className="border-t border-border px-4 py-4 sm:px-6">
           <div className="flex w-full justify-end gap-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            <Button
+              variant="ghost"
+              className="h-10 min-w-20 rounded-lg text-muted-foreground hover:text-foreground focus-visible:ring-foreground/50 focus-visible:ring-2"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
               {canManage ? "Cancel" : "Done"}
             </Button>
             {canManage && (
-              <Button onClick={save} disabled={!changed || !valid || saving}>
+              <Button
+                className="h-10 min-w-28 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
+                onClick={save}
+                disabled={!changed || !valid || saving}
+              >
                 {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
                 {saving ? "Saving…" : "Save access"}
               </Button>
