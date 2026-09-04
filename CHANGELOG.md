@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.1] -- 2026-09-04
+
+- Adds consistent access dialog for Microsoft, GitHub, and Linear integrations with Private, Selected members, and Entire organization sharing choices; member search appears for selected members; dialog retains failed edits and uses the app's dark surface.
+- Ports Microsoft, GitHub, and Linear integrations to Canvas-managed OAuth connection path; shares accounts with Sketch members via IDs and workspace context; saves access policy with revision to prevent concurrent overwrites.
+- Validates connections after new integration setup opens the access dialog; rejects unhealthy accounts and does not treat unchanged pre-existing accounts as proof of OAuth completion.
+- Routes GitHub and Linear tool calls through Canvas for reauthorization; prioritizes personal connection over shared accounts; honors explicit shared selection; requests repair for unhealthy personal connections; removing access takes effect on next tool call.
+- Retains Microsoft automation external account/tenant identity bindings, resolves them as their creator, and requires explicit rebind after connecting a different identity; carries binding to Canvas for both deterministic actions and scheduled agent execution.
+
 ## [1.7.0] -- 2026-09-04
 
 - Routes GitHub and Linear through Canvas-managed OAuth, replacing legacy PATs and API keys with short-lived access tokens that never enter model context, logs, or shell environment; adds GitHub CLI file-exfiltration hardening, exact child-process environment allowlist, and fail-closed availability across both agent runtimes.
