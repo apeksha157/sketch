@@ -93,10 +93,10 @@ export function CliIntegrationDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[32rem]"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem]"
         showCloseButton={!saving}
       >
-        <DialogHeader className="px-6 pt-6 pb-5 text-left">
+        <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
           <div className="flex items-center gap-3 pr-6">
             <app.icon className="size-9 shrink-0" />
             <div>
@@ -112,7 +112,7 @@ export function CliIntegrationDialog({
             void connect();
           }}
         >
-          <div className="min-h-0 space-y-5 overflow-y-auto px-6 pb-6">
+          <div className="min-h-0 space-y-4 overflow-y-auto px-4 pb-5 sm:px-6 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
             <p className="text-sm text-muted-foreground">
               Your {app.credential} is encrypted in Sketch. Actions run with this account’s permissions in {app.name}.
             </p>
@@ -241,21 +241,21 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
   return (
     <Dialog open onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[32rem]"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem]"
         showCloseButton={!saving}
       >
-        <DialogHeader className="px-6 pt-6 pb-5 text-left">
+        <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
           <DialogTitle>Share integration</DialogTitle>
           <DialogDescription>
             {!canManage
               ? "Only the owner can manage this account’s access."
               : justConnected
-                ? `${app.name} is connected. Choose who can use this account in Sketch.`
-                : "Choose who can use this account in Sketch."}
+                ? `${app.name} is connected. Choose who can run actions with this account.`
+                : "Choose who can run actions with this account."}
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 space-y-5 overflow-y-auto px-6 pb-6">
-          <div className="flex min-w-0 items-center gap-3 rounded-lg bg-muted/50 p-3">
+        <div className="min-h-0 space-y-4 overflow-y-auto px-4 pb-5 sm:px-6 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
+          <div className="flex min-w-0 items-center gap-3 pb-1">
             <app.icon className="size-9 shrink-0" />
             <div className="min-w-0">
               <p className="text-sm font-medium">{app.name}</p>
@@ -366,25 +366,27 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
             </p>
           )}
         </div>
-        <DialogFooter className="border-t border-border px-6 py-4">
-          <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>
-            {(justConnected && !changed) || !canManage ? "Done" : "Cancel"}
-          </Button>
-          {canManage && (
-            <Button
-              disabled={!changed || !valid || saving}
-              onClick={() =>
-                void run(async () => {
-                  await api.cliIntegrations.replaceShares(connection.appId, connection.id, targets);
-                  toast.success(mode === "personal" ? "This account is now private" : "Sharing updated");
-                  onOpenChange(false);
-                })
-              }
-            >
-              {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
-              {saving ? "Saving…" : "Save changes"}
+        <DialogFooter className="border-t border-border px-4 py-4 sm:px-6">
+          <div className="flex w-full justify-end gap-2">
+            <Button variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>
+              {(justConnected && !changed) || !canManage ? "Done" : "Cancel"}
             </Button>
-          )}
+            {canManage && (
+              <Button
+                disabled={!changed || !valid || saving}
+                onClick={() =>
+                  void run(async () => {
+                    await api.cliIntegrations.replaceShares(connection.appId, connection.id, targets);
+                    toast.success(mode === "personal" ? "This account is now private" : "Sharing updated");
+                    onOpenChange(false);
+                  })
+                }
+              >
+                {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
+                {saving ? "Saving…" : "Save access"}
+              </Button>
+            )}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

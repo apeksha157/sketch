@@ -333,19 +333,19 @@ export function AccessSettingsDialog({
   return (
     <Dialog open onOpenChange={(open) => !saving && onOpenChange(open)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[32rem]"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem]"
         showCloseButton={!saving}
       >
-        <DialogHeader className="px-6 pt-6 pb-5 text-left">
+        <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
           <DialogTitle>Share integration</DialogTitle>
           <DialogDescription>
             {connection.isOwnedByViewer === false
               ? `${getOwnerDisplayName(connection)} shared this account with you. Only the owner can manage access.`
-              : "Choose who can use this account in Sketch."}
+              : "Choose who can run actions with this account."}
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 space-y-5 overflow-y-auto px-6 pb-6">
-          <div className="flex min-w-0 items-center gap-3 rounded-lg bg-muted/50 p-3">
+        <div className="min-h-0 space-y-4 overflow-y-auto px-4 pb-5 sm:px-6 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
+          <div className="flex min-w-0 items-center gap-3 pb-1">
             <ConnectionIcon connection={connection} />
             <div className="min-w-0">
               <p className="text-sm font-medium">{connection.appName}</p>
@@ -382,16 +382,18 @@ export function AccessSettingsDialog({
             </p>
           )}
         </div>
-        <DialogFooter className="border-t border-border px-6 py-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            {canManage ? "Cancel" : "Done"}
-          </Button>
-          {canManage && (
-            <Button onClick={save} disabled={!changed || !valid || saving}>
-              {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
-              {saving ? "Saving…" : "Save changes"}
+        <DialogFooter className="border-t border-border px-4 py-4 sm:px-6">
+          <div className="flex w-full justify-end gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+              {canManage ? "Cancel" : "Done"}
             </Button>
-          )}
+            {canManage && (
+              <Button onClick={save} disabled={!changed || !valid || saving}>
+                {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
+                {saving ? "Saving…" : "Save access"}
+              </Button>
+            )}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

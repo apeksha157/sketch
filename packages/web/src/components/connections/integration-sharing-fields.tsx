@@ -4,7 +4,7 @@ import { Button } from "@sketch/ui/components/button";
 import { Input } from "@sketch/ui/components/input";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { RadioGroup } from "radix-ui";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 export type SharingMode = "personal" | "members" | "organization";
 
@@ -35,67 +35,56 @@ export function IntegrationSharingFields({
   canShareOrganization?: boolean;
   memberLimit?: number;
 }) {
-  const modeId = useId();
   const [search, setSearch] = useState("");
   const query = search.trim().toLowerCase();
   const visible = members.filter(
     (member) => !query || `${member.name ?? ""} ${member.email ?? ""}`.toLowerCase().includes(query),
   );
   const choices = [
-    { value: "personal", label: "Only you", description: "Keep this account private." },
-    { value: "members", label: "Selected members", description: "Choose people from your organization." },
-    {
-      value: "organization",
-      label: "Entire organization",
-      description: canShareOrganization
-        ? `Everyone in ${orgName || "your organization"}, including new members.`
-        : "Only admins can share with the entire organization.",
-    },
+    { value: "personal", label: "Private", name: "Private" },
+    { value: "members", label: "Members", name: "Selected members" },
+    { value: "organization", label: "Organization", name: "Entire organization" },
   ] as const;
+
   return (
     <>
-      <div className="space-y-2">
-        <p id={`${modeId}-label`} className="text-sm font-medium">
-          Who can use this account?
+      <RadioGroup.Root
+        value={mode}
+        onValueChange={(value) => onModeChange(value as SharingMode)}
+        aria-label="Who can use this account?"
+        disabled={saving}
+        className="flex gap-1 rounded-lg bg-muted/60 p-1"
+      >
+        {choices.map((choice) => (
+          <RadioGroup.Item
+            key={choice.value}
+            value={choice.value}
+            aria-label={choice.name}
+            disabled={choice.value === "organization" && !canShareOrganization}
+            className="flex-1 rounded-md px-1.5 py-2 text-sm font-medium text-muted-foreground outline-none transition-colors motion-reduce:transition-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-foreground/50 data-[state=checked]:bg-background data-[state=checked]:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {choice.label}
+          </RadioGroup.Item>
+        ))}
+      </RadioGroup.Root>
+      {!canShareOrganization && (
+        <p className="text-sm text-muted-foreground">Only admins can share with the entire organization.</p>
+      )}
+      {mode === "personal" && (
+        <p className="text-sm leading-6 text-muted-foreground">
+          Only you can use this account. It won’t be shared with anyone else.
         </p>
-        <RadioGroup.Root
-          value={mode}
-          onValueChange={(value) => onModeChange(value as SharingMode)}
-          aria-labelledby={`${modeId}-label`}
-          disabled={saving}
-          className="space-y-1"
-        >
-          {choices.map((choice) => (
-            <label
-              key={choice.value}
-              htmlFor={`${modeId}-${choice.value}`}
-              className={`flex cursor-pointer items-start gap-3 rounded-md p-3 transition-colors motion-reduce:transition-none ${mode === choice.value ? "bg-muted/60" : "hover:bg-muted/30"} ${saving ? "pointer-events-none opacity-60" : ""}`}
-            >
-              <RadioGroup.Item
-                id={`${modeId}-${choice.value}`}
-                value={choice.value}
-                aria-label={choice.label}
-                disabled={choice.value === "organization" && !canShareOrganization}
-                className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border border-muted-foreground text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background data-[state=checked]:border-foreground"
-              >
-                <RadioGroup.Indicator className="size-2 rounded-full bg-foreground" />
-              </RadioGroup.Item>
-              <span className="min-w-0 space-y-0.5">
-                <span className="block text-sm font-medium">{choice.label}</span>
-                <span className="block text-sm text-muted-foreground">{choice.description}</span>
-              </span>
-            </label>
-          ))}
-        </RadioGroup.Root>
-      </div>
+      )}
+      {mode === "organization" && (
+        <p className="text-sm leading-6 text-muted-foreground">
+          Everyone in {orgName || "your organization"} can use this account, including people who join later.
+        </p>
+      )}
       {mode === "members" && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-medium">Members</p>
-            <span className="text-sm text-muted-foreground" aria-live="polite">
-              {selected.length} selected
-            </span>
-          </div>
+          <p className="text-sm leading-6 text-muted-foreground">
+            You and the members you select can use this account.
+          </p>
           <div className="relative">
             <MagnifyingGlassIcon
               size={16}
@@ -125,11 +114,11 @@ export function IntegrationSharingFields({
               </Button>
             </div>
           ) : (
-            <div className="max-h-52 overflow-y-auto rounded-lg border border-border">
+            <div className="max-h-48 divide-y divide-border overflow-y-auto overscroll-contain [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
               {visible.map((member) => (
                 <label
                   key={member.id}
-                  className={`flex min-h-14 w-full cursor-pointer items-center gap-3 px-3 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none hover:bg-muted/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring ${selected.includes(member.id) ? "bg-muted/40" : ""} ${saving ? "pointer-events-none opacity-60" : ""}`}
+                  className={`flex min-h-14 w-full cursor-pointer items-center gap-3 rounded-md px-2 py-2.5 text-left outline-none transition-colors motion-reduce:transition-none hover:bg-muted/50 focus-within:ring-2 focus-within:ring-inset focus-within:ring-ring ${selected.includes(member.id) ? "bg-muted" : ""} ${saving ? "pointer-events-none opacity-60" : ""}`}
                 >
                   <input
                     type="checkbox"
@@ -145,19 +134,21 @@ export function IntegrationSharingFields({
                       )
                     }
                   />
-                  <span
-                    aria-hidden
-                    className={selected.includes(member.id) ? undefined : "[&>span]:border-muted-foreground"}
-                  >
-                    <ScopeCheckbox checked={selected.includes(member.id)} />
-                  </span>
                   <span className="min-w-0 flex-1">
                     <span className="block break-words text-sm font-medium">
                       {member.name || member.email || member.id}
                     </span>
                     {member.name && member.email && (
-                      <span className="block break-all text-sm text-muted-foreground">{member.email}</span>
+                      <span title={member.email} className="block truncate text-sm text-muted-foreground">
+                        {member.email}
+                      </span>
                     )}
+                  </span>
+                  <span
+                    aria-hidden
+                    className={selected.includes(member.id) ? undefined : "[&>span]:border-muted-foreground"}
+                  >
+                    <ScopeCheckbox checked={selected.includes(member.id)} />
                   </span>
                 </label>
               ))}
@@ -170,14 +161,13 @@ export function IntegrationSharingFields({
               )}
             </div>
           )}
-          {selected.length === 0 && (
-            <p className="text-sm text-muted-foreground">Select at least one member, or choose Only you.</p>
-          )}
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {selected.length === 0
+              ? "Select at least one member to share."
+              : `${selected.length} ${selected.length === 1 ? "member" : "members"} selected`}
+          </p>
         </div>
       )}
-      <p className="text-sm text-muted-foreground">
-        Shared actions run as this account. You keep control of its access.
-      </p>
     </>
   );
 }

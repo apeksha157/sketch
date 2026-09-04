@@ -62,8 +62,8 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     await user.type(screen.getByLabelText(label), "test-credential");
     await user.click(screen.getByRole("button", { name: `Connect ${appName}` }));
     expect(await screen.findByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Only you" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Private" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     expect(screen.queryByDisplayValue("test-credential")).not.toBeInTheDocument();
     expect(bodies).toEqual([{ token: "test-credential", targets: [] }]);
     expect(onSuccess).toHaveBeenCalledExactlyOnceWith(connection(appId));
@@ -108,7 +108,7 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     await user.type(screen.getByLabelText(label), "test-credential");
     await user.click(screen.getByRole("button", { name: `Connect ${appName}` }));
     await user.click(await screen.findByRole("radio", { name: "Selected members" }));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
     expect(await screen.findByRole("checkbox", { name: "Selected Member" })).toBeInTheDocument();
@@ -117,10 +117,10 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     await user.type(screen.getByRole("textbox", { name: "Search members" }), "selected@example.test");
     expect(screen.queryByRole("checkbox", { name: "Other Member" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Selected Member" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save access" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Try saving again");
     expect(screen.getByRole("checkbox", { name: "Selected Member" })).toBeChecked();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(shares).toEqual([
       { targets: [{ type: "user", id: "selected" }] },
@@ -136,7 +136,7 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
       expected: [{ type: "org", id: "default" }],
     },
     {
-      label: "Only you",
+      label: "Private",
       shares: [
         { type: "org", id: "default" },
         { type: "user", id: "selected" },
@@ -159,9 +159,9 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
       renderWithProviders(
         <CliConnectionSharingDialog connection={connection(appId, shares)} open onOpenChange={close} isAdmin />,
       );
-      expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
       await user.click(screen.getByRole("radio", { name: label }));
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save access" }));
       await waitFor(() => expect(bodies).toEqual([{ targets: expected }]));
       await waitFor(() => expect(close).toHaveBeenCalledWith(false));
     },
@@ -175,11 +175,11 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     );
     await user.click(screen.getByRole("radio", { name: "Selected members" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Members could not be loaded");
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     server.use(http.get("/api/users", () => HttpResponse.json({ users: members })));
     await user.click(screen.getByRole("button", { name: "Try again" }));
     await user.click(await screen.findByRole("checkbox", { name: "Selected Member" }));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeEnabled();
   });
 
   it("preserves mixed grants until an explicit choice, then saves organization access alone", async () => {
@@ -203,11 +203,11 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
       />,
     );
     expect(screen.getByRole("radio", { name: "Entire organization" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     expect(bodies).toEqual([]);
-    await user.click(screen.getByRole("radio", { name: "Only you" }));
+    await user.click(screen.getByRole("radio", { name: "Private" }));
     await user.click(screen.getByRole("radio", { name: "Entire organization" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() => expect(bodies).toEqual([{ targets: [{ type: "org", id: "default" }] }]));
   });
 
@@ -220,7 +220,7 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     expect(screen.getByRole("radio", { name: "Entire organization" })).toBeDisabled();
     await user.click(screen.getByRole("radio", { name: "Selected members" }));
     await user.click(await screen.findByRole("checkbox", { name: "Selected Member" }));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeEnabled();
   });
 
   it("does not offer sharing or credential controls to recipients", () => {
@@ -233,7 +233,7 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
       />,
     );
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save access" })).not.toBeInTheDocument();
     expect(screen.queryByText("Connection settings")).not.toBeInTheDocument();
   });
 });

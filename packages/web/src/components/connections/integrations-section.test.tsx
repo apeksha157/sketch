@@ -223,12 +223,12 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("Who can use this account?")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "Who can use this account?" })).toBeInTheDocument();
     await user.click(screen.getByRole("radio", { name: "Selected members" }));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
 
     await user.click(await screen.findByRole("checkbox", { name: "Alex" }));
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save access" }));
 
     await waitFor(() => {
       expect(requestBody).toEqual({ accessLevel: "personal", expectedRevision: 2, memberUserIds: ["member-1"] });
@@ -238,8 +238,8 @@ describe("IntegrationsSection", () => {
 
   it.each([
     ["Entire organization", "personal", [], "organization"],
-    ["Only you", "organization", [], "personal"],
-    ["Only you", "personal", ["member-1"], "personal"],
+    ["Private", "organization", [], "personal"],
+    ["Private", "personal", ["member-1"], "personal"],
   ] as const)(
     "saves %s and clears stale individual grants",
     async (label, previousLevel, previousMembers, accessLevel) => {
@@ -268,7 +268,7 @@ describe("IntegrationsSection", () => {
       ]);
       await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
       await user.click(screen.getByRole("radio", { name: label }));
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      await user.click(screen.getByRole("button", { name: "Save access" }));
       await waitFor(() => expect(requestBody).toEqual({ accessLevel, expectedRevision: 4, memberUserIds: [] }));
     },
   );
@@ -300,10 +300,10 @@ describe("IntegrationsSection", () => {
     ]);
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
     await user.click(screen.getByRole("radio", { name: "Selected members" }));
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     await user.click(await screen.findByRole("checkbox", { name: "Alex" }));
     expect(screen.getByText("alex@example.test")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await user.click(screen.getByRole("button", { name: "Save access" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Account sharing changed");
     expect(screen.getByRole("checkbox", { name: "Alex" })).toBeChecked();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -336,13 +336,13 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
     expect(screen.getByRole("radio", { name: "Selected members" })).toBeChecked();
     expect(await screen.findByRole("checkbox", { name: "Alex" })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     await user.type(screen.getByRole("textbox", { name: "Search members" }), "alex@example");
     expect(screen.queryByRole("checkbox", { name: "Blair" })).not.toBeInTheDocument();
     await user.clear(screen.getByRole("textbox", { name: "Search members" }));
     await user.type(screen.getByRole("textbox", { name: "Search members" }), "no-match");
     expect(screen.getByText("No members match your search.")).toBeInTheDocument();
-    expect(screen.getByText("1 selected")).toBeInTheDocument();
+    expect(screen.getByText("1 member selected")).toBeInTheDocument();
   });
 
   it("shows non-owner shared Canvas accounts as usable but not manageable", async () => {
@@ -369,7 +369,7 @@ describe("IntegrationsSection", () => {
     expect(
       within(dialog).getByText("Tara shared this account with you. Only the owner can manage access."),
     ).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Save access" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Done" })).toBeEnabled();
   });
 
