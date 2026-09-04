@@ -26,7 +26,7 @@ import {
   ShareEnvironmentVariableDialog,
 } from "@/components/connections/environment-variables-section";
 import { GithubIntegrationDialog } from "@/components/connections/github-integration-dialog";
-import { IntegrationsSection } from "@/components/connections/integrations-section";
+import { AccessSettingsDialog, IntegrationsSection } from "@/components/connections/integrations-section";
 import { LinearIntegrationDialog } from "@/components/connections/linear-integration-dialog";
 import { McpServersSection } from "@/components/connections/mcp-servers-section";
 import { RemoveMcpDialog } from "@/components/connections/remove-mcp-dialog";
@@ -408,6 +408,7 @@ export function ConnectionsPage() {
   const [showLinearSetup, setShowLinearSetup] = useState(false);
   const [showProviderSelector, setShowProviderSelector] = useState(false);
   const [showAddProvider, setShowAddProvider] = useState(false);
+  const [newConnectionAccess, setNewConnectionAccess] = useState<IntegrationConnection | null>(null);
   const [connectorNudge, setConnectorNudge] = useState<ConnectorNudgeSuggestion | null>(null);
 
   const invalidateConnections = useCallback(() => {
@@ -429,6 +430,17 @@ export function ConnectionsPage() {
       return;
     }
   }, []);
+
+  const showConnectionSetup = useCallback(
+    (connection: IntegrationConnection) => {
+      if (connection.canManageAccess && isNativeCanvasAppConnection(connection)) {
+        setNewConnectionAccess(connection);
+      } else {
+        void maybeShowConnectorNudge(connection);
+      }
+    },
+    [maybeShowConnectorNudge],
+  );
 
   useEffect(() => {
     if (connectError) {
@@ -469,7 +481,7 @@ export function ConnectionsPage() {
         setDirectConnectState({ kind: "connected", appId: verifyConnectedAppId, appName: connection.appName });
         toast.success(`${connection.appName} connected`);
         invalidateConnections();
-        void maybeShowConnectorNudge(connection);
+        showConnectionSetup(connection);
       };
 
       const failVerification = (message: string) => {
@@ -547,7 +559,7 @@ export function ConnectionsPage() {
     connectionsQuery.refetch,
     cliCatalogQuery.isLoading,
     invalidateConnections,
-    maybeShowConnectorNudge,
+    showConnectionSetup,
   ]);
 
   useEffect(() => {
@@ -833,6 +845,20 @@ export function ConnectionsPage() {
         onSuccess={invalidateAll}
       />
 
+      {provider && newConnectionAccess && (
+        <AccessSettingsDialog
+          connection={newConnectionAccess}
+          providerId={provider.id}
+          orgName={setupStatusQuery.data?.orgName ?? undefined}
+          onSaved={invalidateAll}
+          onOpenChange={(open) => {
+            if (open) return;
+            setNewConnectionAccess(null);
+            void maybeShowConnectorNudge(newConnectionAccess);
+          }}
+        />
+      )}
+
       <AddIntegrationDialog
         open={showAddIntegrationDialog}
         onOpenChange={(open) => {
@@ -862,7 +888,7 @@ export function ConnectionsPage() {
         }}
         onSuccess={(_app, connection) => {
           invalidateAll();
-          if (connection) void maybeShowConnectorNudge(connection);
+          if (connection) showConnectionSetup(connection);
         }}
       />
 

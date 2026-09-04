@@ -3495,12 +3495,18 @@ export const api = {
         { method: "PUT", body: JSON.stringify({ expectedRevision, memberUserIds }) },
       );
     },
-    updateConnectionAccess(providerId: string, connectionId: string, accessLevel: "personal" | "organization") {
+    updateConnectionAccess(
+      providerId: string,
+      connectionId: string,
+      accessLevel: "personal" | "organization",
+      expectedRevision: number,
+      memberUserIds: string[],
+    ) {
       return request<{ success: true; connection: IntegrationConnection | null }>(
         `/api/mcp-servers/${providerId}/connections/${encodeURIComponent(connectionId)}/access`,
         {
           method: "PATCH",
-          body: JSON.stringify({ accessLevel }),
+          body: JSON.stringify({ accessLevel, expectedRevision, memberUserIds }),
         },
       );
     },

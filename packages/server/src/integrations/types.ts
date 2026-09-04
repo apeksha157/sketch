@@ -59,6 +59,8 @@ export interface IntegrationProvider {
     userEmail: string,
     connectionId: string,
     accessLevel: "personal" | "organization",
+    expectedRevision: number,
+    memberUserIds: string[],
     userName?: string,
   ): Promise<IntegrationConnection | null>;
   /**

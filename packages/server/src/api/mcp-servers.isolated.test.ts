@@ -1524,7 +1524,7 @@ describe("MCP Servers API", () => {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Cookie: memberCookie },
-          body: JSON.stringify({ accessLevel: "organization" }),
+          body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
         },
       );
 
@@ -1533,6 +1533,8 @@ describe("MCP Servers API", () => {
         "member@test.com",
         "secrets:owner:notion:notion",
         "organization",
+        2,
+        [],
         "Test Member",
       );
     });
@@ -1570,7 +1572,7 @@ describe("MCP Servers API", () => {
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json", Cookie: memberCookie },
-          body: JSON.stringify({ accessLevel: "organization" }),
+          body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
         },
       );
       expect(res.status).toBe(200);
@@ -1581,6 +1583,8 @@ describe("MCP Servers API", () => {
         "member@test.com",
         "secrets:owner:notion:notion",
         "organization",
+        2,
+        [],
         "Test Member",
       );
     });
@@ -1620,7 +1624,7 @@ describe("MCP Servers API", () => {
       const res = await app.request(`/api/mcp-servers/${server.id}/connections/pd-1/access`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Cookie: memberCookie },
-        body: JSON.stringify({ accessLevel: "organization" }),
+        body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
       });
       expect(res.status).toBe(400);
 

@@ -99,6 +99,8 @@ const createConnectionIntentSchema = z
 
 const updateConnectionAccessSchema = z.object({
   accessLevel: z.enum(["personal", "organization"]),
+  expectedRevision: z.number().int().nonnegative(),
+  memberUserIds: z.array(z.string().min(1)).max(500).default([]),
 });
 const updateConnectionMembersSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -936,6 +938,8 @@ export function mcpServerRoutes(mcpServers: McpServerRepo, users: UserRepo) {
         userResult.email,
         connectionId,
         parsed.data.accessLevel,
+        parsed.data.expectedRevision,
+        parsed.data.memberUserIds,
         userResult.name,
       );
       return c.json({ success: true, connection });

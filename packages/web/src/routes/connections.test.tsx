@@ -34,6 +34,18 @@ describe("ConnectionsPage helpers", () => {
         createdAt: "2026-01-01T00:00:00Z",
       },
       {
+        id: "secrets:owner:microsoft:microsoft-outlook-calendar-oauth",
+        providerId: "provider-1",
+        source: "canvas_user_secrets",
+        appId: "microsoft-outlook-calendar-oauth",
+        appName: "Calendar",
+        status: "active",
+        accessLevel: "personal",
+        canUse: true,
+        isOwnedByViewer: false,
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+      {
         id: "pd-1",
         providerId: "provider-1",
         source: "pipedream",

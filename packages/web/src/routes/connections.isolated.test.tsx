@@ -278,7 +278,7 @@ describe("ConnectionsPage direct connect", () => {
     expect(intent).not.toHaveBeenCalled();
   });
 
-  it("nudges users to connect a matching personal connector after Canvas connection verification", async () => {
+  it("opens sharing after a verified connection, before the connector nudge", async () => {
     const user = userEvent.setup();
     const importedBodies: unknown[] = [];
     setupCommonHandlers([
@@ -291,6 +291,7 @@ describe("ConnectionsPage direct connect", () => {
         status: "active",
         accessLevel: "personal",
         isOwnedByViewer: true,
+        canManageAccess: true,
         icon: "https://img.test/gmail.png",
         createdAt: "2026-01-01T00:00:00Z",
       },
@@ -335,6 +336,10 @@ describe("ConnectionsPage direct connect", () => {
     renderWithProviders(<ConnectionsPage />);
 
     expect(await screen.findByText("Gmail is connected")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Only you" })).toBeChecked();
+    expect(screen.queryByText("Add Gmail to the org brain?")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByText("Add Gmail to the org brain?")).toBeInTheDocument();
     expect(document.querySelector('img[src="https://img.test/gmail.png"]')).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to org brain" })).toBeInTheDocument();

@@ -96,13 +96,13 @@ describe("CanvasProvider", () => {
       },
     );
     await expect(
-      provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:github:github", "organization"),
+      provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:github:github", "organization", 2, []),
     ).rejects.toMatchObject({ status: 409, code: "CLI_INTEGRATION" });
     await expect(provider.removeConnection("priya@example.com", "secrets:owner-1:linear:linear")).rejects.toMatchObject(
       { status: 409, code: "CLI_INTEGRATION" },
     );
     await expect(
-      provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:linear:linear", "organization"),
+      provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:linear:linear", "organization", 2, []),
     ).rejects.toMatchObject({ status: 409, code: "CLI_INTEGRATION" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -278,7 +278,7 @@ describe("CanvasProvider", () => {
     await expect(provider.listConnections("priya@example.com")).resolves.toEqual([]);
   });
 
-  it("omits non-owner personal Canvas accounts even when canUse is incorrectly true", async () => {
+  it("keeps member-shared Canvas accounts when Canvas explicitly grants use", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -286,10 +286,10 @@ describe("CanvasProvider", () => {
           JSON.stringify({
             accounts: [
               {
-                id: "secrets:owner-1:github:github",
+                id: "secrets:owner-1:microsoft:microsoft-outlook-calendar-oauth",
                 source: "canvas_user_secrets",
-                name: "GitHub",
-                app: { name: "GitHub", nameSlug: "github" },
+                name: "Outlook Calendar",
+                app: { name: "Outlook Calendar", nameSlug: "microsoft-outlook-calendar-oauth" },
                 healthy: true,
                 accessLevel: "personal",
                 isOwnedByViewer: false,
@@ -325,7 +325,38 @@ describe("CanvasProvider", () => {
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
     const connections = await provider.listConnections("priya@example.com");
 
-    expect(connections.map((connection) => connection.appId)).toEqual(["slack", "notion"]);
+    expect(connections.map((connection) => connection.appId)).toEqual([
+      "microsoft-outlook-calendar-oauth",
+      "slack",
+      "notion",
+    ]);
+  });
+
+  it.each([false, undefined])("omits member-shared accounts without an explicit grant (%s)", async (canUse) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            accounts: [
+              {
+                id: "secrets:owner:microsoft:microsoft-outlook-calendar-oauth",
+                source: "canvas_user_secrets",
+                name: "Calendar",
+                app: { name: "Calendar", nameSlug: "microsoft-outlook-calendar-oauth" },
+                healthy: true,
+                accessLevel: "personal",
+                isOwnedByViewer: false,
+                canUse,
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    await expect(provider.listConnections("member@example.com")).resolves.toEqual([]);
   });
 
   it("does not infer Canvas ownership solely from canonical secret account IDs", async () => {
@@ -361,12 +392,35 @@ describe("CanvasProvider", () => {
     expect(connections[0].canDelete).toBeUndefined();
   });
 
+  it("lists members beyond the first 500 using valid Canvas page sizes", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      const params = new URL(url).searchParams;
+      expect(params.get("limit")).toBe("100");
+      const offset = Number(params.get("offset"));
+      return new Response(
+        JSON.stringify({
+          data: Array.from({ length: offset < 600 ? 100 : 1 }, (_, index) => ({
+            id: `member-${offset + index}`,
+            name: `Member ${offset + index}`,
+          })),
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+    const members = await provider.listOrganizationMembers("priya@example.com");
+    expect(members).toHaveLength(601);
+    expect(members.at(-1)?.id).toBe("member-600");
+    expect(fetchMock).toHaveBeenCalledTimes(7);
+  });
+
   it("forwards access updates with the real viewer email", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
-    await provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:notion:notion", "organization");
+    await provider.updateConnectionAccess("priya@example.com", "secrets:owner-1:notion:notion", "organization", 2, []);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "https://canvas.example.com/api/canvas-accounts/secrets%3Aowner-1%3Anotion%3Anotion/access",
@@ -377,7 +431,7 @@ describe("CanvasProvider", () => {
           "Content-Type": "application/json",
           "X-User-Email": "priya@example.com",
         },
-        body: JSON.stringify({ accessLevel: "organization" }),
+        body: JSON.stringify({ accessLevel: "organization", expectedRevision: 2, memberUserIds: [] }),
         signal: expect.any(AbortSignal),
       },
     );
@@ -401,7 +455,7 @@ describe("CanvasProvider", () => {
     const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
 
     await expect(
-      provider.updateConnectionAccess("priya@example.com", "pd-account", "organization"),
+      provider.updateConnectionAccess("priya@example.com", "pd-account", "organization", 2, []),
     ).rejects.toMatchObject({
       status: 400,
       code: "BAD_REQUEST",

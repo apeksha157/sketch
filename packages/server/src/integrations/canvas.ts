@@ -122,7 +122,7 @@ function getConnectionSource(account: CanvasAccountResponse): string {
 }
 
 function canUseConnection(account: CanvasAccountResponse): boolean {
-  if (account.canUse === false) return false;
+  if (account.canUse !== undefined) return account.canUse;
   if (
     getConnectionSource(account) === "canvas_user_secrets" &&
     account.accessLevel === "personal" &&
@@ -430,13 +430,19 @@ export class CanvasProvider implements IntegrationProvider {
   }
 
   async listOrganizationMembers(userEmail: string, userName?: string) {
-    const res = await fetch(`${this.apiUrl}/api/org/members?limit=500`, {
-      headers: this.headers(userEmail, true, userName),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!res.ok) throw await this.parseError(res, `Canvas member listing failed: ${res.status}`);
-    const body = (await res.json()) as { data?: Array<{ id: string; name?: string; email?: string }> };
-    return body.data ?? [];
+    const members: Array<{ id: string; name?: string; email?: string }> = [];
+    for (let offset = 0; ; offset += 100) {
+      const res = await fetch(`${this.apiUrl}/api/org/members?limit=100&offset=${offset}`, {
+        headers: this.headers(userEmail, true, userName),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (!res.ok) throw await this.parseError(res, `Canvas member listing failed: ${res.status}`);
+      const body = (await res.json()) as { data?: Array<{ id: string; name?: string; email?: string }> };
+      const page = body.data ?? [];
+      members.push(...page);
+      if (page.length < 100) break;
+    }
+    return members;
   }
 
   async updateConnectionMembers(
@@ -460,6 +466,8 @@ export class CanvasProvider implements IntegrationProvider {
     userEmail: string,
     connectionId: string,
     accessLevel: "personal" | "organization",
+    expectedRevision: number,
+    memberUserIds: string[],
     userName?: string,
   ): Promise<IntegrationConnection | null> {
     if (isCanvasBlockedConnectionId(connectionId)) {
@@ -468,7 +476,7 @@ export class CanvasProvider implements IntegrationProvider {
     const res = await fetch(`${this.apiUrl}/api/canvas-accounts/${encodeURIComponent(connectionId)}/access`, {
       method: "PATCH",
       headers: this.headers(userEmail, true, userName),
-      body: JSON.stringify({ accessLevel }),
+      body: JSON.stringify({ accessLevel, expectedRevision, memberUserIds }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
