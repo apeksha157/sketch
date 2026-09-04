@@ -226,6 +226,7 @@ import * as m223 from "./migrations/223-verdict-lifecycle";
 import * as m224 from "./migrations/224-resolver-runs";
 import * as m225 from "./migrations/225-indexed-file-raw-contents";
 import * as m226 from "./migrations/226-linkedin-company-review-continuations";
+import * as m227 from "./migrations/227-person-enrichment-attempts";
 import type { DB } from "./schema";
 
 /**
@@ -461,6 +462,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "224-resolver-runs": m224,
           "225-indexed-file-raw-contents": m225,
           "226-linkedin-company-review-continuations": m226,
+          "227-person-enrichment-attempts": m227,
         };
       },
     },

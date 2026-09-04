@@ -8,6 +8,7 @@ import {
   type AimfoxLead,
   type AimfoxMessage,
 } from "./aimfox-client";
+import { type LinkedinEnrichmentScope, normalizeLinkedinEnrichmentScopeConfig } from "./enrichment/scope";
 import { type LinkedinAimfoxPersonSeed, buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { extractErrorMessage, runWithConcurrency, truncateErrorMessage } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
@@ -50,6 +51,7 @@ export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   segmentMaxTokens?: number;
   segmentGapHours?: number;
   contactPointDefaultRegion?: string;
+  enrichment?: LinkedinEnrichmentScope;
 }
 
 /**
@@ -162,7 +164,7 @@ export async function discoverLinkedinAimfoxScopeConfig(
   const accountIds = [...new Set(accounts.map((account) => String(account.id)).filter(Boolean))].sort();
   if (accountIds.length === 0) throw new LinkedinAimfoxNoAccountsError();
 
-  return { ...requestedScopeConfig, accountIds } as LinkedinAimfoxScopeConfig;
+  return normalizeLinkedinEnrichmentScopeConfig({ ...requestedScopeConfig, accountIds }) as LinkedinAimfoxScopeConfig;
 }
 
 export function createLinkedinAimfoxConnector(): Connector {

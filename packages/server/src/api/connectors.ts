@@ -42,6 +42,7 @@ import {
   createEnrichmentGenerator,
   resolveOpenRouterEnrichmentConfig,
 } from "../connectors/enrichment-providers";
+import { normalizeLinkedinEnrichmentScopeConfig } from "../connectors/enrichment/scope";
 import { buildCredentialHint } from "../connectors/fireflies";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { ensureValidToken, listFolderContents, listMyDriveFolders, listSharedDrives } from "../connectors/google-drive";
@@ -288,6 +289,25 @@ class WhatsAppGroupScopeValidationError extends Error {
 function withoutWhatsAppGroupSelection(scopeConfig: Record<string, unknown>): Record<string, unknown> {
   const { groupJids: _groupJids, groupIndexing: _groupIndexing, ...scope } = scopeConfig;
   return scope;
+}
+
+function normalizeConnectorScopeConfig(
+  connectorType: ConnectorType,
+  scopeConfig: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!scopeConfig) return undefined;
+  if (connectorType === "linkedin_aimfox") return normalizeLinkedinEnrichmentScopeConfig(scopeConfig);
+  return scopeConfig;
+}
+
+function scopeValidationError(c: Context, err: unknown) {
+  if (err instanceof z.ZodError) {
+    return c.json(
+      { error: { code: "VALIDATION_ERROR", message: err.issues[0]?.message ?? "Invalid scope config" } },
+      400,
+    );
+  }
+  throw err;
 }
 
 const VALID_AUTH_TYPES = ["oauth", "api_key", "service_account", "system"] as const;
@@ -855,9 +875,15 @@ export function connectorRoutes(
         ? buildCredentialHint(validationCredentials.api_key)
         : null;
 
+    let normalizedParsedScope: Record<string, unknown> | undefined;
+    try {
+      normalizedParsedScope = normalizeConnectorScopeConfig(connectorType, parsed.data.scopeConfig);
+    } catch (err) {
+      return scopeValidationError(c, err);
+    }
     const scopeConfig =
       parsed.data.scopeConfig !== undefined
-        ? JSON.stringify(parsed.data.scopeConfig)
+        ? JSON.stringify(normalizedParsedScope)
         : (existingConnector?.scope_config ?? undefined);
 
     if (existingConnector) {
@@ -974,6 +1000,13 @@ export function connectorRoutes(
       }
     }
 
+    let normalizedParsedScope: Record<string, unknown> | undefined;
+    try {
+      normalizedParsedScope = normalizeConnectorScopeConfig(connectorType, parsed.data.scopeConfig);
+    } catch (err) {
+      return scopeValidationError(c, err);
+    }
+
     // Validate credentials by testing the API connection.
     // For OAuth, also refresh the token so we store a valid access_token.
     let credentials = { type: parsed.data.authType, ...parsed.data.credentials } as ConnectorCredentials;
@@ -984,7 +1017,7 @@ export function connectorRoutes(
         if (refreshed) credentials = refreshed;
       }
       if (connectorType === "linkedin_aimfox") {
-        discoveredScopeConfig = await discoverLinkedinAimfoxScopeConfig(credentials, parsed.data.scopeConfig);
+        discoveredScopeConfig = await discoverLinkedinAimfoxScopeConfig(credentials, normalizedParsedScope);
       } else {
         await connectorMeta.validateCredentials(credentials);
       }
@@ -1031,11 +1064,12 @@ export function connectorRoutes(
         );
       }
     }
+    const submittedScopeConfig = normalizedParsedScope;
     const scopeConfig =
       discoveredScopeConfig ??
-      (connectorType === "whatsapp" && parsed.data.scopeConfig
-        ? withoutWhatsAppGroupSelection(parsed.data.scopeConfig)
-        : parsed.data.scopeConfig);
+      (connectorType === "whatsapp" && submittedScopeConfig
+        ? withoutWhatsAppGroupSelection(submittedScopeConfig)
+        : submittedScopeConfig);
 
     const config = await connectorRepo.createConfig({
       connectorType,
@@ -2503,10 +2537,11 @@ export function connectorRoutes(
           config.connector_type === "whatsapp"
             ? await applyWhatsAppGroupScope({
                 db: trx,
-                scopeConfig: parsed.data.scopeConfig,
+                scopeConfig:
+                  normalizeConnectorScopeConfig(config.connector_type as ConnectorType, parsed.data.scopeConfig) ?? {},
                 newlyEnabled: newlyEnabledWhatsAppGroups,
               })
-            : parsed.data.scopeConfig;
+            : (normalizeConnectorScopeConfig(config.connector_type as ConnectorType, parsed.data.scopeConfig) ?? {});
         const existingScope =
           config.scope_config && typeof config.scope_config === "string"
             ? (JSON.parse(config.scope_config) as Record<string, unknown>)
@@ -2533,6 +2568,7 @@ export function connectorRoutes(
       if (err instanceof WhatsAppGroupScopeValidationError) {
         return c.json({ error: { code: "VALIDATION_ERROR", message: err.message } }, 400);
       }
+      if (err instanceof z.ZodError) return scopeValidationError(c, err);
       throw err;
     }
 

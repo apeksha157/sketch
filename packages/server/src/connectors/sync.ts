@@ -40,6 +40,7 @@ import {
   createEnrichmentGenerator,
   resolveOpenRouterEnrichmentConfig,
 } from "./enrichment-providers";
+import { normalizeLinkedinEnrichmentScopeConfig } from "./enrichment/scope";
 import { createGeminiGenerator } from "./gemini-generate";
 import { type ContainerMapping, classificationToContainerTarget } from "./hierarchy-mapping";
 import { applyMicrosoftOAuthConfig, resolveMicrosoftOAuthConfig } from "./microsoft-graph";
@@ -285,11 +286,11 @@ export async function runConnectorSync(
                 storedScopeConfig.backfillGraphOpenFactsMax ?? appConfig?.WHATSAPP_BACKFILL_GRAPH_OPEN_FACTS_MAX,
             }
           : config.connector_type === "linkedin_aimfox"
-            ? {
+            ? normalizeLinkedinEnrichmentScopeConfig({
                 ...storedScopeConfig,
                 contactPointDefaultRegion:
                   storedScopeConfig.contactPointDefaultRegion ?? appConfig?.CONTACT_POINT_DEFAULT_REGION,
-              }
+              })
             : storedScopeConfig;
   const owner = await userRepo.findById(config.created_by);
   const ownerEmail = owner?.email ?? null;
