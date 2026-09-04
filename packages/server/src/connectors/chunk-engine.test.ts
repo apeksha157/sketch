@@ -600,6 +600,172 @@ describe("chunk engine adapter contract", () => {
     expect(secondCursor?.last_message_id).toBe(700);
   });
 
+  it("force-closes an orphaned row_id open slice before planning", async () => {
+    const sliceRepo = createConversationSlicesRepository(db);
+    const rowMessages = [100, 149, 201].map((id, index) => ({
+      ...(makeMessages(3)[index] as ChunkEngineMessage),
+      id,
+      providerMessageId: `row-${id}`,
+    }));
+    await sliceRepo.insertIfAbsent({
+      id: "orphaned-open",
+      conversationId: 1,
+      firstMessageId: 100,
+      lastMessageId: 149,
+      startedAt: rowMessages[0]?.effectiveAt ?? "",
+      endedAt: rowMessages[1]?.effectiveAt ?? "",
+      messageCount: 2,
+      denoisedMessageIds: [100, 149],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      providerThreadId: "stream-a",
+      status: "open",
+    });
+    await sliceRepo.insertIfAbsent({
+      id: "later-closed",
+      conversationId: 1,
+      firstMessageId: 150,
+      lastMessageId: 200,
+      startedAt: rowMessages[1]?.effectiveAt ?? "",
+      endedAt: rowMessages[1]?.effectiveAt ?? "",
+      messageCount: 51,
+      denoisedMessageIds: [150, 200],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      providerThreadId: "stream-a",
+      status: "closed",
+    });
+    await db
+      .insertInto("conversation_slice_stream_cursors")
+      .values({
+        conversation_id: 1,
+        stream_key: "stream-a",
+        last_message_id: 200,
+        updated_at: "2026-07-07T09:00:00.000Z",
+      })
+      .execute();
+    const adapter = fakeAdapter(rowMessages, {
+      providerThreadId: "stream-a",
+      streamKey: "stream-a",
+      order: "row_id",
+      cursor: createStreamChunkCursorStore(1, "stream-a"),
+      flushReason: (kind) => (kind === "idle" ? "gap" : "llm_boundary"),
+      loadOpenAndPending: async (_db, open, cursor) => ({
+        openRaw: open ? rowMessages.filter((message) => message.id <= 149) : [],
+        pendingRaw: rowMessages.filter((message) => message.id > (cursor.lastMessageId ?? 0)),
+        pageFull: false,
+      }),
+      nextPendingMessage: async (_db, cursor) =>
+        rowMessages.find((message) => message.id > (cursor.lastMessageId ?? 0)),
+    });
+
+    const result = await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      { adapter, mode: "live", maxWindows: 1 },
+    );
+    const repaired = await sliceRepo.getById("orphaned-open");
+    const currentOpen = await sliceRepo.getOpenSlice(1, "stream-a");
+
+    expect(result.windowsProcessed).toBe(1);
+    expect(repaired).toMatchObject({ status: "closed", flush_reason: "gap", last_message_id: 149 });
+    expect(currentOpen).toMatchObject({ first_message_id: 201, last_message_id: 201 });
+  });
+
+  it("keeps a WhatsApp live open slice beside a higher-id closed backfill slice", async () => {
+    const groupJid = "backfill-coexistence@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    const messages = createConversationRepository(db);
+    const liveStart = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "live-start",
+      senderName: "Asha",
+      text: "live start",
+      receivedAt: "2026-07-07T09:00:00.000Z",
+    });
+    const liveEnd = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "live-end",
+      senderName: "Asha",
+      text: "live end",
+      receivedAt: "2026-07-07T09:01:00.000Z",
+    });
+    const historyStart = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "history-start",
+      senderName: "Asha",
+      text: "history start",
+      providerTimestamp: "2026-07-06T09:00:00.000Z",
+      receivedAt: "2026-07-07T09:02:00.000Z",
+      source: "history",
+    });
+    const historyEnd = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "history-end",
+      senderName: "Asha",
+      text: "history end",
+      providerTimestamp: "2026-07-06T09:01:00.000Z",
+      receivedAt: "2026-07-07T09:03:00.000Z",
+      source: "history",
+    });
+    const liveNext = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "live-next",
+      senderName: "Asha",
+      text: "live next",
+      receivedAt: "2026-07-07T09:04:00.000Z",
+    });
+    const sliceRepo = createConversationSlicesRepository(db);
+    await sliceRepo.insertIfAbsent({
+      id: "whatsapp-live-open",
+      conversationId: conversation.id,
+      firstMessageId: liveStart.row.id,
+      lastMessageId: liveEnd.row.id,
+      startedAt: liveStart.row.effectiveAt,
+      endedAt: liveEnd.row.effectiveAt,
+      messageCount: 2,
+      denoisedMessageIds: [liveStart.row.id, liveEnd.row.id],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      status: "open",
+    });
+    await sliceRepo.insertIfAbsent({
+      id: "whatsapp-backfill-closed",
+      conversationId: conversation.id,
+      firstMessageId: historyStart.row.id,
+      lastMessageId: historyEnd.row.id,
+      startedAt: historyStart.row.effectiveAt,
+      endedAt: historyEnd.row.effectiveAt,
+      messageCount: 2,
+      denoisedMessageIds: [historyStart.row.id, historyEnd.row.id],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      status: "closed",
+    });
+    await sliceRepo.advanceCursor({
+      conversationId: conversation.id,
+      lastEffectiveAt: liveEnd.row.effectiveAt,
+      lastMessageId: liveEnd.row.id,
+    });
+    const deps = { db, logger: createTestLogger(), generate: async () => "unreachable" };
+    const adapter = createWhatsAppChunkStreamAdapter(deps, { conversationId: conversation.id, groupJid, knobs });
+    adapter.boundaries = "single-segment";
+    adapter.rosterSnapshot = async () => "[]";
+
+    const result = await runChunkingPass(deps, { adapter, mode: "live", maxWindows: 1 });
+    const liveOpen = await sliceRepo.getById("whatsapp-live-open");
+
+    expect(result.windowsProcessed).toBe(1);
+    expect(liveOpen).toMatchObject({ status: "open", last_message_id: liveNext.row.id });
+  });
+
   it("renews Slack stream cursor claims only for the active token", async () => {
     const store = createStreamChunkCursorStore(1, "channel");
     const claimed = await store.claim(db, {

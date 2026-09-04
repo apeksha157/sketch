@@ -540,6 +540,50 @@ function isAtOrBefore(
         (message.effectiveAt === bound.effectiveAt && message.id <= bound.id)))
   );
 }
+
+async function repairOrphanedOpenSlice(
+  db: Kysely<DB>,
+  adapter: ChunkStreamAdapter,
+  open: ConversationSliceRow | undefined,
+  cursor: ChunkCursorState,
+): Promise<ConversationSliceRow | undefined> {
+  if (adapter.order !== "row_id" || !open) return open;
+  return db.transaction().execute(async (trx) => {
+    const currentCursor = await adapter.cursor.get(trx);
+    if (
+      !currentCursor ||
+      currentCursor.claimToken !== cursor.claimToken ||
+      !adapter.cursor.matches(currentCursor, cursor)
+    ) {
+      throw new ClaimLostError();
+    }
+    const sliceRepo = createConversationSlicesRepository(trx);
+    const currentOpen = await sliceRepo.getOpenSlice(adapter.conversationId, adapter.providerThreadId);
+    if (currentOpen?.id !== open.id) throw new ClaimLostError();
+    const laterClosed = await trx
+      .selectFrom("conversation_slices")
+      .select("id")
+      .where("conversation_id", "=", adapter.conversationId)
+      .where((eb) =>
+        eb.or([
+          eb("provider_thread_id", "=", adapter.providerThreadId),
+          eb.and([
+            eb("provider_thread_id", "is", null),
+            eb(eb.cast(eb.val(adapter.providerThreadId), "text"), "is", null),
+          ]),
+        ]),
+      )
+      .where("status", "=", "closed")
+      .where("first_message_id", ">", open.first_message_id)
+      .limit(1)
+      .executeTakeFirst();
+    if (!laterClosed) return currentOpen;
+    const closed = await sliceRepo.closeOpenSlice(open.id, adapter.flushReason("idle"));
+    if (!closed) throw new ClaimLostError();
+    await adapter.onSliceClosed?.(trx, closed);
+    return undefined;
+  });
+}
 async function loadWindow(
   db: Kysely<DB>,
   adapter: ChunkStreamAdapter,
@@ -547,10 +591,11 @@ async function loadWindow(
 ): Promise<BoundaryWindow> {
   const cursor = await adapter.cursor.get(db);
   if (!cursor) throw new Error("Chunking cursor was not claimed");
-  const open = await createConversationSlicesRepository(db).getOpenSlice(
+  let open = await createConversationSlicesRepository(db).getOpenSlice(
     adapter.conversationId,
     adapter.providerThreadId,
   );
+  open = await repairOrphanedOpenSlice(db, adapter, open, cursor);
   const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages, pendingUntil);
   const rawById = new Map([...loaded.openRaw, ...loaded.pendingRaw].map((message) => [message.id, message]));
   const allRaw = sortMessages([...rawById.values()], adapter);
