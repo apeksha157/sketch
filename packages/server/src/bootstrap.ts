@@ -28,6 +28,8 @@ import {
   createEnrichmentEmbeddingProvider,
   resolveOpenRouterEnrichmentConfig,
 } from "./connectors/enrichment-providers";
+import { SalesqlClient } from "./connectors/enrichment/salesql-client";
+import { parseLinkedinEnrichmentScope } from "./connectors/enrichment/scope";
 import { migrateManagedConnectorCredentialsToCanvas } from "./connectors/managed-credential-migration";
 import { createOpenRouterGenerator } from "./connectors/openrouter-generate";
 import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
@@ -48,6 +50,7 @@ import { createAgentRunsRepo } from "./db/repositories/agent-runs";
 import { createAutomationRunsRepository } from "./db/repositories/automation-runs";
 import { createAutomationStepContentRepository } from "./db/repositories/automation-step-content";
 import { createChannelRepository } from "./db/repositories/channels";
+import { createConnectorRepository } from "./db/repositories/connectors";
 import { createConversationRepository } from "./db/repositories/conversations";
 import { createGraphPassRunRepository } from "./db/repositories/graph-pass-runs";
 import { createInboxMessagesRepository } from "./db/repositories/inbox-messages";
@@ -67,6 +70,7 @@ import { createWhatsAppInboundEventsRepository } from "./db/repositories/whatsap
 import { createWhatsAppProviderEventRepository } from "./db/repositories/whatsapp-provider-events";
 import { createWhatsAppTemplateMappingRepository } from "./db/repositories/whatsapp-template-mappings";
 import type { DB } from "./db/schema";
+import { createEnrichmentSweepService } from "./entities/enrichment-sweep";
 import { configureMaterializeDefaults } from "./entities/materialize";
 import { startNormalizationBackfill } from "./entities/normalization-backfill";
 import { isPersonalOrSharedDomain } from "./entities/personal-domains";
@@ -1012,6 +1016,27 @@ export async function createServer(config: Config, options?: CreateServerOptions
           intervalMs: config.WEEKLY_MINT_INTERVAL_MS,
         })
       : null;
+  const enrichmentConnectorRepo = createConnectorRepository(db, config.ENCRYPTION_KEY);
+  const readLinkedinEnrichmentScope = async () => {
+    const configs = await enrichmentConnectorRepo.findConfigsByType("linkedin_aimfox");
+    for (const connectorConfig of configs) {
+      const scope = parseLinkedinEnrichmentScope(JSON.parse(connectorConfig.scope_config) as Record<string, unknown>);
+      if (scope.enabled) return scope;
+    }
+    return null;
+  };
+  /**
+   * The consent gate (`scope_config.enrichment.enabled`) is read per run, not
+   * at startup, so an admin can enable enrichment without a restart.
+   */
+  const enrichmentSweep = config.SALESQL_API_KEY
+    ? createEnrichmentSweepService({
+        db,
+        provider: new SalesqlClient(config.SALESQL_API_KEY),
+        logger: logger.child({ component: "salesql-enrichment" }),
+        readScope: readLinkedinEnrichmentScope,
+      })
+    : null;
   const consolidatedLoopSettings =
     config.CONSOLIDATED_LOOP_MODE === "shadow" ? (weeklyMintSettings ?? (await settingsRepo.get())) : null;
   const consolidatedLoopOpenRouter =
@@ -1331,6 +1356,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     whatsapp,
     whatsappRuntime,
     weeklyMint,
+    enrichmentSweep,
     /**
      * `forceSweep` bypasses the 5-minute interval so a group enabled seconds
      * after the socket connected does not wait for the next scheduled sweep to

@@ -160,11 +160,6 @@ export const configSchema = z.object({
     z.string().trim().length(2).toUpperCase().optional(),
   ),
   SALESQL_API_KEY: z.preprocess((value) => (value === "" ? undefined : value), z.string().optional()),
-  SALESQL_ENRICH_ENABLED: z
-    .enum(["true", "false", "1", "0"])
-    .default("false")
-    .transform((value) => value === "true" || value === "1"),
-  SALESQL_ENRICH_MAX_PER_SYNC: z.coerce.number().int().min(0).default(25),
 
   // Slack mode
   SLACK_MODE: z.enum(["socket", "http"]).default("socket"),

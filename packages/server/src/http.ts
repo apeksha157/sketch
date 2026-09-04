@@ -21,6 +21,7 @@ import { type MagicLinkSender, authRoutes } from "./api/auth";
 import { channelRoutes } from "./api/channels";
 import { connectorRoutes } from "./api/connectors";
 import { devEnrichmentRoutes } from "./api/dev-enrichment";
+import { enrichmentRoutes } from "./api/enrichment";
 import { entityRoutes } from "./api/entities";
 import { graphPassRoutes } from "./api/graph-passes";
 import { graphVerdictRoutes } from "./api/graph-verdicts";
@@ -41,6 +42,7 @@ import { skillsRoutes } from "./api/skills";
 import { verifyJwt } from "./auth/jwt";
 import type { GeminiGenerator } from "./connectors/gemini-generate";
 import type { WeeklyMintService } from "./connectors/weekly-mint";
+import type { EnrichmentSweepService } from "./entities/enrichment-sweep";
 import { entityReviewRoutes } from "./entities/review";
 
 import { oauthRoutes, resolveOrigin } from "./api/oauth";
@@ -169,6 +171,7 @@ interface AppDeps {
   taskMintingGenerator?: GeminiGenerator;
   /** Bootstrap's weekly mint service, so the manual "Run now" route shares its in-flight latch. */
   weeklyMint?: WeeklyMintService | null;
+  enrichmentSweep?: EnrichmentSweepService | null;
 }
 
 /**
@@ -506,6 +509,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
   }
   app.route("/api/graph-passes", graphPassRoutes(db, logger));
   app.route("/api/graph-verdicts", graphVerdictRoutes(db, logger));
+  app.route("/api/enrichment", enrichmentRoutes({ service: deps?.enrichmentSweep ?? null }, logger));
   app.route(
     "/api/project-minting",
     projectMintingRoutes(db, logger, {

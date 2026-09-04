@@ -138,6 +138,29 @@ export interface ConnectorConfigsTable {
   updated_at: Generated<string>;
 }
 
+export interface PersonEnrichmentAttemptsTable {
+  provider: string;
+  linkedin_url: string;
+  entity_id: string;
+  status: string;
+  attempts: Generated<number>;
+  last_attempt_at: string | null;
+  next_eligible_at: string | null;
+  provider_version: string;
+  emails_found: Generated<number>;
+  phones_found: Generated<number>;
+  outcome: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+export interface EnrichmentDailyUsageTable {
+  provider: string;
+  day: string;
+  calls: Generated<number>;
+  updated_at: Generated<string>;
+}
+
 export interface IndexedFilesTable {
   id: string;
   connector_config_id: string;
@@ -2102,6 +2125,8 @@ export interface DB {
   slack_user_sync_state: SlackUserSyncStateTable;
   slack_sync_runs: SlackSyncRunsTable;
   connector_configs: ConnectorConfigsTable;
+  person_enrichment_attempts: PersonEnrichmentAttemptsTable;
+  enrichment_daily_usage: EnrichmentDailyUsageTable;
   indexed_files: IndexedFilesTable;
   email_message_envelopes: EmailMessageEnvelopesTable;
   email_suppressed_messages: EmailSuppressedMessagesTable;

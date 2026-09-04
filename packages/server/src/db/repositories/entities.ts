@@ -226,6 +226,11 @@ export interface UpsertContactPointData {
   makePrimary?: boolean;
 }
 
+export interface WorksAtCompanyRow {
+  companyId: string;
+  hasCorporateDomain: boolean;
+}
+
 export type EntityMentionConfidence = "EXTRACTED" | "INFERRED" | "AMBIGUOUS";
 export type EntityMentionRelation = "mentioned" | "attended" | "authored" | "assigned" | "organized" | "corresponded";
 
@@ -1078,6 +1083,49 @@ export function createEntityRepository(db: Kysely<DB>) {
         .orderBy("created_at", "asc")
         .orderBy("id", "asc")
         .execute();
+    },
+
+    /**
+     * Batched so callers ranking many candidates (the person materializer)
+     * issue one query per chunk, not one per person.
+     */
+    async listWorksAtCompaniesByPerson(personEntityIds: string[]): Promise<Map<string, WorksAtCompanyRow[]>> {
+      const out = new Map<string, WorksAtCompanyRow[]>();
+      for (let i = 0; i < personEntityIds.length; i += 500) {
+        const ids = personEntityIds.slice(i, i + 500);
+        if (ids.length === 0) continue;
+        const rows = await db
+          .selectFrom("entity_relationships")
+          .innerJoin("entities as company", "company.id", "entity_relationships.target_entity_id")
+          .leftJoin("entity_domains", (join) =>
+            join.onRef("entity_domains.entity_id", "=", "company.id").on("entity_domains.kind", "=", "corporate"),
+          )
+          .select([
+            "entity_relationships.source_entity_id as person_id",
+            "company.id as company_id",
+            (eb) => eb.fn.count("entity_domains.id").as("domain_count"),
+          ])
+          .where("entity_relationships.relationship_type", "=", "works_at")
+          .where("entity_relationships.source_entity_id", "in", ids)
+          .where("entity_relationships.valid_to", "is", null)
+          .where("company.source_type", "=", "company")
+          .where(whereLiveEntity("company"))
+          .groupBy(["entity_relationships.source_entity_id", "company.id"])
+          .orderBy("company.id", "asc")
+          .execute();
+        for (const row of rows) {
+          const bucket = out.get(row.person_id) ?? [];
+          bucket.push({ companyId: row.company_id, hasCorporateDomain: Number(row.domain_count) > 0 });
+          out.set(row.person_id, bucket);
+        }
+      }
+      return out;
+    },
+
+    async listWorksAtCompanies(personEntityId: string): Promise<WorksAtCompanyRow[]> {
+      const entityId = await resolveLiveEntityId(db, personEntityId);
+      const byPerson = await this.listWorksAtCompaniesByPerson([entityId]);
+      return byPerson.get(entityId) ?? [];
     },
 
     async getEntityByContactPoint(kind: EntityContactPointKind, rawValue: string) {

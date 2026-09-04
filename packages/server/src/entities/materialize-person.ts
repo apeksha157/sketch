@@ -121,27 +121,6 @@ async function buildPersonRankerContext(
   };
 }
 
-async function loadWorksAtCompanies(
-  deps: MaterializeDeps,
-  personEntityIds: string[],
-): Promise<Map<string, Set<string>>> {
-  if (personEntityIds.length === 0) return new Map();
-  const rows = await deps.db
-    .selectFrom("entity_relationships")
-    .select(["source_entity_id", "target_entity_id"])
-    .where("relationship_type", "=", "works_at")
-    .where("source_entity_id", "in", personEntityIds)
-    .where("valid_to", "is", null)
-    .execute();
-  const out = new Map<string, Set<string>>();
-  for (const row of rows) {
-    const bucket = out.get(row.source_entity_id);
-    if (bucket) bucket.add(row.target_entity_id);
-    else out.set(row.source_entity_id, new Set([row.target_entity_id]));
-  }
-  return out;
-}
-
 export async function materializePersonFact(
   deps: MaterializeDeps,
   fact: IndexedFileFactRow,
@@ -183,9 +162,11 @@ export async function materializePersonFact(
     if (fact.fact_type === "llm_extracted") {
       const candidates = deps.lookup.listByType("person");
       const context = await buildPersonRankerContext(deps, fact.indexed_file_id);
-      const worksAtByPerson = await loadWorksAtCompanies(
-        deps,
+      const worksAtRows = await deps.entityRepo.listWorksAtCompaniesByPerson(
         candidates.map((candidate) => candidate.id),
+      );
+      const worksAtByPerson = new Map(
+        [...worksAtRows].map(([personId, rows]) => [personId, new Set(rows.map((row) => row.companyId))] as const),
       );
       const decision = rankPersonLlmMention(
         { name: fact.subject_name, aliases: variations, entityType: "person" },
