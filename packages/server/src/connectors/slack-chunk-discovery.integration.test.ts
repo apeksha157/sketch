@@ -17,10 +17,10 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>): void {
       await db.destroy();
     });
 
-    async function conversation(providerId: string): Promise<number> {
+    async function conversation(providerId: string, platform: "slack" | "whatsapp" = "slack"): Promise<number> {
       const row = await createConversationRepository(db).getOrCreate({
-        platform: "slack",
-        kind: "channel",
+        platform,
+        kind: platform === "slack" ? "channel" : "group",
         providerConversationId: providerId,
       });
       return row.id;
@@ -76,19 +76,23 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>): void {
       const secondId = await message(secondConversation, "second-1");
       const laterFirstId = await message(firstConversation, "first-2");
 
-      const firstRun = await discoverSlackChunkStreams({
-        db,
-        now: new Date("2026-09-05T01:00:00.000Z"),
-        pageRows: 1,
-        maxPages: 1,
-      });
+      await expect(
+        discoverSlackChunkStreams({
+          db,
+          now: new Date("2026-09-05T01:00:00.000Z"),
+          pageRows: 1,
+          maxPages: 10,
+          afterPagePersisted: (page) => {
+            if (page === 1) throw new Error("simulated discovery crash");
+          },
+        }),
+      ).rejects.toThrow("simulated discovery crash");
       const firstRouters = await db
         .selectFrom("conversation_slice_stream_cursors")
         .select(["conversation_id", "last_message_id"])
         .where("stream_key", "=", "::router")
         .orderBy("conversation_id")
         .execute();
-      expect(firstRun.pages).toBe(1);
       expect(firstRouters).toEqual([
         { conversation_id: firstConversation, last_message_id: firstId },
         { conversation_id: secondConversation, last_message_id: secondId },
@@ -130,6 +134,39 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>): void {
         .execute();
       expect(lateRouter.last_message_id).toBe(lateId);
       expect(channelRows).toHaveLength(1);
+    });
+
+    it("continues across sparse Slack rows in multiple shared id windows", async () => {
+      const whatsappId = await conversation("sparse@g.us", "whatsapp");
+      const slackIds = [
+        await conversation("C-sparse-one"),
+        await conversation("C-sparse-two"),
+        await conversation("C-sparse-three"),
+      ];
+      await message(slackIds[0], "slack-1");
+      await message(whatsappId, "wa-1");
+      await message(whatsappId, "wa-2");
+      await message(slackIds[1], "slack-2");
+      await message(whatsappId, "wa-3");
+      await message(whatsappId, "wa-4");
+      await message(slackIds[2], "slack-3");
+
+      const result = await discoverSlackChunkStreams({
+        db,
+        now: new Date("2026-09-05T01:00:00.000Z"),
+        pageRows: 2,
+        maxPages: 10,
+      });
+      const streams = await db
+        .selectFrom("conversation_slice_stream_cursors")
+        .select(["conversation_id", "stream_key"])
+        .where("conversation_id", "in", slackIds)
+        .where("stream_key", "=", "channel")
+        .orderBy("conversation_id")
+        .execute();
+
+      expect(result.pages).toBeGreaterThan(1);
+      expect(streams.map((row) => row.conversation_id)).toEqual([...slackIds].sort((a, b) => a - b));
     });
   });
 }

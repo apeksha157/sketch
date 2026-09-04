@@ -89,9 +89,28 @@ describe("Slack chunk engine runner", () => {
     });
     expect(skipped.tickSkipped).toBe(true);
     expect(skippedGenerate).not.toHaveBeenCalled();
+    expect(
+      (
+        await db
+          .selectFrom("conversation_slice_stream_cursors")
+          .select("pending_since")
+          .where("conversation_id", "=", skippedId)
+          .where("stream_key", "=", "channel")
+          .executeTakeFirstOrThrow()
+      ).pending_since,
+    ).not.toBeNull();
 
     const burstId = await seedStream({ providerId: "C-burst", messages: 2, lastAttemptAt: recent });
-    const burstGenerate = vi.fn(validBoundary);
+    const burstGenerate = vi.fn(async () => {
+      const cursor = await db
+        .selectFrom("conversation_slice_stream_cursors")
+        .select("llm_last_attempt_at")
+        .where("conversation_id", "=", burstId)
+        .where("stream_key", "=", "channel")
+        .executeTakeFirstOrThrow();
+      expect(cursor.llm_last_attempt_at).toBe(now.toISOString());
+      return validBoundary();
+    });
     const burst = await runSlackChunkStream({
       db,
       logger: createTestLogger(),
@@ -133,6 +152,32 @@ describe("Slack chunk engine runner", () => {
     expect(disabled.skippedReason).toBe("no_generator");
     expect(disabledCursor.llm_last_attempt_at).toBeNull();
     expect(disabledCursor.pending_since).not.toBeNull();
+
+    const claimedId = await seedStream({ providerId: "C-claimed", messages: 2 });
+    await db
+      .updateTable("conversation_slice_stream_cursors")
+      .set({ claim_token: "other-run", claimed_at: now.toISOString() })
+      .where("conversation_id", "=", claimedId)
+      .where("stream_key", "=", "channel")
+      .execute();
+    const unavailable = await runSlackChunkStream({
+      db,
+      logger: createTestLogger(),
+      now,
+      conversationId: claimedId,
+      streamKey: "channel",
+      knobs: channelKnobs,
+      generate: validBoundary,
+    });
+    const claimedCursor = await db
+      .selectFrom("conversation_slice_stream_cursors")
+      .select(["pending_since", "llm_last_attempt_at"])
+      .where("conversation_id", "=", claimedId)
+      .where("stream_key", "=", "channel")
+      .executeTakeFirstOrThrow();
+    expect(unavailable.skippedReason).toBe("claim_unavailable");
+    expect(claimedCursor.llm_last_attempt_at).toBeNull();
+    expect(claimedCursor.pending_since).not.toBeNull();
   });
 
   it("clears only a drained pass and keeps pending work on failure or budget exhaustion", async () => {
@@ -215,5 +260,82 @@ describe("Slack chunk engine runner", () => {
       .where("stream_key", "=", "channel")
       .executeTakeFirstOrThrow();
     expect(cursor.pending_since).toBe(resetAt);
+  });
+
+  it("preserves pending_since on a full page, claim loss, and overlap guard", async () => {
+    const fullPageId = await seedStream({ providerId: "C-full-page", messages: 53 });
+    const fullPage = await runSlackChunkStream({
+      db,
+      logger: createTestLogger(),
+      now,
+      conversationId: fullPageId,
+      streamKey: "channel",
+      knobs: channelKnobs,
+      generate: validBoundary,
+    });
+    expect(fullPage.pendingRemaining).toBe(true);
+
+    const claimLossId = await seedStream({ providerId: "C-claim-loss", messages: 2 });
+    const claimLoss = await runSlackChunkStream({
+      db,
+      logger: createTestLogger(),
+      now,
+      conversationId: claimLossId,
+      streamKey: "channel",
+      knobs: channelKnobs,
+      generate: async () => {
+        await db
+          .updateTable("conversation_slice_stream_cursors")
+          .set({ claim_token: "replacement" })
+          .where("conversation_id", "=", claimLossId)
+          .where("stream_key", "=", "channel")
+          .execute();
+        return validBoundary();
+      },
+    });
+    expect(claimLoss.skippedReason).toBe("claim_lost");
+
+    const overlapId = await seedStream({ providerId: "C-overlap", messages: 2 });
+    const overlapMessages = await db
+      .selectFrom("conversation_messages")
+      .select("id")
+      .where("conversation_id", "=", overlapId)
+      .orderBy("id")
+      .execute();
+    await db
+      .insertInto("conversation_slices")
+      .values({
+        id: "overlapping-closed-slice",
+        conversation_id: overlapId,
+        first_message_id: overlapMessages[0]?.id as number,
+        last_message_id: overlapMessages[0]?.id as number,
+        started_at: now.toISOString(),
+        ended_at: now.toISOString(),
+        message_count: 1,
+        denoised_message_ids: JSON.stringify([overlapMessages[0]?.id]),
+        flush_reason: "gap",
+        roster_snapshot: "[]",
+        salience_verdict: "kept",
+        status: "closed",
+      })
+      .execute();
+    const overlap = await runSlackChunkStream({
+      db,
+      logger: createTestLogger(),
+      now,
+      conversationId: overlapId,
+      streamKey: "channel",
+      knobs: channelKnobs,
+      generate: validBoundary,
+    });
+    expect(overlap.skippedReason).toBe("overlap_guard");
+
+    const retained = await db
+      .selectFrom("conversation_slice_stream_cursors")
+      .select(["conversation_id", "pending_since"])
+      .where("conversation_id", "in", [fullPageId, claimLossId, overlapId])
+      .execute();
+    expect(retained).toHaveLength(3);
+    expect(retained.every((row) => row.pending_since !== null)).toBe(true);
   });
 });

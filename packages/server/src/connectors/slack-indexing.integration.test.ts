@@ -747,14 +747,23 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         providerTimestamp: "2026-07-17T11:00:00.000Z",
         receivedAt: "2026-07-17T11:00:00.000Z",
       });
+      const plainMessage = await conversations.insertMessage({
+        conversationId: conversation.id,
+        providerMessageId: "1900.2",
+        senderJid: "U0TEAM",
+        senderName: "Roopak",
+        text: "Decision: we ship the pricing change on Monday",
+        providerTimestamp: "2026-07-17T11:01:00.000Z",
+        receivedAt: "2026-07-17T11:01:00.000Z",
+      });
       await createConversationSlicesRepository(db).insertIfAbsent({
         conversationId: conversation.id,
         firstMessageId: message.row.id,
-        lastMessageId: message.row.id,
+        lastMessageId: plainMessage.row.id,
         startedAt: "2026-07-17T11:00:00.000Z",
-        endedAt: "2026-07-17T11:00:00.000Z",
-        messageCount: 1,
-        denoisedMessageIds: [message.row.id],
+        endedAt: "2026-07-17T11:01:00.000Z",
+        messageCount: 2,
+        denoisedMessageIds: [message.row.id, plainMessage.row.id],
         flushReason: "gap",
         rosterSnapshot: "[]",
         salienceVerdict: "kept",
@@ -768,6 +777,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(items).toHaveLength(1);
       expect(items[0]?.content).toContain("Channel: #general");
       expect(items[0]?.content).toContain("Roopak: [shared file: pricing-plan.pdf]");
+      expect(items[0]?.content).toContain("Roopak: Decision: we ship the pricing change on Monday");
       expect(items[0]?.content).not.toContain("see attached files.");
       expect(items[0]?.content).not.toContain("Participants:");
       expect(items[0]?.content).not.toContain("(teammate)");

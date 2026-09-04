@@ -1,6 +1,7 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../db/schema";
 import { SLACK_CHANNEL_STREAM_KEY, SLACK_ROUTER_STREAM_KEY } from "./slack-chunker";
+import { IN_CLAUSE_CHUNK_SIZE, chunk } from "./sync-utils";
 
 interface DiscoveryRow {
   conversation_id: number;
@@ -15,6 +16,7 @@ export interface SlackChunkDiscoveryOptions {
   pageRows: number;
   maxPages: number;
   now?: Date;
+  afterPagePersisted?: (page: number) => void | Promise<void>;
 }
 
 export interface SlackChunkDiscoverySummary {
@@ -99,20 +101,21 @@ async function persistPage(db: Kysely<DB>, rows: DiscoveryRow[], now: string): P
           }),
         )
         .execute();
-      await trx
-        .insertInto("conversation_slice_stream_cursors")
-        .values(
-          [...group.streamKeys].map((streamKey) => ({
-            conversation_id: conversationId,
-            stream_key: streamKey,
-            pending_since: now,
-            updated_at: now,
-          })),
-        )
-        .onConflict((oc) =>
-          oc.columns(["conversation_id", "stream_key"]).doUpdateSet({ pending_since: now, updated_at: now }),
-        )
-        .execute();
+      const streamRows = [...group.streamKeys].map((streamKey) => ({
+        conversation_id: conversationId,
+        stream_key: streamKey,
+        pending_since: now,
+        updated_at: now,
+      }));
+      for (const streamRowChunk of chunk(streamRows, IN_CLAUSE_CHUNK_SIZE)) {
+        await trx
+          .insertInto("conversation_slice_stream_cursors")
+          .values(streamRowChunk)
+          .onConflict((oc) =>
+            oc.columns(["conversation_id", "stream_key"]).doUpdateSet({ pending_since: now, updated_at: now }),
+          )
+          .execute();
+      }
     }
   });
 }
@@ -134,10 +137,9 @@ export async function discoverSlackChunkStreams(
     if (rows.length === 0) break;
     await persistPage(options.db, rows, now);
     pages += 1;
+    await options.afterPagePersisted?.(pages);
     streamsMarkedPending += rows.length;
     for (const row of rows) conversations.add(Number(row.conversation_id));
-    const rowCount = rows.reduce((sum, row) => sum + Number(row.row_count), 0);
-    if (rowCount <= pageRows) break;
   }
 
   return { pages, streamsMarkedPending, conversationsTouched: conversations.size };

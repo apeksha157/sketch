@@ -1,8 +1,19 @@
 import { type Kysely, sql } from "kysely";
+import { isPg } from "../dialect";
 
 const OPEN_SLICE_INDEX = "conversation_slices_one_open_per_conversation_uidx";
 const OPEN_ENDED_AT_INDEX = "conversation_slices_open_ended_at_idx";
 const PENDING_SINCE_INDEX = "conversation_slice_stream_cursors_pending_since_idx";
+
+async function addTextColumnIfMissing(db: Kysely<unknown>, table: string, column: string): Promise<void> {
+  if (isPg(db)) {
+    await sql.raw(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} TEXT`).execute(db);
+    return;
+  }
+  const columns = await sql.raw<{ name: string }>(`PRAGMA table_info(${table})`).execute(db);
+  if (columns.rows.some((row) => row.name === column)) return;
+  await db.schema.alterTable(table).addColumn(column, "text").execute();
+}
 
 export async function up(db: Kysely<unknown>): Promise<void> {
   await sql.raw(`DROP INDEX IF EXISTS ${OPEN_SLICE_INDEX}`).execute(db);
@@ -20,9 +31,9 @@ export async function up(db: Kysely<unknown>): Promise<void> {
       WHERE status = 'open'
     `)
     .execute(db);
-  await db.schema.alterTable("conversation_slices").addColumn("legacy_unjudged_at", "text").execute();
-  await db.schema.alterTable("conversation_slice_stream_cursors").addColumn("pending_since", "text").execute();
-  await db.schema.alterTable("conversation_slice_stream_cursors").addColumn("llm_last_attempt_at", "text").execute();
+  await addTextColumnIfMissing(db, "conversation_slices", "legacy_unjudged_at");
+  await addTextColumnIfMissing(db, "conversation_slice_stream_cursors", "pending_since");
+  await addTextColumnIfMissing(db, "conversation_slice_stream_cursors", "llm_last_attempt_at");
   await sql
     .raw(`
       CREATE INDEX IF NOT EXISTS ${PENDING_SINCE_INDEX}

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, createTestPgDb } from "../../test-utils";
 import { createMigrator } from "../migrate";
 import type { DB } from "../schema";
+import { up } from "./228-slack-chunk-engine-streams";
 
 const PRE_MIGRATION = "225-indexed-file-raw-contents";
 
@@ -142,3 +143,15 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>): void {
 
 runSuite("228 Slack chunk engine streams migration SQLite", createTestDb);
 runSuite("228 Slack chunk engine streams migration Postgres", createTestPgDb);
+
+describe("228 Slack chunk engine streams migration retry safety", () => {
+  it("runs up twice on SQLite", async () => {
+    const db = await createTestDb();
+    try {
+      await up(db as unknown as Kysely<unknown>);
+      await up(db as unknown as Kysely<unknown>);
+    } finally {
+      await db.destroy();
+    }
+  });
+});

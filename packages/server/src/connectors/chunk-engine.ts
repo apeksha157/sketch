@@ -1079,6 +1079,7 @@ export async function runChunkingPass(
     maxWindows?: number;
     pendingUntil?: ChunkPendingBound;
     historyStartId?: number | null;
+    onPassClaimed?: (claim: { claimToken: string }) => Promise<void>;
     onPassComplete?: (completion: {
       claimToken: string;
       pendingSinceAtClaim: string | null;
@@ -1115,6 +1116,7 @@ export async function runChunkingPass(
   let skippedReason: string | undefined;
   const maxWindows = Math.max(1, params.maxWindows ?? params.adapter.knobs.maxWindowsPerRun);
   try {
+    await params.onPassClaimed?.({ claimToken });
     try {
       while (budgetUsed < maxWindows) {
         const state = await loadWindow(
