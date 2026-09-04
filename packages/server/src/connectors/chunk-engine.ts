@@ -1042,18 +1042,15 @@ export async function evaluateIdleClose(
       const tailIds = parseDenoisedIds(open);
       const tailId = tailIds[tailIds.length - 1];
       if (tailId === undefined) return false;
-      let tail: ChunkEngineMessage | undefined;
+      const tail = await params.adapter.tailMessage(trx, tailId);
+      if (!tail) return false;
       let nextPending: SortableMessage | undefined;
-      if (params.mode === "live") {
-        tail = await params.adapter.tailMessage(trx, tailId);
-      } else {
+      if (params.mode === "backfill") {
         const loaded = await params.adapter.loadOpenAndPending(trx, open, cursor, params.adapter.knobs.windowMessages);
-        tail = loaded.openRaw.find((message) => message.id === tailId);
         nextPending = sortMessages(loaded.pendingRaw, params.adapter).find((message) =>
           params.adapter.cursor.isAfterCursor(message, cursor),
         );
       }
-      if (!tail) return false;
       const idleMs = params.adapter.knobs.idleCloseHours * 60 * 60 * 1000;
       const isIdle =
         params.mode === "live"

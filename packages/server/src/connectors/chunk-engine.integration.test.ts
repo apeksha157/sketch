@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { type Kysely, sql } from "kysely";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createConversationRepository } from "../db/repositories/conversations";
 import type { DB } from "../db/schema";
-import { createTestLogger, getSharedPgDb } from "../test-utils";
+import { createTestLogger, createTestPgDb } from "../test-utils";
 import { runChunkingPass } from "./chunk-engine";
 import { createWhatsAppChunkStreamAdapter } from "./whatsapp-llm-chunker";
 
@@ -27,16 +27,12 @@ const knobs = {
 describe("chunk engine on Postgres", () => {
   let db!: Kysely<DB>;
 
-  beforeAll(async () => {
-    db = await getSharedPgDb();
+  beforeEach(async () => {
+    db = await createTestPgDb();
   }, 30_000);
 
-  beforeEach(async () => {
-    await sql`BEGIN`.execute(db);
-  });
-
   afterEach(async () => {
-    await sql`ROLLBACK`.execute(db);
+    await db.destroy();
   });
 
   it("applies a WhatsApp window when roster alias enrichment fails", async () => {
@@ -47,7 +43,7 @@ describe("chunk engine on Postgres", () => {
       kind: "group",
       providerConversationId: groupJid,
     });
-    await createConversationRepository(db).insertMessage({
+    const message = await createConversationRepository(db).insertMessage({
       conversationId: conversation.id,
       providerMessageId: randomUUID(),
       senderName: "Asha",
@@ -63,7 +59,8 @@ describe("chunk engine on Postgres", () => {
     let rosterDb: Kysely<DB> | undefined;
     adapter.rosterSnapshot = async (snapshotDb) => {
       rosterDb = snapshotDb;
-      throw new Error("alias enrichment failed");
+      await sql`SELECT * FROM table_that_does_not_exist`.execute(snapshotDb).catch(() => undefined);
+      return "[]";
     };
 
     const result = await runChunkingPass(deps, { adapter, mode: "live", maxWindows: 1 });
@@ -72,9 +69,11 @@ describe("chunk engine on Postgres", () => {
       .select(["conversation_id", "status"])
       .where("conversation_id", "=", conversation.id)
       .executeTakeFirstOrThrow();
+    const cursor = await adapter.cursor.get(db);
 
     expect(result).toMatchObject({ windowsProcessed: 1, openSliceId: expect.any(String) });
     expect(rosterDb).toBe(db);
     expect(slice).toEqual({ conversation_id: conversation.id, status: "open" });
+    expect(cursor).toMatchObject({ lastEffectiveAt: now, lastMessageId: message.row.id });
   });
 });
