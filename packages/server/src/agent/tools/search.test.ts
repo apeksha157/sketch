@@ -293,3 +293,70 @@ describe("public search handlers", () => {
     expect(contentResult.content[0]?.text).toBe("File file-alice not found.");
   });
 });
+
+describe("GetFileContent view: full", () => {
+  async function seedRaw(content: string): Promise<void> {
+    await db
+      .insertInto("indexed_file_raw_contents")
+      .values({
+        indexed_file_id: "file-alice",
+        kind: "transcript",
+        content,
+        char_length: content.length,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .execute();
+  }
+
+  it("returns the raw stored version, bypassing the public MCP summary cap", async () => {
+    await seedRaw("## Transcript\n[00:01] Sanaa: A full sentence far longer than the 50-char public cap allows.");
+    const result = await handleGetFileContent({ fileId: "file-alice", view: "full" }, deps());
+    const text = result.content[0]?.text ?? "";
+    expect(text).toContain("Sanaa: A full sentence far longer");
+    expect(text).not.toContain("Content truncated");
+    expect(text).toContain("[Total length:");
+  });
+
+  it("falls back to indexed content with a note when no raw version is stored", async () => {
+    const result = await handleGetFileContent({ fileId: "file-alice", view: "full" }, deps());
+    const text = result.content[0]?.text ?? "";
+    expect(text).toContain("(no separate raw version stored — returning indexed content)");
+    expect(text).toContain("A".repeat(120));
+  });
+
+  it("pages content larger than one page and reports the continuation offset", async () => {
+    const big = `## Transcript\n${"S: word\n".repeat(9000)}`;
+    await seedRaw(big);
+    const page1 = await handleGetFileContent({ fileId: "file-alice", view: "full" }, deps());
+    const text1 = page1.content[0]?.text ?? "";
+    expect(text1).toContain(`[Showing characters 0-50000 of ${big.length}. Pass offset: 50000 for the next page.]`);
+
+    const page2 = await handleGetFileContent({ fileId: "file-alice", view: "full", offset: 50000 }, deps());
+    const text2 = page2.content[0]?.text ?? "";
+    expect(text2).toContain(`[Total length: ${big.length} characters.]`);
+    expect(text2).not.toContain("Pass offset:");
+
+    const past = await handleGetFileContent({ fileId: "file-alice", view: "full", offset: big.length + 5 }, deps());
+    expect(past.content[0]?.text).toContain("(offset is past the end of the content)");
+  });
+
+  it("rejects offset without view: full as a tool error, and enforces RBAC before the raw lookup", async () => {
+    const bad = await handleGetFileContent({ fileId: "file-alice", offset: 10 }, deps());
+    expect(bad.isError).toBe(true);
+
+    await db
+      .insertInto("indexed_file_raw_contents")
+      .values({
+        indexed_file_id: "file-bob",
+        kind: "transcript",
+        content: "bob secret transcript",
+        char_length: 21,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .execute();
+    const denied = await handleGetFileContent({ fileId: "file-bob", view: "full" }, deps());
+    expect(denied.content[0]?.text).toBe("File file-bob not found.");
+  });
+});

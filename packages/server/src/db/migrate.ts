@@ -224,6 +224,7 @@ import * as m221 from "./migrations/221-extraction-stages";
 import * as m222 from "./migrations/222-webhook-verification";
 import * as m223 from "./migrations/223-verdict-lifecycle";
 import * as m224 from "./migrations/224-resolver-runs";
+import * as m225 from "./migrations/225-indexed-file-raw-contents";
 import type { DB } from "./schema";
 
 /**
@@ -457,6 +458,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "222-webhook-verification": m222,
           "223-verdict-lifecycle": m223,
           "224-resolver-runs": m224,
+          "225-indexed-file-raw-contents": m225,
         };
       },
     },

@@ -167,6 +167,15 @@ interface FirefliesTranscript {
   } | null;
   /** Speaker diarization result — populated by the per-transcript detail query. */
   speakers?: FirefliesSpeaker[];
+  /** Sentence-level transcript — populated by the per-transcript detail query. */
+  sentences?: FirefliesSentence[] | null;
+}
+
+/** Fireflies types start_time as a String in their schema; treat every field as unreliable. */
+interface FirefliesSentence {
+  speaker_name: string | null;
+  text: string | null;
+  start_time: string | number | null;
 }
 
 interface FirefliesContact {
@@ -340,6 +349,39 @@ function formatTranscriptContent(transcript: FirefliesTranscript): string {
 }
 
 /**
+ * Format sentence-level transcript as retrieval-only plain text. Returns null
+ * when no sentence carries usable text, so callers never persist a raw row
+ * that would suppress the summary fallback. start_time is a String in the
+ * Fireflies schema — parse defensively and omit the timestamp when unusable.
+ */
+export function formatTranscriptSentences(sentences: FirefliesSentence[] | null | undefined): string | null {
+  if (!sentences || sentences.length === 0) return null;
+  const lines: string[] = [];
+  for (const sentence of sentences) {
+    const text = typeof sentence.text === "string" ? sentence.text.trim() : "";
+    if (!text) continue;
+    const speaker =
+      typeof sentence.speaker_name === "string" && sentence.speaker_name.trim()
+        ? sentence.speaker_name.trim()
+        : "Unknown";
+    const seconds =
+      typeof sentence.start_time === "number"
+        ? sentence.start_time
+        : Number.parseFloat(String(sentence.start_time ?? ""));
+    const stamp = Number.isFinite(seconds) && seconds >= 0 ? `[${formatTimestamp(seconds)}] ` : "";
+    lines.push(`${stamp}${speaker}: ${text}`);
+  }
+  if (lines.length === 0) return null;
+  return `## Transcript\n${lines.join("\n")}`;
+}
+
+function formatTimestamp(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+/**
  * Try to match a speaker name to an email by checking if any name token
  * (length ≥ 3) appears as a substring of the email's local-part. Requires
  * an unambiguous single match — emits null on zero or multiple hits.
@@ -454,12 +496,14 @@ function transcriptToSyncedItem(
   detailMarker: FirefliesDetailMarker,
 ): SyncedItem {
   const content = formatTranscriptContent(transcript);
+  const transcriptText = formatTranscriptSentences(transcript.sentences);
   const date = new Date(transcript.date);
 
   const { attendees, accessValues } = buildPeople(transcript, contacts, contactsByName, ownerEmail, resolveNameToEmail);
 
   return {
     sourceMeta: { detail: { ...detailMarker } },
+    ...(transcriptText !== null ? { rawContent: { kind: "transcript" as const, content: transcriptText } } : {}),
     providerFileId: transcript.id,
     providerUrl: transcript.transcript_url,
     fileName: transcript.title,
@@ -498,7 +542,7 @@ query Transcripts($limit: Int, $skip: Int, $fromDate: DateTime) {
   }
 }`;
 
-/** Fetch a single transcript's summary + speakers by ID. */
+/** Fetch a single transcript's summary + speakers + full transcript by ID. */
 const TRANSCRIPT_DETAIL_QUERY = `
 query Transcript($id: String!) {
   transcript(id: $id) {
@@ -511,6 +555,11 @@ query Transcript($id: String!) {
     speakers {
       id
       name
+    }
+    sentences {
+      speaker_name
+      text
+      start_time
     }
   }
 }`;
@@ -765,13 +814,18 @@ async function* syncTranscripts(
         continue;
       }
 
-      // Fetch summary + speakers separately — neither available in bulk list query
+      // Fetch summary + speakers + sentences separately — none available in bulk list query
       const detailData = await firefliesRequest<{
-        transcript: { summary: FirefliesTranscript["summary"]; speakers: FirefliesSpeaker[] | null } | null;
+        transcript: {
+          summary: FirefliesTranscript["summary"];
+          speakers: FirefliesSpeaker[] | null;
+          sentences: FirefliesSentence[] | null;
+        } | null;
       }>(TRANSCRIPT_DETAIL_QUERY, { id: transcript.id }, apiKey, logger);
 
       transcript.summary = detailData.transcript?.summary ?? null;
       transcript.speakers = detailData.transcript?.speakers ?? [];
+      transcript.sentences = detailData.transcript?.sentences ?? null;
 
       const marker = buildDetailMarker(transcript, state?.marker ?? null, contactsLoaded, now);
       yield transcriptToSyncedItem(transcript, contacts, contactsByName, ownerEmail, resolveNameToEmail, marker);

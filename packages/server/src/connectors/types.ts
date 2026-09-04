@@ -158,6 +158,12 @@ export interface SyncedItem {
   sourcePath: string | null;
   sourceMeta?: Record<string, unknown>;
   /**
+   * Retrieval-only raw payload (e.g. a full meeting transcript). Persisted to
+   * indexed_file_raw_contents, deliberately outside `content` so it never
+   * affects content_hash, chunking, embeddings, or enrichment.
+   */
+  rawContent?: { kind: "transcript"; content: string };
+  /**
    * Optional display grouping key. For CRM this is the parent object provider id
    * that should anchor activity rollups, for example `Deals:123`.
    */

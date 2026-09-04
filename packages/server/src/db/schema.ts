@@ -270,6 +270,15 @@ export interface DocumentChunksTable {
   token_count: number | null;
 }
 
+export interface IndexedFileRawContentsTable {
+  indexed_file_id: string;
+  kind: string;
+  content: string;
+  char_length: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DocumentTimeframesTable {
   id: string;
   indexed_file_id: string;
@@ -2102,6 +2111,7 @@ export interface DB {
   access_scope_members: AccessScopeMembersTable;
   connector_files: ConnectorFilesTable;
   document_chunks: DocumentChunksTable;
+  indexed_file_raw_contents: IndexedFileRawContentsTable;
   document_timeframes: DocumentTimeframesTable;
   chunk_embeddings: ChunkEmbeddingsTable;
   file_embeddings: FileEmbeddingsTable;
