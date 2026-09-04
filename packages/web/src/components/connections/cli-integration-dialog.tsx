@@ -252,30 +252,27 @@ function ConnectionSharingContent({ connection, onOpenChange, isAdmin, onChanged
   return (
     <Dialog open onOpenChange={(next) => !saving && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 shadow-none sm:max-w-[28rem] [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:right-4 [&>[data-slot=dialog-close]]:grid [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:place-items-center [&>[data-slot=dialog-close]]:rounded-md [&>[data-slot=dialog-close]]:hover:bg-muted [&>[data-slot=dialog-close]]:focus:ring-foreground/50"
+        className="flex max-h-[calc(100dvh-2rem)] flex-col gap-0 overflow-hidden p-0 bg-background shadow-none sm:max-w-[30rem] [&>[data-slot=dialog-close]]:top-4 [&>[data-slot=dialog-close]]:right-4 [&>[data-slot=dialog-close]]:grid [&>[data-slot=dialog-close]]:size-8 [&>[data-slot=dialog-close]]:place-items-center [&>[data-slot=dialog-close]]:rounded-md [&>[data-slot=dialog-close]]:hover:bg-muted [&>[data-slot=dialog-close]]:focus:ring-foreground/50"
         showCloseButton={!saving}
       >
-        <DialogHeader className="px-4 pt-5 pb-5 text-left sm:px-6 sm:pt-6">
-          <DialogTitle>Share integration</DialogTitle>
-          <DialogDescription>
-            {!canManage
-              ? "Only the owner can manage this account’s access."
-              : justConnected
-                ? `${app.name} is connected. Choose who can run actions with this account.`
-                : "Choose who can run actions with this account."}
-          </DialogDescription>
+        <DialogHeader className="px-4 pt-5 pb-4 text-left sm:px-6 sm:pt-6">
+          <DialogTitle className="pr-8 text-xl leading-7">Share {app.name}</DialogTitle>
         </DialogHeader>
         <div className="min-h-0 space-y-4 overflow-y-auto px-4 pb-5 sm:px-6 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          <div className="flex min-w-0 items-center gap-3 pb-1">
+          <div className="flex min-w-0 items-center gap-3">
             <app.icon className="size-9 shrink-0" />
             <div className="min-w-0">
-              <p className="text-sm font-medium">{app.name}</p>
               <p className="break-all text-sm text-muted-foreground">
                 {connection.appId === "github" ? "@" : ""}
                 {savedConnection.accountLogin}
               </p>
             </div>
           </div>
+          <DialogDescription className="leading-5">
+            {!canManage
+              ? "Only the owner can manage this account’s access."
+              : "Sharing lets others run actions in Sketch using this account."}
+          </DialogDescription>
           {canManage && (
             <>
               <IntegrationSharingFields

@@ -43,6 +43,16 @@ function Setup({
   return <CliIntegrationDialog appId={appId} open={open} onOpenChange={setOpen} isAdmin onSuccess={onSuccess} />;
 }
 
+async function chooseAccess(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole("combobox", { name: "Who has access" }));
+  await user.click(await screen.findByRole("option", { name: (label) => label.startsWith(name) }));
+}
+
+async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("textbox", { name: "Add members" }));
+  await user.click(await screen.findByRole("button", { name: `Add ${name}` }));
+}
+
 describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
   const appName = appId === "github" ? "GitHub" : "Linear";
   const label = appId === "github" ? "Personal access token" : "Personal API key";
@@ -61,8 +71,8 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     renderWithProviders(<Setup appId={appId} onSuccess={onSuccess} />);
     await user.type(screen.getByLabelText(label), "test-credential");
     await user.click(screen.getByRole("button", { name: `Connect ${appName}` }));
-    expect(await screen.findByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Private" })).toBeChecked();
+    expect(await screen.findByRole("dialog", { name: /^Share / })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Private");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     expect(screen.queryByDisplayValue("test-credential")).not.toBeInTheDocument();
     expect(bodies).toEqual([{ token: "test-credential", targets: [] }]);
@@ -85,7 +95,7 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     await user.click(screen.getByRole("button", { name: `Connect ${appName}` }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Credential is invalid");
     expect(onSuccess).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog", { name: "Share integration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /^Share / })).not.toBeInTheDocument();
   });
 
   it("saves only selected members and retries a failed share without reconnecting or replaying success", async () => {
@@ -107,19 +117,20 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     renderWithProviders(<Setup appId={appId} onSuccess={onSuccess} />);
     await user.type(screen.getByLabelText(label), "test-credential");
     await user.click(screen.getByRole("button", { name: `Connect ${appName}` }));
-    await user.click(await screen.findByRole("radio", { name: "Selected members" }));
+    await chooseAccess(user, "Selected members");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
-    expect(await screen.findByRole("checkbox", { name: "Selected Member" })).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "Owner" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "External" })).not.toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: "Search members" }), "selected@example.test");
-    expect(screen.queryByRole("checkbox", { name: "Other Member" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("checkbox", { name: "Selected Member" }));
+    await user.click(screen.getByRole("textbox", { name: "Add members" }));
+    expect(await screen.findByRole("button", { name: "Add Selected Member" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Owner" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add External" })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "Add members" }), "selected@example.test");
+    expect(screen.queryByRole("button", { name: "Add Other Member" })).not.toBeInTheDocument();
+    await addMember(user, "Selected Member");
     await user.click(screen.getByRole("button", { name: "Save access" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Try saving again");
-    expect(screen.getByRole("checkbox", { name: "Selected Member" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Remove Selected Member" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(shares).toEqual([
@@ -160,7 +171,7 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
         <CliConnectionSharingDialog connection={connection(appId, shares)} open onOpenChange={close} isAdmin />,
       );
       expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-      await user.click(screen.getByRole("radio", { name: label }));
+      await chooseAccess(user, label);
       await user.click(screen.getByRole("button", { name: "Save access" }));
       await waitFor(() => expect(bodies).toEqual([{ targets: expected }]));
       await waitFor(() => expect(close).toHaveBeenCalledWith(false));
@@ -173,12 +184,12 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     renderWithProviders(
       <CliConnectionSharingDialog connection={connection(appId)} open onOpenChange={vi.fn()} isAdmin />,
     );
-    await user.click(screen.getByRole("radio", { name: "Selected members" }));
+    await chooseAccess(user, "Selected members");
     expect(await screen.findByRole("alert")).toHaveTextContent("Members could not be loaded");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     server.use(http.get("/api/users", () => HttpResponse.json({ users: members })));
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    await user.click(await screen.findByRole("checkbox", { name: "Selected Member" }));
+    await addMember(user, "Selected Member");
     expect(screen.getByRole("button", { name: "Save access" })).toBeEnabled();
   });
 
@@ -202,11 +213,11 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
         isAdmin
       />,
     );
-    expect(screen.getByRole("radio", { name: "Entire organization" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Entire organization");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
     expect(bodies).toEqual([]);
-    await user.click(screen.getByRole("radio", { name: "Private" }));
-    await user.click(screen.getByRole("radio", { name: "Entire organization" }));
+    await chooseAccess(user, "Private");
+    await chooseAccess(user, "Entire organization");
     await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() => expect(bodies).toEqual([{ targets: [{ type: "org", id: "default" }] }]));
   });
@@ -217,9 +228,10 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
     renderWithProviders(
       <CliConnectionSharingDialog connection={connection(appId)} open onOpenChange={vi.fn()} isAdmin={false} />,
     );
-    expect(screen.getByRole("radio", { name: "Entire organization" })).toBeDisabled();
-    await user.click(screen.getByRole("radio", { name: "Selected members" }));
-    await user.click(await screen.findByRole("checkbox", { name: "Selected Member" }));
+    await user.click(screen.getByRole("combobox", { name: "Who has access" }));
+    expect(screen.getByRole("option", { name: /^Entire organization/ })).toHaveAttribute("aria-disabled", "true");
+    await user.click(screen.getByRole("option", { name: /^Selected members/ }));
+    await addMember(user, "Selected Member");
     expect(screen.getByRole("button", { name: "Save access" })).toBeEnabled();
   });
 
@@ -232,8 +244,34 @@ describe.each(["github", "linear"] as const)("%s sharing", (appId) => {
         isAdmin
       />,
     );
-    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save access" })).not.toBeInTheDocument();
     expect(screen.queryByText("Connection settings")).not.toBeInTheDocument();
+  });
+
+  it("shows member controls only for selected members and retains unsaved selections across modes", async () => {
+    const user = userEvent.setup();
+    server.use(http.get("/api/users", () => HttpResponse.json({ users: members })));
+    renderWithProviders(
+      <CliConnectionSharingDialog connection={connection(appId)} open onOpenChange={vi.fn()} isAdmin />,
+    );
+    expect(screen.getByText("Sharing lets others run actions in Sketch using this account.")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Add members" })).not.toBeInTheDocument();
+
+    await chooseAccess(user, "Selected members");
+    await addMember(user, "Selected Member");
+    expect(screen.getByRole("button", { name: "Remove Selected Member" })).toBeInTheDocument();
+
+    for (const mode of ["Private", "Entire organization"]) {
+      await chooseAccess(user, mode);
+      expect(screen.queryByRole("textbox", { name: "Add members" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remove Selected Member" })).not.toBeInTheDocument();
+    }
+
+    await chooseAccess(user, "Selected members");
+    expect(await screen.findByRole("button", { name: "Remove Selected Member" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove Selected Member" }));
+    expect(screen.queryByRole("button", { name: "Remove Selected Member" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
   });
 });

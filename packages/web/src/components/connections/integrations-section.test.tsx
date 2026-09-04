@@ -28,6 +28,16 @@ function renderSection(connections: IntegrationConnection[], onDisconnect = vi.f
   );
 }
 
+async function chooseAccess(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole("combobox", { name: "Who has access" }));
+  await user.click(await screen.findByRole("option", { name: (label) => label.startsWith(name) }));
+}
+
+async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("textbox", { name: "Add members" }));
+  await user.click(await screen.findByRole("button", { name: `Add ${name}` }));
+}
+
 describe("IntegrationsSection", () => {
   it("renders Canvas access metadata and gates destructive controls", () => {
     renderSection([
@@ -223,11 +233,11 @@ describe("IntegrationsSection", () => {
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
 
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByRole("radiogroup", { name: "Who can use this account?" })).toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: "Selected members" }));
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toBeInTheDocument();
+    await chooseAccess(user, "Selected members");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
 
-    await user.click(await screen.findByRole("checkbox", { name: "Alex" }));
+    await addMember(user, "Alex");
     await user.click(screen.getByRole("button", { name: "Save access" }));
 
     await waitFor(() => {
@@ -267,7 +277,7 @@ describe("IntegrationsSection", () => {
         },
       ]);
       await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
-      await user.click(screen.getByRole("radio", { name: label }));
+      await chooseAccess(user, label);
       await user.click(screen.getByRole("button", { name: "Save access" }));
       await waitFor(() => expect(requestBody).toEqual({ accessLevel, expectedRevision: 4, memberUserIds: [] }));
     },
@@ -299,13 +309,13 @@ describe("IntegrationsSection", () => {
       },
     ]);
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
-    await user.click(screen.getByRole("radio", { name: "Selected members" }));
+    await chooseAccess(user, "Selected members");
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-    await user.click(await screen.findByRole("checkbox", { name: "Alex" }));
+    await addMember(user, "Alex");
     expect(screen.getByText("alex@example.test")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save access" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Account sharing changed");
-    expect(screen.getByRole("checkbox", { name: "Alex" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
@@ -334,13 +344,14 @@ describe("IntegrationsSection", () => {
       },
     ]);
     await user.click(screen.getByRole("button", { name: "Open settings for GitHub" }));
-    expect(screen.getByRole("radio", { name: "Selected members" })).toBeChecked();
-    expect(await screen.findByRole("checkbox", { name: "Alex" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Selected members");
+    expect(await screen.findByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-    await user.type(screen.getByRole("textbox", { name: "Search members" }), "alex@example");
-    expect(screen.queryByRole("checkbox", { name: "Blair" })).not.toBeInTheDocument();
-    await user.clear(screen.getByRole("textbox", { name: "Search members" }));
-    await user.type(screen.getByRole("textbox", { name: "Search members" }), "no-match");
+    await user.type(screen.getByRole("textbox", { name: "Add members" }), "blair@example");
+    expect(screen.getByRole("button", { name: "Add Blair" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Alex" })).toBeInTheDocument();
+    await user.clear(screen.getByRole("textbox", { name: "Add members" }));
+    await user.type(screen.getByRole("textbox", { name: "Add members" }), "no-match");
     expect(screen.getByText("No members match your search.")).toBeInTheDocument();
     expect(screen.getByText("1 member selected")).toBeInTheDocument();
   });

@@ -57,6 +57,16 @@ function setupCommonHandlers(connections: unknown[] = []) {
   );
 }
 
+async function chooseAccess(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(await screen.findByRole("combobox", { name: "Who has access" }));
+  await user.click(await screen.findByRole("option", { name: (label) => label.startsWith(name) }));
+}
+
+async function addMember(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("textbox", { name: "Add members" }));
+  await user.click(await screen.findByRole("button", { name: `Add ${name}` }));
+}
+
 describe("ConnectionsPage direct connect", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -193,15 +203,15 @@ describe("ConnectionsPage direct connect", () => {
 
     await user.click(await screen.findByRole("button", { name: "Open settings for GitHub" }));
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-    expect(await screen.findByRole("checkbox", { name: "Existing recipient" })).toBeChecked();
+    expect(await screen.findByRole("button", { name: "Remove Existing recipient" })).toBeInTheDocument();
     await user.click(screen.getByText("Connection settings"));
     await user.type(screen.getByLabelText("Replacement GitHub token"), "ghp_updated");
     await user.click(screen.getByRole("button", { name: "Replace token" }));
     await waitFor(() => expect(credentialBodies).toEqual([{ token: "ghp_updated" }]));
 
-    await user.click(screen.getByRole("checkbox", { name: "Recipient" }));
+    await addMember(user, "Recipient");
     expect(screen.getByRole("button", { name: "Save access" })).toBeEnabled();
-    await user.click(screen.getByRole("radio", { name: "Entire organization" }));
+    await chooseAccess(user, "Entire organization");
     await user.click(screen.getByRole("button", { name: "Save access" }));
     await waitFor(() =>
       expect(shareBodies).toEqual([
@@ -210,7 +220,7 @@ describe("ConnectionsPage direct connect", () => {
         },
       ]),
     );
-    expect(screen.queryByRole("dialog", { name: "Share integration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /^Share / })).not.toBeInTheDocument();
   });
 
   it("does not start a new intent for an already connected app", async () => {
@@ -331,8 +341,8 @@ describe("ConnectionsPage direct connect", () => {
     renderWithProviders(<ConnectionsPage />);
 
     expect(await screen.findByText("Gmail is connected")).toBeInTheDocument();
-    expect(await screen.findByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Private" })).toBeChecked();
+    expect(await screen.findByRole("dialog", { name: /^Share / })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Private");
     expect(screen.queryByText("Add Gmail to the org brain?")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByText("Add Gmail to the org brain?")).toBeInTheDocument();
@@ -487,8 +497,8 @@ describe("ConnectionsPage direct connect", () => {
 
     expect(await screen.findByText("@octocat")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("ghp_test_token")).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Private" })).toBeChecked();
+    expect(screen.getByRole("dialog", { name: /^Share / })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Who has access" })).toHaveTextContent("Private");
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(connectBodies).toEqual([{ token: "ghp_test_token", targets: [] }]);
   });
@@ -556,10 +566,10 @@ describe("ConnectionsPage direct connect", () => {
     renderWithProviders(<ConnectionsPage />);
 
     await user.click(await screen.findByRole("button", { name: "Open settings for Linear" }));
-    expect(await screen.findByRole("dialog", { name: "Share integration" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: /^Share / })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save access" })).toBeDisabled();
-    await user.click(screen.getByRole("radio", { name: "Selected members" }));
-    await user.click(await screen.findByRole("checkbox", { name: "Recipient" }));
+    await chooseAccess(user, "Selected members");
+    await addMember(user, "Recipient");
 
     await user.click(screen.getByRole("button", { name: "Save access" }));
 
@@ -570,7 +580,7 @@ describe("ConnectionsPage direct connect", () => {
         },
       ]),
     );
-    expect(screen.queryByRole("dialog", { name: "Share integration" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /^Share / })).not.toBeInTheDocument();
   });
 
   it("shows callback errors without starting a new intent", async () => {
