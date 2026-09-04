@@ -393,7 +393,10 @@ export type KindRule = { sources?: string[]; fileTypes?: string[] };
  * coarse (only "document" | "structured") and source-only mapping silently
  * sweeps in tasks under `kind: "doc"` — so we discriminate on file_type too.
  */
-export const KIND_TO_RULES: Record<string, KindRule[]> = {
+export const SEARCH_KINDS = ["meeting", "doc", "task", "message", "email"] as const;
+export type SearchKind = (typeof SEARCH_KINDS)[number];
+
+export const KIND_TO_RULES: Record<SearchKind, KindRule[]> = {
   meeting: [{ sources: ["fireflies", "otter"] }, { sources: ["teams"], fileTypes: ["meeting_transcript"] }],
   doc: [
     { sources: ["google_drive"], fileTypes: ["document", "presentation"] },
@@ -406,7 +409,23 @@ export const KIND_TO_RULES: Record<string, KindRule[]> = {
     { sources: ["linear"], fileTypes: ["issue"] },
   ],
   message: [{ sources: ["conversation", "whatsapp", "slack"] }],
+  email: [{ sources: ["outlook", "gmail"], fileTypes: ["email_message"] }],
 };
+
+/**
+ * Sources reachable through a kind's rules. A rule with no `sources` matches
+ * every source, so it contributes the full searchable set.
+ */
+export function sourcesForKind(kind: SearchKind): string[] {
+  const rules = KIND_TO_RULES[kind] ?? [];
+  if (rules.some((r) => !r.sources?.length)) return [...SEARCHABLE_SOURCES];
+  return [...new Set(rules.flatMap((r) => r.sources ?? []))];
+}
+
+/** Kinds whose rules can reach the given source. Used to build actionable kind×source errors. */
+export function kindsForSource(source: string): SearchKind[] {
+  return SEARCH_KINDS.filter((kind) => sourcesForKind(kind).includes(source));
+}
 
 /** Compile kind rules to a raw SQL fragment for the FTS / hybrid pipelines. */
 function kindFilterSql(rules: KindRule[]) {

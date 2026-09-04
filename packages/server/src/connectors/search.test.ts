@@ -16,9 +16,11 @@ import {
   filterAccessibleFileIds,
   getFileContent,
   hybridSearch,
+  kindsForSource,
   listIndexedSourcesForPrompt,
   search,
   searchFiles,
+  sourcesForKind,
 } from "./search";
 import { CONNECTOR_TYPES } from "./types";
 
@@ -283,6 +285,18 @@ describe("searchFiles — FTS5 column weights", () => {
 describe("KIND_TO_RULES", () => {
   it("maps message kind to local conversation, WhatsApp, and Slack slice sources", () => {
     expect(KIND_TO_RULES.message).toEqual([{ sources: ["conversation", "whatsapp", "slack"] }]);
+  });
+
+  it("maps email kind to Outlook and Gmail email messages, disjoint from message", () => {
+    expect(KIND_TO_RULES.email).toEqual([{ sources: ["outlook", "gmail"], fileTypes: ["email_message"] }]);
+    expect(sourcesForKind("message")).not.toContain("outlook");
+    expect(sourcesForKind("email")).toEqual(["outlook", "gmail"]);
+  });
+
+  it("resolves which kinds reach a source", () => {
+    expect(kindsForSource("outlook")).toEqual(["email"]);
+    expect(kindsForSource("whatsapp")).toEqual(["message"]);
+    expect(kindsForSource("outlook_calendar")).toEqual([]);
   });
 
   it("keeps searchable sources in sync with connector types and kind rules", () => {
