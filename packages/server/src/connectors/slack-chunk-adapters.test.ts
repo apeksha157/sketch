@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Config } from "../config";
+import { configSchema } from "../config";
 import { createConversationRepository } from "../db/repositories/conversations";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
@@ -216,6 +216,46 @@ describe("Slack chunk adapters", () => {
     };
     expect(isIndexableSlackChunkMessage(message)).toBe(true);
     expect(renderSlackChunkMessageText(message.text, attachments)).toBe("[shared file: roadmap.pdf]");
+    expect(renderSlackChunkMessageText(message.text, JSON.stringify([{ mimeType: "application/pdf" }]))).toBe(
+      "[shared file]",
+    );
+  });
+
+  it("renders attachment placeholders in channel boundary prompts", async () => {
+    const repo = createConversationRepository(db);
+    await repo.insertMessage({
+      conversationId,
+      providerMessageId: "channel-file",
+      senderJid: "U-file",
+      senderName: "File sender",
+      text: "see attached files.",
+      attachments: [
+        { originalName: "roadmap.pdf", mimeType: "application/pdf", localPath: "/tmp/roadmap.pdf", sizeBytes: 1 },
+      ],
+      providerTimestamp: "2026-09-01T09:00:00.000Z",
+      receivedAt: "2026-09-01T09:00:00.000Z",
+    });
+    await repo.insertMessage({
+      conversationId,
+      providerMessageId: "channel-text",
+      senderJid: "U-text",
+      senderName: "Text sender",
+      text: "Please review the file",
+      providerTimestamp: "2026-09-01T09:01:00.000Z",
+      receivedAt: "2026-09-01T09:01:00.000Z",
+    });
+    const generate = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ segments: [{ start: 1, end: 2, threads: ["roadmap"] }] }));
+    const channel = createSlackChannelChunkAdapter({ conversationId, knobs: baseKnobs });
+
+    await runChunkingPass(
+      { db, logger: createTestLogger(), generate },
+      { adapter: channel, mode: "live", maxWindows: 1 },
+    );
+
+    expect(generate.mock.calls[0]?.[0]).toContain("[shared file: roadmap.pdf]");
+    expect(generate.mock.calls[0]?.[0]).not.toContain("see attached files.");
   });
 
   it("keeps channel and thread slices open in the same conversation", async () => {
@@ -245,7 +285,7 @@ describe("Slack chunk adapters", () => {
   });
 
   it("resolves channel and thread knobs from environment config", () => {
-    const config = {
+    const config = configSchema.parse({
       SLACK_CHUNK_WINDOW_MESSAGES: 250,
       SLACK_CHUNK_WINDOW_TOKENS: 7500,
       SLACK_CHUNK_MIN_MESSAGES: 10,
@@ -262,7 +302,7 @@ describe("Slack chunk adapters", () => {
       SLACK_CHUNK_TOPIC_REGISTRY_CAP: 30,
       SLACK_CHUNK_CHANNEL_WORKER_POOL: 4,
       SLACK_CHUNK_MAX_WINDOWS_PER_RUN: 8,
-    } as Config;
+    });
     const resolved = resolveSlackChunkEngineKnobs(config);
     expect(resolved.channel.minMessages).toBe(10);
     expect(resolved.thread.minMessages).toBe(1);

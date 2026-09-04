@@ -677,7 +677,15 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         providerMessageId: "1900.1",
         senderJid: "U0TEAM",
         senderName: "Roopak",
-        text: "Decision: we ship the pricing change on Monday",
+        text: "see attached files.",
+        attachments: [
+          {
+            originalName: "pricing-plan.pdf",
+            mimeType: "application/pdf",
+            localPath: "/tmp/pricing-plan.pdf",
+            sizeBytes: 1,
+          },
+        ],
         providerTimestamp: "2026-07-17T11:00:00.000Z",
         receivedAt: "2026-07-17T11:00:00.000Z",
       });
@@ -701,7 +709,8 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
 
       expect(items).toHaveLength(1);
       expect(items[0]?.content).toContain("Channel: #general");
-      expect(items[0]?.content).toContain("Roopak: Decision: we ship the pricing change on Monday");
+      expect(items[0]?.content).toContain("Roopak: [shared file: pricing-plan.pdf]");
+      expect(items[0]?.content).not.toContain("see attached files.");
       expect(items[0]?.content).not.toContain("Participants:");
       expect(items[0]?.content).not.toContain("(teammate)");
     });

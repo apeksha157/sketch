@@ -12,6 +12,7 @@ import {
 } from "../slack/identity-resolution";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
 import type { GeminiGenerator } from "./gemini-generate";
+import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
 import { SLACK_CONVERSATION_SLICE_FILE_TYPE, type SyncedItem } from "./types";
 import { type WhatsAppSalienceVerdict, parseWhatsAppSalienceResponse } from "./whatsapp-emission";
 
@@ -170,7 +171,7 @@ async function renderSlackSlice(
   const membership = requireMembership(context.slice);
   const rows = await db
     .selectFrom("conversation_messages")
-    .select(["id", "sender_name", "sender_jid", "text", "provider_timestamp", "received_at"])
+    .select(["id", "sender_name", "sender_jid", "text", "attachments", "provider_timestamp", "received_at"])
     .where("conversation_id", "=", context.conversationId)
     .where("id", "in", membership)
     .orderBy("id", "asc")
@@ -209,7 +210,8 @@ async function renderSlackSlice(
   const transcriptLines = rows.map((row) => {
     const senderName = displayNames.get(row.sender_jid) ?? row.sender_name;
     const timestamp = row.provider_timestamp ?? row.received_at;
-    return `[${timestamp}] ${senderName}: ${resolveMentionTokens(row.text, displayNames)}`;
+    const text = renderSlackChunkMessageText(row.text, row.attachments);
+    return `[${timestamp}] ${senderName}: ${resolveMentionTokens(text, displayNames)}`;
   });
   const transcript = [...(rootLine ? [rootLine, ""] : []), ...transcriptLines].join("\n");
 

@@ -62,8 +62,9 @@ interface SlackThreadAdapterParams extends SlackAdapterParams {
 /** Normalizes attachment placeholders for boundary prompts and slice transcripts. */
 export function renderSlackChunkMessageText(text: string, attachments: string | null): string {
   if (text.trim().toLowerCase() !== SLACK_ATTACHMENT_PLACEHOLDER) return text;
-  const name = parseSlackChunkAttachments(attachments).firstName;
-  return name ? `[shared file: ${name}]` : text;
+  const parsed = parseSlackChunkAttachments(attachments);
+  if (!parsed.hasAttachments) return text;
+  return parsed.firstName ? `[shared file: ${parsed.firstName}]` : "[shared file]";
 }
 
 function toMessage(row: SlackMessageRow): SlackEngineMessage {
@@ -78,6 +79,22 @@ function toMessage(row: SlackMessageRow): SlackEngineMessage {
     effectiveAt: row.effective_at ?? row.provider_timestamp ?? row.received_at,
     receivedAt: row.received_at,
   };
+}
+
+function isSlackEngineMessage(message: ChunkEngineMessage): message is SlackEngineMessage {
+  return (
+    "senderName" in message &&
+    typeof message.senderName === "string" &&
+    "addressedToSketch" in message &&
+    typeof message.addressedToSketch === "boolean"
+  );
+}
+
+function requireSlackEngineMessage(message: ChunkEngineMessage): SlackEngineMessage {
+  if (!isSlackEngineMessage(message)) {
+    throw new Error("Slack chunk adapter received an invalid message");
+  }
+  return message;
 }
 
 function streamQuery(db: Kysely<DB>, conversationId: number, providerThreadId: string | null) {
@@ -145,8 +162,8 @@ function createAdapter(params: SlackAdapterParams, providerThreadId: string | nu
     nextPendingMessage: async (db, cursor, options) =>
       (await loadPending(db, params.conversationId, providerThreadId, cursor, 1, options))[0],
     tailMessage,
-    isIndexable: (message) => isIndexableSlackChunkMessage(message as SlackEngineMessage),
-    senderLabel: (message) => (message as SlackEngineMessage).senderName,
+    isIndexable: (message) => isIndexableSlackChunkMessage(requireSlackEngineMessage(message)),
+    senderLabel: (message) => requireSlackEngineMessage(message).senderName,
     order: "row_id",
     boundaries: providerThreadId === null ? "llm" : "single-segment",
     promptHeader:

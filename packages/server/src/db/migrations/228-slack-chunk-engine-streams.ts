@@ -8,14 +8,14 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await sql.raw(`DROP INDEX IF EXISTS ${OPEN_SLICE_INDEX}`).execute(db);
   await sql
     .raw(`
-      CREATE UNIQUE INDEX ${OPEN_SLICE_INDEX}
+      CREATE UNIQUE INDEX IF NOT EXISTS ${OPEN_SLICE_INDEX}
       ON conversation_slices(conversation_id, (COALESCE(provider_thread_id, '')))
       WHERE status = 'open'
     `)
     .execute(db);
   await sql
     .raw(`
-      CREATE INDEX ${OPEN_ENDED_AT_INDEX}
+      CREATE INDEX IF NOT EXISTS ${OPEN_ENDED_AT_INDEX}
       ON conversation_slices(ended_at, conversation_id)
       WHERE status = 'open'
     `)
@@ -25,7 +25,7 @@ export async function up(db: Kysely<unknown>): Promise<void> {
   await db.schema.alterTable("conversation_slice_stream_cursors").addColumn("llm_last_attempt_at", "text").execute();
   await sql
     .raw(`
-      CREATE INDEX ${PENDING_SINCE_INDEX}
+      CREATE INDEX IF NOT EXISTS ${PENDING_SINCE_INDEX}
       ON conversation_slice_stream_cursors(pending_since)
       WHERE pending_since IS NOT NULL
     `)
