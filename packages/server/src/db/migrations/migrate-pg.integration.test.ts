@@ -251,7 +251,7 @@ describe("runMigrations on Postgres — full sequence", () => {
     expect(names[215]).toBe("220-retire-pats");
     expect(names[216]).toBe("221-extraction-stages");
     expect(names[217]).toBe("222-webhook-verification");
-    expect(names[218]).toBe("223-linkedin-company-review-continuations");
+    expect(names[221]).toBe("226-linkedin-company-review-continuations");
   });
   it("keeps the automation-sharing migration ledger in order", async () => {
     await runMigrations(db, { quiet: true });

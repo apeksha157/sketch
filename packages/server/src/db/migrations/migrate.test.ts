@@ -422,7 +422,7 @@ describe("runMigrations — full sequence", () => {
     expect(names[215]).toBe("220-retire-pats");
     expect(names[216]).toBe("221-extraction-stages");
     expect(names[217]).toBe("222-webhook-verification");
-    expect(names[218]).toBe("223-linkedin-company-review-continuations");
+    expect(names[221]).toBe("226-linkedin-company-review-continuations");
   });
 
   it("adds portable session fencing columns with safe legacy defaults", async () => {
