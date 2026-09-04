@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { ConversationSliceRow } from "../db/repositories/conversation-slices";
 import { createConversationRepository } from "../db/repositories/conversations";
 import { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
@@ -424,6 +425,76 @@ describe("chunk engine adapter contract", () => {
     await runChunkingPass(deps, { adapter, mode: "live", maxWindows: 1 });
 
     expect(pendingRowsRead).toEqual([knobs.windowMessages + 50]);
+  });
+
+  it("scopes the row_id overlap guard to its stream with a null-safe predicate", async () => {
+    const messages = makeMessages(3).map((message) => ({ ...message, id: message.id + 99 }));
+    const slices = createConversationSlicesRepository(db);
+    await slices.insertIfAbsent({
+      id: "other-stream",
+      conversationId: 1,
+      firstMessageId: 101,
+      lastMessageId: 103,
+      startedAt: messages[1]?.effectiveAt ?? "",
+      endedAt: messages[2]?.effectiveAt ?? "",
+      messageCount: 2,
+      denoisedMessageIds: [101, 103],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      providerThreadId: "stream-b",
+      status: "closed",
+    });
+    const providerThreadPredicateCounts: number[] = [];
+    const observedDb = db.withPlugin({
+      transformQuery(args) {
+        const serialized = JSON.stringify(args.node);
+        if (serialized.includes("conversation_slices")) {
+          providerThreadPredicateCounts.push(serialized.match(/provider_thread_id/gu)?.length ?? 0);
+        }
+        return args.node;
+      },
+      async transformResult(args) {
+        return args.result;
+      },
+    });
+    const otherStreamResult = await runChunkingPass(
+      { db: observedDb, logger: createTestLogger(), generate: async () => "unreachable" },
+      {
+        adapter: fakeAdapter(messages, { conversationId: 1, providerThreadId: "stream-a", order: "row_id" }),
+        mode: "live",
+        maxWindows: 1,
+      },
+    );
+
+    await db.deleteFrom("conversation_slices").where("provider_thread_id", "=", "stream-a").execute();
+    await slices.insertIfAbsent({
+      id: "same-stream",
+      conversationId: 1,
+      firstMessageId: 100,
+      lastMessageId: 103,
+      startedAt: messages[0]?.effectiveAt ?? "",
+      endedAt: messages[2]?.effectiveAt ?? "",
+      messageCount: 3,
+      denoisedMessageIds: [100, 101, 103],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      providerThreadId: "stream-a",
+      status: "closed",
+    });
+    const sameStreamResult = await runChunkingPass(
+      { db: observedDb, logger: createTestLogger(), generate: async () => "unreachable" },
+      {
+        adapter: fakeAdapter(messages, { conversationId: 1, providerThreadId: "stream-a", order: "row_id" }),
+        mode: "live",
+        maxWindows: 1,
+      },
+    );
+
+    expect(otherStreamResult.windowsProcessed).toBe(1);
+    expect(sameStreamResult.skippedReason).toBe("overlap_guard");
+    expect(Math.max(...providerThreadPredicateCounts)).toBeGreaterThanOrEqual(2);
   });
 
   it("renews Slack stream cursor claims only for the active token", async () => {

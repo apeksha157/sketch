@@ -667,15 +667,23 @@ async function ensureNoOverlap(
     .selectAll()
     .where("conversation_id", "=", adapter.conversationId)
     .where((eb) =>
-      adapter.providerThreadId === null
-        ? eb("provider_thread_id", "is", null)
-        : eb("provider_thread_id", "=", adapter.providerThreadId),
+      eb.or([
+        eb("provider_thread_id", "=", adapter.providerThreadId),
+        eb.and([
+          eb("provider_thread_id", "is", null),
+          eb(eb.cast(eb.val(adapter.providerThreadId), "text"), "is", null),
+        ]),
+      ]),
     )
     .where((eb) =>
-      eb.or([
-        eb.and([eb("first_message_id", "<=", maxMessageId), eb("last_message_id", ">=", minMessageId)]),
-        eb.and([eb("started_at", "<=", maxEndedAt), eb("ended_at", ">=", minStartedAt)]),
-      ]),
+      adapter.order === "row_id"
+        ? eb.and([eb("first_message_id", "<=", maxMessageId), eb("last_message_id", ">=", minMessageId)])
+        : eb.and([
+            eb("first_message_id", "<=", maxMessageId),
+            eb("last_message_id", ">=", minMessageId),
+            eb("started_at", "<=", maxEndedAt),
+            eb("ended_at", ">=", minStartedAt),
+          ]),
     )
     .execute();
   for (const candidate of planned) {
