@@ -22,6 +22,7 @@ const knobs = {
   burstThresholdMessages: null,
   topicRegistryCap: 30,
   groupWorkerPool: 4,
+  maxWindowsPerRun: 4,
 };
 
 describe("WhatsApp LLM boundary engine", () => {

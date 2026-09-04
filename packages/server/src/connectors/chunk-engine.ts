@@ -59,7 +59,7 @@ export interface ChunkEngineKnobs {
   burstThresholdMessages: number | null;
   topicRegistryCap: number;
   groupWorkerPool: number;
-  maxWindowsPerRun?: number;
+  maxWindowsPerRun: number;
 }
 
 export interface ChunkPendingBound {
@@ -548,6 +548,24 @@ async function repairOrphanedOpenSlice(
   cursor: ChunkCursorState,
 ): Promise<ConversationSliceRow | undefined> {
   if (adapter.order !== "row_id" || !open) return open;
+  const laterClosed = await db
+    .selectFrom("conversation_slices")
+    .select("id")
+    .where("conversation_id", "=", adapter.conversationId)
+    .where((eb) =>
+      eb.or([
+        eb("provider_thread_id", "=", adapter.providerThreadId),
+        eb.and([
+          eb("provider_thread_id", "is", null),
+          eb(eb.cast(eb.val(adapter.providerThreadId), "text"), "is", null),
+        ]),
+      ]),
+    )
+    .where("status", "=", "closed")
+    .where("first_message_id", ">", open.first_message_id)
+    .limit(1)
+    .executeTakeFirst();
+  if (!laterClosed) return open;
   return db.transaction().execute(async (trx) => {
     const currentCursor = await adapter.cursor.get(trx);
     if (
@@ -560,24 +578,6 @@ async function repairOrphanedOpenSlice(
     const sliceRepo = createConversationSlicesRepository(trx);
     const currentOpen = await sliceRepo.getOpenSlice(adapter.conversationId, adapter.providerThreadId);
     if (currentOpen?.id !== open.id) throw new ClaimLostError();
-    const laterClosed = await trx
-      .selectFrom("conversation_slices")
-      .select("id")
-      .where("conversation_id", "=", adapter.conversationId)
-      .where((eb) =>
-        eb.or([
-          eb("provider_thread_id", "=", adapter.providerThreadId),
-          eb.and([
-            eb("provider_thread_id", "is", null),
-            eb(eb.cast(eb.val(adapter.providerThreadId), "text"), "is", null),
-          ]),
-        ]),
-      )
-      .where("status", "=", "closed")
-      .where("first_message_id", ">", open.first_message_id)
-      .limit(1)
-      .executeTakeFirst();
-    if (!laterClosed) return currentOpen;
     const closed = await sliceRepo.closeOpenSlice(open.id, adapter.flushReason("idle"));
     if (!closed) throw new ClaimLostError();
     await adapter.onSliceClosed?.(trx, closed);
@@ -597,6 +597,12 @@ async function loadWindow(
   );
   open = await repairOrphanedOpenSlice(db, adapter, open, cursor);
   const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages, pendingUntil);
+  /**
+   * The raw range is derived from the open span and bounded pending page, so
+   * `(conversation_id, first_message_id)` is no longer a pure function of the
+   * full message set. This is safe because overlap validation, slice writes,
+   * and cursor advancement happen together in one apply transaction.
+   */
   const rawById = new Map([...loaded.openRaw, ...loaded.pendingRaw].map((message) => [message.id, message]));
   const allRaw = sortMessages([...rawById.values()], adapter);
   const openIds = new Set(parseDenoisedIds(open));
@@ -1035,7 +1041,7 @@ function emptyResult(openSliceId: string | null, skippedReason?: string) {
     windowsProcessed: 0,
     slicesClosed: 0,
     messagesProcessed: 0,
-    pendingRemaining: false,
+    pendingRemaining: skippedReason !== undefined,
     openSliceId,
     ...(skippedReason ? { skippedReason } : {}),
   };
@@ -1073,7 +1079,7 @@ export async function runChunkingPass(
   let lastPageFull = false;
   let openSliceId: string | null = null;
   let skippedReason: string | undefined;
-  const maxWindows = Math.max(1, params.maxWindows ?? params.adapter.knobs.maxWindowsPerRun ?? 8);
+  const maxWindows = Math.max(1, params.maxWindows ?? params.adapter.knobs.maxWindowsPerRun);
   try {
     while (budgetUsed < maxWindows) {
       const state = await loadWindow(deps.db, params.adapter, params.pendingUntil);
@@ -1149,6 +1155,7 @@ export async function runChunkingPass(
   }
   const finalCursor = await params.adapter.cursor.get(deps.db);
   const pendingRemaining =
+    skippedReason !== undefined ||
     lastPageFull ||
     (budgetUsed >= maxWindows &&
       finalCursor !== undefined &&

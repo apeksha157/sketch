@@ -1,6 +1,6 @@
 import type { Kysely, Transaction } from "kysely";
 import type { Logger } from "pino";
-import type { ConversationSliceRow } from "../db/repositories/conversation-slices";
+import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { createWhatsAppIdentityCandidateRepository } from "../db/repositories/whatsapp-identity-candidates";
 import type { DB } from "../db/schema";
 import {
@@ -158,18 +158,38 @@ async function listOpenRawMessages(
   return rows.map((row) => toMessage(row as RawMessageRow));
 }
 
+/**
+ * Live mode excludes history rows that backfill has not admitted into the
+ * open slice; otherwise rejected provider timestamps can move those rows
+ * past the live cursor and make the two passes overlap.
+ */
 async function listPendingRawMessages(
   db: Kysely<DB>,
   conversationId: number,
   cursor: ChunkCursorState,
   limit: number,
   pendingUntil?: ChunkPendingBound,
+  openFirstMessageId?: number | null,
 ): Promise<ChunkEngineMessage[]> {
+  const historyStartId =
+    pendingUntil === undefined && openFirstMessageId === undefined
+      ? (await createConversationSlicesRepository(db).getOpenSlice(conversationId))?.first_message_id
+      : openFirstMessageId;
   let query = db
     .selectFrom("conversation_messages")
     .select(RAW_MESSAGE_COLUMNS)
     .where("conversation_id", "=", conversationId)
     .where("effective_at", "is not", null);
+  if (pendingUntil === undefined) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("source", "=", "live"),
+        ...(historyStartId !== undefined && historyStartId !== null
+          ? [eb.and([eb("source", "=", "history"), eb("id", ">=", historyStartId)])]
+          : []),
+      ]),
+    );
+  }
   if (cursor.lastEffectiveAt !== null && cursor.lastMessageId !== null) {
     query = query.where((eb) =>
       eb.or([
@@ -216,7 +236,7 @@ export function createWhatsAppChunkStreamAdapter(
       const limit = cap + 50;
       const [openRaw, pendingRaw] = await Promise.all([
         listOpenRawMessages(db, params.conversationId, open),
-        listPendingRawMessages(db, params.conversationId, state, limit, pendingUntil),
+        listPendingRawMessages(db, params.conversationId, state, limit, pendingUntil, open?.first_message_id ?? null),
       ]);
       return {
         openRaw,

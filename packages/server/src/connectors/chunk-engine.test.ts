@@ -33,6 +33,7 @@ const knobs = {
   burstThresholdMessages: null,
   topicRegistryCap: 30,
   groupWorkerPool: 4,
+  maxWindowsPerRun: 4,
 };
 
 function makeMessages(count: number, text = "four words"): ChunkEngineMessage[] {
@@ -45,6 +46,42 @@ function makeMessages(count: number, text = "four words"): ChunkEngineMessage[] 
     attachments: null,
     isBot: false,
   }));
+}
+
+async function insertMessagesBatched(
+  db: Kysely<DB>,
+  rows: Array<{
+    conversationId: number;
+    providerMessageId: string;
+    senderName?: string;
+    isBot?: boolean;
+    text: string;
+    receivedAt: string;
+  }>,
+): Promise<void> {
+  for (let offset = 0; offset < rows.length; offset += 500) {
+    await db
+      .insertInto("conversation_messages")
+      .values(
+        rows.slice(offset, offset + 500).map((row) => ({
+          conversation_id: row.conversationId,
+          provider_message_id: row.providerMessageId,
+          event_key: null,
+          sender_name: row.senderName ?? "Asha",
+          sender_user_id: null,
+          is_bot: row.isBot ? 1 : 0,
+          text: row.text,
+          attachments: null,
+          provider_thread_id: null,
+          provider_parent_message_id: null,
+          provider_timestamp: null,
+          received_at: row.receivedAt,
+          source: "live",
+          effective_at: row.receivedAt,
+        })),
+      )
+      .execute();
+  }
 }
 
 async function seedIndexedFile(db: Kysely<DB>, fileId: string, sliceId: string): Promise<void> {
@@ -174,6 +211,27 @@ describe("chunk engine adapter contract", () => {
     expect(slice.denoised_message_ids).toBe("[1,2,3]");
     expect(generateCalls).toBe(0);
     expect(topics).toEqual([]);
+  });
+
+  it("keeps pending work marked when the cursor claim is unavailable", async () => {
+    const adapter = fakeAdapter(makeMessages(1));
+    adapter.cursor.claim = async () => false;
+
+    const result = await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      { adapter, mode: "live" },
+    );
+
+    expect(result).toMatchObject({ pendingRemaining: true, skippedReason: "claim_unavailable" });
+  });
+
+  it("keeps pending work marked after boundary validation fails", async () => {
+    const result = await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "not json" },
+      { adapter: fakeAdapter(makeMessages(2), { boundaries: "llm" }), mode: "live" },
+    );
+
+    expect(result).toMatchObject({ pendingRemaining: true, skippedReason: "boundary_validation_failed" });
   });
 
   it("force-splits a single segment at both message and token hard caps", async () => {
@@ -425,18 +483,16 @@ describe("chunk engine adapter contract", () => {
       kind: "group",
       providerConversationId: groupJid,
     });
-    await db.transaction().execute(async (trx) => {
-      const messages = createConversationRepository(trx);
-      for (let index = 0; index < 5_000; index += 1) {
-        await messages.insertMessage({
-          conversationId: conversation.id,
-          providerMessageId: `bounded-${index}`,
-          senderName: "Asha",
-          text: "roadmap update",
-          receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
-        });
-      }
-    });
+    await insertMessagesBatched(
+      db,
+      Array.from({ length: 5_000 }, (_, index) => ({
+        conversationId: conversation.id,
+        providerMessageId: `bounded-${index}`,
+        senderName: "Asha",
+        text: "roadmap update",
+        receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+      })),
+    );
     const deps = { db, logger: createTestLogger(), generate: async () => "unreachable" };
     const adapter = createWhatsAppChunkStreamAdapter(deps, { conversationId: conversation.id, groupJid, knobs });
     const loadOpenAndPending = adapter.loadOpenAndPending;
@@ -472,28 +528,29 @@ describe("chunk engine adapter contract", () => {
       providerThreadId: "stream-b",
       status: "closed",
     });
-    const providerThreadPredicateCounts: number[] = [];
-    const observedDb = db.withPlugin({
-      transformQuery(args) {
-        const serialized = JSON.stringify(args.node);
-        if (serialized.includes("conversation_slices")) {
-          providerThreadPredicateCounts.push(serialized.match(/provider_thread_id/gu)?.length ?? 0);
-        }
-        return args.node;
-      },
-      async transformResult(args) {
-        return args.result;
-      },
+    await slices.insertIfAbsent({
+      id: "null-stream",
+      conversationId: 1,
+      firstMessageId: 99,
+      lastMessageId: 101,
+      startedAt: messages[0]?.effectiveAt ?? "",
+      endedAt: messages[2]?.effectiveAt ?? "",
+      messageCount: 2,
+      denoisedMessageIds: [99, 101],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      providerThreadId: null,
+      status: "closed",
     });
     const otherStreamResult = await runChunkingPass(
-      { db: observedDb, logger: createTestLogger(), generate: async () => "unreachable" },
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
       {
         adapter: fakeAdapter(messages, { conversationId: 1, providerThreadId: "stream-a", order: "row_id" }),
         mode: "live",
         maxWindows: 1,
       },
     );
-
     await db.deleteFrom("conversation_slices").where("provider_thread_id", "=", "stream-a").execute();
     await slices.insertIfAbsent({
       id: "same-stream",
@@ -511,9 +568,17 @@ describe("chunk engine adapter contract", () => {
       status: "closed",
     });
     const sameStreamResult = await runChunkingPass(
-      { db: observedDb, logger: createTestLogger(), generate: async () => "unreachable" },
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
       {
         adapter: fakeAdapter(messages, { conversationId: 1, providerThreadId: "stream-a", order: "row_id" }),
+        mode: "live",
+        maxWindows: 1,
+      },
+    );
+    const nullStreamResult = await runChunkingPass(
+      { db, logger: createTestLogger(), generate: async () => "unreachable" },
+      {
+        adapter: fakeAdapter(messages, { conversationId: 1, providerThreadId: null, order: "row_id" }),
         mode: "live",
         maxWindows: 1,
       },
@@ -521,7 +586,55 @@ describe("chunk engine adapter contract", () => {
 
     expect(otherStreamResult.windowsProcessed).toBe(1);
     expect(sameStreamResult.skippedReason).toBe("overlap_guard");
-    expect(Math.max(...providerThreadPredicateCounts)).toBeGreaterThanOrEqual(2);
+    expect(nullStreamResult).toMatchObject({ pendingRemaining: true, skippedReason: "overlap_guard" });
+  });
+
+  it("overrides the tick gate when indexable messages follow a full noise page", async () => {
+    const groupJid = "burst-after-noise@g.us";
+    const groups = createWhatsAppGroupRepository(db);
+    await groups.upsert({
+      jid: groupJid,
+      name: "Burst After Noise",
+      description: null,
+      updated_at: "2026-07-07T09:00:00.000Z",
+    });
+    const group = await groups.setIndexEnabled(groupJid, true, {
+      chunkMinMessages: 1,
+      chunkWindowMessages: 250,
+      chunkBurstThresholdMessages: 250,
+    });
+    if (!group) throw new Error("Failed to enable burst group");
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    await insertMessagesBatched(
+      db,
+      Array.from({ length: 550 }, (_, index) => ({
+        conversationId: conversation.id,
+        providerMessageId: `burst-after-noise-${index}`,
+        isBot: index < 300,
+        text: index < 300 ? "noise" : "roadmap update",
+        receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+      })),
+    );
+    let generateCalls = 0;
+
+    const result = await chunkWhatsAppIndexingGroups({
+      db,
+      groups: [{ ...group, chunkLastLlmAttemptAt: "2026-07-07T09:55:00.000Z" }],
+      logger: createTestLogger(),
+      now: new Date("2026-07-07T10:00:00.000Z"),
+      llmGenerate: async (prompt) => {
+        generateCalls += 1;
+        const count = prompt.match(/^\d+\. /gmu)?.length ?? 0;
+        return JSON.stringify({ segments: [{ start: 1, end: count, threads: ["roadmap"] }] });
+      },
+    });
+
+    expect(generateCalls).toBeGreaterThan(0);
+    expect(result.messagesProcessed).toBe(550);
   });
 
   it("drains a full WhatsApp noise page before slicing indexable rows", async () => {
@@ -540,19 +653,17 @@ describe("chunk engine adapter contract", () => {
       kind: "group",
       providerConversationId: groupJid,
     });
-    await db.transaction().execute(async (trx) => {
-      const messages = createConversationRepository(trx);
-      for (let index = 0; index < 305; index += 1) {
-        await messages.insertMessage({
-          conversationId: conversation.id,
-          providerMessageId: `noise-drain-${index}`,
-          senderName: index < 300 ? "Bot" : "Asha",
-          isBot: index < 300,
-          text: index < 300 ? "noise" : "roadmap update",
-          receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
-        });
-      }
-    });
+    await insertMessagesBatched(
+      db,
+      Array.from({ length: 305 }, (_, index) => ({
+        conversationId: conversation.id,
+        providerMessageId: `noise-drain-${index}`,
+        senderName: index < 300 ? "Bot" : "Asha",
+        isBot: index < 300,
+        text: index < 300 ? "noise" : "roadmap update",
+        receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+      })),
+    );
     const result = await chunkWhatsAppIndexingGroups({
       db,
       groups: [group],
@@ -580,18 +691,16 @@ describe("chunk engine adapter contract", () => {
       kind: "group",
       providerConversationId: groupJid,
     });
-    await db.transaction().execute(async (trx) => {
-      const messages = createConversationRepository(trx);
-      for (let index = 0; index < 700; index += 1) {
-        await messages.insertMessage({
-          conversationId: conversation.id,
-          providerMessageId: `run-budget-${index}`,
-          senderName: "Asha",
-          text: "roadmap update",
-          receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
-        });
-      }
-    });
+    await insertMessagesBatched(
+      db,
+      Array.from({ length: 700 }, (_, index) => ({
+        conversationId: conversation.id,
+        providerMessageId: `run-budget-${index}`,
+        senderName: "Asha",
+        text: "roadmap update",
+        receivedAt: new Date(Date.parse("2026-07-07T09:00:00.000Z") + index * 1_000).toISOString(),
+      })),
+    );
     let generateCalls = 0;
     const deps = {
       db,
@@ -790,6 +899,74 @@ describe("chunk engine adapter contract", () => {
 
     expect(result.windowsProcessed).toBe(1);
     expect(liveOpen).toMatchObject({ status: "open", last_message_id: liveNext.row.id });
+  });
+
+  it("excludes unadmitted history before the live open slice from live pending rows", async () => {
+    const groupJid = "live-source-scope@g.us";
+    const conversation = await createConversationRepository(db).getOrCreate({
+      platform: "whatsapp",
+      kind: "group",
+      providerConversationId: groupJid,
+    });
+    const messages = createConversationRepository(db);
+    const history = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "unadmitted-history",
+      senderName: "Asha",
+      text: "old history",
+      providerTimestamp: "invalid",
+      receivedAt: "2026-07-07T10:00:00.000Z",
+      source: "history",
+    });
+    const liveStart = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "live-source-start",
+      senderName: "Asha",
+      text: "live start",
+      receivedAt: "2026-07-07T09:00:00.000Z",
+    });
+    const liveNext = await messages.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: "live-source-next",
+      senderName: "Asha",
+      text: "live next",
+      receivedAt: "2026-07-07T09:01:00.000Z",
+    });
+    const sliceRepo = createConversationSlicesRepository(db);
+    await sliceRepo.insertIfAbsent({
+      id: "live-source-open",
+      conversationId: conversation.id,
+      firstMessageId: liveStart.row.id,
+      lastMessageId: liveStart.row.id,
+      startedAt: liveStart.row.effectiveAt,
+      endedAt: liveStart.row.effectiveAt,
+      messageCount: 1,
+      denoisedMessageIds: [liveStart.row.id],
+      flushReason: "llm_boundary",
+      rosterSnapshot: "[]",
+      salienceVerdict: "kept",
+      status: "open",
+    });
+    await sliceRepo.advanceCursor({
+      conversationId: conversation.id,
+      lastEffectiveAt: liveStart.row.effectiveAt,
+      lastMessageId: liveStart.row.id,
+    });
+    const open = await sliceRepo.getOpenSlice(conversation.id);
+    const cursor = await sliceRepo.getCursor(conversation.id);
+    if (!cursor) throw new Error("Missing live cursor");
+    const deps = { db, logger: createTestLogger(), generate: async () => "unreachable" };
+    const adapter = createWhatsAppChunkStreamAdapter(deps, { conversationId: conversation.id, groupJid, knobs });
+
+    const loaded = await adapter.loadOpenAndPending(
+      db,
+      open,
+      { lastEffectiveAt: cursor.last_effective_at, lastMessageId: cursor.last_message_id, claimToken: null },
+      knobs.windowMessages,
+    );
+
+    expect(history.row.id).toBeLessThan(liveStart.row.id);
+    expect(loaded.pendingRaw.map((message) => message.id)).toEqual([liveNext.row.id]);
   });
 
   it("requeues a linked WhatsApp open slice when a boundary revision closes a shorter range", async () => {

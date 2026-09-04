@@ -63,7 +63,7 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES).toBeNull();
         expect(result.data.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP).toBe(30);
         expect(result.data.WHATSAPP_CHUNK_GROUP_WORKER_POOL).toBe(4);
-        expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(8);
+        expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(4);
         expect(result.data.WHATSAPP_SLICE_GAP_MINUTES).toBe(25);
         expect(result.data.WHATSAPP_SLICE_MAX_AGE_MINUTES).toBe(120);
         expect(result.data.WHATSAPP_SLICE_MAX_MESSAGES).toBe(50);

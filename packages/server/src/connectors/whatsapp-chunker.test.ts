@@ -212,7 +212,7 @@ describe("resolveWhatsAppLlmChunkerKnobs", () => {
       burstThresholdMessages: 50,
       topicRegistryCap: 25,
       groupWorkerPool: 3,
-      maxWindowsPerRun: 8,
+      maxWindowsPerRun: 4,
     });
     expect(resolveWhatsAppLlmChunkerKnobs(group, defaults)).toEqual({
       windowMessages: 210,
@@ -229,7 +229,7 @@ describe("resolveWhatsAppLlmChunkerKnobs", () => {
       burstThresholdMessages: 60,
       topicRegistryCap: 26,
       groupWorkerPool: 2,
-      maxWindowsPerRun: 8,
+      maxWindowsPerRun: 4,
     });
     expect(resolveWhatsAppLlmChunkerKnobs(group)).toEqual({
       windowMessages: 250,
@@ -246,7 +246,7 @@ describe("resolveWhatsAppLlmChunkerKnobs", () => {
       burstThresholdMessages: null,
       topicRegistryCap: 30,
       groupWorkerPool: 4,
-      maxWindowsPerRun: 8,
+      maxWindowsPerRun: 4,
     });
   });
 });

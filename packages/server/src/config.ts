@@ -197,7 +197,7 @@ export const configSchema = z.object({
   ),
   WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP: z.coerce.number().int().min(1).default(30),
   WHATSAPP_CHUNK_GROUP_WORKER_POOL: z.coerce.number().int().min(1).default(4),
-  WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN: z.coerce.number().int().min(1).default(8),
+  WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN: z.coerce.number().int().min(1).default(4),
   WHATSAPP_SLICE_GAP_MINUTES: z.coerce.number().int().min(1).default(25),
   WHATSAPP_SLICE_MAX_AGE_MINUTES: z.coerce.number().int().min(1).default(120),
   WHATSAPP_SLICE_MAX_MESSAGES: z.coerce.number().int().min(1).default(50),

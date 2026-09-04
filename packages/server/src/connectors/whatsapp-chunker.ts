@@ -13,10 +13,7 @@ import type { WhatsAppGroupIndexingConfig } from "../db/repositories/whatsapp-gr
 import type { DB } from "../db/schema";
 import { MAX_MATERIALIZATION_ATTEMPTS } from "../entities/materialize-replay";
 import { isReasoningTextCommand, isToolProgressCommand } from "../progress-settings";
-import {
-  WHATSAPP_PROVIDER_TIMESTAMP_MAX_FUTURE_MS,
-  effectiveWhatsAppMessageTimestamp,
-} from "../whatsapp/provider-timestamp";
+import { WHATSAPP_PROVIDER_TIMESTAMP_MAX_FUTURE_MS } from "../whatsapp/provider-timestamp";
 import { estimateTokens } from "./chunking";
 import { isRetryableProviderError } from "./provider-fallback";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
@@ -44,7 +41,7 @@ export const DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES = 15;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_REASONING_EFFORT = "high" as const;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_TOPIC_REGISTRY_CAP = 30;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL = 4;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN = 8;
+export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN = 4;
 
 const MINUTE_MS = 60 * 1000;
 const DEFAULT_CLAIM_STALE_MS = 5 * MINUTE_MS;
@@ -75,7 +72,7 @@ export interface WhatsAppLlmChunkerKnobs {
   burstThresholdMessages: number | null;
   topicRegistryCap: number;
   groupWorkerPool: number;
-  maxWindowsPerRun?: number;
+  maxWindowsPerRun: number;
 }
 
 export interface WhatsAppLlmChunkerGroupOverrides {
@@ -155,12 +152,6 @@ interface ChunkerRawRow {
   provider_timestamp: string | null;
   received_at: string;
   effective_at: string | null;
-}
-
-interface ChunkerTimestampRow {
-  id: number;
-  provider_timestamp: string | null;
-  received_at: string;
 }
 
 interface ChunkWhatsAppGroupOptions {
@@ -325,14 +316,6 @@ class WhatsAppBackfillGraphInvariantError extends Error {
 function effectiveTimeMs(value: string): number {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/**
- * Provider timestamp validation lives in TypeScript so SQLite and Postgres use
- * the same floor, skew, and invalid-date behavior without dialect-specific casts.
- */
-function effectiveTimestamp(row: ChunkerTimestampRow, now: Date): string {
-  return effectiveWhatsAppMessageTimestamp(row.provider_timestamp, row.received_at, now);
 }
 
 function isAfterCursor(message: { id: number; effectiveAt: string }, cursor: ConversationSliceCursorRow): boolean {
@@ -521,9 +504,9 @@ async function listMessagesAfterCursor(
   db: Kysely<DB>,
   conversationId: number,
   cursor: ConversationSliceCursorRow,
-  now: Date,
   limit: number,
   openFirstMessageId?: number,
+  indexableOnly = false,
 ): Promise<WhatsAppChunkerMessage[]> {
   const lowerBound = cursorReceivedAtLowerBound(cursor);
   const open = await createConversationSlicesRepository(db).getOpenSlice(conversationId);
@@ -548,6 +531,7 @@ async function listMessagesAfterCursor(
       ...(historyStartId !== undefined ? [eb.and([eb("source", "=", "history"), eb("id", ">=", historyStartId)])] : []),
     ]),
   );
+  if (indexableOnly) query = query.where("is_bot", "=", 0);
   if (cursor.last_effective_at !== null && cursor.last_message_id !== null) {
     query = query.where((eb) =>
       eb.or([
@@ -564,11 +548,22 @@ async function listMessagesAfterCursor(
   return rows.map((row: ChunkerRawRow) => ({
     id: row.id,
     providerMessageId: row.provider_message_id,
-    effectiveAt: row.effective_at ?? effectiveTimestamp(row, now),
+    effectiveAt: row.effective_at as string,
     text: row.text,
     attachments: row.attachments,
     isBot: row.is_bot === 1,
   }));
+}
+
+async function countPendingDenoisedMessages(
+  db: Kysely<DB>,
+  conversationId: number,
+  cursor: ConversationSliceCursorRow,
+  limit: number,
+  openFirstMessageId?: number,
+): Promise<number> {
+  const messages = await listMessagesAfterCursor(db, conversationId, cursor, limit, openFirstMessageId, true);
+  return messages.filter(isIndexableWhatsAppChunkMessage).length;
 }
 
 async function countLateArrivals(
@@ -670,11 +665,9 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
     db,
     conversation.id,
     cursor,
-    now,
     knobs.windowMessages + 1,
     openBeforeIdleClose?.first_message_id,
   );
-  const denoisedMessages = messages.filter(isIndexableWhatsAppChunkMessage);
   const lateArrivals = await countLateArrivals(db, conversation.id, cursor);
   if (lateArrivals > 0) logger.info({ conversationId: conversation.id, lateArrivals }, "late_arrival_skipped");
   if (messages.length === 0 || !options.llmGenerate) {
@@ -684,11 +677,17 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
   const lastAttemptMs = group.chunkLastLlmAttemptAt ? Date.parse(group.chunkLastLlmAttemptAt) : Number.NaN;
   const open = await repo.getOpenSlice(conversation.id);
   const burstThreshold = knobs.burstThresholdMessages ?? Math.max(1, knobs.windowMessages - (open?.message_count ?? 0));
-  if (
-    Number.isFinite(lastAttemptMs) &&
-    now.getTime() - lastAttemptMs < knobs.tickMinutes * MINUTE_MS &&
-    denoisedMessages.length < burstThreshold
-  ) {
+  const tickGated = Number.isFinite(lastAttemptMs) && now.getTime() - lastAttemptMs < knobs.tickMinutes * MINUTE_MS;
+  const pendingDenoisedMessages = tickGated
+    ? await countPendingDenoisedMessages(
+        db,
+        conversation.id,
+        cursor,
+        burstThreshold + 1,
+        openBeforeIdleClose?.first_message_id,
+      )
+    : 0;
+  if (tickGated && pendingDenoisedMessages < burstThreshold) {
     return emptyRunSummary();
   }
 
