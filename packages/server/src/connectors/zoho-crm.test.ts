@@ -10,6 +10,7 @@ import {
   formatCrmRecordContent,
   makeProviderFileId,
   moduleToFileType,
+  toZohoModifiedSince,
 } from "./zoho-crm";
 
 const logger = pino({ level: "silent" });
@@ -137,6 +138,15 @@ describe("Zoho CRM connector", () => {
       connector.validateCredentials(credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() })),
     ).rejects.toThrow(/token is invalid or revoked; reconnect required/i);
     expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("formats If-Modified-Since cursors to second precision with a numeric offset", () => {
+    expect(toZohoModifiedSince("2026-09-05T13:42:32.482Z")).toBe("2026-09-05T13:42:32+00:00");
+    expect(toZohoModifiedSince("2026-09-05T13:42:32Z")).toBe("2026-09-05T13:42:32+00:00");
+  });
+
+  it("passes an unparseable cursor through unchanged instead of throwing", () => {
+    expect(toZohoModifiedSince("not-a-date")).toBe("not-a-date");
   });
 
   it("discovers standard modules, skips inactive modules, and keeps parent-like order", async () => {
@@ -344,7 +354,7 @@ describe("Zoho CRM connector", () => {
       }
       if (url.includes("/Accounts?")) {
         expect(url).toContain("fields=");
-        expect((init?.headers as Record<string, string>)["If-Modified-Since"]).toBe("2026-01-01T00:00:00.000Z");
+        expect((init?.headers as Record<string, string>)["If-Modified-Since"]).toBe("2026-01-01T00:00:00+00:00");
         // Second page (token-based) returns empty to end pagination.
         if (url.includes("page_token=")) {
           return Promise.resolve(jsonResponse({ data: [], info: { more_records: false } }));

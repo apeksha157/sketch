@@ -845,6 +845,21 @@ function rollupRelationFields(moduleApiName: string): string[] {
   }
 }
 
+/**
+ * Zoho silently ignores If-Modified-Since values it cannot parse, and our
+ * stored cursors (ISO with milliseconds and a "Z" suffix) fall in that
+ * bucket — so every "incremental" sync was a full scan. Verified against the
+ * live API: the same instant sent as "2026-09-05T20:04:23.341Z" returned all
+ * records, while "2026-09-05T20:04:23+00:00" returned 304. Format to second
+ * precision with an explicit numeric offset; an unparseable cursor is passed
+ * through unchanged (Zoho ignores it, matching the old behaviour).
+ */
+export function toZohoModifiedSince(cursor: string): string {
+  const parsed = new Date(cursor);
+  if (Number.isNaN(parsed.getTime())) return cursor;
+  return parsed.toISOString().replace(/\.\d{3}Z$/, "+00:00");
+}
+
 async function* syncModule(
   credentials: OAuthCredentials,
   module: DiscoveredZohoModule,
@@ -855,7 +870,7 @@ async function* syncModule(
   let page = 0;
   let pageToken: string | null = null;
   let moreRecords = true;
-  const headers = cursor ? { "If-Modified-Since": cursor } : undefined;
+  const headers = cursor ? { "If-Modified-Since": toZohoModifiedSince(cursor) } : undefined;
   const fields = await resolveModuleFields(credentials, module.apiName, logger);
 
   // Zoho v6 caps offset pagination at the first 2000 records; beyond that the
