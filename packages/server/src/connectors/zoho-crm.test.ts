@@ -82,6 +82,63 @@ describe("Zoho CRM connector", () => {
     );
   });
 
+  it("refreshTokens treats a token expiring within the 30-minute buffer as stale", async () => {
+    const connector = createZohoCrmConnector();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ access_token: "new-token", expires_in: 3600 }));
+
+    const result = await connector.refreshTokens?.(
+      credentials({ expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString() }),
+    );
+
+    expect(result?.access_token).toBe("new-token");
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://accounts.zoho.in/oauth/v2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("refreshes and retries once when the access token expires mid-run", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "minted-mid-run", expires_in: 3600 }))
+      .mockResolvedValueOnce(jsonResponse({ users: [{ id: "u1" }] }));
+    const connector = createZohoCrmConnector();
+    const creds = credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() });
+
+    await expect(connector.validateCredentials(creds)).resolves.toBeUndefined();
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://accounts.zoho.in/oauth/v2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://www.zohoapis.in/crm/v6/users?type=CurrentUser",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Zoho-oauthtoken minted-mid-run" }),
+      }),
+    );
+    expect(creds.access_token).toBe("minted-mid-run");
+  });
+
+  it("gives up after one mid-run retry when the refreshed token is still rejected", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "still-bad", expires_in: 3600 }))
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }));
+    const connector = createZohoCrmConnector();
+
+    await expect(
+      connector.validateCredentials(credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() })),
+    ).rejects.toThrow(/token is invalid or revoked; reconnect required/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
   it("discovers standard modules, skips inactive modules, and keeps parent-like order", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
