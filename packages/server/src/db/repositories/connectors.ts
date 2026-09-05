@@ -608,10 +608,7 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
           existing.content === null &&
           sourceUpdatedAt !== existing.source_updated_at;
         const embeddingsOnlyContentRefresh =
-          data.enrichmentRefresh === "embeddings_only" &&
-          contentChanged &&
-          !categoryChanged &&
-          !sourceVersionChanged;
+          data.enrichmentRefresh === "embeddings_only" && contentChanged && !categoryChanged && !sourceVersionChanged;
         const updates: Record<string, unknown> = {
           provider_file_id: data.providerFileId,
           provider_message_id: data.providerMessageId ?? null,

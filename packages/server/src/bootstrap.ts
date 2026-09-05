@@ -34,8 +34,8 @@ import { migrateManagedConnectorCredentialsToCanvas } from "./connectors/managed
 import { createOpenRouterGenerator } from "./connectors/openrouter-generate";
 import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
 import { repairSlackChunkStreamsOnStartup } from "./connectors/slack-chunk-adapters";
+import { archiveAllSlackChannelFiles } from "./connectors/slack-emission";
 import { ensureSlackConnectorConfig } from "./connectors/slack-provisioning";
-import { archiveAllSlackChannelFiles } from "./connectors/slack-salience";
 import { startSyncScheduler } from "./connectors/sync";
 import { createWeeklyMintService } from "./connectors/weekly-mint";
 import { createPricingService } from "./cost/cost-pricing";

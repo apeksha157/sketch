@@ -5,7 +5,7 @@ import {
   archiveAllSlackChannelFiles,
   emitSlackSyncedItems,
   reconcileSlackChannelAcls,
-} from "./slack-salience";
+} from "./slack-emission";
 import type { Connector, ConnectorCredentials, SyncedItem } from "./types";
 
 const SLACK_CHUNK_DEFAULTS = {
@@ -19,12 +19,14 @@ const SLACK_CHUNK_DEFAULTS = {
   SLACK_CHUNK_TICK_MINUTES: 30,
   SLACK_CHUNK_IDLE_CLOSE_HOURS: 96,
   SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES: 20,
+  SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: 120,
   SLACK_CHUNK_MODEL: null,
   SLACK_CHUNK_REASONING_EFFORT: "high" as const,
   SLACK_CHUNK_BURST_THRESHOLD_MESSAGES: null,
   SLACK_CHUNK_TOPIC_REGISTRY_CAP: 30,
   SLACK_CHUNK_CHANNEL_WORKER_POOL: 4,
   SLACK_CHUNK_MAX_WINDOWS_PER_RUN: 8,
+  SLACK_EMISSION_LEGACY_PER_RUN: 200,
 };
 
 function assertSystemCredentials(credentials: ConnectorCredentials): void {
@@ -116,13 +118,30 @@ export function createSlackIndexingConnector(): Connector {
 
       let emitted = 0;
       let skippedNoScope = 0;
+      let emissionSummary = {
+        tier1Emits: 0,
+        tier2Emits: 0,
+        legacyDrained: 0,
+        legacyRemaining: 0,
+        rosterFailures: 0,
+      };
       for await (const item of emitSlackSyncedItems({
         db,
         logger,
         facade: slackIndexing,
         emissionRefreshDays: SLACK_EMISSION_REFRESH_DAYS,
+        minMessages: knobs.channel.minMessages,
+        threadMinMessages: knobs.thread.minMessages,
+        provisionalRefreshMessages: knobs.channel.provisionalRefreshMessages,
+        provisionalRefreshMaxMinutes:
+          appConfig?.SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES ??
+          SLACK_CHUNK_DEFAULTS.SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES,
+        legacyPerRun: appConfig?.SLACK_EMISSION_LEGACY_PER_RUN ?? SLACK_CHUNK_DEFAULTS.SLACK_EMISSION_LEGACY_PER_RUN,
         onSkippedNoScope: () => {
           skippedNoScope += 1;
+        },
+        onSummary: (summary) => {
+          emissionSummary = summary;
         },
         slackEntitySyncEnabled: appConfig?.SLACK_ENTITY_SYNC ?? true,
       })) {
@@ -137,7 +156,7 @@ export function createSlackIndexingConnector(): Connector {
         connectorConfigId,
         slackEntitySyncEnabled: appConfig?.SLACK_ENTITY_SYNC ?? true,
       });
-      logger.info({ emitted, skippedNoScope }, "Completed Slack indexing sync");
+      logger.info({ emitted, skippedNoScope, ...emissionSummary }, "Completed Slack indexing sync");
     },
 
     async getCursor(): Promise<string | null> {

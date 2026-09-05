@@ -49,7 +49,7 @@ import {
   parseSketchCommand,
 } from "../commands";
 import type { Config } from "../config";
-import { refreshSlackChannelName } from "../connectors/slack-salience";
+import { refreshSlackChannelName } from "../connectors/slack-emission";
 import type { createAutomationRunsRepository } from "../db/repositories/automation-runs";
 import type { createAutomationStepContentRepository } from "../db/repositories/automation-step-content";
 import type { createChannelRepository } from "../db/repositories/channels";

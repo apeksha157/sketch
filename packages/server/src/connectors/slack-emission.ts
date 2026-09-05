@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { type Kysely, sql } from "kysely";
+import { createHash } from "node:crypto";
+import type { Kysely } from "kysely";
 import type { Logger } from "pino";
-import { createConnectorRepository } from "../db/repositories/connectors";
+import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
 import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { DB } from "../db/schema";
 import {
@@ -11,33 +11,20 @@ import {
   resolveSlackChannelRoster,
 } from "../slack/identity-resolution";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
-import type { GeminiGenerator } from "./gemini-generate";
+import { normalizeSourceTimestampForStorage, parseTimestampMs } from "../timestamps";
 import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
 import { SLACK_CONVERSATION_SLICE_FILE_TYPE, type SyncedItem } from "./types";
-import { type WhatsAppSalienceVerdict, parseWhatsAppSalienceResponse } from "./whatsapp-emission";
 
-export const DEFAULT_SLACK_SALIENCE_BATCH_LIMIT = 50;
 export const SLACK_EMISSION_REFRESH_DAYS = 7;
-export const SLACK_SALIENCE_PROMPT_VERSION = "slack-salience-v1";
-
-const SALIENCE_CLAIM_STALE_MS = 15 * 60_000;
+export const SLACK_EMISSION_PAGE_SIZE = 200;
 const MENTION_TOKEN_PATTERN = /<@(U[A-Z0-9]+)(?:\|[^>]*)?>/g;
 
-export interface SlackSalienceRunSummary {
-  batchLimit: number;
-  pendingConsidered: number;
-  judged: number;
-  kept: number;
-  dropped: number;
-  failures: number;
-}
-
-export interface SlackSalienceOptions {
-  db: Kysely<DB>;
-  logger: Logger;
-  facade: SlackIndexingFacade;
-  generator: GeminiGenerator | null;
-  batchLimit?: number;
+export interface SlackEmissionRunSummary {
+  tier1Emits: number;
+  tier2Emits: number;
+  legacyDrained: number;
+  legacyRemaining: number;
+  rosterFailures: number;
 }
 
 interface SlackSliceContext {
@@ -45,22 +32,16 @@ interface SlackSliceContext {
   conversationId: number;
   channelId: string;
   channelName: string;
+  linkedSourceUpdatedAt: string | null;
+  linkedSourceMeta: string | null;
 }
 
 interface RenderedSlackSlice {
-  rosterBlock: string;
-  transcript: string;
   content: string;
-  roster: SlackRosterSnapshot;
-  serializedRoster: string;
   accessPrincipals: ReturnType<typeof accessPrincipalsFromRoster>;
 }
 
 class SlackSliceMembershipError extends Error {}
-
-function emptySummary(batchLimit: number): SlackSalienceRunSummary {
-  return { batchLimit, pendingConsidered: 0, judged: 0, kept: 0, dropped: 0, failures: 0 };
-}
 
 function stableContentHash(content: string): string {
   return createHash("sha256").update(content).digest("hex");
@@ -97,10 +78,7 @@ async function dropInvalidMembership(
     .updateTable("conversation_slices")
     .set({
       salience_verdict: "dropped",
-      salience_signals: JSON.stringify({
-        promptVersion: SLACK_SALIENCE_PROMPT_VERSION,
-        droppedReason: "invalid_membership",
-      }),
+      salience_signals: JSON.stringify({ droppedReason: "invalid_membership" }),
       salience_claim_token: null,
       salience_claimed_at: null,
     })
@@ -119,60 +97,85 @@ function resolveMentionTokens(text: string, displayNameBySlackId: Map<string, st
   });
 }
 
-async function listSliceContexts(
+type EmissionLane = "current" | "legacy";
+
+async function listSliceContextPage(
   db: Kysely<DB>,
-  where: "pending" | "kept",
-  limit: number | null,
-  refreshedAfter?: string,
+  lane: EmissionLane,
+  refreshedAfter: string,
+  cursor: { timestamp: string; id: string } | null,
+  limit: number,
 ): Promise<SlackSliceContext[]> {
   let query = db
     .selectFrom("conversation_slices")
     .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
+    .leftJoin("indexed_files", "indexed_files.id", "conversation_slices.indexed_file_id")
     .selectAll("conversation_slices")
-    .select(["conversations.provider_conversation_id", "conversations.display_name"])
+    .select([
+      "conversations.provider_conversation_id",
+      "conversations.display_name",
+      "indexed_files.source_updated_at as linked_source_updated_at",
+      "indexed_files.source_meta as linked_source_meta",
+    ])
     .where("conversations.platform", "=", "slack")
-    .where("conversations.kind", "=", "channel");
-
-  query =
-    where === "pending"
-      ? query.where("conversation_slices.salience_verdict", "is", null)
-      : query.where("conversation_slices.salience_verdict", "=", "kept");
-  if (where === "pending") {
-    /**
-     * A claim left behind by a failed attempt is retry backoff: rows inside
-     * the stale window are excluded so they don't occupy batch slots, and
-     * never-attempted rows (empty coalesce sorts first) are judged before
-     * retries so persistent failures cannot starve fresh slices.
-     */
-    const staleBefore = new Date(Date.now() - SALIENCE_CLAIM_STALE_MS).toISOString();
-    query = query
-      .where((eb) =>
-        eb.or([
-          eb("conversation_slices.salience_claimed_at", "is", null),
-          eb("conversation_slices.salience_claimed_at", "<", staleBefore),
-        ]),
-      )
-      .orderBy(sql`coalesce(conversation_slices.salience_claimed_at, '')`, "asc");
-  }
-  if (where === "kept" && refreshedAfter) {
-    query = query.where((eb) =>
+    .where("conversations.kind", "=", "channel")
+    .where("conversation_slices.salience_verdict", "=", "kept")
+    .where((eb) =>
       eb.or([
         eb("conversation_slices.indexed_file_id", "is", null),
-        eb("conversation_slices.ended_at", ">", refreshedAfter),
+        eb.and([
+          eb("conversation_slices.status", "=", "open"),
+          eb(eb.ref("conversation_slices.ended_at"), ">", eb.ref("indexed_files.source_updated_at")),
+        ]),
+        eb.and([
+          eb("conversation_slices.status", "=", "closed"),
+          eb("conversation_slices.ended_at", ">=", refreshedAfter),
+        ]),
       ]),
     );
-  }
-  query = query.orderBy("conversation_slices.ended_at", "asc");
-  if (limit !== null) query = query.limit(limit);
 
-  const rows = await query.execute();
+  if (lane === "current") {
+    query = query.where("conversation_slices.legacy_unjudged_at", "is", null);
+    if (cursor) {
+      query = query.where((eb) =>
+        eb.or([
+          eb("conversation_slices.started_at", ">", cursor.timestamp),
+          eb.and([
+            eb("conversation_slices.started_at", "=", cursor.timestamp),
+            eb("conversation_slices.id", ">", cursor.id),
+          ]),
+        ]),
+      );
+    }
+    query = query.orderBy("conversation_slices.started_at", "asc").orderBy("conversation_slices.id", "asc");
+  } else {
+    query = query
+      .where("conversation_slices.legacy_unjudged_at", "is not", null)
+      .where("conversation_slices.indexed_file_id", "is", null);
+    if (cursor) {
+      query = query.where((eb) =>
+        eb.or([
+          eb("conversation_slices.ended_at", "<", cursor.timestamp),
+          eb.and([
+            eb("conversation_slices.ended_at", "=", cursor.timestamp),
+            eb("conversation_slices.id", "<", cursor.id),
+          ]),
+        ]),
+      );
+    }
+    query = query.orderBy("conversation_slices.ended_at", "desc").orderBy("conversation_slices.id", "desc");
+  }
+
+  const rows = await query.limit(limit).execute();
   return rows.map((row) => {
-    const { provider_conversation_id, display_name, ...slice } = row;
+    const { provider_conversation_id, display_name, linked_source_updated_at, linked_source_meta, ...slice } = row;
     return {
       slice: slice as ConversationSliceRow,
       conversationId: slice.conversation_id,
       channelId: provider_conversation_id,
       channelName: display_name ?? provider_conversation_id,
+      linkedSourceUpdatedAt: normalizeSourceTimestampForStorage(linked_source_updated_at),
+      linkedSourceMeta: linked_source_meta,
     };
   });
 }
@@ -228,16 +231,6 @@ async function renderSlackSlice(
 
   const displayNames = new Map(roster.participants.map((p) => [p.slackUserId, p.displayName]));
   const channelLine = `Channel: #${context.channelName}`;
-  const rosterBlock = [
-    channelLine,
-    "Participants:",
-    ...roster.participants.map((participant) => {
-      const kindLabel =
-        participant.kind === "teammate" ? "teammate" : participant.kind === "entity" ? "CRM contact" : "external";
-      return `- ${participant.displayName} (${kindLabel})`;
-    }),
-  ].join("\n");
-
   const rootLine = await loadThreadRootLine(db, context, displayNames);
   const transcriptLines = rows.map((row) => {
     const senderName = displayNames.get(row.sender_jid) ?? row.sender_name;
@@ -247,148 +240,11 @@ async function renderSlackSlice(
   });
   const transcript = [...(rootLine ? [rootLine, ""] : []), ...transcriptLines].join("\n");
 
-  /**
-   * Stored content is transcript-only (plus the channel header), matching the
-   * email/Fireflies convention: participant rosters stay out of the body so
-   * they never pollute embeddings or the entity extractor. The full roster
-   * block still feeds the salience prompt, and ACLs come from the roster
-   * snapshot, so nothing downstream loses identity context.
-   */
+  /** Stored content excludes participant rosters from embeddings and entity extraction. */
   return {
-    rosterBlock,
-    transcript,
     content: `${channelLine}\n\n${transcript}`,
-    roster,
-    serializedRoster: JSON.stringify(roster),
     accessPrincipals: accessPrincipalsFromRoster(roster),
   };
-}
-
-function renderPrompt(input: { rosterBlock: string; transcript: string }): string {
-  return [
-    `You judge whether a Slack channel conversation slice is worth indexing into an org knowledge base. Prompt version: ${SLACK_SALIENCE_PROMPT_VERSION}.`,
-    "",
-    "Keep a slice when it contains at least one of: a decision, a commitment (someone agreeing to do something), a substantive question, or discussion of named people, companies, or projects.",
-    "Drop slices that are only small talk, greetings, emoji chatter, scheduling back-and-forth with no outcome, or bot noise.",
-    "",
-    input.rosterBlock,
-    "",
-    "Transcript:",
-    input.transcript,
-    "",
-    'Respond with JSON only: {"salient": boolean, "signals": ["decision"|"commitment"|"question"|"named_entity"], "entities": [{"name": string, "type": "person"|"company"|"project"}]}',
-  ].join("\n");
-}
-
-function serializedSignals(verdict: WhatsAppSalienceVerdict): string {
-  return JSON.stringify({
-    promptVersion: SLACK_SALIENCE_PROMPT_VERSION,
-    signals: verdict.signals,
-    entities: verdict.entities,
-  });
-}
-
-/**
- * Slack Web API errors carry the platform code in `data.error`. These codes
- * mean the bot can no longer see the channel (left, kicked, or the channel was
- * archived), so every retry would fail identically.
- */
-function isChannelInaccessibleError(err: unknown): boolean {
-  const code = (err as { data?: { error?: string } } | null)?.data?.error;
-  return code === "channel_not_found" || code === "not_in_channel" || code === "is_archived";
-}
-
-async function processPendingSlice(
-  options: SlackSalienceOptions,
-  context: SlackSliceContext,
-): Promise<"lost" | "kept" | "dropped"> {
-  const claimToken = randomUUID();
-  const now = new Date();
-  const repo = createConversationSlicesRepository(options.db);
-  const claimed = await repo.claimSalienceIfPending(context.slice.id, {
-    claimToken,
-    now: now.toISOString(),
-    staleBefore: new Date(now.getTime() - SALIENCE_CLAIM_STALE_MS).toISOString(),
-  });
-  if (!claimed) return "lost";
-
-  try {
-    const rendered = await renderSlackSlice(options.db, options.facade, context, options.logger);
-    if (!options.generator) {
-      throw new Error("Slack salience gate requires an enrichment generator");
-    }
-    const parsed = await options.generator.generateJSON<unknown>(
-      renderPrompt({ rosterBlock: rendered.rosterBlock, transcript: rendered.transcript }),
-      { maxTokens: 1024, label: `slackSalience:${context.slice.id}` },
-    );
-    const verdict = parseWhatsAppSalienceResponse(parsed);
-    const updated = await repo.updateSalienceVerdictIfClaimed(context.slice.id, claimToken, {
-      verdict: verdict.salient ? "kept" : "dropped",
-      signals: serializedSignals(verdict),
-      rosterSnapshot: rendered.serializedRoster,
-    });
-    if (!updated) return "lost";
-    return verdict.salient ? "kept" : "dropped";
-  } catch (err) {
-    /**
-     * Membership is the opt-in: a slice whose channel the bot can no longer
-     * see must not be indexed, so it is dead-lettered as dropped instead of
-     * retrying forever. Any other failure keeps the claim in place — the
-     * stale-claim window doubles as retry backoff, and the pending listing
-     * skips backed-off rows so persistent failures cannot monopolize the
-     * batch.
-     */
-    if (isChannelInaccessibleError(err)) {
-      options.logger.warn(
-        { err, sliceId: context.slice.id, channelId: context.channelId },
-        "Slack salience dead-lettered slice: channel no longer accessible",
-      );
-      const updated = await repo.updateSalienceVerdictIfClaimed(context.slice.id, claimToken, {
-        verdict: "dropped",
-        signals: JSON.stringify({
-          promptVersion: SLACK_SALIENCE_PROMPT_VERSION,
-          droppedReason: "channel_inaccessible",
-        }),
-      });
-      return updated ? "dropped" : "lost";
-    }
-    throw err;
-  }
-}
-
-export async function processSlackSalience(options: SlackSalienceOptions): Promise<SlackSalienceRunSummary> {
-  const batchLimit = Math.max(1, options.batchLimit ?? DEFAULT_SLACK_SALIENCE_BATCH_LIMIT);
-  const summary = emptySummary(batchLimit);
-  const pending = await listSliceContexts(options.db, "pending", batchLimit);
-  summary.pendingConsidered = pending.length;
-
-  if (!options.generator && pending.length > 0) {
-    summary.failures = pending.length;
-    options.logger.warn(
-      { pendingSlices: pending.length },
-      "Slack salience gate skipped: no enrichment generator configured; slices remain pending",
-    );
-    return summary;
-  }
-
-  for (const context of pending) {
-    try {
-      const result = await processPendingSlice(options, context);
-      if (result === "lost") continue;
-      summary.judged += 1;
-      if (result === "kept") summary.kept += 1;
-      if (result === "dropped") summary.dropped += 1;
-    } catch (err) {
-      summary.failures += 1;
-      options.logger.warn(
-        { err, sliceId: context.slice.id, conversationId: context.conversationId },
-        "Slack salience gate failed; slice remains pending",
-      );
-    }
-  }
-
-  options.logger.info(summary, "Completed Slack salience gate run");
-  return summary;
 }
 
 function formatTimeRange(slice: ConversationSliceRow): string {
@@ -423,6 +279,77 @@ async function findSliceFileId(db: Kysely<DB>, sliceId: string): Promise<string 
   return row?.id ?? null;
 }
 
+async function readSliceSourceMeta(
+  db: Kysely<DB>,
+  context: SlackSliceContext,
+): Promise<Record<string, unknown> | null> {
+  if (context.linkedSourceMeta !== null) return readSourceMeta({ source_meta: context.linkedSourceMeta });
+  const row = await db
+    .selectFrom("indexed_files")
+    .select("source_meta")
+    .where("provider_file_id", "=", context.slice.id)
+    .where("file_type", "=", SLACK_CONVERSATION_SLICE_FILE_TYPE)
+    .where("is_archived", "=", 0)
+    .executeTakeFirst();
+  return row ? readSourceMeta(row) : null;
+}
+
+export interface SlackEmissionAnchor {
+  firstMessageId: number;
+  messageCount: number;
+  emittedAt: string;
+  enrichedMessageCount: number;
+  enrichedAt: string;
+}
+
+function parseEmissionAnchor(value: Record<string, unknown> | null): SlackEmissionAnchor | null {
+  if (
+    !value ||
+    !Number.isInteger(value.firstMessageId) ||
+    !Number.isInteger(value.messageCount) ||
+    typeof value.emittedAt !== "string" ||
+    !Number.isInteger(value.enrichedMessageCount) ||
+    typeof value.enrichedAt !== "string"
+  ) {
+    return null;
+  }
+  return value as unknown as SlackEmissionAnchor;
+}
+
+export function slackEmissionRefreshTier(input: {
+  status: string;
+  firstMessageId: number;
+  messageCount: number;
+  previous: SlackEmissionAnchor | null;
+  provisionalRefreshMessages: number;
+  provisionalRefreshMaxMinutes: number;
+  now: Date;
+}): "full" | "embeddings_only" {
+  if (input.status === "closed" || !input.previous) return "full";
+  if (
+    input.firstMessageId !== input.previous.firstMessageId ||
+    input.messageCount < input.previous.messageCount ||
+    input.messageCount - input.previous.enrichedMessageCount >= input.provisionalRefreshMessages
+  ) {
+    return "full";
+  }
+  const enrichedAt = parseTimestampMs(input.previous.enrichedAt);
+  if (enrichedAt === null || input.now.getTime() - enrichedAt >= input.provisionalRefreshMaxMinutes * 60_000) {
+    return "full";
+  }
+  return "embeddings_only";
+}
+
+function isFreshEmissionCandidate(context: SlackSliceContext, refreshedAfter: string): boolean {
+  if (context.slice.indexed_file_id === null) return true;
+  const endedAt = normalizeSourceTimestampForStorage(context.slice.ended_at);
+  if (!endedAt) return false;
+  if (context.slice.status === "open") {
+    return context.linkedSourceUpdatedAt !== null && endedAt > context.linkedSourceUpdatedAt;
+  }
+  return endedAt >= refreshedAfter;
+}
+
 async function archiveLinkedSliceFileIfPresent(db: Kysely<DB>, context: SlackSliceContext): Promise<void> {
   const indexedFileId = context.slice.indexed_file_id ?? (await findSliceFileId(db, context.slice.id));
   if (!indexedFileId) return;
@@ -452,99 +379,186 @@ export async function* emitSlackSyncedItems(options: {
   logger: Logger;
   facade: SlackIndexingFacade;
   emissionRefreshDays?: number;
+  minMessages?: number;
+  threadMinMessages?: number;
+  provisionalRefreshMessages?: number;
+  provisionalRefreshMaxMinutes?: number;
+  legacyPerRun?: number;
   now?: Date;
   onSkippedNoScope?: () => void;
+  onSummary?: (summary: SlackEmissionRunSummary) => void;
+  onPageListedSliceCount?: (count: number) => void;
+  onPageRosterCacheSize?: (size: number) => void;
   slackEntitySyncEnabled?: boolean;
 }): AsyncGenerator<SyncedItem> {
   const refreshDays = options.emissionRefreshDays ?? SLACK_EMISSION_REFRESH_DAYS;
   const now = options.now ?? new Date();
-  const refreshedAfter = new Date(now.getTime() - refreshDays * 24 * 60 * 60_000).toISOString();
-  const kept = await listSliceContexts(options.db, "kept", null, refreshedAfter);
-  const rosterCache = new Map<string, SlackRosterSnapshot>();
+  const refreshedAfter = normalizeSourceTimestampForStorage(
+    new Date(now.getTime() - refreshDays * 24 * 60 * 60_000).toISOString(),
+  );
+  if (!refreshedAfter) throw new Error("Slack emission refresh cutoff is invalid");
+  const summary: SlackEmissionRunSummary = {
+    tier1Emits: 0,
+    tier2Emits: 0,
+    legacyDrained: 0,
+    legacyRemaining: 0,
+    rosterFailures: 0,
+  };
+  const minMessages = Math.max(1, options.minMessages ?? 10);
+  const threadMinMessages = Math.max(1, options.threadMinMessages ?? 1);
+  const provisionalRefreshMessages = Math.max(1, options.provisionalRefreshMessages ?? 20);
+  const provisionalRefreshMaxMinutes = Math.max(1, options.provisionalRefreshMaxMinutes ?? 120);
+  const legacyPerRun = Math.max(1, options.legacyPerRun ?? 200);
+  const emittedLegacyIds: string[] = [];
 
-  for (const context of kept) {
-    let roster = rosterCache.get(context.channelId);
-    if (!roster) {
-      try {
-        roster = await resolveSlackChannelRoster({
-          db: options.db,
-          facade: options.facade,
-          channelId: context.channelId,
-          channelName: context.channelName,
-          logger: options.logger,
+  for (const lane of ["current", "legacy"] as const) {
+    let cursor: { timestamp: string; id: string } | null = null;
+    let remainingForLane = lane === "legacy" ? legacyPerRun : Number.POSITIVE_INFINITY;
+    while (remainingForLane > 0) {
+      const pageLimit = Math.min(SLACK_EMISSION_PAGE_SIZE, remainingForLane);
+      const page = await listSliceContextPage(options.db, lane, refreshedAfter, cursor, pageLimit);
+      options.onPageListedSliceCount?.(page.length);
+      if (page.length === 0) break;
+      const last = page[page.length - 1];
+      if (!last) break;
+      cursor = {
+        timestamp: lane === "current" ? last.slice.started_at : last.slice.ended_at,
+        id: last.slice.id,
+      };
+      remainingForLane -= page.length;
+      const rosterCache = new Map<string, SlackRosterSnapshot>();
+
+      for (const context of page) {
+        if (!isFreshEmissionCandidate(context, refreshedAfter)) continue;
+        const floor = context.slice.provider_thread_id === null ? minMessages : threadMinMessages;
+        if (context.slice.status === "open" && context.slice.message_count < floor) continue;
+
+        let roster = rosterCache.get(context.channelId);
+        if (!roster) {
+          try {
+            roster = await resolveSlackChannelRoster({
+              db: options.db,
+              facade: options.facade,
+              channelId: context.channelId,
+              channelName: context.channelName,
+              logger: options.logger,
+            });
+          } catch (err) {
+            summary.rosterFailures += 1;
+            options.logger.warn({ err, channelId: context.channelId }, "Slack emission roster resolution failed");
+            continue;
+          }
+          rosterCache.set(context.channelId, roster);
+        }
+
+        const serializedRoster = JSON.stringify(roster);
+        if (serializedRoster !== context.slice.roster_snapshot) {
+          await options.db
+            .updateTable("conversation_slices")
+            .set({ roster_snapshot: serializedRoster })
+            .where("id", "=", context.slice.id)
+            .execute();
+          context.slice = { ...context.slice, roster_snapshot: serializedRoster };
+        }
+
+        const accessPrincipals = accessPrincipalsFromRoster(roster);
+        if (accessPrincipals.length === 0) {
+          await archiveLinkedSliceFileIfPresent(options.db, context);
+          options.onSkippedNoScope?.();
+          options.logger.warn(
+            { sliceId: context.slice.id, channelId: context.channelId },
+            "Skipped Slack slice indexing because no teammate access scope resolved",
+          );
+          continue;
+        }
+
+        const previous = parseEmissionAnchor(await readSliceSourceMeta(options.db, context));
+        const enrichmentRefresh = slackEmissionRefreshTier({
+          status: context.slice.status,
+          firstMessageId: context.slice.first_message_id,
+          messageCount: context.slice.message_count,
+          previous,
+          provisionalRefreshMessages,
+          provisionalRefreshMaxMinutes,
+          now,
         });
-      } catch (err) {
-        options.logger.warn({ err, channelId: context.channelId }, "Slack emission roster resolution failed");
-        continue;
+
+        let rendered: RenderedSlackSlice;
+        try {
+          rendered = await renderSlackSlice(options.db, options.facade, context, options.logger);
+        } catch (err) {
+          if (err instanceof SlackSliceMembershipError) {
+            await dropInvalidMembership(options.db, options.logger, context, err);
+            continue;
+          }
+          options.logger.warn({ err, sliceId: context.slice.id }, "Slack slice render failed; skipping emission");
+          continue;
+        }
+
+        const emittedAt = now.toISOString();
+        const sourceMeta = {
+          firstMessageId: context.slice.first_message_id,
+          messageCount: context.slice.message_count,
+          emittedAt,
+          enrichedMessageCount:
+            enrichmentRefresh === "full" ? context.slice.message_count : (previous?.enrichedMessageCount ?? 0),
+          enrichedAt: enrichmentRefresh === "full" ? emittedAt : (previous?.enrichedAt ?? emittedAt),
+        };
+        if (enrichmentRefresh === "full") summary.tier2Emits += 1;
+        else summary.tier1Emits += 1;
+        if (lane === "legacy") {
+          summary.legacyDrained += 1;
+          emittedLegacyIds.push(context.slice.id);
+        }
+
+        yield {
+          providerFileId: context.slice.id,
+          providerUrl: null,
+          fileName: `Slack: #${context.channelName} - ${formatTimeRange(context.slice)}`,
+          fileType: SLACK_CONVERSATION_SLICE_FILE_TYPE,
+          contentCategory: "document",
+          content: rendered.content,
+          sourcePath: sourcePathForSlice(context),
+          contentHash: stableContentHash(rendered.content),
+          sourceCreatedAt: context.slice.started_at,
+          sourceUpdatedAt: context.slice.ended_at,
+          sourceMeta,
+          enrichmentRefresh,
+          threadId: String(context.conversationId),
+          accessScope: {
+            scopeType: "slack_channel",
+            providerScopeId: context.channelId,
+            label: `#${context.channelName}`,
+            members: rendered.accessPrincipals,
+          },
+          accessPrincipals:
+            options.slackEntitySyncEnabled === false
+              ? undefined
+              : rendered.accessPrincipals.filter((principal) => principal.type === "email"),
+        };
       }
-      rosterCache.set(context.channelId, roster);
+      options.onPageRosterCacheSize?.(rosterCache.size);
+      if (page.length < pageLimit) break;
     }
-
-    const serializedRoster = JSON.stringify(roster);
-    if (serializedRoster !== context.slice.roster_snapshot) {
-      await options.db
-        .updateTable("conversation_slices")
-        .set({ roster_snapshot: serializedRoster })
-        .where("id", "=", context.slice.id)
-        .execute();
-      context.slice = { ...context.slice, roster_snapshot: serializedRoster };
-    }
-
-    const accessPrincipals = accessPrincipalsFromRoster(roster);
-    if (accessPrincipals.length === 0) {
-      await archiveLinkedSliceFileIfPresent(options.db, context);
-      options.onSkippedNoScope?.();
-      options.logger.warn(
-        { sliceId: context.slice.id, channelId: context.channelId },
-        "Skipped Slack slice indexing because no teammate access scope resolved",
-      );
-      continue;
-    }
-
-    let rendered: RenderedSlackSlice;
-    try {
-      rendered = await renderSlackSlice(options.db, options.facade, context, options.logger);
-    } catch (err) {
-      if (err instanceof SlackSliceMembershipError) {
-        await dropInvalidMembership(options.db, options.logger, context, err);
-        continue;
-      }
-      options.logger.warn({ err, sliceId: context.slice.id }, "Slack slice render failed; skipping emission");
-      continue;
-    }
-
-    yield {
-      providerFileId: context.slice.id,
-      providerUrl: null,
-      fileName: `Slack: #${context.channelName} - ${formatTimeRange(context.slice)}`,
-      fileType: SLACK_CONVERSATION_SLICE_FILE_TYPE,
-      contentCategory: "document",
-      content: rendered.content,
-      sourcePath: sourcePathForSlice(context),
-      contentHash: stableContentHash(rendered.content),
-      sourceCreatedAt: context.slice.started_at,
-      sourceUpdatedAt: context.slice.ended_at,
-      threadId: String(context.conversationId),
-      accessScope: {
-        scopeType: "slack_channel",
-        providerScopeId: context.channelId,
-        label: `#${context.channelName}`,
-        members: rendered.accessPrincipals,
-      },
-      accessPrincipals:
-        options.slackEntitySyncEnabled === false
-          ? undefined
-          : rendered.accessPrincipals.filter((principal) => principal.type === "email"),
-    };
   }
+
+  let legacyRemainingQuery = options.db
+    .selectFrom("conversation_slices")
+    .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
+    .select(({ fn }) => fn.countAll<number>().as("count"))
+    .where("conversations.platform", "=", "slack")
+    .where("conversations.kind", "=", "channel")
+    .where("conversation_slices.salience_verdict", "=", "kept")
+    .where("conversation_slices.legacy_unjudged_at", "is not", null)
+    .where("conversation_slices.indexed_file_id", "is", null);
+  if (emittedLegacyIds.length > 0) {
+    legacyRemainingQuery = legacyRemainingQuery.where("conversation_slices.id", "not in", emittedLegacyIds);
+  }
+  const legacyRemaining = await legacyRemainingQuery.executeTakeFirstOrThrow();
+  summary.legacyRemaining = Number(legacyRemaining.count);
+  options.onSummary?.(summary);
 }
 
-/**
- * Membership reconciliation independent of content emission. Without this a
- * quiet channel outside the re-emission window would retain a departed
- * teammate's access indefinitely, and a channel the bot was removed from
- * would keep serving its indexed slices forever.
- */
 /**
  * Disconnect handling archives indexed channel files when the bot can no
  * longer verify channel membership.
