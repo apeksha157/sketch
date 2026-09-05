@@ -21,6 +21,7 @@ import {
 } from "./slack-emission";
 import { createSlackIndexingConnector } from "./slack-indexing";
 import { ensureSlackConnectorConfig } from "./slack-provisioning";
+import { runConnectorSync } from "./sync";
 import { loadExistingContentHashes, processSyncedItem } from "./sync-item";
 import { toEmailPrincipals } from "./types";
 
@@ -1651,6 +1652,42 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(items.map((item) => item.providerFileId)).toEqual([current.id, newest.id, middle.id]);
       expect(items.map((item) => item.providerFileId)).not.toContain(oldest.id);
       expect(summary).toMatchObject({ legacyDrained: 2, legacyRemaining: 1 });
+    });
+
+    it("moves a successfully persisted legacy slice into the current refresh lane", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const legacy = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        legacy: true,
+      });
+      const facade = fakeFacade({ listMemberChannels: async () => [{ id: "C1", name: "c1" }] });
+
+      const syncResult = await runConnectorSync(
+        db,
+        config.id,
+        logger,
+        { SLACK_EMISSION_LEGACY_PER_RUN: 1 },
+        { slackIndexingFacade: facade },
+      );
+      const persisted = await db
+        .selectFrom("conversation_slices")
+        .select(["indexed_file_id", "legacy_unjudged_at"])
+        .where("id", "=", legacy.id)
+        .executeTakeFirstOrThrow();
+      const refreshed = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade })) refreshed.push(item);
+
+      expect(syncResult.errors).toEqual([]);
+      expect(syncResult.itemsProcessed).toBe(1);
+      expect(persisted.indexed_file_id).not.toBeNull();
+      expect(persisted.legacy_unjudged_at).toBeNull();
+      expect(refreshed.map((item) => item.providerFileId)).toContain(legacy.id);
     });
 
     it("re-emits a growing linked open slice as tier one without advancing its enrichment anchor", async () => {

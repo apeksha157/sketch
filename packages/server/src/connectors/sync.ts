@@ -822,7 +822,7 @@ async function linkConversationSliceIndexedFile(
 ): Promise<void> {
   const result = await db
     .updateTable("conversation_slices")
-    .set({ indexed_file_id: indexedFileId })
+    .set({ indexed_file_id: indexedFileId, legacy_unjudged_at: null })
     .where("id", "=", sliceId)
     .executeTakeFirst();
   if (Number(result.numUpdatedRows ?? 0) === 0) {
