@@ -113,6 +113,46 @@ function runRepositorySuite(label: string, getDb: () => Promise<Kysely<DB>>, opt
       expect(stored.salience_claimed_at).toBeNull();
     });
 
+    it("preserves dropped verdicts when closing open slices", async () => {
+      const first = await seedConversationWindow(db);
+      const second = await seedConversationWindow(db);
+      const repo = createConversationSlicesRepository(db);
+      const idleSlice = await repo.insertIfAbsent({
+        conversationId: first.conversationId,
+        firstMessageId: first.firstMessageId,
+        lastMessageId: first.lastMessageId,
+        startedAt: "2026-07-07T09:00:00.000Z",
+        endedAt: "2026-07-07T09:05:00.000Z",
+        messageCount: 2,
+        flushReason: "gap",
+        rosterSnapshot: "[]",
+        salienceVerdict: "dropped",
+        status: "open",
+      });
+      const boundarySlice = await repo.insertIfAbsent({
+        conversationId: second.conversationId,
+        firstMessageId: second.firstMessageId,
+        lastMessageId: second.lastMessageId,
+        startedAt: "2026-07-07T09:00:00.000Z",
+        endedAt: "2026-07-07T09:05:00.000Z",
+        messageCount: 2,
+        flushReason: "gap",
+        rosterSnapshot: "[]",
+        salienceVerdict: "dropped",
+        status: "open",
+      });
+
+      const idleClosed = await repo.closeOpenSlice(idleSlice.row.id, "max_age");
+      const boundaryClosed = await repo.closeSlice(boundarySlice.row.id);
+
+      expect(idleClosed).toMatchObject({ status: "closed", salience_verdict: "dropped", flush_reason: "max_age" });
+      expect(boundaryClosed).toMatchObject({
+        status: "closed",
+        salience_verdict: "dropped",
+        flush_reason: "llm_boundary",
+      });
+    });
+
     it("gets and advances the composite slice cursor without regressing", async () => {
       const { conversationId } = await seedConversationWindow(db);
       const repo = createConversationSlicesRepository(db);

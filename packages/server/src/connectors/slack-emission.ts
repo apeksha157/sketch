@@ -12,18 +12,27 @@ import {
 } from "../slack/identity-resolution";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
 import { normalizeSourceTimestampForStorage, parseTimestampMs } from "../timestamps";
+import { configDefault } from "./config-default";
 import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
 import { SLACK_CONVERSATION_SLICE_FILE_TYPE, type SyncedItem } from "./types";
 
 export const SLACK_EMISSION_REFRESH_DAYS = 7;
 export const SLACK_EMISSION_PAGE_SIZE = 200;
 const MENTION_TOKEN_PATTERN = /<@(U[A-Z0-9]+)(?:\|[^>]*)?>/g;
+const SLACK_EMISSION_DEFAULTS = {
+  minMessages: configDefault("SLACK_CHUNK_MIN_MESSAGES"),
+  threadMinMessages: configDefault("SLACK_THREAD_MIN_MESSAGES"),
+  provisionalRefreshMessages: configDefault("SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"),
+  provisionalRefreshMaxMinutes: configDefault("SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"),
+  legacyPerRun: configDefault("SLACK_EMISSION_LEGACY_PER_RUN"),
+};
 
 export interface SlackEmissionRunSummary {
   tier1Emits: number;
   tier2Emits: number;
   legacyDrained: number;
   legacyRemaining: number;
+  /** Counts skipped slices, not Slack roster API calls. */
   rosterFailures: number;
 }
 
@@ -34,6 +43,8 @@ interface SlackSliceContext {
   channelName: string;
   linkedSourceUpdatedAt: string | null;
   linkedSourceMeta: string | null;
+  fallbackFileId: string | null;
+  fallbackSourceMeta: string | null;
 }
 
 interface RenderedSlackSlice {
@@ -91,12 +102,13 @@ async function dropInvalidMembership(
 }
 
 /**
- * Slack Web API errors carry the platform code in `data.error`. These codes
- * mean the bot can no longer see the channel, so retrying cannot recover.
+ * Slack Web API errors carry the platform code in `data.error`. Only definitive
+ * access failures dead-letter slices; archived channels remain retryable because
+ * they can be unarchived.
  */
 function isChannelInaccessibleError(err: unknown): boolean {
   const code = (err as { data?: { error?: string } } | null)?.data?.error;
-  return code === "channel_not_found" || code === "not_in_channel" || code === "is_archived";
+  return code === "channel_not_found" || code === "not_in_channel";
 }
 
 async function dropInaccessibleChannelSlices(
@@ -143,12 +155,20 @@ async function listSliceContextPage(
     .selectFrom("conversation_slices")
     .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
     .leftJoin("indexed_files", "indexed_files.id", "conversation_slices.indexed_file_id")
+    .leftJoin("indexed_files as fallback_files", (join) =>
+      join
+        .onRef("fallback_files.provider_file_id", "=", "conversation_slices.id")
+        .on("fallback_files.file_type", "=", SLACK_CONVERSATION_SLICE_FILE_TYPE)
+        .on("fallback_files.is_archived", "=", 0),
+    )
     .selectAll("conversation_slices")
     .select([
       "conversations.provider_conversation_id",
       "conversations.display_name",
       "indexed_files.source_updated_at as linked_source_updated_at",
       "indexed_files.source_meta as linked_source_meta",
+      "fallback_files.id as fallback_file_id",
+      "fallback_files.source_meta as fallback_source_meta",
     ])
     .where("conversations.platform", "=", "slack")
     .where("conversations.kind", "=", "channel")
@@ -201,7 +221,15 @@ async function listSliceContextPage(
 
   const rows = await query.limit(limit).execute();
   return rows.map((row) => {
-    const { provider_conversation_id, display_name, linked_source_updated_at, linked_source_meta, ...slice } = row;
+    const {
+      provider_conversation_id,
+      display_name,
+      linked_source_updated_at,
+      linked_source_meta,
+      fallback_file_id,
+      fallback_source_meta,
+      ...slice
+    } = row;
     return {
       slice: slice as ConversationSliceRow,
       conversationId: slice.conversation_id,
@@ -209,6 +237,8 @@ async function listSliceContextPage(
       channelName: display_name ?? provider_conversation_id,
       linkedSourceUpdatedAt: normalizeSourceTimestampForStorage(linked_source_updated_at),
       linkedSourceMeta: linked_source_meta,
+      fallbackFileId: fallback_file_id,
+      fallbackSourceMeta: fallback_source_meta,
     };
   });
 }
@@ -310,21 +340,6 @@ async function findSliceFileId(db: Kysely<DB>, sliceId: string): Promise<string 
     .where("is_archived", "=", 0)
     .executeTakeFirst();
   return row?.id ?? null;
-}
-
-async function readSliceSourceMeta(
-  db: Kysely<DB>,
-  context: SlackSliceContext,
-): Promise<Record<string, unknown> | null> {
-  if (context.linkedSourceMeta !== null) return readSourceMeta({ source_meta: context.linkedSourceMeta });
-  const row = await db
-    .selectFrom("indexed_files")
-    .select("source_meta")
-    .where("provider_file_id", "=", context.slice.id)
-    .where("file_type", "=", SLACK_CONVERSATION_SLICE_FILE_TYPE)
-    .where("is_archived", "=", 0)
-    .executeTakeFirst();
-  return row ? readSourceMeta(row) : null;
 }
 
 export interface SlackEmissionAnchor {
@@ -437,11 +452,17 @@ export async function* emitSlackSyncedItems(options: {
     legacyRemaining: 0,
     rosterFailures: 0,
   };
-  const minMessages = Math.max(1, options.minMessages ?? 10);
-  const threadMinMessages = Math.max(1, options.threadMinMessages ?? 1);
-  const provisionalRefreshMessages = Math.max(1, options.provisionalRefreshMessages ?? 20);
-  const provisionalRefreshMaxMinutes = Math.max(1, options.provisionalRefreshMaxMinutes ?? 120);
-  const legacyPerRun = Math.max(1, options.legacyPerRun ?? 200);
+  const minMessages = Math.max(1, options.minMessages ?? SLACK_EMISSION_DEFAULTS.minMessages);
+  const threadMinMessages = Math.max(1, options.threadMinMessages ?? SLACK_EMISSION_DEFAULTS.threadMinMessages);
+  const provisionalRefreshMessages = Math.max(
+    1,
+    options.provisionalRefreshMessages ?? SLACK_EMISSION_DEFAULTS.provisionalRefreshMessages,
+  );
+  const provisionalRefreshMaxMinutes = Math.max(
+    1,
+    options.provisionalRefreshMaxMinutes ?? SLACK_EMISSION_DEFAULTS.provisionalRefreshMaxMinutes,
+  );
+  const legacyPerRun = Math.max(1, options.legacyPerRun ?? SLACK_EMISSION_DEFAULTS.legacyPerRun);
   const legacyBacklog = await options.db
     .selectFrom("conversation_slices")
     .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
@@ -472,7 +493,15 @@ export async function* emitSlackSyncedItems(options: {
 
       for (const context of page) {
         if (!isFreshEmissionCandidate(context, refreshedAfter)) continue;
-        const previous = parseEmissionAnchor(await readSliceSourceMeta(options.db, context));
+        const floor = context.slice.provider_thread_id === null ? minMessages : threadMinMessages;
+        const belowFloor = context.slice.status === "open" && context.slice.message_count < floor;
+        const sliceFileId = context.slice.indexed_file_id ?? context.fallbackFileId;
+        if (belowFloor && sliceFileId === null) continue;
+        const previous = parseEmissionAnchor(
+          readSourceMeta({
+            source_meta: context.slice.indexed_file_id === null ? context.fallbackSourceMeta : context.linkedSourceMeta,
+          }),
+        );
         const enrichmentRefresh = slackEmissionRefreshTier({
           status: context.slice.status,
           firstMessageId: context.slice.first_message_id,
@@ -482,15 +511,6 @@ export async function* emitSlackSyncedItems(options: {
           provisionalRefreshMaxMinutes,
           now,
         });
-        const floor = context.slice.provider_thread_id === null ? minMessages : threadMinMessages;
-        const belowFloor = context.slice.status === "open" && context.slice.message_count < floor;
-        if (
-          belowFloor &&
-          context.slice.indexed_file_id === null &&
-          (await findSliceFileId(options.db, context.slice.id)) === null
-        ) {
-          continue;
-        }
 
         let roster = rosterCache.get(context.channelId);
         if (!rosterCache.has(context.channelId)) {

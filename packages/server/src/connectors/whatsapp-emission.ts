@@ -666,7 +666,9 @@ async function syncedItemForKeptSlice(
     messageCount: context.slice.message_count,
     emittedAt,
     enrichedMessageCount:
-      enrichmentRefresh === "full" ? context.slice.message_count : (previousEmission?.enrichedMessageCount ?? 0),
+      enrichmentRefresh === "full"
+        ? context.slice.message_count
+        : (previousEmission?.enrichedMessageCount ?? context.slice.message_count),
     enrichedAt: enrichmentRefresh === "full" ? emittedAt : (previousEmission?.enrichedAt ?? emittedAt),
   };
   return {

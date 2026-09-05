@@ -195,7 +195,11 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
     ): Promise<ConversationSliceRow | undefined> {
       const result = await db
         .updateTable("conversation_slices")
-        .set({ status: "closed", salience_verdict: "kept", flush_reason: flushReason })
+        .set({
+          status: "closed",
+          salience_verdict: sql<ConversationSliceSalienceVerdict>`CASE WHEN salience_verdict = 'dropped' THEN salience_verdict ELSE 'kept' END`,
+          flush_reason: flushReason,
+        })
         .where("id", "=", sliceId)
         .where("status", "=", "open")
         .executeTakeFirst();
@@ -206,7 +210,11 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
     async closeSlice(sliceId: string): Promise<ConversationSliceRow | undefined> {
       const result = await db
         .updateTable("conversation_slices")
-        .set({ status: "closed", salience_verdict: "kept", flush_reason: "llm_boundary" })
+        .set({
+          status: "closed",
+          salience_verdict: sql<ConversationSliceSalienceVerdict>`CASE WHEN salience_verdict = 'dropped' THEN salience_verdict ELSE 'kept' END`,
+          flush_reason: "llm_boundary",
+        })
         .where("id", "=", sliceId)
         .executeTakeFirst();
       if (Number(result.numUpdatedRows ?? 0) === 0) return undefined;

@@ -396,7 +396,7 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
         status: "open",
         verdict: "kept",
         chunkMinMessages: 1,
-        chunkProvisionalRefreshMessages: 3,
+        chunkProvisionalRefreshMessages: 2,
       });
       const config = await seedConnectorConfig(db);
       const initialNow = new Date();
@@ -431,7 +431,7 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
 
       expect(bootstrap).toHaveLength(1);
       expect(bootstrap[0]?.enrichmentRefresh).toBe("embeddings_only");
-      expect(bootstrap[0]?.sourceMeta).toMatchObject({ messageCount: 2, enrichedMessageCount: 0 });
+      expect(bootstrap[0]?.sourceMeta).toMatchObject({ messageCount: 2, enrichedMessageCount: 2 });
 
       await runConnectorSync(db, config.id, createTestLogger());
       const persisted = await db
@@ -439,8 +439,20 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
         .select(["source_meta", "summary_status"])
         .where("id", "=", linked.indexed_file_id as string)
         .executeTakeFirstOrThrow();
-      expect(JSON.parse(persisted.source_meta ?? "{}")).toMatchObject({ messageCount: 2, enrichedMessageCount: 0 });
+      expect(JSON.parse(persisted.source_meta ?? "{}")).toMatchObject({ messageCount: 2, enrichedMessageCount: 2 });
       expect(persisted.summary_status).toBe("done");
+
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ name: "Renamed rollout group again" })
+        .where("jid", "=", seeded.groupJid)
+        .execute();
+      const following = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 120_000),
+      });
+      expect(following).toHaveLength(1);
+      expect(following[0]?.enrichmentRefresh).toBe("embeddings_only");
     });
 
     it("emits changed open content at tier one and upgrades to tier two when the refresh clock expires", async () => {

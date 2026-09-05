@@ -1,4 +1,4 @@
-import { type Config, configSchema } from "../config";
+import { configDefault } from "./config-default";
 import { resolveSlackChunkEngineKnobs } from "./slack-chunk-adapters";
 import { runSlackChunkEngine } from "./slack-chunk-engine-runner";
 import {
@@ -8,10 +8,6 @@ import {
   reconcileSlackChannelAcls,
 } from "./slack-emission";
 import type { Connector, ConnectorCredentials, SyncedItem } from "./types";
-
-function configDefault<Key extends keyof Config>(key: Key): Config[Key] {
-  return configSchema.shape[key].parse(undefined) as Config[Key];
-}
 
 const SLACK_CHUNK_DEFAULTS = {
   SLACK_CHUNK_WINDOW_MESSAGES: configDefault("SLACK_CHUNK_WINDOW_MESSAGES"),

@@ -1640,49 +1640,55 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(summary).toMatchObject({ rosterFailures: 2, tier2Emits: 1 });
     });
 
-    it("dead-letters every listed slice when Slack reports an inaccessible channel", async () => {
-      const first = await insertEmittableSlackSlice(db, {
-        channelId: "C_GONE",
-        startedAt: "2026-09-05T08:00:00.000Z",
-      });
-      const second = await insertEmittableSlackSlice(db, {
-        channelId: "C_GONE",
-        startedAt: "2026-09-05T09:00:00.000Z",
-      });
-      let rosterCalls = 0;
-      const facade = fakeFacade({
-        listChannelMembers: async () => {
-          rosterCalls += 1;
-          throw { data: { error: "not_in_channel" } };
-        },
-      });
+    it.each(["channel_not_found", "not_in_channel"])(
+      "dead-letters every listed slice when Slack reports %s",
+      async (errorCode) => {
+        const first = await insertEmittableSlackSlice(db, {
+          channelId: "C_GONE",
+          startedAt: "2026-09-05T08:00:00.000Z",
+        });
+        const second = await insertEmittableSlackSlice(db, {
+          channelId: "C_GONE",
+          startedAt: "2026-09-05T09:00:00.000Z",
+        });
+        let rosterCalls = 0;
+        const facade = fakeFacade({
+          listChannelMembers: async () => {
+            rosterCalls += 1;
+            throw { data: { error: errorCode } };
+          },
+        });
 
-      const firstRun = [];
-      for await (const item of emitSlackSyncedItems({ db, logger, facade })) firstRun.push(item);
-      const dropped = await db
-        .selectFrom("conversation_slices")
-        .select(["id", "salience_verdict", "salience_signals"])
-        .where("id", "in", [first.id, second.id])
-        .orderBy("id")
-        .execute();
+        const firstRun = [];
+        for await (const item of emitSlackSyncedItems({ db, logger, facade })) firstRun.push(item);
+        const dropped = await db
+          .selectFrom("conversation_slices")
+          .select(["id", "salience_verdict", "salience_signals"])
+          .where("id", "in", [first.id, second.id])
+          .orderBy("id")
+          .execute();
 
-      const secondRun = [];
-      for await (const item of emitSlackSyncedItems({ db, logger, facade })) secondRun.push(item);
+        const secondRun = [];
+        for await (const item of emitSlackSyncedItems({ db, logger, facade })) secondRun.push(item);
 
-      expect(firstRun).toHaveLength(0);
-      expect(secondRun).toHaveLength(0);
-      expect(rosterCalls).toBe(1);
-      expect(dropped).toEqual([
-        expect.objectContaining({ salience_verdict: "dropped" }),
-        expect.objectContaining({ salience_verdict: "dropped" }),
-      ]);
-      expect(dropped.map((row) => JSON.parse(row.salience_signals ?? "{}"))).toEqual([
-        { droppedReason: "channel_inaccessible" },
-        { droppedReason: "channel_inaccessible" },
-      ]);
-    });
+        expect(firstRun).toHaveLength(0);
+        expect(secondRun).toHaveLength(0);
+        expect(rosterCalls).toBe(1);
+        expect(dropped).toEqual([
+          expect.objectContaining({ salience_verdict: "dropped" }),
+          expect.objectContaining({ salience_verdict: "dropped" }),
+        ]);
+        expect(dropped.map((row) => JSON.parse(row.salience_signals ?? "{}"))).toEqual([
+          { droppedReason: "channel_inaccessible" },
+          { droppedReason: "channel_inaccessible" },
+        ]);
+      },
+    );
 
-    it("keeps transient roster failures eligible for the next run", async () => {
+    it.each([
+      { name: "an ordinary outage", error: new Error("transient Slack outage") },
+      { name: "is_archived", error: { data: { error: "is_archived" } } },
+    ])("keeps $name roster failures eligible for the next run", async ({ error }) => {
       const first = await insertEmittableSlackSlice(db, {
         channelId: "C_RETRY",
         startedAt: "2026-09-05T08:00:00.000Z",
@@ -1695,7 +1701,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       const facade = fakeFacade({
         listChannelMembers: async () => {
           rosterCalls += 1;
-          throw new Error("transient Slack outage");
+          throw error;
         },
       });
 
