@@ -90,6 +90,39 @@ async function dropInvalidMembership(
   );
 }
 
+/**
+ * Slack Web API errors carry the platform code in `data.error`. These codes
+ * mean the bot can no longer see the channel, so retrying cannot recover.
+ */
+function isChannelInaccessibleError(err: unknown): boolean {
+  const code = (err as { data?: { error?: string } } | null)?.data?.error;
+  return code === "channel_not_found" || code === "not_in_channel" || code === "is_archived";
+}
+
+async function dropInaccessibleChannelSlices(
+  db: Kysely<DB>,
+  logger: Logger,
+  contexts: SlackSliceContext[],
+  err: unknown,
+): Promise<void> {
+  const sliceIds = contexts.map((context) => context.slice.id);
+  if (sliceIds.length === 0) return;
+  await db
+    .updateTable("conversation_slices")
+    .set({
+      salience_verdict: "dropped",
+      salience_signals: JSON.stringify({ droppedReason: "channel_inaccessible" }),
+      salience_claim_token: null,
+      salience_claimed_at: null,
+    })
+    .where("id", "in", sliceIds)
+    .execute();
+  logger.warn(
+    { err, channelId: contexts[0]?.channelId, sliceCount: sliceIds.length },
+    "Slack slices dead-lettered: channel inaccessible",
+  );
+}
+
 function resolveMentionTokens(text: string, displayNameBySlackId: Map<string, string>): string {
   return text.replace(MENTION_TOKEN_PATTERN, (_match, slackUserId: string) => {
     const name = displayNameBySlackId.get(slackUserId);
@@ -426,7 +459,7 @@ export async function* emitSlackSyncedItems(options: {
         id: last.slice.id,
       };
       remainingForLane -= page.length;
-      const rosterCache = new Map<string, SlackRosterSnapshot>();
+      const rosterCache = new Map<string, SlackRosterSnapshot | null>();
 
       for (const context of page) {
         if (!isFreshEmissionCandidate(context, refreshedAfter)) continue;
@@ -434,7 +467,7 @@ export async function* emitSlackSyncedItems(options: {
         if (context.slice.status === "open" && context.slice.message_count < floor) continue;
 
         let roster = rosterCache.get(context.channelId);
-        if (!roster) {
+        if (!rosterCache.has(context.channelId)) {
           try {
             roster = await resolveSlackChannelRoster({
               db: options.db,
@@ -444,11 +477,23 @@ export async function* emitSlackSyncedItems(options: {
               logger: options.logger,
             });
           } catch (err) {
-            summary.rosterFailures += 1;
+            roster = null;
+            rosterCache.set(context.channelId, null);
+            if (isChannelInaccessibleError(err)) {
+              await dropInaccessibleChannelSlices(
+                options.db,
+                options.logger,
+                page.filter((candidate) => candidate.channelId === context.channelId),
+                err,
+              );
+            }
             options.logger.warn({ err, channelId: context.channelId }, "Slack emission roster resolution failed");
-            continue;
           }
-          rosterCache.set(context.channelId, roster);
+          if (roster) rosterCache.set(context.channelId, roster);
+        }
+        if (!roster) {
+          summary.rosterFailures += 1;
+          continue;
         }
 
         const serializedRoster = JSON.stringify(roster);
