@@ -316,6 +316,11 @@ describe("configSchema", () => {
       }
     });
 
+    it("caps the Slack legacy emission drain at 2000 slices per run", () => {
+      expect(configSchema.safeParse({ SLACK_EMISSION_LEGACY_PER_RUN: "2000" }).success).toBe(true);
+      expect(configSchema.safeParse({ SLACK_EMISSION_LEGACY_PER_RUN: "2001" }).success).toBe(false);
+    });
+
     it("parses vision analysis environment settings", () => {
       const result = configSchema.safeParse({
         VISION_ENABLED: "true",

@@ -442,7 +442,16 @@ export async function* emitSlackSyncedItems(options: {
   const provisionalRefreshMessages = Math.max(1, options.provisionalRefreshMessages ?? 20);
   const provisionalRefreshMaxMinutes = Math.max(1, options.provisionalRefreshMaxMinutes ?? 120);
   const legacyPerRun = Math.max(1, options.legacyPerRun ?? 200);
-  const emittedLegacyIds: string[] = [];
+  const legacyBacklog = await options.db
+    .selectFrom("conversation_slices")
+    .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
+    .select(({ fn }) => fn.countAll<number>().as("count"))
+    .where("conversations.platform", "=", "slack")
+    .where("conversations.kind", "=", "channel")
+    .where("conversation_slices.salience_verdict", "=", "kept")
+    .where("conversation_slices.legacy_unjudged_at", "is not", null)
+    .where("conversation_slices.indexed_file_id", "is", null)
+    .executeTakeFirstOrThrow();
 
   for (const lane of ["current", "legacy"] as const) {
     let cursor: { timestamp: string; id: string } | null = null;
@@ -553,7 +562,6 @@ export async function* emitSlackSyncedItems(options: {
         else summary.tier1Emits += 1;
         if (lane === "legacy") {
           summary.legacyDrained += 1;
-          emittedLegacyIds.push(context.slice.id);
         }
 
         yield {
@@ -587,20 +595,7 @@ export async function* emitSlackSyncedItems(options: {
     }
   }
 
-  let legacyRemainingQuery = options.db
-    .selectFrom("conversation_slices")
-    .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
-    .select(({ fn }) => fn.countAll<number>().as("count"))
-    .where("conversations.platform", "=", "slack")
-    .where("conversations.kind", "=", "channel")
-    .where("conversation_slices.salience_verdict", "=", "kept")
-    .where("conversation_slices.legacy_unjudged_at", "is not", null)
-    .where("conversation_slices.indexed_file_id", "is", null);
-  if (emittedLegacyIds.length > 0) {
-    legacyRemainingQuery = legacyRemainingQuery.where("conversation_slices.id", "not in", emittedLegacyIds);
-  }
-  const legacyRemaining = await legacyRemainingQuery.executeTakeFirstOrThrow();
-  summary.legacyRemaining = Number(legacyRemaining.count);
+  summary.legacyRemaining = Math.max(0, Number(legacyBacklog.count) - summary.legacyDrained);
   options.onSummary?.(summary);
 }
 

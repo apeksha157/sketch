@@ -224,7 +224,7 @@ export const configSchema = z.object({
   SLACK_CHUNK_CHANNEL_WORKER_POOL: z.coerce.number().int().min(1).default(4),
   SLACK_DISCOVERY_PAGE_ROWS: z.coerce.number().int().min(1).default(5000),
   SLACK_DISCOVERY_MAX_PAGES: z.coerce.number().int().min(1).default(20),
-  SLACK_EMISSION_LEGACY_PER_RUN: z.coerce.number().int().min(1).default(200),
+  SLACK_EMISSION_LEGACY_PER_RUN: z.coerce.number().int().min(1).max(2000).default(200),
   WHATSAPP_SLICE_GAP_MINUTES: z.coerce.number().int().min(1).default(25),
   WHATSAPP_SLICE_MAX_AGE_MINUTES: z.coerce.number().int().min(1).default(120),
   WHATSAPP_SLICE_MAX_MESSAGES: z.coerce.number().int().min(1).default(50),
