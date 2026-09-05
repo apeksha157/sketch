@@ -241,7 +241,7 @@ export async function repairSlackChunkStreamsOnStartup(
 ): Promise<{ orphanedOpenSlicesClosed: number; legacyVerdictsKept: number }> {
   const repaired = await sql`
     UPDATE conversation_slices
-    SET status = 'closed', flush_reason = 'gap'
+    SET status = 'closed', flush_reason = 'gap', indexed_file_id = NULL
     WHERE status = 'open'
       AND EXISTS (
         SELECT 1

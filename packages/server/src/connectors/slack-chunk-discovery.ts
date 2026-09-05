@@ -8,7 +8,6 @@ interface DiscoveryRow {
   is_thread_reply: number;
   thread_key: string | null;
   max_id: number | string;
-  row_count: number | string;
 }
 
 export interface SlackChunkDiscoveryOptions {
@@ -48,8 +47,7 @@ async function discoverPage(db: Kysely<DB>, pageMax: number): Promise<DiscoveryR
       m.conversation_id,
       m.is_thread_reply,
       CASE WHEN m.is_thread_reply = 1 THEN m.provider_thread_id ELSE NULL END AS thread_key,
-      MAX(m.id) AS max_id,
-      COUNT(*) AS row_count
+      MAX(m.id) AS max_id
     FROM conversation_messages AS m
     INNER JOIN conversations AS c ON c.id = m.conversation_id
     LEFT JOIN conversation_slice_stream_cursors AS r

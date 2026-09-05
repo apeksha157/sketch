@@ -472,8 +472,25 @@ export async function* emitSlackSyncedItems(options: {
 
       for (const context of page) {
         if (!isFreshEmissionCandidate(context, refreshedAfter)) continue;
+        const previous = parseEmissionAnchor(await readSliceSourceMeta(options.db, context));
+        const enrichmentRefresh = slackEmissionRefreshTier({
+          status: context.slice.status,
+          firstMessageId: context.slice.first_message_id,
+          messageCount: context.slice.message_count,
+          previous,
+          provisionalRefreshMessages,
+          provisionalRefreshMaxMinutes,
+          now,
+        });
         const floor = context.slice.provider_thread_id === null ? minMessages : threadMinMessages;
-        if (context.slice.status === "open" && context.slice.message_count < floor) continue;
+        const belowFloor = context.slice.status === "open" && context.slice.message_count < floor;
+        if (
+          belowFloor &&
+          context.slice.indexed_file_id === null &&
+          (await findSliceFileId(options.db, context.slice.id)) === null
+        ) {
+          continue;
+        }
 
         let roster = rosterCache.get(context.channelId);
         if (!rosterCache.has(context.channelId)) {
@@ -525,17 +542,6 @@ export async function* emitSlackSyncedItems(options: {
           );
           continue;
         }
-
-        const previous = parseEmissionAnchor(await readSliceSourceMeta(options.db, context));
-        const enrichmentRefresh = slackEmissionRefreshTier({
-          status: context.slice.status,
-          firstMessageId: context.slice.first_message_id,
-          messageCount: context.slice.message_count,
-          previous,
-          provisionalRefreshMessages,
-          provisionalRefreshMaxMinutes,
-          now,
-        });
 
         let rendered: RenderedSlackSlice;
         try {

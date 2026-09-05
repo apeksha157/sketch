@@ -11,6 +11,7 @@ import { createTestDb, createTestPgDb } from "../test-utils";
 import type { ChunkEngineKnobs } from "./chunk-engine";
 import { runEnrichment } from "./enrichment";
 import type { GeminiGenerator } from "./gemini-generate";
+import { repairSlackChunkStreamsOnStartup } from "./slack-chunk-adapters";
 import { runSlackChunkEngine } from "./slack-chunk-engine-runner";
 import {
   type SlackEmissionRunSummary,
@@ -394,6 +395,52 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         channelName: "new-name",
       });
       expect(unchanged).toBe(false);
+    });
+
+    it("startup repair requeues a linked orphaned open slice", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const orphan = await insertEmittableSlackSlice(db, {
+        channelId: "C_REPAIR",
+        startedAt: "2026-09-01T08:00:00.000Z",
+        status: "open",
+      });
+      await insertEmittableSlackSlice(db, {
+        channelId: "C_REPAIR",
+        startedAt: "2026-09-01T09:00:00.000Z",
+        status: "closed",
+      });
+      await db
+        .insertInto("indexed_files")
+        .values({
+          id: "file-orphaned-open",
+          connector_config_id: config.id,
+          provider_file_id: orphan.id,
+          file_name: "Slack orphan",
+          file_type: "slack_conversation_slice",
+          content_category: "document",
+          source: "slack",
+          synced_at: "2026-09-01T08:00:00.000Z",
+        })
+        .execute();
+      await db
+        .updateTable("conversation_slices")
+        .set({ indexed_file_id: "file-orphaned-open" })
+        .where("id", "=", orphan.id)
+        .execute();
+
+      await repairSlackChunkStreamsOnStartup(db, logger);
+      const repaired = await db
+        .selectFrom("conversation_slices")
+        .select(["status", "indexed_file_id"])
+        .where("id", "=", orphan.id)
+        .executeTakeFirstOrThrow();
+
+      expect(repaired).toEqual({ status: "closed", indexed_file_id: null });
     });
 
     it("migration 154 reclassifies mpdm-named channel conversations as mpim", async () => {
@@ -1507,6 +1554,57 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(trimmedItem?.content).toContain("old boundary message 1");
       expect(trimmedItem?.content).toContain("old boundary message 2");
       expect(trimmedItem?.content).not.toContain("old boundary message 3");
+    });
+
+    it("re-emits a linked open slice at tier two when a shrink moves it below the floor", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const slice = await insertEmittableSlackSlice(db, {
+        channelId: "C_SHRINK_FLOOR",
+        startedAt: "2026-09-05T10:00:00.000Z",
+        messageCount: 3,
+        status: "open",
+      });
+      const initialItems = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade(), minMessages: 3 })) {
+        initialItems.push(item);
+      }
+      const initial = initialItems[0];
+      if (!initial) throw new Error("Expected initial Slack emission");
+      const persisted = await processSyncedItem({
+        db,
+        repo: createConnectorRepository(db),
+        connectorConfigId: config.id,
+        connectorType: "slack",
+        item: initial,
+        existingHashes: new Map(),
+      });
+      if (persisted.kind === "skipped_empty") throw new Error("Expected persisted Slack emission");
+      const membership = JSON.parse(slice.denoised_message_ids ?? "[]") as number[];
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          indexed_file_id: null,
+          last_message_id: membership[0],
+          ended_at: new Date(Date.parse(slice.ended_at) + 60_000).toISOString(),
+          message_count: 1,
+          denoised_message_ids: JSON.stringify([membership[0]]),
+        })
+        .where("id", "=", slice.id)
+        .execute();
+
+      const refreshed = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade(), minMessages: 3 })) {
+        refreshed.push(item);
+      }
+
+      expect(refreshed).toHaveLength(1);
+      expect(refreshed[0]?.providerFileId).toBe(slice.id);
+      expect(refreshed[0]?.enrichmentRefresh).toBe("full");
     });
 
     it("caches a channel roster failure for the page and reports every skipped slice", async () => {

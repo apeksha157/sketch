@@ -1,3 +1,4 @@
+import { type Config, configSchema } from "../config";
 import { resolveSlackChunkEngineKnobs } from "./slack-chunk-adapters";
 import { runSlackChunkEngine } from "./slack-chunk-engine-runner";
 import {
@@ -8,25 +9,31 @@ import {
 } from "./slack-emission";
 import type { Connector, ConnectorCredentials, SyncedItem } from "./types";
 
+function configDefault<Key extends keyof Config>(key: Key): Config[Key] {
+  return configSchema.shape[key].parse(undefined) as Config[Key];
+}
+
 const SLACK_CHUNK_DEFAULTS = {
-  SLACK_CHUNK_WINDOW_MESSAGES: 250,
-  SLACK_CHUNK_WINDOW_TOKENS: 7_500,
-  SLACK_CHUNK_MIN_MESSAGES: 10,
-  SLACK_CHUNK_TARGET_MESSAGES: 40,
-  SLACK_CHUNK_MAX_MESSAGES: 80,
-  SLACK_CHUNK_MAX_TOKENS: 1_500,
-  SLACK_THREAD_MIN_MESSAGES: 1,
-  SLACK_CHUNK_TICK_MINUTES: 30,
-  SLACK_CHUNK_IDLE_CLOSE_HOURS: 96,
-  SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES: 20,
-  SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: 120,
-  SLACK_CHUNK_MODEL: null,
-  SLACK_CHUNK_REASONING_EFFORT: "high" as const,
-  SLACK_CHUNK_BURST_THRESHOLD_MESSAGES: null,
-  SLACK_CHUNK_TOPIC_REGISTRY_CAP: 30,
-  SLACK_CHUNK_CHANNEL_WORKER_POOL: 4,
-  SLACK_CHUNK_MAX_WINDOWS_PER_RUN: 8,
-  SLACK_EMISSION_LEGACY_PER_RUN: 200,
+  SLACK_CHUNK_WINDOW_MESSAGES: configDefault("SLACK_CHUNK_WINDOW_MESSAGES"),
+  SLACK_CHUNK_WINDOW_TOKENS: configDefault("SLACK_CHUNK_WINDOW_TOKENS"),
+  SLACK_CHUNK_MIN_MESSAGES: configDefault("SLACK_CHUNK_MIN_MESSAGES"),
+  SLACK_CHUNK_TARGET_MESSAGES: configDefault("SLACK_CHUNK_TARGET_MESSAGES"),
+  SLACK_CHUNK_MAX_MESSAGES: configDefault("SLACK_CHUNK_MAX_MESSAGES"),
+  SLACK_CHUNK_MAX_TOKENS: configDefault("SLACK_CHUNK_MAX_TOKENS"),
+  SLACK_THREAD_MIN_MESSAGES: configDefault("SLACK_THREAD_MIN_MESSAGES"),
+  SLACK_CHUNK_TICK_MINUTES: configDefault("SLACK_CHUNK_TICK_MINUTES"),
+  SLACK_CHUNK_IDLE_CLOSE_HOURS: configDefault("SLACK_CHUNK_IDLE_CLOSE_HOURS"),
+  SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES: configDefault("SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"),
+  SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: configDefault("SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"),
+  SLACK_CHUNK_MODEL: configDefault("SLACK_CHUNK_MODEL"),
+  SLACK_CHUNK_REASONING_EFFORT: configDefault("SLACK_CHUNK_REASONING_EFFORT"),
+  SLACK_CHUNK_BURST_THRESHOLD_MESSAGES: configDefault("SLACK_CHUNK_BURST_THRESHOLD_MESSAGES"),
+  SLACK_CHUNK_TOPIC_REGISTRY_CAP: configDefault("SLACK_CHUNK_TOPIC_REGISTRY_CAP"),
+  SLACK_CHUNK_CHANNEL_WORKER_POOL: configDefault("SLACK_CHUNK_CHANNEL_WORKER_POOL"),
+  SLACK_CHUNK_MAX_WINDOWS_PER_RUN: configDefault("SLACK_CHUNK_MAX_WINDOWS_PER_RUN"),
+  SLACK_DISCOVERY_PAGE_ROWS: configDefault("SLACK_DISCOVERY_PAGE_ROWS"),
+  SLACK_DISCOVERY_MAX_PAGES: configDefault("SLACK_DISCOVERY_MAX_PAGES"),
+  SLACK_EMISSION_LEGACY_PER_RUN: configDefault("SLACK_EMISSION_LEGACY_PER_RUN"),
 };
 
 function assertSystemCredentials(credentials: ConnectorCredentials): void {
@@ -112,8 +119,8 @@ export function createSlackIndexingConnector(): Connector {
         generate: slackChunkerGenerate,
         channelKnobs: knobs.channel,
         threadKnobs: knobs.thread,
-        discoveryPageRows: appConfig?.SLACK_DISCOVERY_PAGE_ROWS ?? 5_000,
-        discoveryMaxPages: appConfig?.SLACK_DISCOVERY_MAX_PAGES ?? 20,
+        discoveryPageRows: appConfig?.SLACK_DISCOVERY_PAGE_ROWS ?? SLACK_CHUNK_DEFAULTS.SLACK_DISCOVERY_PAGE_ROWS,
+        discoveryMaxPages: appConfig?.SLACK_DISCOVERY_MAX_PAGES ?? SLACK_CHUNK_DEFAULTS.SLACK_DISCOVERY_MAX_PAGES,
       });
 
       let emitted = 0;
