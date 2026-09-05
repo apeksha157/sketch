@@ -29,12 +29,7 @@ import type { ConsolidatedLoopAgenticGenerator } from "./consolidated-loop";
 import { resolveConnectorCredentials } from "./credential-providers";
 import { reconcileDanglingCrmRollups, refreshCrmActivityRollups } from "./crm-rollup";
 import { isEmailSyncedItem, persistEnvelopeMetadata, recordSuppressedEmailRecord } from "./email";
-import {
-  SCHEDULED_ENRICHMENT_MAX_FILES_PER_RUN,
-  SCHEDULED_ENRICHMENT_TIME_BUDGET_MS,
-  isEnrichmentActive,
-  runEnrichment,
-} from "./enrichment";
+import { SCHEDULED_ENRICHMENT_TIME_BUDGET_MS, isEnrichmentActive, runEnrichment } from "./enrichment";
 import {
   createEnrichmentEmbeddingProvider,
   createEnrichmentGenerator,
@@ -822,6 +817,7 @@ export interface SyncSchedulerDeps {
 const SYNC_CONCURRENCY = 4;
 const STALE_SYNCING_THRESHOLD_MS = 60 * 60 * 1000;
 const DEFAULT_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+const ENRICHMENT_TICK_INTERVAL_MS = 10 * 60 * 1000;
 const CO_MENTION_FULL_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let lastCoMentionFullSweepAt = 0;
 
@@ -980,7 +976,6 @@ export async function runScheduledEnrichment(db: Kysely<DB>, logger: Logger, dep
       downloadImage: deps?.downloadImage,
       consolidatedLoopMode: deps?.appConfig?.CONSOLIDATED_LOOP_MODE,
       consolidatedLoopAgenticGenerator: deps?.consolidatedLoopAgenticGenerator,
-      maxFilesPerRun: SCHEDULED_ENRICHMENT_MAX_FILES_PER_RUN,
       timeBudgetMs: SCHEDULED_ENRICHMENT_TIME_BUDGET_MS,
     });
 
@@ -1076,6 +1071,7 @@ export function startSyncScheduler(
 ): SyncSchedulerHandle {
   let aborted = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let enrichmentTimer: ReturnType<typeof setTimeout> | null = null;
   let scheduledEnrichmentInFlight = false;
 
   // Recover any connectors stuck in "syncing" from a previous crash
@@ -1088,29 +1084,41 @@ export function startSyncScheduler(
     logger.error({ err }, "Failed to recover stale enrichments on startup");
   });
 
-  // Startup enrichment disabled — enrichment now runs only when explicitly
-  // triggered from the UI or after the scheduled sync cycle. This prevents
-  // DB contention between enrichment and sync writes.
-  logger.info("Startup enrichment skipped (trigger manually from UI)");
+  // Startup enrichment disabled — the first scheduled slice runs one
+  // enrichment interval after boot. This prevents DB contention between
+  // enrichment and the startup sync/recovery writes.
+  logger.info("Startup enrichment skipped (first slice runs on the enrichment timer)");
 
   async function scheduleNext(delayMs?: number): Promise<void> {
     if (aborted) return;
     const nextMs = delayMs ?? (await getIntervalMsFromSettings(db, intervalMs));
     timer = setTimeout(async () => {
       if (aborted) return;
-      let shouldRunEnrichment = false;
       try {
         await runAllSyncs(db, logger, deps);
-        shouldRunEnrichment = true;
       } catch (err) {
         logger.error({ err }, "Sync scheduler tick failed");
       }
       scheduleNext();
-      if (shouldRunEnrichment && !aborted) {
-        if (scheduledEnrichmentInFlight || isEnrichmentActive()) {
-          logger.warn("Skipping scheduled enrichment because enrichment is active");
-          return;
-        }
+    }, nextMs);
+    logger.debug({ intervalMs: nextMs }, "Next sync scheduled");
+  }
+
+  /**
+   * Enrichment runs on its own cadence instead of piggybacking on sync
+   * completion: chained to the sync tick, a slow connector scan pushed the
+   * next enrichment slice out to a 50-minute cycle even though each slice is
+   * budget-capped. The in-flight/active guards keep slices from overlapping
+   * each other or a manual run; DB contention with a concurrently running
+   * sync stays bounded by the slice's time budget.
+   */
+  function scheduleNextEnrichment(): void {
+    if (aborted) return;
+    enrichmentTimer = setTimeout(async () => {
+      if (aborted) return;
+      if (scheduledEnrichmentInFlight || isEnrichmentActive()) {
+        logger.warn("Skipping scheduled enrichment because enrichment is active");
+      } else {
         scheduledEnrichmentInFlight = true;
         try {
           await runScheduledEnrichment(db, logger, deps);
@@ -1120,17 +1128,19 @@ export function startSyncScheduler(
           scheduledEnrichmentInFlight = false;
         }
       }
-    }, nextMs);
-    logger.debug({ intervalMs: nextMs }, "Next sync scheduled");
+      scheduleNextEnrichment();
+    }, ENRICHMENT_TICK_INTERVAL_MS);
   }
 
   scheduleNext();
-  logger.info({ intervalMs }, "Sync scheduler started");
+  scheduleNextEnrichment();
+  logger.info({ intervalMs, enrichmentIntervalMs: ENRICHMENT_TICK_INTERVAL_MS }, "Sync scheduler started");
 
   return {
     async stop() {
       aborted = true;
       if (timer) clearTimeout(timer);
+      if (enrichmentTimer) clearTimeout(enrichmentTimer);
       logger.info("Sync scheduler stopped");
     },
   };

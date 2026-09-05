@@ -25,7 +25,6 @@ vi.mock("./registry", () => ({
 }));
 
 vi.mock("./enrichment", () => ({
-  SCHEDULED_ENRICHMENT_MAX_FILES_PER_RUN: 50,
   SCHEDULED_ENRICHMENT_TIME_BUDGET_MS: 4 * 60 * 1000,
   clearEnrichmentData: vi.fn(),
   isEnrichmentActive: vi.fn(() => mocks.enrichment.active),
@@ -87,20 +86,24 @@ describe("startSyncScheduler enrichment timing", () => {
     });
 
     const intervalMs = 5 * 60 * 1000;
+    const enrichmentIntervalMs = 10 * 60 * 1000;
     const handle = startSyncScheduler(db, logger, intervalMs);
     try {
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(intervalMs);
-      await vi.waitFor(() => expect(mocks.connectorSync).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(enrichmentIntervalMs);
+      await vi.waitFor(() => expect(mocks.connectorSync).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(mocks.runEnrichment).toHaveBeenCalledTimes(1));
 
       await vi.advanceTimersByTimeAsync(intervalMs);
-      await vi.waitFor(() => expect(mocks.connectorSync).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(mocks.connectorSync).toHaveBeenCalledTimes(3));
       expect(mocks.runEnrichment).toHaveBeenCalledTimes(1);
 
       mocks.enrichment.release?.();
       await vi.advanceTimersByTimeAsync(0);
       await vi.waitFor(() => expect(mocks.enrichment.active).toBe(false));
+
+      await vi.advanceTimersByTimeAsync(enrichmentIntervalMs);
+      await vi.waitFor(() => expect(mocks.runEnrichment).toHaveBeenCalledTimes(2));
     } finally {
       await handle.stop();
     }
