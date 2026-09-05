@@ -586,18 +586,14 @@ function readWhatsAppEmissionSourceMeta(sourceMeta: string | null): WhatsAppEmis
  * to do". Debugging a pipeline that looks dead always asks "why not", and a
  * count alone cannot answer it.
  */
-export type WhatsAppEmissionSkipReason =
-  | "no_access_scope"
-  | "below_min_messages"
-  | "unchanged_content"
-  | "below_refresh_threshold";
+export type WhatsAppEmissionSkipReason = "no_access_scope" | "below_min_messages" | "unchanged_content";
 
 async function syncedItemForKeptSlice(
   db: Kysely<DB>,
   context: SliceContext,
   logger: Logger,
   now: Date,
-  provisionalRefreshMaxMinutes: number | undefined,
+  provisionalRefreshMaxMinutes: number,
 ): Promise<{ item: SyncedItem | null; skippedNoScope: boolean; skipReason: WhatsAppEmissionSkipReason | null }> {
   const rendered = await renderSlice(db, context, logger);
   if (rendered.serializedRosterSnapshot !== context.slice.roster_snapshot) {
@@ -645,27 +641,22 @@ async function syncedItemForKeptSlice(
         return { item: null, skippedNoScope: false, skipReason: "unchanged_content" };
       const refreshMessages =
         context.chunkProvisionalRefreshMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES;
-      if (provisionalRefreshMaxMinutes === undefined) {
-        const previousMessageCount = renderedMessageCount(existing?.content ?? null);
-        if (
-          context.slice.message_count >= previousMessageCount &&
-          context.slice.message_count - previousMessageCount < refreshMessages
-        ) {
-          return { item: null, skippedNoScope: false, skipReason: "below_refresh_threshold" };
+      previousEmission = readWhatsAppEmissionSourceMeta(existing?.source_meta ?? null);
+      if (previousEmission) {
+        const boundaryChanged = context.slice.first_message_id !== previousEmission.firstMessageId;
+        const shrank = context.slice.message_count < previousEmission.messageCount;
+        const countRefreshDue = context.slice.message_count - previousEmission.enrichedMessageCount >= refreshMessages;
+        const timeRefreshDue =
+          now.getTime() - Date.parse(previousEmission.enrichedAt) >= provisionalRefreshMaxMinutes * 60_000;
+        if (!boundaryChanged && !shrank && !countRefreshDue && !timeRefreshDue) {
+          enrichmentRefresh = "embeddings_only";
         }
-      } else {
-        previousEmission = readWhatsAppEmissionSourceMeta(existing?.source_meta ?? null);
-        if (previousEmission) {
-          const boundaryChanged = context.slice.first_message_id !== previousEmission.firstMessageId;
-          const shrank = context.slice.message_count < previousEmission.messageCount;
-          const countRefreshDue =
-            context.slice.message_count - previousEmission.enrichedMessageCount >= refreshMessages;
-          const timeRefreshDue =
-            now.getTime() - Date.parse(previousEmission.enrichedAt) >= provisionalRefreshMaxMinutes * 60_000;
-          if (!boundaryChanged && !shrank && !countRefreshDue && !timeRefreshDue) {
-            enrichmentRefresh = "embeddings_only";
-          }
-        }
+      } else if (context.slice.message_count === renderedMessageCount(existing?.content ?? null)) {
+        /**
+         * Files created before emission anchors existed bootstrap at tier one
+         * when membership is unchanged, avoiding a rollout-wide LLM refresh.
+         */
+        enrichmentRefresh = "embeddings_only";
       }
     }
   }
@@ -785,7 +776,7 @@ export async function* emitWhatsAppSyncedItems(options: {
   db: Kysely<DB>;
   logger: Logger;
   emissionRefreshDays?: number;
-  provisionalRefreshMaxMinutes?: number;
+  provisionalRefreshMaxMinutes: number;
   now?: Date;
   onSkippedNoScope?: () => void;
   /**

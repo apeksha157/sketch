@@ -166,7 +166,7 @@ async function collectEmittedWhatsAppItems(
     db,
     logger: fakeLogger(),
     emissionRefreshDays: options.emissionRefreshDays,
-    provisionalRefreshMaxMinutes: options.provisionalRefreshMaxMinutes,
+    provisionalRefreshMaxMinutes: options.provisionalRefreshMaxMinutes ?? 120,
     now: options.now,
   })) {
     items.push(item);
@@ -274,7 +274,7 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       );
     });
 
-    it("materializes and refreshes one open slice by growth threshold, then emits a boundary shrink", async () => {
+    it("materializes every open growth tick, upgrades at the count threshold, then emits a boundary shrink", async () => {
       const seeded = await seedSlice(db, {
         status: "open",
         verdict: "kept",
@@ -319,7 +319,9 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
         })
         .where("id", "=", seeded.sliceId)
         .execute();
-      await expect(collectEmittedWhatsAppItems(db)).resolves.toEqual([]);
+      const belowThreshold = await collectEmittedWhatsAppItems(db);
+      expect(belowThreshold).toHaveLength(1);
+      expect(belowThreshold[0]?.enrichmentRefresh).toBe("embeddings_only");
 
       const fourth = await messages.insertMessage({
         conversationId: seeded.conversationId,
@@ -357,6 +359,7 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       expect(grown).toHaveLength(1);
       expect(grown[0]?.providerFileId).toBe(seeded.sliceId);
       expect(grown[0]?.contentHash).not.toBe(before.content_hash);
+      expect(grown[0]?.enrichmentRefresh).toBe("full");
       await createWhatsAppGroupRepository(db).setIndexEnabled(seeded.groupJid, true, {
         chunkIdleCloseHours: 100_000,
       });
@@ -386,6 +389,58 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       await expect(
         db.selectFrom("indexed_files").select("provider_file_id").where("id", "=", before.id).executeTakeFirstOrThrow(),
       ).resolves.toEqual({ provider_file_id: seeded.sliceId });
+    });
+
+    it("bootstraps an unchanged-count linked open slice without rerunning LLM enrichment", async () => {
+      const seeded = await seedSlice(db, {
+        status: "open",
+        verdict: "kept",
+        chunkMinMessages: 1,
+        chunkProvisionalRefreshMessages: 3,
+      });
+      const config = await seedConnectorConfig(db);
+      const initialNow = new Date();
+      const initialTimestamp = initialNow.toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: initialTimestamp })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, initialTimestamp, initialTimestamp);
+      await runConnectorSync(db, config.id, createTestLogger());
+      const linked = await db
+        .selectFrom("conversation_slices")
+        .select("indexed_file_id")
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      await db
+        .updateTable("indexed_files")
+        .set({ source_meta: null, summary_status: "done" })
+        .where("id", "=", linked.indexed_file_id as string)
+        .execute();
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ name: "Renamed rollout group" })
+        .where("jid", "=", seeded.groupJid)
+        .execute();
+
+      const bootstrap = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 60_000),
+      });
+
+      expect(bootstrap).toHaveLength(1);
+      expect(bootstrap[0]?.enrichmentRefresh).toBe("embeddings_only");
+      expect(bootstrap[0]?.sourceMeta).toMatchObject({ messageCount: 2, enrichedMessageCount: 0 });
+
+      await runConnectorSync(db, config.id, createTestLogger());
+      const persisted = await db
+        .selectFrom("indexed_files")
+        .select(["source_meta", "summary_status"])
+        .where("id", "=", linked.indexed_file_id as string)
+        .executeTakeFirstOrThrow();
+      expect(JSON.parse(persisted.source_meta ?? "{}")).toMatchObject({ messageCount: 2, enrichedMessageCount: 0 });
+      expect(persisted.summary_status).toBe("done");
     });
 
     it("emits changed open content at tier one and upgrades to tier two when the refresh clock expires", async () => {
