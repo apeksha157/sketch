@@ -1379,6 +1379,161 @@ describe("runConnectorSync — ACL sync on unchanged items", () => {
     });
   });
 
+  it("keeps minted llm_task facts active across an embeddings-only content refresh", async () => {
+    db = await createTestDb();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "connector-fact-refresh",
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: JSON.stringify({ type: "oauth", accessToken: "test" }),
+        created_by: "admin",
+        scope_config: JSON.stringify({}),
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "file-fact-refresh",
+        connector_config_id: "connector-fact-refresh",
+        provider_file_id: "provider-fact-refresh",
+        file_name: "conversation.md",
+        file_type: "document",
+        content_category: "document",
+        source: "google_drive",
+        source_path: "/conversation.md",
+        provider_url: null,
+        content: "old content",
+        content_hash: "old-hash",
+        summary: "Resolved summary",
+        summary_status: "done",
+        embedding_status: "done",
+        source_updated_at: "2026-09-05T00:00:00.000Z",
+        synced_at: "2026-09-05T00:00:00.000Z",
+      })
+      .execute();
+    await db
+      .insertInto("indexed_file_facts")
+      .values({
+        id: "fact-minted-task",
+        indexed_file_id: "file-fact-refresh",
+        connector_config_id: "connector-fact-refresh",
+        created_by_user_id: null,
+        source: "google_drive",
+        fact_type: "llm_task",
+        relation: "task",
+        subject_name: "Follow up with vendor",
+        fact_key: "llm_task:follow-up",
+        deleted_at: null,
+      })
+      .execute();
+
+    async function* mockGen() {
+      yield {
+        providerFileId: "provider-fact-refresh",
+        providerUrl: null,
+        fileName: "conversation.md",
+        fileType: "document",
+        contentCategory: "document" as const,
+        content: "new content",
+        sourcePath: "/conversation.md",
+        enrichmentRefresh: "embeddings_only" as const,
+        contentHash: "new-hash",
+        sourceCreatedAt: null,
+        sourceUpdatedAt: "2026-09-05T01:00:00.000Z",
+      } satisfies SyncedItem;
+    }
+    mockConnectorSync.mockReturnValue(mockGen());
+
+    const result = await runConnectorSync(db, "connector-fact-refresh", logger);
+    const fact = await db
+      .selectFrom("indexed_file_facts")
+      .select(["deleted_at"])
+      .where("id", "=", "fact-minted-task")
+      .executeTakeFirstOrThrow();
+
+    expect(result.itemsUpdated).toBe(1);
+    expect(fact.deleted_at).toBeNull();
+  });
+
+  it("tombstones minted llm_task facts when a full content refresh changes the transcript", async () => {
+    db = await createTestDb();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "connector-fact-refresh",
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: JSON.stringify({ type: "oauth", accessToken: "test" }),
+        created_by: "admin",
+        scope_config: JSON.stringify({}),
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "file-fact-refresh",
+        connector_config_id: "connector-fact-refresh",
+        provider_file_id: "provider-fact-refresh",
+        file_name: "conversation.md",
+        file_type: "document",
+        content_category: "document",
+        source: "google_drive",
+        source_path: "/conversation.md",
+        provider_url: null,
+        content: "old content",
+        content_hash: "old-hash",
+        summary: "Resolved summary",
+        summary_status: "done",
+        embedding_status: "done",
+        source_updated_at: "2026-09-05T00:00:00.000Z",
+        synced_at: "2026-09-05T00:00:00.000Z",
+      })
+      .execute();
+    await db
+      .insertInto("indexed_file_facts")
+      .values({
+        id: "fact-minted-task",
+        indexed_file_id: "file-fact-refresh",
+        connector_config_id: "connector-fact-refresh",
+        created_by_user_id: null,
+        source: "google_drive",
+        fact_type: "llm_task",
+        relation: "task",
+        subject_name: "Follow up with vendor",
+        fact_key: "llm_task:follow-up",
+        deleted_at: null,
+      })
+      .execute();
+
+    async function* mockGen() {
+      yield {
+        providerFileId: "provider-fact-refresh",
+        providerUrl: null,
+        fileName: "conversation.md",
+        fileType: "document",
+        contentCategory: "document" as const,
+        content: "new content",
+        sourcePath: "/conversation.md",
+        contentHash: "new-hash",
+        sourceCreatedAt: null,
+        sourceUpdatedAt: "2026-09-05T01:00:00.000Z",
+      } satisfies SyncedItem;
+    }
+    mockConnectorSync.mockReturnValue(mockGen());
+
+    const result = await runConnectorSync(db, "connector-fact-refresh", logger);
+    const fact = await db
+      .selectFrom("indexed_file_facts")
+      .select(["deleted_at"])
+      .where("id", "=", "fact-minted-task")
+      .executeTakeFirstOrThrow();
+
+    expect(result.itemsUpdated).toBe(1);
+    expect(fact.deleted_at).not.toBeNull();
+  });
+
   it("re-seeds person entities for attendees even when content hash is unchanged", async () => {
     // Guards the skip-branch attendees-seed change: a cursor reset (or any
     // sync hitting the content-hash skip path) must now backfill attendee

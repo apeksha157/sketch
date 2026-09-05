@@ -568,6 +568,13 @@ export async function runConnectorSync(
           await persistEnvelopeMetadata(db, itemResult.indexedFileId, item.emailEnvelope);
         }
 
+        /**
+         * An embeddings-only refresh re-emits the transcript without re-running the
+         * LLM stages, so derived llm_task facts must not be reconciled (tombstoned)
+         * until the full refresh that can re-derive them.
+         */
+        const derivedFactsContentChanged =
+          itemResult.kind !== "unchanged" && item.enrichmentRefresh !== "embeddings_only";
         await emitFactsForSyncedItem({
           db,
           factRepo,
@@ -577,7 +584,7 @@ export async function runConnectorSync(
           item,
           indexedFileId: itemResult.indexedFileId,
           emitCorrespondentFacts: connector.emitsCorrespondentFacts ?? false,
-          contentChanged: itemResult.kind !== "unchanged",
+          contentChanged: derivedFactsContentChanged,
           generator: llmTaskGenerator,
         });
 
