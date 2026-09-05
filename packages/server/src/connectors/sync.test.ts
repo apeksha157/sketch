@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
-import { seedTeamDirectoryEntities } from "./sync";
+import { buildSyncLanes, seedTeamDirectoryEntities } from "./sync";
+import { runWithConcurrency } from "./sync-utils";
 
 describe("seedTeamDirectoryEntities", () => {
   let db: Kysely<DB>;
@@ -66,5 +67,63 @@ describe("seedTeamDirectoryEntities", () => {
     await expect(
       db.selectFrom("entities").select("subtype").where("id", "=", "existing-internal-user").executeTakeFirstOrThrow(),
     ).resolves.toEqual({ subtype: "internal" });
+  });
+});
+
+describe("buildSyncLanes", () => {
+  it("collapses Microsoft connectors into one lane, preserving order, and keeps others singleton", () => {
+    const lanes = buildSyncLanes([
+      { connector_type: "outlook", id: "o" },
+      { connector_type: "zoho_crm", id: "z" },
+      { connector_type: "outlook_calendar", id: "c" },
+      { connector_type: "gmail", id: "g" },
+      { connector_type: "teams", id: "t" },
+    ]);
+
+    expect(lanes).toEqual([
+      [{ connector_type: "zoho_crm", id: "z" }],
+      [{ connector_type: "gmail", id: "g" }],
+      [
+        { connector_type: "outlook", id: "o" },
+        { connector_type: "outlook_calendar", id: "c" },
+        { connector_type: "teams", id: "t" },
+      ],
+    ]);
+  });
+
+  it("emits no empty Microsoft lane when no Microsoft connectors are present", () => {
+    expect(buildSyncLanes([{ connector_type: "slack", id: "s" }])).toEqual([[{ connector_type: "slack", id: "s" }]]);
+    expect(buildSyncLanes([])).toEqual([]);
+  });
+
+  it("never overlaps Microsoft syncs under runWithConcurrency while others run alongside", async () => {
+    const configs = [
+      { connector_type: "outlook", id: "o" },
+      { connector_type: "zoho_crm", id: "z" },
+      { connector_type: "outlook_calendar", id: "c" },
+      { connector_type: "teams", id: "t" },
+    ];
+    let microsoftActive = 0;
+    let maxMicrosoftActive = 0;
+    let totalActive = 0;
+    let maxTotalActive = 0;
+
+    await runWithConcurrency(buildSyncLanes(configs), 4, async (lane) => {
+      for (const config of lane) {
+        const isMicrosoft = config.connector_type !== "zoho_crm";
+        totalActive += 1;
+        maxTotalActive = Math.max(maxTotalActive, totalActive);
+        if (isMicrosoft) {
+          microsoftActive += 1;
+          maxMicrosoftActive = Math.max(maxMicrosoftActive, microsoftActive);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        if (isMicrosoft) microsoftActive -= 1;
+        totalActive -= 1;
+      }
+    });
+
+    expect(maxMicrosoftActive).toBe(1);
+    expect(maxTotalActive).toBeGreaterThan(1);
   });
 });

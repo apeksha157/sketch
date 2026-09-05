@@ -865,6 +865,33 @@ async function getIntervalMsFromSettings(db: Kysely<DB>, fallbackMs: number): Pr
   return fallbackMs;
 }
 
+const MICROSOFT_SHARED_CREDENTIAL_TYPES = new Set<string>(["outlook", "outlook_calendar", "teams"]);
+
+/**
+ * Group syncable configs into lanes: lanes run concurrently, configs within a
+ * lane run sequentially. The Microsoft connectors (outlook, outlook_calendar,
+ * teams) share one brokered credential, and the broker rejects concurrent
+ * token refreshes — launched in parallel, whichever connectors lost the mint
+ * race failed their whole run and flapped their sync status to error on
+ * every scheduled tick. In one lane the first connector refreshes the token
+ * and the rest reuse it.
+ */
+export function buildSyncLanes<T extends { connector_type: string }>(configs: T[]): T[][] {
+  const microsoftLane: T[] = [];
+  const lanes: T[][] = [];
+  for (const config of configs) {
+    if (MICROSOFT_SHARED_CREDENTIAL_TYPES.has(config.connector_type)) {
+      microsoftLane.push(config);
+    } else {
+      lanes.push([config]);
+    }
+  }
+  if (microsoftLane.length > 0) {
+    lanes.push(microsoftLane);
+  }
+  return lanes;
+}
+
 /**
  * Run sync for all connectors that are due.
  * Called on a schedule (e.g., every 30 minutes).
@@ -889,16 +916,18 @@ export async function runAllSyncs(db: Kysely<DB>, logger: Logger, deps?: SyncSch
 
   const postSyncInputs = createPostSyncGraphInputCollector();
 
-  await runWithConcurrency(configs, SYNC_CONCURRENCY, async (config) => {
-    postSyncInputs.add({ affectedIndexedFileIds: [], sources: [config.connector_type], workCycleReconciles: [] });
-    try {
-      await runConnectorSync(db, config.id, logger, deps?.appConfig, {
-        postSyncMode: "deferred",
-        postSyncInputCollector: postSyncInputs,
-        slackIndexingFacade: deps?.slackIndexingFacade ?? null,
-      });
-    } catch (err) {
-      logger.error({ err, connectorId: config.id }, "Scheduled sync failed for connector");
+  await runWithConcurrency(buildSyncLanes(configs), SYNC_CONCURRENCY, async (lane) => {
+    for (const config of lane) {
+      postSyncInputs.add({ affectedIndexedFileIds: [], sources: [config.connector_type], workCycleReconciles: [] });
+      try {
+        await runConnectorSync(db, config.id, logger, deps?.appConfig, {
+          postSyncMode: "deferred",
+          postSyncInputCollector: postSyncInputs,
+          slackIndexingFacade: deps?.slackIndexingFacade ?? null,
+        });
+      } catch (err) {
+        logger.error({ err, connectorId: config.id }, "Scheduled sync failed for connector");
+      }
     }
   });
 
