@@ -11,11 +11,17 @@
  * sources (gmail facts store "Corresponded {id}"); junk is suppressed rather
  * than shown. Expanding a row unclamps the snippet and fetches every mention
  * of the entity in that file, so ×N actually opens into N quotes.
+ *
+ * The two jobs are separate controls: the title opens the file itself in a
+ * `FileDetailSheet` the strip owns, so every host gets file reading for free,
+ * while a chevron toggles the inline quotes where quotes can exist at all.
  */
 import { ConnectorLogo } from "@/components/connector-logos";
 import { type EntityTimelineGroup, type EntityTimelineItem, api } from "@/lib/api";
+import { FileDetailSheet } from "@/routes/files/file-detail-sheet";
 import {
   CalendarBlankIcon,
+  CaretDownIcon,
   CheckCircleIcon,
   FileTextIcon,
   NoteIcon,
@@ -24,7 +30,7 @@ import {
 } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 interface TimelineStripProps {
   groups: EntityTimelineGroup[];
@@ -195,13 +201,16 @@ function TimelineRow({
   entityId,
   loadQuotes,
   quotesScope,
+  onOpenFile,
 }: {
   item: EntityTimelineItem;
   entityId?: string;
   loadQuotes?: (item: EntityTimelineItem) => Promise<(string | null)[]>;
   quotesScope?: string;
+  onOpenFile: (fileId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const quotesId = useId();
   const meta = item.crmActivity
     ? (ACTIVITY_META[item.crmActivity.activityType] ?? { Icon: FileTextIcon, label: "Activity" })
     : null;
@@ -230,32 +239,46 @@ function TimelineRow({
       <span className="relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground">
         <Glyph item={item} />
       </span>
-      <button
-        type="button"
-        onClick={expandable ? () => setExpanded((v) => !v) : undefined}
-        aria-expanded={expandable ? expanded : undefined}
-        className={cn(
-          "min-w-0 flex-1 rounded-md pt-0.5 text-left",
-          expandable && "-mx-1.5 cursor-pointer px-1.5 transition-colors hover:bg-muted/40",
-        )}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-snug text-foreground">
-            {item.fileName}
-          </p>
-          {time ? <span className="shrink-0 pt-px text-[10px] text-muted-foreground">{time}</span> : null}
+      <div className="min-w-0 flex-1 pt-0.5">
+        <div className="-mx-1.5 flex items-start gap-1">
+          <button
+            type="button"
+            onClick={() => onOpenFile(item.fileId)}
+            className="min-w-0 flex-1 cursor-pointer rounded-md px-1.5 text-left transition-colors hover:bg-muted/40"
+          >
+            <span className="flex items-start justify-between gap-2">
+              <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-snug text-foreground">
+                {item.fileName}
+              </span>
+              {time ? <span className="shrink-0 pt-px text-[10px] text-muted-foreground">{time}</span> : null}
+            </span>
+          </button>
+          {expandable ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-label="Show quotes"
+              aria-expanded={expanded}
+              aria-controls={quotesId}
+              className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+            >
+              <CaretDownIcon size={12} className={cn("transition-transform", expanded && "rotate-180")} />
+            </button>
+          ) : null}
         </div>
         {snippet ? (
           <p className={cn("mt-0.5 text-[11px] leading-snug text-muted-foreground", !expanded && "line-clamp-2")}>
             {snippet}
           </p>
         ) : null}
-        {expanded && load ? <ExpandedQuotes scope={scope} item={item} primarySnippet={snippet} load={load} /> : null}
+        <div id={quotesId}>
+          {expanded && load ? <ExpandedQuotes scope={scope} item={item} primarySnippet={snippet} load={load} /> : null}
+        </div>
         <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/70">
           <span className="truncate">{attribution.join(" · ")}</span>
           {item.crmActivity?.hasBody ? <SparkleIcon size={10} weight="fill" className="shrink-0 text-primary" /> : null}
         </p>
-      </button>
+      </div>
     </div>
   );
 }
@@ -263,6 +286,7 @@ function TimelineRow({
 export function TimelineStrip({ groups, entityId, loadQuotes, quotesScope }: TimelineStripProps) {
   const items = groups.flatMap((g) => g.items);
   const dayGroups = groupByDay(items);
+  const [openFileId, setOpenFileId] = useState<string | null>(null);
 
   return (
     <div data-testid="timeline-strip">
@@ -282,12 +306,14 @@ export function TimelineStrip({ groups, entityId, loadQuotes, quotesScope }: Tim
                   entityId={entityId}
                   loadQuotes={loadQuotes}
                   quotesScope={quotesScope}
+                  onOpenFile={setOpenFileId}
                 />
               ))}
             </div>
           </div>
         ))}
       </div>
+      <FileDetailSheet fileId={openFileId} onClose={() => setOpenFileId(null)} />
     </div>
   );
 }

@@ -94,7 +94,7 @@ export function FileDetailSheet({
           )}
         </div>
 
-        {file && <FileDetailFooter fileId={file.id} fileName={file.fileName} connector={connector} />}
+        {file && connector && <FileDetailFooter fileId={file.id} fileName={file.fileName} connector={connector} />}
       </SheetContent>
     </Sheet>
   );
@@ -433,6 +433,12 @@ function ContentPreview({ content }: { content: string }) {
   );
 }
 
+/**
+ * Ops actions for the Files page. Only mounted once a connector resolved:
+ * `useDashboardAuth` reads route context and would throw for hosts that render
+ * the sheet outside the dashboard route tree, and without a connector every
+ * capability is false so the footer renders nothing anyway.
+ */
 function FileDetailFooter({
   fileId,
   fileName,
