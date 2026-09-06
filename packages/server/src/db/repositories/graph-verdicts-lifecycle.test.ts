@@ -13,6 +13,7 @@ import { createTestDb } from "../../test-utils";
 import { createMigrator } from "../migrate";
 import type { DB } from "../schema";
 import { createGraphVerdictRepository, mergePairKey } from "./graph-verdicts";
+import { MACHINE_PRINCIPAL_USER_ID } from "./machine-principal";
 
 const USER_ID = "lifecycle-user";
 
@@ -89,6 +90,31 @@ async function insertMerge(
     .execute();
 }
 
+function storeMergeInput(input: {
+  runId: string;
+  subject: string;
+  target: string;
+  evidenceJson?: string;
+  evidenceFingerprint?: string;
+}) {
+  return {
+    action: "merge_into",
+    subjectEntityId: input.subject,
+    subjectName: input.subject,
+    subjectEntityType: "company",
+    targetEntityId: input.target,
+    targetName: input.target,
+    reason: "test merge",
+    evidenceJson: input.evidenceJson ?? "{}",
+    evidenceFingerprint: input.evidenceFingerprint ?? `fp-${input.subject}-${input.target}`,
+    validationStatus: "ok",
+    validationReason: null,
+    wouldChangeJson: null,
+    status: "awaiting_human",
+    runId: input.runId,
+  } as const;
+}
+
 describe("graph verdict lifecycle (3.1a)", () => {
   let db: Kysely<DB>;
 
@@ -152,6 +178,89 @@ describe("graph verdict lifecycle (3.1a)", () => {
     const byId = new Map(rows.map((row) => [row.id, row.status]));
     expect(byId.get("gv-veto")).toBe("approved");
     expect(byId.get("gv-pending")).toBe("rejected");
+  });
+
+  it("keeps no-file machine merge proposals in awaiting_human only for the human lane", async () => {
+    const repo = createGraphVerdictRepository(db);
+    const run = await repo.createRun({
+      source: "test",
+      proposedByUserId: MACHINE_PRINCIPAL_USER_ID,
+      tokenId: "salesql-sweep",
+      note: null,
+      verdictsProposed: 2,
+    });
+
+    const humanLane = await repo.storeVerdicts(
+      [storeMergeInput({ runId: run.id, subject: "ent-human-a", target: "ent-human-b" })],
+      { lane: "human" },
+    );
+    const defaultLane = await repo.storeVerdicts([
+      storeMergeInput({ runId: run.id, subject: "ent-default-a", target: "ent-default-b" }),
+    ]);
+
+    const rows = await db
+      .selectFrom("graph_verdicts")
+      .select(["id", "status"])
+      .where("id", "in", [humanLane.ids[0] ?? "", defaultLane.ids[0] ?? ""])
+      .execute();
+    const byId = new Map(rows.map((row) => [row.id, row.status]));
+    expect(byId.get(humanLane.ids[0] ?? "")).toBe("awaiting_human");
+    expect(byId.get(defaultLane.ids[0] ?? "")).toBe("pending_corroboration");
+  });
+
+  it("returns an existing awaiting_human merge row for the human lane without superseding or rewriting it", async () => {
+    const repo = createGraphVerdictRepository(db);
+    const run = await repo.createRun({
+      source: "test",
+      proposedByUserId: MACHINE_PRINCIPAL_USER_ID,
+      tokenId: "salesql-sweep",
+      note: null,
+      verdictsProposed: 1,
+    });
+    const first = await repo.storeVerdicts(
+      [
+        storeMergeInput({
+          runId: run.id,
+          subject: "ent-existing-a",
+          target: "ent-existing-b",
+          evidenceJson: JSON.stringify({ notes: ["original"] }),
+          evidenceFingerprint: "fp-original",
+        }),
+      ],
+      { lane: "human" },
+    );
+    const firstId = first.ids[0];
+    if (!firstId) throw new Error("first verdict id missing");
+    await db
+      .updateTable("graph_verdicts")
+      .set({ updated_at: "2026-09-01T00:00:00.000Z" })
+      .where("id", "=", firstId)
+      .execute();
+
+    const before = await db
+      .selectFrom("graph_verdicts")
+      .select(["id", "evidence_json", "updated_at"])
+      .where("id", "=", firstId)
+      .executeTakeFirstOrThrow();
+    const second = await repo.storeVerdicts(
+      [
+        storeMergeInput({
+          runId: run.id,
+          subject: "ent-existing-b",
+          target: "ent-existing-a",
+          evidenceJson: JSON.stringify({ notes: ["replacement"] }),
+          evidenceFingerprint: "fp-replacement",
+        }),
+      ],
+      { lane: "human" },
+    );
+    const afterRows = await db.selectFrom("graph_verdicts").select(["id", "evidence_json", "updated_at"]).execute();
+    const after = afterRows.find((row) => row.id === firstId);
+
+    expect(second.ids).toEqual([firstId]);
+    expect(second.dispositions).toEqual(["existing"]);
+    expect(afterRows).toHaveLength(1);
+    expect(after).toEqual(before);
   });
 
   it("migration 223 backfills pair keys and supersedes the older of an opposite-direction active pair", async () => {

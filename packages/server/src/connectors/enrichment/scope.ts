@@ -6,7 +6,7 @@ export type LinkedinVisibilityMode = (typeof LINKEDIN_VISIBILITY_MODES)[number];
 const enrichmentScopeSchema = z
   .object({
     enabled: z.boolean().optional().default(false),
-    dailyCap: z.coerce.number().int().min(0).optional().default(200),
+    dailyCap: z.coerce.number().int().min(0).optional().default(25),
     batch: z.coerce.number().int().min(1).optional().default(50),
     autoMerge: z.boolean().optional().default(false),
   })
