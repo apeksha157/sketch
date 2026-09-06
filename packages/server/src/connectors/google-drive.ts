@@ -400,7 +400,7 @@ export function fileToSyncedItem(
     sourceUpdatedAt: file.modifiedTime ?? null,
     mimeType: file.mimeType,
     accessScope: access.scope,
-    accessPrincipals: access.emails ? toEmailPrincipals(access.emails) : access.emails,
+    accessPrincipals: access.emails && access.emails.length > 0 ? toEmailPrincipals(access.emails) : null,
     authorEmail: file.owners?.find((owner) => owner.emailAddress)?.emailAddress,
     authorName: file.owners?.find((owner) => owner.emailAddress)?.displayName,
     authorSourceId: file.owners?.find((owner) => owner.emailAddress)?.permissionId,

@@ -302,7 +302,7 @@ async function syncItemAccess(
         await repo.grantFileAccessEmails(indexedFileId, item.accessPrincipals);
       }
     }
-  } else if (item.accessPrincipals && item.accessPrincipals.length > 0) {
+  } else if (item.accessPrincipals !== undefined && item.accessPrincipals !== null) {
     await repo.syncFileAccessEmails(indexedFileId, item.accessPrincipals);
   }
 }

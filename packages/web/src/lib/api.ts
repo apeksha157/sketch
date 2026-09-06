@@ -1374,6 +1374,7 @@ export interface ConnectorConfig {
   authType: string;
   credentialSource?: "local" | "canvas";
   scopeConfig: Record<string, unknown>;
+  visibility?: "owner" | "workspace";
   hierarchyLevels?: HierarchyLevel[] | null;
   containerClassificationEnabled?: boolean;
 
@@ -2661,8 +2662,38 @@ export const api = {
           canUpdateCredentials?: boolean;
           canBrowseScope?: boolean;
           canEnrich?: boolean;
+          visibility?: "owner" | "workspace";
+          scopeConfig?: Record<string, unknown>;
         }>;
       }>("/api/connectors/mine");
+    },
+    updateEnrichment(id: string, enrichment: { enabled: boolean; dailyCap: number; autoMerge: boolean }) {
+      return request<{
+        connector: {
+          id: string;
+          connectorType: string;
+          scopeConfig: Record<string, unknown>;
+          visibility: "owner" | "workspace";
+          syncStatus: string;
+        };
+      }>(`/api/connectors/${id}/enrichment`, {
+        method: "PUT",
+        body: JSON.stringify(enrichment),
+      });
+    },
+    updateVisibility(id: string, visibility: "owner" | "workspace") {
+      return request<{
+        connector: {
+          id: string;
+          connectorType: string;
+          scopeConfig: Record<string, unknown>;
+          visibility: "owner" | "workspace";
+          syncStatus: string;
+        };
+      }>(`/api/connectors/${id}/visibility`, {
+        method: "PUT",
+        body: JSON.stringify({ visibility }),
+      });
     },
     rotateKey(id: string, apiKey: string) {
       return request<{ ok: boolean }>(`/api/connectors/${id}/rotate-key`, {
@@ -2888,6 +2919,11 @@ export const api = {
         run: { status: "unchanged" | "completed"; digestHash: string };
         proposals: ContainerClassificationProposal[];
       }>(`/api/connectors/${id}/container-classification`, { method: "POST" });
+    },
+  },
+  enrichment: {
+    allowance() {
+      return request<{ remaining: number; resetsAt: string | null }>("/api/enrichment/allowance");
     },
   },
   googleOAuth: {

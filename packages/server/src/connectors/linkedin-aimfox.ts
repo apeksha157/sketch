@@ -8,7 +8,12 @@ import {
   type AimfoxLead,
   type AimfoxMessage,
 } from "./aimfox-client";
-import { type LinkedinEnrichmentScope, normalizeLinkedinEnrichmentScopeConfig } from "./enrichment/scope";
+import {
+  type LinkedinEnrichmentScope,
+  type LinkedinVisibilityMode,
+  normalizeLinkedinEnrichmentScopeConfig,
+  parseLinkedinVisibilityScopeConfig,
+} from "./enrichment/scope";
 import { type LinkedinAimfoxPersonSeed, buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { extractErrorMessage, runWithConcurrency, truncateErrorMessage } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
@@ -51,6 +56,7 @@ export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   segmentMaxTokens?: number;
   segmentGapHours?: number;
   contactPointDefaultRegion?: string;
+  visibility?: LinkedinVisibilityMode;
   enrichment?: LinkedinEnrichmentScope;
 }
 
@@ -109,6 +115,14 @@ interface AccountRunState {
   backfill: Map<string, ConversationCompletion>;
   backfillAttempted: boolean;
   backfillPageShort: boolean;
+  accountsWalked: number;
+  threadsListed: number;
+  threadsEmitted: number;
+  threadsSkippedNoReply: number;
+  threadsSkippedNoSeed: number;
+  leadDetailFailures: number;
+  buildFailures: number;
+  pageCapHit: boolean;
 }
 
 interface ParsedLinkedinAimfoxScopeConfig {
@@ -121,6 +135,7 @@ interface ParsedLinkedinAimfoxScopeConfig {
   segmentMaxTokens: number;
   segmentGapMs: number;
   contactPointDefaultRegion?: string;
+  visibility: LinkedinVisibilityMode;
 }
 
 interface IngestContext {
@@ -208,6 +223,14 @@ export function createLinkedinAimfoxConnector(): Connector {
           backfill: new Map(),
           backfillAttempted: false,
           backfillPageShort: false,
+          accountsWalked: 1,
+          threadsListed: 0,
+          threadsEmitted: 0,
+          threadsSkippedNoReply: 0,
+          threadsSkippedNoSeed: 0,
+          leadDetailFailures: 0,
+          buildFailures: 0,
+          pageCapHit: false,
         };
         runState.set(accountId, state);
         const client = new AimfoxClient(api_key, { accountId, maxRpm: scopeConfig.maxRpm });
@@ -223,7 +246,15 @@ export function createLinkedinAimfoxConnector(): Connector {
         const handled = new Set<string>();
 
         if (existing.highWatermark) {
-          const changed = await listChangedConversations(client, existing.highWatermark, runAnchorMs, opts.logger);
+          const changedResult = await listChangedConversations(
+            client,
+            existing.highWatermark,
+            runAnchorMs,
+            opts.logger,
+          );
+          const changed = changedResult.conversations;
+          state.threadsListed += changedResult.threadsListed;
+          state.pageCapHit ||= changedResult.pageCapHit;
           for (const conversation of changed) handled.add(conversation.conversation_urn);
           yield* ingestConversations(context, changed, state.incremental);
         }
@@ -237,6 +268,7 @@ export function createLinkedinAimfoxConnector(): Connector {
           });
           state.backfillAttempted = true;
           state.backfillPageShort = page.short;
+          state.threadsListed += page.threadsListed;
           const fresh = page.conversations.filter((conversation) => !handled.has(conversation.conversation_urn));
           yield* ingestConversations(context, fresh, state.backfill);
         }
@@ -261,6 +293,10 @@ export function createLinkedinAimfoxConnector(): Connector {
       }
       return JSON.stringify(next);
     },
+
+    getSyncDiagnostics() {
+      return linkedinSyncDiagnostics(runState);
+    },
   };
 }
 
@@ -278,12 +314,15 @@ async function listChangedConversations(
   highWatermark: string,
   runAnchorMs: number,
   logger: Logger,
-): Promise<AimfoxConversationListItem[]> {
+): Promise<{ conversations: AimfoxConversationListItem[]; threadsListed: number; pageCapHit: boolean }> {
   const changed: AimfoxConversationListItem[] = [];
   const seen = new Set<string>();
   let before = runAnchorMs;
+  let threadsListed = 0;
+  let pageCapHit = false;
   for (let pageIndex = 0; pageIndex < MAX_INCREMENTAL_PAGES; pageIndex++) {
     const page = await client.listConversationsPage({ before, count: 100 });
+    threadsListed += page.length;
     for (const conversation of page) {
       if (seen.has(conversation.conversation_urn)) continue;
       seen.add(conversation.conversation_urn);
@@ -294,10 +333,11 @@ async function listChangedConversations(
     if (new Date(oldest).toISOString() < highWatermark) break;
     before = oldest;
     if (pageIndex === MAX_INCREMENTAL_PAGES - 1) {
+      pageCapHit = true;
       logger.warn({ pages: MAX_INCREMENTAL_PAGES }, "LinkedIn incremental listing hit the page cap");
     }
   }
-  return changed;
+  return { conversations: changed, threadsListed, pageCapHit };
 }
 
 /**
@@ -308,14 +348,16 @@ async function listChangedConversations(
 async function listBackfillPage(
   client: AimfoxClient,
   input: { before: number; budget: number; sinceMs: number | null },
-): Promise<{ conversations: AimfoxConversationListItem[]; short: boolean }> {
+): Promise<{ conversations: AimfoxConversationListItem[]; short: boolean; threadsListed: number }> {
   const conversations: AimfoxConversationListItem[] = [];
   const seen = new Set<string>();
   let before = input.before;
   let short = false;
+  let threadsListed = 0;
   while (conversations.length < input.budget) {
     const count = Math.min(100, input.budget - conversations.length);
     const page = await client.listConversationsPage({ before, count });
+    threadsListed += page.length;
     for (const conversation of page) {
       if (seen.has(conversation.conversation_urn)) continue;
       seen.add(conversation.conversation_urn);
@@ -334,7 +376,7 @@ async function listBackfillPage(
     if (short) break;
     before = oldest;
   }
-  return { conversations, short };
+  return { conversations, short, threadsListed };
 }
 
 async function resolveConversationLeads(
@@ -380,6 +422,7 @@ async function* ingestConversations(
 
     if (!("lead" in result)) {
       completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: true });
+      state.leadDetailFailures++;
       logger.warn(
         { leadId: result.leadId, conversationUrn, err: result.error },
         "Failed to fetch LinkedIn Aimfox lead detail",
@@ -390,6 +433,8 @@ async function* ingestConversations(
     const seed = buildPersonSeed(result.lead);
     if (!seed) {
       completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: false });
+      state.threadsSkippedNoSeed++;
+      logger.debug({ leadId: result.leadId, conversationUrn }, "LinkedIn thread has no usable lead seed; skipped");
       continue;
     }
 
@@ -407,15 +452,19 @@ async function* ingestConversations(
         },
         contactPointDefaultRegion: scopeConfig.contactPointDefaultRegion,
         getExistingItemState: context.getExistingItemState,
+        visibility: scopeConfig.visibility,
       });
       completions.set(conversationUrn, { activity, expectedItems: items.length, persistedItems: 0, failed: false });
       if (items.length === 0) {
+        state.threadsSkippedNoReply++;
         logger.debug({ leadId: result.leadId, conversationUrn }, "LinkedIn thread has no reply yet; skipped");
       }
+      if (items.length > 0) state.threadsEmitted++;
       for (const item of items) yield item;
     } catch (err) {
       const error = truncateErrorMessage(extractErrorMessage(err));
       completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: true });
+      state.buildFailures++;
       logger.warn({ leadId: result.leadId, conversationUrn, err: error }, "Failed to ingest Aimfox thread");
     }
   }
@@ -462,6 +511,7 @@ async function buildLinkedinSyncedItems(
     seed: LinkedinAimfoxPersonSeed;
     segmentLimits: LinkedinSegmentLimits;
     contactPointDefaultRegion?: string;
+    visibility: LinkedinVisibilityMode;
     getExistingItemState?: (providerFileId: string) => {
       sourceMeta: Record<string, unknown> | null;
       threadId: string | null;
@@ -486,6 +536,7 @@ async function buildLinkedinSyncedItems(
         profileProviderFileId: profileItem.providerFileId,
         seed: input.seed,
         segment,
+        visibility: input.visibility,
       }),
     ),
   ];
@@ -583,6 +634,7 @@ function buildLinkedinProfileSyncedItem(input: {
   seed: LinkedinAimfoxPersonSeed;
   engaged: boolean;
   contactPointDefaultRegion?: string;
+  visibility: LinkedinVisibilityMode;
 }): SyncedItem {
   const providerFileId = linkedinProfileProviderFileId(input.accountId, input.seed.leadId);
   const contactPoints = buildProfileContactPoints(
@@ -627,7 +679,7 @@ function buildLinkedinProfileSyncedItem(input: {
     sourceCreatedAt: null,
     sourceUpdatedAt: conversationLastContactedAt(input.conversation),
     mimeType: "application/json",
-    accessPrincipals: toEmailPrincipals([input.ownerEmail]),
+    accessPrincipals: linkedinAccessPrincipals(input.visibility, input.ownerEmail),
     personSeeds: [personSeed],
     contactPoints,
   };
@@ -641,6 +693,7 @@ function buildLinkedinConversationSyncedItem(input: {
   profileProviderFileId: string;
   seed: LinkedinAimfoxPersonSeed;
   segment: LinkedinAimfoxSegment;
+  visibility: LinkedinVisibilityMode;
 }): SyncedItem {
   const content = renderConversationSegment({
     ownerName: input.ownerName,
@@ -675,7 +728,7 @@ function buildLinkedinConversationSyncedItem(input: {
     sourceCreatedAt: firstTimestamp,
     sourceUpdatedAt: lastTimestamp,
     mimeType: "text/plain",
-    accessPrincipals: toEmailPrincipals([input.ownerEmail]),
+    accessPrincipals: linkedinAccessPrincipals(input.visibility, input.ownerEmail),
     parentEntities: [
       {
         source: "aimfox",
@@ -684,6 +737,15 @@ function buildLinkedinConversationSyncedItem(input: {
       },
     ],
   };
+}
+
+/**
+ * Workspace visibility emits an explicit empty grant list so each touched file
+ * clears stale owner stamps through syncItemAccess. Legacy and owner mode keep
+ * the creator's Sketch email as the only per-file principal.
+ */
+function linkedinAccessPrincipals(visibility: LinkedinVisibilityMode, ownerEmail: string) {
+  return visibility === "workspace" ? [] : toEmailPrincipals([ownerEmail]);
 }
 
 function buildProfileContactPoints(
@@ -894,6 +956,7 @@ function parseScopeConfig(value: Record<string, unknown>): ParsedLinkedinAimfoxS
     segmentGapMs: positiveInteger(value.segmentGapHours, DEFAULT_SEGMENT_GAP_HOURS) * HOUR_MS,
     contactPointDefaultRegion:
       typeof value.contactPointDefaultRegion === "string" ? value.contactPointDefaultRegion : undefined,
+    visibility: parseLinkedinVisibilityScopeConfig(value),
   };
 }
 
@@ -964,6 +1027,30 @@ function cloneLinkedinAimfoxCursor(cursor: LinkedinAimfoxCursor): LinkedinAimfox
       Object.entries(cursor.accounts).map(([accountId, state]) => [accountId, { ...state }]),
     ),
   };
+}
+
+function linkedinSyncDiagnostics(runState: Map<string, AccountRunState>) {
+  const totals = {
+    accountsWalked: 0,
+    threadsListed: 0,
+    threadsEmitted: 0,
+    threadsSkippedNoReply: 0,
+    threadsSkippedNoSeed: 0,
+    leadDetailFailures: 0,
+    buildFailures: 0,
+    pageCapHit: false,
+  };
+  for (const state of runState.values()) {
+    totals.accountsWalked += state.accountsWalked;
+    totals.threadsListed += state.threadsListed;
+    totals.threadsEmitted += state.threadsEmitted;
+    totals.threadsSkippedNoReply += state.threadsSkippedNoReply;
+    totals.threadsSkippedNoSeed += state.threadsSkippedNoSeed;
+    totals.leadDetailFailures += state.leadDetailFailures;
+    totals.buildFailures += state.buildFailures;
+    totals.pageCapHit ||= state.pageCapHit;
+  }
+  return totals;
 }
 
 function isComplete(conversation: ConversationCompletion): boolean {
