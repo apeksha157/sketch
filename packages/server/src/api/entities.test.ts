@@ -2729,6 +2729,67 @@ describe("Entity drawer routes", () => {
     expect(body.totalCount).toBe(2);
   });
 
+  it("GET /api/entities/:id/timeline returns structural relations first and mention count", async () => {
+    await seedEntity("timeline-passages-entity", "Sarah", "person");
+    await seedFile("timeline-passages-file");
+    await db
+      .updateTable("indexed_files")
+      .set({
+        source_updated_at: "2026-05-22T00:00:00.000Z",
+        source_created_at: "2026-05-22T00:00:00.000Z",
+      })
+      .where("id", "=", "timeline-passages-file")
+      .execute();
+
+    const now = new Date().toISOString();
+    await db
+      .insertInto("entity_mentions")
+      .values([
+        {
+          id: "timeline-passages-attended",
+          entity_id: "timeline-passages-entity",
+          indexed_file_id: "timeline-passages-file",
+          chunk_index: null,
+          context_snippet: "Sarah attended the weekly review",
+          confidence: "EXTRACTED",
+          source: "google_drive",
+          relation: "attended",
+          mentioned_at: now,
+        },
+        {
+          id: "timeline-passages-mentioned",
+          entity_id: "timeline-passages-entity",
+          indexed_file_id: "timeline-passages-file",
+          chunk_index: 2,
+          context_snippet: "Sarah owns the follow-up",
+          confidence: "INFERRED",
+          source: "google_drive",
+          relation: "mentioned",
+          mentioned_at: now,
+        },
+      ])
+      .execute();
+
+    const res = await app.request("/api/entities/timeline-passages-entity/timeline", {
+      headers: { Cookie: adminCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      groups: Array<{
+        items: Array<{ fileId: string; relations: string[]; mentionCount: number }>;
+      }>;
+    };
+    const item = body.groups
+      .flatMap((group) => group.items)
+      .find((timelineItem) => timelineItem.fileId === "timeline-passages-file");
+
+    expect(item).toMatchObject({
+      fileId: "timeline-passages-file",
+      relations: ["attended", "mentioned"],
+      mentionCount: 2,
+    });
+  });
+
   it("GET /api/entities/:id/timeline returns CRM activity metadata from entity mentions", async () => {
     await seedEntity("deal-1", "Acme renewal", "deal");
     await seedEntity("contact-1", "Jane Buyer", "person");

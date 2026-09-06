@@ -25,7 +25,7 @@ import {
   declareRelationship,
   removeDeclaredRelationship,
 } from "../../entities/declare-relationship";
-import { snippetsInFile } from "../../entities/evidence-snippets";
+import { passagesInFile, snippetsInFile } from "../../entities/evidence-snippets";
 import { normalizeEntityMatchName } from "../../entities/name-keys";
 import {
   type EntityProfileFacts,
@@ -1444,6 +1444,34 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
     const contentViewer = getContentViewer(c);
     const entity = await repo.getEntity(entityId, viewer);
     if (!entity) return c.json({ error: { code: "NOT_FOUND", message: "Entity not found" } }, 404);
+    if (c.req.query("mode") === "passages") {
+      const existingFile = await db
+        .selectFrom("indexed_files")
+        .select("id")
+        .where("id", "=", fileId)
+        .executeTakeFirst();
+      if (!existingFile) return c.json({ error: { code: "NOT_FOUND", message: "File not found" } }, 404);
+
+      let visibleFileQuery = db.selectFrom("indexed_files").select(["id"]).where("id", "=", fileId);
+      if (!contentViewer.isAdmin) {
+        visibleFileQuery = visibleFileQuery.where(fileVisibilityPredicate(contentViewer));
+      }
+      const visibleFile = await visibleFileQuery.executeTakeFirst();
+      if (!visibleFile) {
+        return c.json(
+          {
+            error: {
+              code: "FORBIDDEN",
+              message: "You don't have access to this file's contents.",
+            },
+          },
+          403,
+        );
+      }
+
+      const passages = await passagesInFile(db, fileId, entity.name);
+      return c.json({ passages });
+    }
     let fileQuery = db.selectFrom("indexed_files").select(["id"]).where("id", "=", fileId);
     if (!contentViewer.isAdmin) {
       fileQuery = fileQuery.where(fileVisibilityPredicate(contentViewer));
@@ -1482,6 +1510,7 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
         "entity_mentions.id",
         "entity_mentions.context_snippet",
         "entity_mentions.chunk_index",
+        "entity_mentions.relation",
         "entity_mentions.mentioned_at",
         "indexed_files.id as file_id",
         "indexed_files.file_name",
@@ -1551,6 +1580,7 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
         id: m.id,
         contextSnippet: m.context_snippet,
         chunkIndex: m.chunk_index,
+        relation: m.relation,
         mentionedAt: m.mentioned_at,
         sourceDate: m.source_updated_at ?? m.source_created_at ?? m.mentioned_at,
         file: {

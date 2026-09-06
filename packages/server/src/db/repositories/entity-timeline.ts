@@ -17,6 +17,7 @@ export interface TimelineItem {
   occurredAt: string;
   mentionConfidence: "EXTRACTED" | "INFERRED" | "AMBIGUOUS";
   mentionCount: number;
+  relations: string[];
   contextSnippet: string | null;
   url: string | null;
   rollupGroupId: string | null;
@@ -101,6 +102,7 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
           "indexed_files.provider_url",
           "indexed_files.rollup_group_id",
           "entity_mentions.confidence",
+          "entity_mentions.relation",
           "entity_mentions.context_snippet",
           "entity_mentions.mentioned_at",
         ])
@@ -127,6 +129,7 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
         const existing = byFile.get(row.file_id);
         if (existing) {
           existing.mentionCount += 1;
+          addTimelineRelation(existing, row.relation);
           // Keep the strongest confidence seen for this file (EXTRACTED beats INFERRED beats AMBIGUOUS).
           const inboundRank = CONFIDENCE_ORDER[row.confidence] ?? 3;
           const existingRank = CONFIDENCE_ORDER[existing.mentionConfidence] ?? 3;
@@ -143,6 +146,7 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
           occurredAt,
           mentionConfidence: normalizeConfidence(row.confidence),
           mentionCount: 1,
+          relations: relationListFor(row.relation),
           contextSnippet: row.context_snippet ?? null,
           url: row.provider_url ?? null,
           rollupGroupId: row.rollup_group_id ?? null,
@@ -168,4 +172,17 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
       return { groups, truncated, totalCount: capped.length };
     },
   };
+}
+
+function relationListFor(relation: string): string[] {
+  return relation === "mentioned" ? ["mentioned"] : [relation];
+}
+
+function addTimelineRelation(item: TimelineItem, relation: string): void {
+  if (item.relations.includes(relation)) return;
+  if (relation === "mentioned") item.relations.push(relation);
+  else {
+    const insertionIndex = item.relations.includes("mentioned") ? item.relations.length - 1 : item.relations.length;
+    item.relations.splice(insertionIndex, 0, relation);
+  }
 }
