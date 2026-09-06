@@ -109,6 +109,12 @@ describe("search stage reporting", () => {
     expect(stages.indexOf("ftsCandidates")).toBeLessThan(stages.indexOf("fuse"));
     expect(stages.indexOf("fuse")).toBeLessThan(stages.indexOf("filter"));
     expect(stages.indexOf("filter")).toBeLessThan(stages.indexOf("finalize"));
+
+    const filter = reports.find((report) => report.stage === "filter");
+    expect(filter?.outcomes?.find((outcome) => outcome.kind === "bodylessCrmActivities")).toMatchObject({
+      result: "kept",
+      reason: "structured CRM activity types summarized on parent objects",
+    });
   });
 
   it("skips embedQuery with a reason when no embedding provider is configured", async () => {

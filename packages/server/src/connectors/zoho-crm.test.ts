@@ -1,7 +1,8 @@
 import pino from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OAuthCredentials } from "./types";
+import { CRM_ACTIVITY_FILE_TYPES, type OAuthCredentials } from "./types";
 import {
+  ACTIVITY_MODULES,
   createZohoCrmConnector,
   discoverStandardModules,
   extractAccountDomainsFromRecord,
@@ -42,6 +43,12 @@ describe("Zoho CRM connector", () => {
     expect(makeProviderFileId("Contacts", "123")).toBe("Contacts:123");
     expect(moduleToFileType("Contacts")).toBe("crm_contact");
     expect(moduleToFileType("Custom_Module")).toBe("crm_custom_module");
+  });
+
+  it("keeps bodyless activity file types pinned to the Zoho activity module set", () => {
+    const mappedActivityFileTypes = [...ACTIVITY_MODULES].map((moduleName) => moduleToFileType(moduleName)).sort();
+
+    expect(mappedActivityFileTypes).toEqual([...CRM_ACTIVITY_FILE_TYPES].sort());
   });
 
   it("validateCredentials succeeds on current user response and fails on revoked token", async () => {

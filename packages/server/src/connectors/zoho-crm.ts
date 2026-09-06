@@ -88,7 +88,7 @@ type ZohoRecord = Record<string, unknown> & {
 type ParentEntity = NonNullable<SyncedItem["parentEntities"]>[number];
 type RelationshipEndpoint = NonNullable<SyncedItem["relationships"]>[number]["source"];
 
-const ACTIVITY_MODULES = new Set(["tasks", "notes", "calls", "events", "meetings"]);
+export const ACTIVITY_MODULES = new Set(["tasks", "notes", "calls", "events", "meetings"]);
 
 export interface DiscoveredZohoModule {
   logicalName: StandardModule;
