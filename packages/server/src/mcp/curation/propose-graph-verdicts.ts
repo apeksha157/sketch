@@ -58,6 +58,15 @@ type EntityProposal = z.infer<typeof entityVerdictSchema>;
 type MentionProposal = z.infer<typeof mentionVerdictSchema>;
 type Proposal = ProposeGraphVerdictsArgs["verdicts"][number];
 
+export interface ProposeGraphVerdictsOptions {
+  /**
+   * Passed through to `storeVerdicts`: `"human"` files machine pair merges as
+   * `awaiting_human` and dedups against an existing awaiting row. See
+   * `StoreGraphVerdictsOptions`.
+   */
+  lane?: "human";
+}
+
 type NormalizedEvidence = {
   fileIds: string[];
   reviewIds: string[];
@@ -444,6 +453,7 @@ export async function handleProposeGraphVerdicts(
   args: ProposeGraphVerdictsArgs,
   db: Kysely<DB>,
   authContext: { userId: string; tokenId: string },
+  options: ProposeGraphVerdictsOptions = {},
 ) {
   const batch = await withGraphVerdictUniqueRetry(async () =>
     db.transaction().execute(async (trx): Promise<StoredProposalBatch> => {
@@ -466,7 +476,7 @@ export async function handleProposeGraphVerdicts(
         if (!row) throw new Error("Missing graph verdict row.");
         return { ...row, runId: run.id };
       });
-      const stored = await repo.storeVerdicts(verdictRows);
+      const stored = await repo.storeVerdicts(verdictRows, { lane: options.lane });
       const results: ProposalResult[] = stored.rows.map((row, index) => ({
         verdictId: stored.ids[index] ?? "",
         action: row.action as ProposalResult["action"],

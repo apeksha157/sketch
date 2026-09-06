@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.4] -- 2026-09-06
+
+- Adds LinkedIn connector visibility choice (`owner` or `workspace`), letting admins control whether synced conversations and profiles are searchable by everyone or only the connector owner; includes a dedicated `PUT /api/connectors/:id/visibility` route that reconciles file grants without resetting the sync cursor.
+- Introduces `PUT /api/connectors/:id/enrichment` route to update SalesQL enrichment settings (enabled, dailyCap, autoMerge) independently from scope changes, preserving the sync cursor and server-side `batch` knob.
+- Adds visibility and enrichment switches to the LinkedIn connect and manage dialogs with client-facing copy that avoids naming the provider; manage dialog saves both settings behind a single Save action.
+- Routes SalesQL merge proposals to the human review lane so machine-pair verdicts land as `awaiting_human` instead of stuck `pending_corroboration`; duplicate proposals for the same pair return the existing row without inserting.
+- Defaults SalesQL enrichment daily cap to 25 and keeps `autoMerge` off by default to prevent silent opt-in for existing connectors.
+- Adds `GET /api/enrichment/allowance` admin endpoint exposing remaining lookup credits and reset timestamp from the enrichment provider.
+- Includes LinkedIn conversations in `message`-kind search results so agent and search surfaces can reach synced threads without filtering by source.
+- Adds sync diagnostics to the LinkedIn connector, logging walked and persisted counters and warning when a run walks threads but persists nothing.
+- Returns `scopeConfig` on `/mine` for LinkedIn connectors so the UI can render current visibility and enrichment state.
+- Replaces the previous `SALESQL_ENRICH_ENABLED` and `SALESQL_ENRICH_MAX_PER_SYNC` env vars with `scope_config.enrichment` stored per connector.
+
 ## [1.7.3] -- 2026-09-04
 
 - Adds LinkedIn connector via Aimfox, admin-managed with shared workspace key, syncing conversations into the graph as timeline-shaped threads (cold outreach → meeting notes → follow-up) and only indexing threads with a reply.

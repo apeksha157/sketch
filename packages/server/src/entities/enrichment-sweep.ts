@@ -49,7 +49,13 @@ export type EnrichmentManualRunOutcome =
   | { started: false; reason: "in_flight" }
   | { started: true; completion: Promise<EnrichmentSweepReport> };
 
+export interface EnrichmentAllowance {
+  remainingCalls: number | null;
+  resetsAt?: string | null;
+}
+
 export interface EnrichmentSweepService {
+  allowance(): Promise<EnrichmentAllowance>;
   runOnce(opts?: { apply?: boolean; limit?: number }): Promise<EnrichmentSweepReport>;
   tryRunManual(opts?: { apply?: boolean; limit?: number }): EnrichmentManualRunOutcome;
 }
@@ -217,10 +223,15 @@ async function reResolveDedupByEmail(params: {
     evidence: candidateEvidence(candidate),
   }));
   const result = parseProposalResult(
-    await handleProposeGraphVerdicts({ verdicts }, params.db, {
-      userId: MACHINE_PRINCIPAL_USER_ID,
-      tokenId: "salesql-sweep",
-    }),
+    await handleProposeGraphVerdicts(
+      { verdicts },
+      params.db,
+      {
+        userId: MACHINE_PRINCIPAL_USER_ID,
+        tokenId: "salesql-sweep",
+      },
+      { lane: "human" },
+    ),
   );
   const proposed = result.stored ?? 0;
   if (proposed < result.results.length) {
@@ -482,6 +493,10 @@ export async function runEnrichmentSweep(
 export function createEnrichmentSweepService(deps: EnrichmentSweepServiceDeps): EnrichmentSweepService {
   let inflight: Promise<EnrichmentSweepReport> | null = null;
 
+  async function allowance(): Promise<EnrichmentAllowance> {
+    return deps.provider.allowance ? deps.provider.allowance() : { remainingCalls: null, resetsAt: null };
+  }
+
   async function runOnce(opts: { apply?: boolean; limit?: number } = {}): Promise<EnrichmentSweepReport> {
     if (inflight) return inflight;
     inflight = (async () => {
@@ -509,5 +524,5 @@ export function createEnrichmentSweepService(deps: EnrichmentSweepServiceDeps): 
     return { started: true, completion };
   }
 
-  return { runOnce, tryRunManual };
+  return { allowance, runOnce, tryRunManual };
 }
