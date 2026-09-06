@@ -50,7 +50,7 @@ import { birthOrigin, entityEmail, humanSourceType, isWeeklyPassProjectRow } fro
  * rows are per-mention; fold them per file so ×N matches the drawer, keeping
  * the first snippet that survives the junk filter.
  */
-type TimelineEvidenceRow = EntityReviewEvidenceRow & { relation?: string | null; chunkIndex?: number | null };
+type TimelineEvidenceRow = EntityReviewEvidenceRow & { relation?: string | null };
 
 function evidenceTimelineGroups(evidence: TimelineEvidenceRow[]): EntityTimelineGroup[] {
   const byFile = new Map<string, EntityTimelineItem>();
@@ -59,7 +59,6 @@ function evidenceTimelineGroups(evidence: TimelineEvidenceRow[]): EntityTimeline
     if (existing) {
       existing.mentionCount += 1;
       if (e.relation && !existing.relations?.includes(e.relation)) existing.relations?.push(e.relation);
-      if (e.chunkIndex != null) existing.passageCount = (existing.passageCount ?? 0) + 1;
       if (!usefulSnippet(existing.contextSnippet, existing.fileName) && e.contextSnippet)
         existing.contextSnippet = e.contextSnippet;
       if (e.seen_at > existing.occurredAt) existing.occurredAt = e.seen_at;
@@ -76,7 +75,6 @@ function evidenceTimelineGroups(evidence: TimelineEvidenceRow[]): EntityTimeline
       mentionCount: 1,
       contextSnippet: e.contextSnippet ?? null,
       relations: e.relation ? [e.relation] : [],
-      passageCount: e.chunkIndex != null ? 1 : 0,
       url: e.file.providerUrl,
       rollupGroupId: null,
       crmActivity: null,
@@ -107,7 +105,6 @@ export function mentionTimelineGroups(mentions: EntityMention[]): EntityTimeline
       seen_at: m.sourceDate,
       contextSnippet: m.contextSnippet,
       relation: m.relation ?? null,
-      chunkIndex: m.chunkIndex,
       file: { name: m.file.fileName, providerUrl: m.file.providerUrl, sourcePath: m.file.sourcePath },
     })),
   );

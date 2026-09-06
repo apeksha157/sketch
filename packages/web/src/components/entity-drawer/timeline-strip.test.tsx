@@ -1,17 +1,19 @@
 /**
  * TimelineStrip contract:
  *  - day-grouped rows lead with the file title (email subject), line two names
- *    the relation · source · passage count, no midnight clock time, no ×N
+ *    the relation · source, no midnight clock time, no ×N, no passage count
  *  - the whole row is one button that expands in place; nothing opens a sheet
- *  - structural rows (no passages) expand straight into the file's text
- *  - LLM rows show their passages first and reveal the text under
- *    "Show whole file"; review hosts get the same shape from `loadQuotes`
+ *  - a row carrying any structural relation expands straight into the file's
+ *    text — it never calls the passages endpoint
+ *  - a "mentioned"-only row shows its passages first and reveals the text under
+ *    "Show whole file"; review hosts get the same shape from `loadQuotes`;
+ *    an empty passages result falls back to the text with no empty block
  *  - a gated file expands into the inline no-access line, strip intact
  *  - CRM activity rows show the activity label, not the raw source string
  */
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/utils";
-import { screen, within } from "@testing-library/react";
+import { cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -65,7 +67,6 @@ function item(overrides: Record<string, unknown>) {
     mentionCount: 1,
     contextSnippet: null,
     relations: [] as string[],
-    passageCount: 0,
     url: null,
     rollupGroupId: null,
     crmActivity: null,
@@ -82,7 +83,7 @@ const groups = [
         fileName: "Int. call: Building OW AI capability",
         sourceType: "fireflies",
         occurredAt: "2026-05-22T00:00:00",
-        relations: ["attended"],
+        relations: ["attended", "mentioned"],
       }),
       item({
         fileId: "f2",
@@ -91,7 +92,6 @@ const groups = [
         occurredAt: "2026-05-22T00:00:00",
         mentionCount: 2,
         relations: ["mentioned"],
-        passageCount: 2,
       }),
     ],
   },
@@ -120,21 +120,27 @@ const crmGroups = [
 ];
 
 describe("TimelineStrip", () => {
-  it("leads with the file title under day headers and attributes relation, source and passages", () => {
+  it("leads with the file title under day headers and attributes relation and source", () => {
     renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
     expect(screen.getByText(/3 entries/)).toBeInTheDocument();
     expect(screen.getByText("May 22")).toBeInTheDocument();
     expect(screen.getByText("Apr 10")).toBeInTheDocument();
     expect(screen.getByText("Int. call: Building OW AI capability")).toBeInTheDocument();
     expect(screen.getByText("Attended · fireflies")).toBeInTheDocument();
-    expect(screen.getByText("Mentioned · gmail · 2 passages")).toBeInTheDocument();
+    expect(screen.getByText("Mentioned · gmail")).toBeInTheDocument();
     expect(screen.getByText("google drive")).toBeInTheDocument();
     expect(screen.queryByText(/×2/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/passage/)).not.toBeInTheDocument();
     expect(screen.queryByText(/12:00/)).not.toBeInTheDocument();
   });
 
-  it("expands a structural row inline into the file's text with no sheet anywhere", async () => {
+  it("expands a structural row inline into the file's text without asking for passages", async () => {
+    let passagesRequested = false;
     server.use(
+      http.get("/api/entities/e-1/snippets", () => {
+        passagesRequested = true;
+        return HttpResponse.json({ passages: [] });
+      }),
       http.get("/api/connectors/files/f1/content", () =>
         HttpResponse.json(
           fileContentResponse({
@@ -159,9 +165,20 @@ describe("TimelineStrip", () => {
     expect(toggle.contains(body)).toBe(false);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText("Show whole file")).not.toBeInTheDocument();
+    expect(passagesRequested).toBe(false);
   });
 
-  it("shows an LLM row's passages first and reveals the file text under Show whole file", async () => {
+  it("shows a mentioned-only row's passages first, then falls back to the text when there are none", async () => {
+    const contentHandler = http.get("/api/connectors/files/f2/content", () =>
+      HttpResponse.json(
+        fileContentResponse({
+          id: "f2",
+          fileName: "Re: IPROC SUPPLIER REQUEST",
+          source: "gmail",
+          content: "Full supplier request thread body.",
+        }),
+      ),
+    );
     server.use(
       http.get("/api/entities/e-1/snippets", ({ request }) => {
         const url = new URL(request.url);
@@ -174,16 +191,7 @@ describe("TimelineStrip", () => {
           ],
         });
       }),
-      http.get("/api/connectors/files/f2/content", () =>
-        HttpResponse.json(
-          fileContentResponse({
-            id: "f2",
-            fileName: "Re: IPROC SUPPLIER REQUEST",
-            source: "gmail",
-            content: "Full supplier request thread body.",
-          }),
-        ),
-      ),
+      contentHandler,
     );
     const user = userEvent.setup();
     renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" highlight="Sanaa Khalloq" />);
@@ -203,6 +211,21 @@ describe("TimelineStrip", () => {
     await user.click(within(region).getByRole("button", { name: "Show whole file" }));
     expect(await within(region).findByText(/Full supplier request thread body/)).toBeInTheDocument();
     expect(region.textContent).toContain("following up on the submission");
+
+    cleanup();
+    server.use(
+      http.get("/api/entities/e-1/snippets", () => HttpResponse.json({ passages: [] })),
+      contentHandler,
+    );
+    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" highlight="Sanaa Khalloq" />);
+
+    const emptyToggle = rowToggle("Re: IPROC SUPPLIER REQUEST");
+    await user.click(emptyToggle);
+    const emptyRegion = expansionRegion(emptyToggle);
+
+    expect(await within(emptyRegion).findByText(/Full supplier request thread body/)).toBeInTheDocument();
+    expect(within(emptyRegion).queryByText("Where they come up")).not.toBeInTheDocument();
+    expect(within(emptyRegion).queryByRole("button", { name: "Show whole file" })).not.toBeInTheDocument();
   });
 
   it("renders the inline no-access line when the content endpoint denies the file", async () => {

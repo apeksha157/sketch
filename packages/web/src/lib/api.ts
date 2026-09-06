@@ -1080,8 +1080,6 @@ export interface EntityTimelineItem {
   contextSnippet: string | null;
   /** Distinct mention relations for this file, structural before "mentioned". */
   relations?: string[];
-  /** Mentions carrying a chunk index — the passages an extractor found. */
-  passageCount?: number;
   url: string | null;
   rollupGroupId: string | null;
   crmActivity: {

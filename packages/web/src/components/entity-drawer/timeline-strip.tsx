@@ -4,15 +4,17 @@
  * Row anatomy: the file's title (for email that IS the subject line) and a
  * clock time on line one — day headers carry the date, so a time only shows
  * when the source recorded one. Line two names how the file links the entity
- * (Attended, Sent, Mentioned, …), its source, and how many passages an
- * extractor found. Matcher working data — the stored snippet and the ×N
- * mention count — is deliberately not rendered; it read as noise.
+ * (Attended, Sent, Mentioned, …) and its source. Matcher working data — the
+ * stored snippet and the ×N mention count — is deliberately not rendered; it
+ * read as noise, and passages are only known once a row is expanded.
  *
  * The whole row is one button and expands in place. Two link kinds share one
  * expansion model with a pluggable passages source: structural rows (attendee,
- * sender, CRM record) go straight to the file's text, LLM-identified rows show
- * their passages first with "Show whole file" underneath. Review hosts have no
- * entity behind the row, so they pass `loadQuotes` and get the same shape.
+ * sender, CRM record) go straight to the file's text, rows linked only by the
+ * extractor ("mentioned") show their passages first with "Show whole file"
+ * underneath. Review hosts have no entity behind the row, so they pass
+ * `loadQuotes` and get the same shape. A passages source that resolves to
+ * nothing falls back to the file's text, so no row expands into an empty block.
  */
 import { ConnectorLogo } from "@/components/connector-logos";
 import { FileContentPreview } from "@/components/file-content-preview";
@@ -33,7 +35,7 @@ import { useId, useState } from "react";
 
 interface TimelineStripProps {
   groups: EntityTimelineGroup[];
-  /** Enables the passages endpoint for rows whose mentions carry chunk indexes. */
+  /** Enables the passages endpoint for rows the extractor alone linked. */
   entityId?: string;
   /**
    * Custom passages source for rows without an entity behind them (review
@@ -95,6 +97,8 @@ const RELATION_LABELS: Record<string, string> = {
   mentioned: "Mentioned",
   seeded: "Record",
   contactable: "Contact",
+  organized: "Organised",
+  primary_contact: "Primary contact",
 };
 
 function relationLabel(relation: string): string {
@@ -221,6 +225,21 @@ function Highlighted({ text, needle }: { text: string; needle?: string }) {
 }
 
 /**
+ * Both file-scoped fetches gate the same way, so a denied passages call reads
+ * exactly like a denied content call instead of leaking a different word.
+ */
+function gateMessage(error: unknown): string | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status === 403) return "You don't have access to this file's contents.";
+  if (error.status === 404) return "File not found.";
+  return null;
+}
+
+function isGated(error: unknown): boolean {
+  return gateMessage(error) !== null;
+}
+
+/**
  * The file's stored text, shared with the Files page under the same query key
  * so an expansion and the sheet never fetch twice.
  */
@@ -228,13 +247,12 @@ function WholeFile({ fileId }: { fileId: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["file-content", fileId],
     queryFn: () => api.integrations.fileContent(fileId),
-    retry: (failureCount, err) =>
-      err instanceof ApiRequestError && (err.status === 403 || err.status === 404) ? false : failureCount < 3,
+    retry: (failureCount, err) => (isGated(err) ? false : failureCount < 3),
   });
 
   if (isLoading) return <p className="text-[11px] text-muted-foreground">Loading…</p>;
-  if (error instanceof ApiRequestError && error.status === 403)
-    return <p className="text-[11px] text-muted-foreground">You don't have access to this file's contents.</p>;
+  const gate = gateMessage(error);
+  if (gate) return <p className="text-[11px] text-muted-foreground">{gate}</p>;
   const file = data?.file;
   if (!file) return <p className="text-[11px] text-muted-foreground">File not found.</p>;
 
@@ -268,15 +286,20 @@ interface RowExpansionProps {
   highlight?: string;
 }
 
+/** Only the extractor links this row, so passages are worth looking for. */
+function onlyMentioned(relations: string[]): boolean {
+  return relations.includes("mentioned") && relations.every((r) => r === "mentioned");
+}
+
 /**
  * One expansion model, two entry points: with a passages source the row leads
- * with the passages and hides the file body behind "Show whole file";
- * without one it is the file body straight away.
+ * with the passages and hides the file body behind "Show whole file"; without
+ * one — or when the source resolves to nothing — it is the file body straight
+ * away. A gated passages fetch stops there rather than retrying as content.
  */
 function RowExpansion({ item, entityId, loadQuotes, quotesScope, highlight }: RowExpansionProps) {
-  const fromEndpoint = !loadQuotes && !!entityId && (item.passageCount ?? 0) > 0;
-  const hasPassages = !!loadQuotes || fromEndpoint;
-  const [showWholeFile, setShowWholeFile] = useState(!hasPassages);
+  const hasPassages = !!loadQuotes || (!!entityId && onlyMentioned(item.relations ?? []));
+  const [wholeFileRequested, setWholeFileRequested] = useState(false);
 
   const scope = loadQuotes ? (quotesScope ?? "custom") : (entityId ?? "none");
   const passagesQuery = useQuery({
@@ -290,39 +313,40 @@ function RowExpansion({ item, entityId, loadQuotes, quotesScope, highlight }: Ro
       return passages.map((p) => p.text);
     },
     enabled: hasPassages,
+    retry: (failureCount, err) => (isGated(err) ? false : failureCount < 3),
   });
 
+  const gate = gateMessage(passagesQuery.error);
   const passages = [...new Set(passagesQuery.data ?? [])];
+  const awaitingPassages = hasPassages && passagesQuery.isPending;
+  const showWholeFile = !gate && !awaitingPassages && (!hasPassages || wholeFileRequested || passages.length === 0);
 
   return (
     <div className="mt-1.5 space-y-2 border-l-2 border-border pl-2.5">
-      {hasPassages ? (
-        passagesQuery.isLoading ? (
-          <p className="text-[11px] text-muted-foreground">Loading…</p>
-        ) : passages.length > 0 ? (
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Where they come up</p>
-            <div className="mt-1 divide-y divide-border">
-              {passages.map((text) => (
-                <p key={text} className="py-1.5 text-[11px] leading-snug text-muted-foreground first:pt-0 last:pb-0">
-                  <Highlighted text={text} needle={highlight} />
-                </p>
-              ))}
-            </div>
+      {gate ? <p className="text-[11px] text-muted-foreground">{gate}</p> : null}
+      {awaitingPassages ? <p className="text-[11px] text-muted-foreground">Loading…</p> : null}
+      {passages.length > 0 ? (
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Where they come up</p>
+          <div className="mt-1 divide-y divide-border">
+            {passages.map((text) => (
+              <p key={text} className="py-1.5 text-[11px] leading-snug text-muted-foreground first:pt-0 last:pb-0">
+                <Highlighted text={text} needle={highlight} />
+              </p>
+            ))}
           </div>
-        ) : null
+        </div>
       ) : null}
-      {showWholeFile ? (
-        <WholeFile fileId={item.fileId} />
-      ) : (
+      {showWholeFile ? <WholeFile fileId={item.fileId} /> : null}
+      {!showWholeFile && !gate && !awaitingPassages ? (
         <button
           type="button"
-          onClick={() => setShowWholeFile(true)}
+          onClick={() => setWholeFileRequested(true)}
           className="cursor-pointer text-[11px] text-primary hover:underline"
         >
           Show whole file
         </button>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -354,8 +378,6 @@ function TimelineRow({
     const relations = item.relations ?? [];
     if (relations.length > 0) attribution.push(relationLabel(primaryRelation(relations)));
     attribution.push(sourceLabel(item.sourceType));
-    const passageCount = item.passageCount ?? 0;
-    if (passageCount > 0) attribution.push(`${passageCount} ${passageCount === 1 ? "passage" : "passages"}`);
   }
 
   return (
