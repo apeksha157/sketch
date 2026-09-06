@@ -15,14 +15,24 @@ describe("connectors repo — CRM rollup collapse", () => {
     repo = createConnectorRepository(db);
     await db
       .insertInto("connector_configs")
-      .values({
-        id: "cfg",
-        connector_type: "zoho_crm",
-        auth_type: "oauth",
-        credentials: "{}",
-        created_by: "u",
-        scope_config: "{}",
-      })
+      .values([
+        {
+          id: "cfg",
+          connector_type: "zoho_crm",
+          auth_type: "oauth",
+          credentials: "{}",
+          created_by: "u",
+          scope_config: "{}",
+        },
+        {
+          id: "cfg-drive",
+          connector_type: "google_drive",
+          auth_type: "oauth",
+          credentials: "{}",
+          created_by: "u",
+          scope_config: "{}",
+        },
+      ])
       .execute();
   });
 
@@ -32,12 +42,13 @@ describe("connectors repo — CRM rollup collapse", () => {
 
   async function seedFile(
     providerFileId: string,
-    fileType: string,
+    fileType: string | null,
     rollupGroupId: string | null,
     contentCategory: "document" | "structured" = "structured",
+    opts: { source?: string; connectorConfigId?: string } = {},
   ): Promise<{ id: string }> {
     return repo.upsertFile({
-      source: "zoho_crm",
+      source: opts.source ?? "zoho_crm",
       providerFileId,
       providerUrl: null,
       fileName: providerFileId,
@@ -48,7 +59,7 @@ describe("connectors repo — CRM rollup collapse", () => {
       contentHash: providerFileId,
       sourceCreatedAt: null,
       sourceUpdatedAt: null,
-      connectorConfigId: "cfg",
+      connectorConfigId: opts.connectorConfigId ?? "cfg",
       rollupGroupId,
     });
   }
@@ -134,5 +145,21 @@ describe("connectors repo — CRM rollup collapse", () => {
     expect(files.map((file) => file.provider_file_id)).toEqual(["Accounts:a1"]);
     expect(total).toBe(1);
     expect(enrichedTotal).toBe(0);
+  });
+
+  it("keeps structured non-CRM files with null file type when rollups are collapsed", async () => {
+    await seedFile("Drive:unknown", null, null, "structured", {
+      source: "google_drive",
+      connectorConfigId: "cfg-drive",
+    });
+    await seedFile("Calls:c1", "crm_call", null);
+
+    const files = await repo.listAllFiles({ limit: 50, offset: 0, viewer: ADMIN, collapseRollups: true });
+    const total = await repo.countAllFiles({ viewer: ADMIN, collapseRollups: true });
+    const bySource = await repo.countFilesBySource(ADMIN);
+
+    expect(files.map((file) => file.provider_file_id)).toEqual(["Drive:unknown"]);
+    expect(total).toBe(1);
+    expect(bySource).toEqual([{ source: "google_drive", count: 1 }]);
   });
 });

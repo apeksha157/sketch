@@ -49,6 +49,8 @@ export type SyncStatus = "pending" | "active" | "syncing" | "paused" | "error" |
 
 export type ContentCategory = "document" | "structured";
 
+export const CRM_ACTIVITY_FILE_TYPES = ["crm_task", "crm_note", "crm_call", "crm_event", "crm_meeting"] as const;
+
 export type AccessPrincipalType = "email" | "phone" | "slack_user" | "whatsapp_lid";
 
 export interface AccessPrincipal {

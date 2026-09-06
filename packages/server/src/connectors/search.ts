@@ -37,7 +37,13 @@ import {
 } from "./entity-scope";
 import { idInList } from "./id-in-list";
 import { filterAccessibleFileIds } from "./sync-utils";
-import { type AccessPrincipalInput, CONNECTOR_TYPES, type ConnectorType, normalizeAccessPrincipals } from "./types";
+import {
+  type AccessPrincipalInput,
+  CONNECTOR_TYPES,
+  CRM_ACTIVITY_FILE_TYPES,
+  type ConnectorType,
+  normalizeAccessPrincipals,
+} from "./types";
 import {
   type ScoredVector,
   VECTOR_HIT_DISPLAY_CAP,
@@ -108,6 +114,35 @@ export function fileAccessFilterSql(principalInput: AccessPrincipalInput[], slac
 }
 
 /**
+ * Zoho CRM sync classifies activity rows through `activityBody` in `zoho-crm.ts`,
+ * which reads `Description ?? Note_Content`: for CRM activity file types, `structured`
+ * means there is no free-text body, while `document` means there is one. Bodyless
+ * activity rows are summarized under their parent object by the CRM rollup. CRM rows
+ * still render a markdown header into `content`, and summaries are usually empty, so
+ * neither `content` nor `summary` can identify this case.
+ */
+export function bodylessCrmActivityPredicateSql(): RawBuilder<boolean> {
+  const fileTypes = sql.join(
+    CRM_ACTIVITY_FILE_TYPES.map((fileType) => sql`${fileType}`),
+    sql`, `,
+  );
+  return sql<boolean>`(
+    indexed_files.content_category IS NULL
+    OR indexed_files.content_category <> 'structured'
+    OR indexed_files.file_type IS NULL
+    OR indexed_files.file_type NOT IN (${fileTypes})
+  )`;
+}
+
+function isBodylessCrmActivity(row: { content_category: string | null; file_type: string | null }): boolean {
+  return (
+    row.content_category === "structured" &&
+    row.file_type !== null &&
+    CRM_ACTIVITY_FILE_TYPES.some((fileType) => fileType === row.file_type)
+  );
+}
+
+/**
  * Search the FTS5 index.
  *
  * Supports FTS5 query syntax:
@@ -125,13 +160,6 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
     principalList.length > 0
       ? sql`AND ${fileAccessFilterSql(principalList, opts?.slackEntitySyncEnabled ?? true)}`
       : sql``;
-
-  // Hide bodyless CRM activities ("empty reminders") from search — they're rolled
-  // up under their parent object, never surfaced as standalone results.
-  const excludeEmptyActivities = sql`AND NOT (
-    indexed_files.content_category = 'structured'
-    AND indexed_files.file_type IN ('crm_task', 'crm_call', 'crm_event', 'crm_meeting', 'crm_note')
-  )`;
 
   if (isPg(db)) {
     const tsQuery = sanitizeTsQuery(query);
@@ -152,7 +180,7 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
       FROM indexed_files
       WHERE indexed_files.search_vector @@ plainto_tsquery('english', ${query})
       AND indexed_files.is_archived = 0
-      ${excludeEmptyActivities}
+      AND ${bodylessCrmActivityPredicateSql()}
       ${userFilter}
       ${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
       ${opts?.category ? sql`AND indexed_files.content_category = ${opts.category}` : sql``}
@@ -181,7 +209,7 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
 		INNER JOIN indexed_files_fts ON indexed_files.rowid = indexed_files_fts.rowid
 		WHERE indexed_files_fts MATCH ${ftsQuery}
 		AND indexed_files.is_archived = 0
-		${excludeEmptyActivities}
+		AND ${bodylessCrmActivityPredicateSql()}
 		${userFilter}
 		${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
 		${opts?.category ? sql`AND indexed_files.content_category = ${opts.category}` : sql``}
@@ -709,6 +737,7 @@ export async function hybridSearch(
         FROM indexed_files
         WHERE indexed_files.search_vector @@ plainto_tsquery('english', ${query})
         AND indexed_files.is_archived = 0
+        AND ${bodylessCrmActivityPredicateSql()}
         ${fileIdFilter}
         ${entityScopeFilter}
         ${accessFilter ?? sql``}
@@ -743,6 +772,7 @@ export async function hybridSearch(
         INNER JOIN indexed_files_fts ON indexed_files.rowid = indexed_files_fts.rowid
         WHERE indexed_files_fts MATCH ${ftsQuery}
         AND indexed_files.is_archived = 0
+        AND ${bodylessCrmActivityPredicateSql()}
         ${fileIdFilter}
         ${entityScopeFilter}
         ${accessFilter ?? sql``}
@@ -1123,7 +1153,8 @@ export async function hybridSearch(
       "access_scope_id",
     ])
     .where("id", "in", topFileIds)
-    .where("is_archived", "=", 0);
+    .where("is_archived", "=", 0)
+    .where(bodylessCrmActivityPredicateSql());
 
   if (opts?.source) {
     metaQuery = metaQuery.where("source", "=", opts.source);
@@ -1333,6 +1364,7 @@ export async function hybridSearch(
  * candidate budget before fusion.
  */
 function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions, accessFilter: RawBuilder<unknown> | null) {
+  const requiredPredicate = sql`AND ${bodylessCrmActivityPredicateSql()}`;
   const parts = [];
   if (opts.fileIds && opts.fileIds.length > 0) {
     parts.push(sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`);
@@ -1352,7 +1384,7 @@ function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions, accessFil
   if (opts.category) parts.push(sql`AND indexed_files.content_category = ${opts.category}`);
   if (opts.kindRules?.length) parts.push(kindFilterSql(opts.kindRules));
   if (accessFilter) parts.push(accessFilter);
-  return parts.length > 0 ? sql`${sql.join(parts, sql` `)}` : sql``;
+  return sql`${requiredPredicate} ${sql.join(parts, sql` `)}`;
 }
 
 /**
@@ -1407,6 +1439,12 @@ function describeFilters(opts: HybridSearchOptions): Array<{
       shown: `${opts.entityScope?.entityIds.length ?? 0} entity/entities (${opts.entityScope?.mode ?? "and"})`,
     },
     { field: "archived", label: "Archived excluded", value: true, shown: "is_archived = 0" },
+    {
+      field: "bodylessCrmActivities",
+      label: "Bodyless CRM activities hidden",
+      value: true,
+      shown: "structured CRM activity types summarized on parent objects",
+    },
   ].map((entry) => ({
     field: entry.field,
     label: entry.label,
@@ -1480,6 +1518,7 @@ function sqlFilterReason(
   opts: HybridSearchOptions,
 ): string {
   if (row.is_archived !== 0) return "archived";
+  if (isBodylessCrmActivity(row)) return "bodyless CRM activity summarized on its parent object";
   if (opts.source && row.source !== opts.source) return `source is ${row.source}, not ${opts.source}`;
   if (opts.sources?.length && !opts.sources.includes(row.source))
     return `source ${row.source} not in the requested set`;
@@ -1877,7 +1916,8 @@ async function browseLatest(
       "source_created_at",
       "summary",
     ])
-    .where("is_archived", "=", 0);
+    .where("is_archived", "=", 0)
+    .where(bodylessCrmActivityPredicateSql());
 
   if (opts.kindRules?.length) {
     const rules = opts.kindRules;

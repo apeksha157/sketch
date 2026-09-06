@@ -15,6 +15,7 @@ import { forEachChunk } from "../../connectors/sync-utils";
 import {
   type AccessPrincipal,
   type AccessPrincipalInput,
+  CRM_ACTIVITY_FILE_TYPES,
   type ConnectorType,
   type ContentCategory,
   type SyncStatus,
@@ -219,9 +220,7 @@ function decodeConnectorConfigRow<T extends { credentials: string }>(row: T, enc
 }
 
 /** CRM activity file types whose bodyless ("empty reminder") rows are hidden from the list. */
-const CRM_ACTIVITY_FILE_TYPES_SQL = sql.join(
-  ["crm_task", "crm_call", "crm_event", "crm_meeting", "crm_note"].map((t) => sql`${t}`),
-);
+const CRM_ACTIVITY_FILE_TYPES_SQL = sql.join(CRM_ACTIVITY_FILE_TYPES.map((fileType) => sql`${fileType}`));
 
 const CONNECTOR_SCOPED_PROVIDER_FILE_ID_SOURCES = new Set<string>([
   "google_calendar",
@@ -240,9 +239,11 @@ const CONNECTOR_SCOPED_PROVIDER_FILE_ID_SOURCES = new Set<string>([
  */
 const browseVisibilityPredicate = sql<boolean>`(
   (indexed_files.rollup_group_id IS NULL OR indexed_files.rollup_group_id = indexed_files.provider_file_id)
-  AND NOT (
-    indexed_files.content_category = 'structured'
-    AND indexed_files.file_type IN (${CRM_ACTIVITY_FILE_TYPES_SQL})
+  AND (
+    indexed_files.content_category IS NULL
+    OR indexed_files.content_category <> 'structured'
+    OR indexed_files.file_type IS NULL
+    OR indexed_files.file_type NOT IN (${CRM_ACTIVITY_FILE_TYPES_SQL})
   )
 )`;
 
