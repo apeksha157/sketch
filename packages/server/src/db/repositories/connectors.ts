@@ -426,6 +426,47 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
       return decodeConnectorConfigRow(row, encryptionKey);
     },
 
+    /**
+     * Rewrites LinkedIn Aimfox file visibility authoritatively after a
+     * connector-level mode flip. Workspace mode deliberately leaves files with
+     * no access scope and no per-file grants, which makes the existing
+     * unrestricted visibility rule apply.
+     */
+    async reapplyLinkedinVisibility(configId: string, mode: "owner" | "workspace", ownerEmail: string) {
+      const files = await db
+        .selectFrom("indexed_files")
+        .select("id")
+        .where("connector_config_id", "=", configId)
+        .where("source", "=", "linkedin_aimfox")
+        .execute();
+      const fileIds = files.map((file) => file.id);
+      if (fileIds.length === 0) return;
+
+      await forEachChunk(
+        fileIds,
+        async (ids) => {
+          await db.deleteFrom("file_access").where("indexed_file_id", "in", ids).execute();
+          await db.updateTable("indexed_files").set({ access_scope_id: null }).where("id", "in", ids).execute();
+          if (mode === "workspace") return;
+
+          const principals = normalizeAccessPrincipals([ownerEmail]);
+          const principal = principals[0];
+          if (!principal) return;
+          await db
+            .insertInto("file_access")
+            .values(
+              ids.map((indexedFileId) => ({
+                indexed_file_id: indexedFileId,
+                principal_type: principal.type,
+                principal_value: principal.value,
+              })),
+            )
+            .execute();
+        },
+        500,
+      );
+    },
+
     /** Get all file IDs linked to a connector. */
     async getFileIdsForConnector(connectorId: string): Promise<string[]> {
       const rows = await db

@@ -199,7 +199,7 @@ export interface SyncedItem {
   /**
    * Per-file email access list. Used when access varies per file
    * (e.g., Google Drive My Drive files with individual sharing).
-   * null → no per-file restrictions.
+   * undefined/null → leave per-file grants untouched; [] → clear them.
    */
   accessPrincipals?: AccessPrincipal[] | null;
   /**
@@ -604,6 +604,9 @@ export interface Connector {
   }): AsyncGenerator<SyncedItem>;
 
   onItemResult?(result: { item: SyncedItem; persisted: boolean; error?: string }): void | Promise<void>;
+
+  /** Optional counters emitted by connectors for the dispatcher sync log line. */
+  getSyncDiagnostics?(): Record<string, string | number | boolean | null>;
 
   /** Return the new sync cursor after a sync run. */
   getCursor(opts: {
