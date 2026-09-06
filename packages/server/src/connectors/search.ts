@@ -28,6 +28,13 @@ import { parseEmailAddrJson, parseEmailAddrListJson } from "./email/envelope-met
 import type { EmailAddr } from "./email/normalized-email";
 import { createEnrichmentQueryEmbedder, resolveOpenRouterEnrichmentConfig } from "./enrichment-providers";
 import type { SearchCandidate, StageKey, StageReporter, VectorChunkHit } from "./enrichment-stage-report";
+import {
+  type EntityScope,
+  entityScopeHasFiles,
+  entityScopePredicateSql,
+  findEntityLinkedFileIds,
+  resolveSqliteEntityScopeFileIds,
+} from "./entity-scope";
 import { idInList } from "./id-in-list";
 import { filterAccessibleFileIds } from "./sync-utils";
 import { type AccessPrincipalInput, CONNECTOR_TYPES, type ConnectorType, normalizeAccessPrincipals } from "./types";
@@ -438,10 +445,12 @@ export interface HybridSearchOptions extends SearchOptions {
   contentTypes?: string[];
   /** Embed the query for vector search. If null, only FTS5 is used. */
   queryEmbedding?: number[];
-  /** Restrict search to these file IDs only (entity-scoped search). */
+  /** Restrict search to these file IDs only. */
   fileIds?: string[];
-  /** File IDs linked to entities matching the query — used for entity boost in ranking. */
-  entityFileIds?: Set<string>;
+  /** Restrict search to files linked to these entities without materialising file IDs. */
+  entityScope?: EntityScope;
+  /** Entity matches whose links to the bounded candidate set receive a ranking boost. */
+  entityBoostEntityIds?: string[];
   /** Multi-source filter (OR-of-sources). Takes precedence over `source` when both set. */
   sources?: string[];
   /** Compiled kind rules — see KIND_TO_RULES. Caller (Search tool) translates `kind` → rules. */
@@ -527,12 +536,19 @@ export async function hybridSearch(
   const ftsResults = new Map<string, { rank: number; snippet: string | null }>();
   const vecResults = new Map<string, { rank: number; similarity: number; snippet: string | null }>();
   const fileIdScope = opts?.fileIds && opts.fileIds.length > 0 ? new Set(opts.fileIds) : null;
+  const sqliteEntityFileIdScope =
+    !isPg(db) && opts?.queryEmbedding && opts.entityScope
+      ? await resolveSqliteEntityScopeFileIds(db, opts.entityScope)
+      : null;
 
   // ── 0. Build filter fragments ────────────────────────────────
   const fileIdFilter =
     opts?.fileIds && opts.fileIds.length > 0
       ? sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`
       : sql``;
+  const entityScopeFilter = opts?.entityScope
+    ? sql`AND ${entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope)}`
+    : sql``;
   // Push `kind` and `sources` into FTS so candidates outside the requested
   // kind don't crowd out matches; we'd otherwise lose them past `limit * 3`.
   const kindFilter = opts?.kindRules?.length ? kindFilterSql(opts.kindRules) : sql``;
@@ -554,6 +570,7 @@ export async function hybridSearch(
         WHERE indexed_files.search_vector @@ plainto_tsquery('english', ${query})
         AND indexed_files.is_archived = 0
         ${fileIdFilter}
+        ${entityScopeFilter}
         ${kindFilter}
         ${sourcesFilter}
         ORDER BY rank DESC
@@ -586,6 +603,7 @@ export async function hybridSearch(
         WHERE indexed_files_fts MATCH ${ftsQuery}
         AND indexed_files.is_archived = 0
         ${fileIdFilter}
+        ${entityScopeFilter}
         ${kindFilter}
         ${sourcesFilter}
         ORDER BY rank
@@ -767,7 +785,8 @@ export async function hybridSearch(
        * belonging to files that never reach the result set. On Postgres this is a no-op,
        * because the rows arrived scoped already.
        */
-      const inScope = (fileId: string) => !fileIdScope || fileIdScope.has(fileId);
+      const inScope = (fileId: string) =>
+        (!fileIdScope || fileIdScope.has(fileId)) && (!sqliteEntityFileIdScope || sqliteEntityFileIdScope.has(fileId));
 
       const hits: ScoredVector[] = [];
       for (const row of chunkRows.rows) {
@@ -799,9 +818,11 @@ export async function hybridSearch(
     }
 
     // Filter by file IDs if entity-scoped
-    const filteredVecResults = fileIdScope
-      ? allVecResults.filter((result) => fileIdScope.has(result.fileId))
-      : allVecResults;
+    const filteredVecResults = allVecResults.filter(
+      (result) =>
+        (!fileIdScope || fileIdScope.has(result.fileId)) &&
+        (!sqliteEntityFileIdScope || sqliteEntityFileIdScope.has(result.fileId)),
+    );
 
     // Sort by distance (ascending) and assign ranks
     filteredVecResults.sort((a, b) => a.distance - b.distance);
@@ -856,6 +877,9 @@ export async function hybridSearch(
 
   // ── 3. Merge via RRF ───────────────────────────────────────
   const allFileIds = new Set([...ftsResults.keys(), ...vecResults.keys()]);
+  const entityFileIds = opts?.entityBoostEntityIds?.length
+    ? await findEntityLinkedFileIds(db, [...allFileIds], opts.entityBoostEntityIds)
+    : undefined;
   const scored: Array<{ fileId: string; score: number; snippet: string | null; similarity: number | null }> = [];
 
   for (const fileId of allFileIds) {
@@ -868,7 +892,7 @@ export async function hybridSearch(
     if (vec) score += 1 / (RRF_K + vec.rank);
 
     // Entity boost: files linked to entities matching the query get a score bump
-    if (opts?.entityFileIds?.has(fileId)) {
+    if (entityFileIds?.has(fileId)) {
       score += ENTITY_BOOST;
     }
 
@@ -890,7 +914,7 @@ export async function hybridSearch(
     summary: {
       rrfK: RRF_K,
       entityBoost: ENTITY_BOOST,
-      boostedFiles: opts?.entityFileIds?.size ?? 0,
+      boostedFiles: entityFileIds?.size ?? 0,
       scored: scored.length,
     },
   });
@@ -1125,7 +1149,7 @@ export async function hybridSearch(
         scored,
         ftsResults,
         vecResults,
-        entityFileIds: opts.entityFileIds,
+        entityFileIds,
         attribution: dropAttribution,
         accessFiltered,
         collapsed,
@@ -1152,6 +1176,9 @@ function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions) {
   const parts = [];
   if (opts.fileIds && opts.fileIds.length > 0) {
     parts.push(sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`);
+  }
+  if (opts.entityScope) {
+    parts.push(sql`AND ${entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope)}`);
   }
   if (opts.source) parts.push(sql`AND indexed_files.source = ${opts.source}`);
   if (opts.sources && opts.sources.length > 0) {
@@ -1208,9 +1235,15 @@ function describeFilters(opts: HybridSearchOptions): Array<{
     },
     {
       field: "fileIds",
-      label: "Entity file scope",
+      label: "File ID scope",
       value: opts.fileIds?.length ? opts.fileIds : null,
       shown: `${opts.fileIds?.length ?? 0} file(s)`,
+    },
+    {
+      field: "entityScope",
+      label: "Entity scope",
+      value: opts.entityScope ?? null,
+      shown: `${opts.entityScope?.entityIds.length ?? 0} entity/entities (${opts.entityScope?.mode ?? "and"})`,
     },
     { field: "archived", label: "Archived excluded", value: true, shown: "is_archived = 0" },
   ].map((entry) => ({
@@ -1627,59 +1660,6 @@ export async function browseFiles(
 }
 
 /**
- * Resolve a list of entity ids to the file ids that mention them.
- *
- * Mode:
- *  - "or"  → union: any file mentioning any of the entities
- *  - "and" → intersection: file must mention every entity
- *
- * For small `entityIds.length` (≤3) AND mode runs N small queries and intersects
- * Sets in app code — the planner consistently picks index scans for these and
- * the round-trip count is negligible. For larger N a single `GROUP BY ... HAVING
- * COUNT(DISTINCT entity_id)` query takes over (covered by the composite index
- * added in migration 042).
- */
-export async function resolveEntityFileIds(db: Kysely<DB>, entityIds: string[], mode: "and" | "or"): Promise<string[]> {
-  if (entityIds.length === 0) return [];
-  const uniqueIds = [...new Set(entityIds)];
-
-  if (mode === "or" || uniqueIds.length === 1) {
-    const rows = await db
-      .selectFrom("entity_mentions")
-      .select("indexed_file_id")
-      .distinct()
-      .where("entity_id", "in", uniqueIds)
-      .execute();
-    return rows.map((r) => r.indexed_file_id);
-  }
-
-  if (uniqueIds.length <= 3) {
-    const sets = await Promise.all(
-      uniqueIds.map(
-        async (id) =>
-          new Set(
-            (
-              await db.selectFrom("entity_mentions").select("indexed_file_id").where("entity_id", "=", id).execute()
-            ).map((r) => r.indexed_file_id),
-          ),
-      ),
-    );
-    let out = sets[0];
-    for (let i = 1; i < sets.length; i++) out = new Set([...out].filter((x) => sets[i].has(x)));
-    return [...out];
-  }
-
-  const rows = await db
-    .selectFrom("entity_mentions")
-    .select(["indexed_file_id", db.fn.count<number>("entity_id").distinct().as("n")])
-    .where("entity_id", "in", uniqueIds)
-    .groupBy("indexed_file_id")
-    .having((eb) => eb(eb.fn.count("entity_id").distinct(), "=", uniqueIds.length))
-    .execute();
-  return rows.map((r) => r.indexed_file_id);
-}
-
-/**
  * Coerce a date-like value (ISO string from SQLite, Date object from
  * node-postgres) to milliseconds since epoch. Returns null for null /
  * undefined / unparseable input so the caller can sort them last.
@@ -1713,7 +1693,7 @@ async function browseLatest(
   opts: {
     kindRules?: KindRule[];
     sources?: string[];
-    fileIds?: string[];
+    entityScope?: EntityScope;
     userPrincipals?: AccessPrincipalInput[];
     slackEntitySyncEnabled?: boolean;
     after?: string;
@@ -1721,8 +1701,6 @@ async function browseLatest(
     limit: number;
   },
 ): Promise<HybridSearchResult[]> {
-  // Caller is responsible for the empty-fileIds short-circuit; selectFrom().where("id", "in", [])
-  // emits invalid `IN ()` SQL on SQLite.
   if (opts.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
   let q = db
     .selectFrom("indexed_files")
@@ -1755,7 +1733,7 @@ async function browseLatest(
     );
   }
   if (opts.sources?.length) q = q.where("source", "in", opts.sources);
-  if (opts.fileIds?.length) q = q.where(idInList(db, sql.ref("indexed_files.id"), opts.fileIds));
+  if (opts.entityScope) q = q.where(entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope));
 
   if ((opts.userPrincipals ?? []).length > 0) {
     const userPrincipals = opts.userPrincipals ?? [];
@@ -1840,7 +1818,7 @@ export async function search(
     entityIds?: string[];
     entityIdsMode?: "and" | "or";
     sortBy?: "relevance" | "recency";
-    /** Suppress search()'s own auto-entity-boost (caller will manage entityFileIds itself). */
+    /** Suppress search()'s own auto-entity-boost when the caller manages entity matching. */
     skipAutoEntityBoost?: boolean;
     geminiMaxRpm?: number;
     geminiMaxRetries?: number;
@@ -1855,26 +1833,26 @@ export async function search(
   const isRecency = opts?.sortBy === "recency";
   const trimmedQuery = query.trim();
 
-  // Resolve entityId / entityIds → fileIds for scoped search.
-  // Single `entityId` folds into the `entityIds` path (n=1, mode collapses).
   const allEntityIds =
     opts?.entityIds && opts.entityIds.length > 0 ? opts.entityIds : opts?.entityId ? [opts.entityId] : [];
-  let fileIds: string[] | undefined;
-  if (allEntityIds.length > 0) {
-    fileIds = await resolveEntityFileIds(db, allEntityIds, opts?.entityIdsMode ?? "and");
+  const entityScope =
+    allEntityIds.length > 0
+      ? { entityIds: [...new Set(allEntityIds)], mode: opts?.entityIdsMode ?? ("and" as const) }
+      : undefined;
+  const scopeHasFiles = entityScope && trimmedQuery !== "" ? await entityScopeHasFiles(db, entityScope) : undefined;
+  if (entityScope) {
     opts?.stageReport?.({
       stage: "resolveEntities",
       label: "Resolve entity scope",
       kind: "code",
       status: "done",
       summary: {
-        entityIds: allEntityIds.length,
-        mode: opts?.entityIdsMode ?? "and",
-        files: fileIds.length,
+        entityIds: entityScope.entityIds.length,
+        mode: entityScope.mode,
+        resolution: "correlated database predicate",
+        ...(scopeHasFiles === false ? { files: 0 } : {}),
       },
     });
-    // Empty-set short-circuit: avoid `IN ()` (invalid on SQLite) and skip the work.
-    if (fileIds.length === 0) return [];
   } else {
     opts?.stageReport?.({
       stage: "resolveEntities",
@@ -1885,20 +1863,22 @@ export async function search(
     });
   }
 
+  if (scopeHasFiles === false) return [];
+
   // Empty-query path: skip FTS/vector entirely. Require at least one structural filter.
   if (trimmedQuery === "") {
     const hasFilter =
       !!opts?.kindRules?.length ||
       !!opts?.sources?.length ||
       !!opts?.source ||
-      (fileIds !== undefined && fileIds.length > 0) ||
+      !!entityScope ||
       !!opts?.after ||
       !!opts?.before;
     if (!hasFilter) return [];
     return browseLatest(db, {
       kindRules: opts?.kindRules,
       sources: opts?.sources ?? (opts?.source ? [opts.source] : undefined),
-      fileIds,
+      entityScope,
       userPrincipals: opts?.userPrincipals,
       slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
       after: opts?.after,
@@ -1970,21 +1950,13 @@ export async function search(
 
   // Auto-entity-discovery boost. Suppressed when the caller already pinned
   // entityIds (would double-count) or asked to skip it.
-  let entityFileIds: Set<string> | undefined;
+  let entityBoostEntityIds: string[] | undefined;
   if (allEntityIds.length === 0 && !opts?.skipAutoEntityBoost) {
     try {
       const entityRepo = createEntityRepository(db);
       const matchingEntities = await entityRepo.searchEntities(trimmedQuery, { limit: 10 });
       if (matchingEntities.length > 0) {
-        const entityIds = matchingEntities.map((e) => e.id);
-        const mentions = await db
-          .selectFrom("entity_mentions")
-          .select("indexed_file_id")
-          .where("entity_id", "in", entityIds)
-          .execute();
-        if (mentions.length > 0) {
-          entityFileIds = new Set(mentions.map((m) => m.indexed_file_id));
-        }
+        entityBoostEntityIds = matchingEntities.map((entity) => entity.id);
       }
       opts?.stageReport?.({
         stage: "discoverEntities",
@@ -1994,8 +1966,7 @@ export async function search(
         summary: {
           set: "fuse boost",
           entitiesMatched: matchingEntities.length,
-          filesBoosted: entityFileIds?.size ?? 0,
-          note: "search()'s own discovery, limit 10, not public-filtered. This is the set applied at RRF fuse.",
+          note: "search()'s own discovery, limit 10, not public-filtered. Links are loaded only for fused candidates.",
         },
         outcomes: matchingEntities.map((entity) => ({
           subject: entity.name,
@@ -2031,8 +2002,8 @@ export async function search(
     userPrincipals: opts?.userPrincipals,
     ...(opts?.accessBypassReason ? { accessBypassReason: opts.accessBypassReason } : {}),
     slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
-    fileIds,
-    entityFileIds,
+    entityScope,
+    entityBoostEntityIds,
     timeFilter: opts?.after || opts?.before ? { after: opts?.after, before: opts?.before } : undefined,
   });
 

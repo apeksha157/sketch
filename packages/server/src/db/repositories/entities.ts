@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Kysely, RawBuilder, Selectable } from "kysely";
 import { sql } from "kysely";
 import { deleteNameEmbedding } from "../../connectors/embeddings/trunk-name-embeddings";
+import type { AccessPrincipal } from "../../connectors/types";
 import {
   filterAliasWritesForEntityName,
   isJunkAliasValue,
@@ -20,6 +21,7 @@ import { isPg } from "../dialect";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../schema";
 import { type FileViewer, fileVisibilityPredicate } from "./connectors";
 import { type EntityAliasProvenance, recordAlias, recordAliases } from "./entity-alias-rows";
+import { fileVisibilityRuleSql } from "./file-visibility-rule";
 
 const SYSTEM_ENTITY_SOURCE_TYPES = ["clickup_workspace", "clickup_space"];
 export const PROTECTED_ENTITY_SOURCES = ["team", "team_directory"];
@@ -921,7 +923,14 @@ export function createEntityRepository(db: Kysely<DB>) {
       await insert.execute();
     },
 
-    async getMentionsForEntity(entityId: string, opts?: { limit?: number; since?: string }) {
+    async getMentionsForEntity(
+      entityId: string,
+      opts?: {
+        limit?: number;
+        since?: string;
+        visibility?: { principals: AccessPrincipal[]; slackEntitySyncEnabled: boolean };
+      },
+    ) {
       let query = db
         .selectFrom("entity_mentions")
         .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
@@ -946,6 +955,16 @@ export function createEntityRepository(db: Kysely<DB>) {
           sql`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
           ">=",
           opts.since,
+        );
+      }
+      if (opts?.visibility) {
+        query = query.where(
+          fileVisibilityRuleSql({
+            principals: opts.visibility.principals,
+            slackEntitySyncEnabled: opts.visibility.slackEntitySyncEnabled,
+            archived: "exclude",
+            alias: "indexed_files",
+          }),
         );
       }
       if (opts?.limit) {

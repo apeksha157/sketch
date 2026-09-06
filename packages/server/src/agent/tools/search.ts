@@ -1,11 +1,12 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { sql } from "kysely";
 import { z } from "zod/v4";
 import { resolveContentPrincipals } from "../../access/principals";
+import { findEntityLinkedFileIds } from "../../connectors/entity-scope";
 import {
   KIND_TO_RULES,
   SEARCHABLE_SOURCES,
   SEARCH_KINDS,
-  filterAccessibleFileIds,
   getFileContent,
   kindsForSource,
   search,
@@ -13,6 +14,7 @@ import {
 } from "../../connectors/search";
 import type { DevSearchTraceOrigin, DevSearchTraceStatus } from "../../db/repositories/dev-search-traces";
 import { createEntityRepository } from "../../db/repositories/entities";
+import { fileVisibilityRuleSql } from "../../db/repositories/file-visibility-rule";
 import { createRawContentRepository } from "../../db/repositories/raw-contents";
 import { createSearchTraceCapture } from "./search-trace";
 import type { SketchMcpDeps, ToolResult } from "./types";
@@ -129,6 +131,12 @@ function contentPrincipalDeps(deps: SketchMcpDeps) {
   return { ...deps, adminBypass: { enabled: deps.adminReadAllEnabled === true } };
 }
 
+/**
+ * Keep public entity metadata only when at least one mentioning file is visible. For an
+ * entity the caller cannot see, the correlated EXISTS scans that entity's mentions before
+ * returning false, including the visibility rule's nested entity-share EXISTS. This residual
+ * is O(mentions) in the database and occurs only for the negative case.
+ */
 async function filterEntityRowsForPublic<
   T extends { id: string; source_type: string; subtype: string | null; aliases: string | null },
 >(deps: SketchMcpDeps, rows: T[]): Promise<T[]> {
@@ -138,25 +146,30 @@ async function filterEntityRowsForPublic<
   if (userPrincipals === undefined) return rows;
   if (userPrincipals.length === 0) return [];
 
-  const mentions = await deps.db
-    .selectFrom("entity_mentions")
-    .select(["entity_id", "indexed_file_id"])
+  const visibleEntities = await deps.db
+    .selectFrom("entities")
+    .select("entities.id")
     .where(
-      "entity_id",
+      "entities.id",
       "in",
       rows.map((row) => row.id),
     )
+    .where(
+      sql<boolean>`EXISTS (
+        SELECT 1
+        FROM entity_mentions em
+        INNER JOIN indexed_files f ON f.id = em.indexed_file_id
+        WHERE em.entity_id = entities.id
+          AND ${fileVisibilityRuleSql({
+            principals: userPrincipals,
+            slackEntitySyncEnabled: deps.slackEntitySyncEnabled ?? true,
+            archived: "exclude",
+            alias: "f",
+          })}
+      )`,
+    )
     .execute();
-
-  const accessibleIds = await filterAccessibleFileIds(
-    deps.db,
-    mentions.map((mention) => mention.indexed_file_id),
-    userPrincipals,
-    deps.slackEntitySyncEnabled ?? true,
-  );
-  const visibleEntityIds = new Set(
-    mentions.filter((mention) => accessibleIds.has(mention.indexed_file_id)).map((mention) => mention.entity_id),
-  );
+  const visibleEntityIds = new Set(visibleEntities.map((entity) => entity.id));
 
   return rows.filter((row) => visibleEntityIds.has(row.id));
 }
@@ -293,17 +306,6 @@ export async function handleSearch(
     lines.push("");
   }
 
-  let entityFileIds: Set<string> | undefined;
-  if (!skipAutoEntityBoost && entityMatches.length > 0) {
-    const matchIds = entityMatches.map((e) => e.id);
-    const mentions = await deps.db
-      .selectFrom("entity_mentions")
-      .select("indexed_file_id")
-      .where("entity_id", "in", matchIds)
-      .execute();
-    entityFileIds = new Set(mentions.map((m) => m.indexed_file_id));
-  }
-
   const effectiveLimit = resultLimit ?? (sortBy === "recency" ? 3 : 10);
   const userPrincipals = await resolveContentPrincipals(contentPrincipalDeps(deps));
   if (deps.publicMcp && userPrincipals !== undefined && userPrincipals.length === 0) {
@@ -331,6 +333,15 @@ export async function handleSearch(
     settingsEncryptionKey: deps.settingsEncryptionKey,
     logger: deps.logger,
   });
+
+  const entityFileIds =
+    !skipAutoEntityBoost && entityMatches.length > 0 && results.length > 0
+      ? await findEntityLinkedFileIds(
+          deps.db,
+          results.map((result) => result.id),
+          entityMatches.map((entity) => entity.id),
+        )
+      : undefined;
 
   const effectiveSortBy = sortBy ?? "relevance";
   const rerankApplied =
@@ -487,22 +498,14 @@ export async function handleGetEntityContext(
   if (userPrincipals !== undefined && userPrincipals.length === 0) {
     return { content: [{ type: "text", text: "No mentions found for this entity." }] };
   }
-  const rawMentions = await entityRepo.getMentionsForEntity(entityId, {
-    limit: Math.max(requestedLimit * 5, 100),
+  const mentions = await entityRepo.getMentionsForEntity(entityId, {
+    limit: requestedLimit,
     since,
+    visibility:
+      userPrincipals === undefined
+        ? undefined
+        : { principals: userPrincipals, slackEntitySyncEnabled: deps.slackEntitySyncEnabled ?? true },
   });
-
-  const accessibleIds =
-    userPrincipals === undefined
-      ? new Set(rawMentions.map((m) => m.indexed_file_id))
-      : await filterAccessibleFileIds(
-          deps.db,
-          rawMentions.map((m) => m.indexed_file_id),
-          userPrincipals,
-          deps.slackEntitySyncEnabled ?? true,
-        );
-
-  const mentions = rawMentions.filter((m) => accessibleIds.has(m.indexed_file_id)).slice(0, requestedLimit);
 
   if (deps.publicMcp?.filterEntityMetadata && mentions.length === 0) {
     return { content: [{ type: "text", text: `Entity ${entityId} not found.` }] };
