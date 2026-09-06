@@ -388,6 +388,48 @@ describe("public search handlers", () => {
     expect(result.content[0]?.text).toBe("Entity entity-bob not found.");
   });
 
+  it("applies mention visibility before the requested limit", async () => {
+    const hiddenFileIds = Array.from({ length: 101 }, (_, index) => `newer-hidden-${index}`);
+    await db
+      .insertInto("indexed_files")
+      .values(
+        hiddenFileIds.map((id) => ({
+          id,
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: id,
+          file_name: id,
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          access_scope_id: "scope-bob",
+          source_updated_at: "2030-01-01T00:00:00.000Z",
+          synced_at: "2030-01-01T00:00:00.000Z",
+        })),
+      )
+      .execute();
+    await db
+      .insertInto("entity_mentions")
+      .values(
+        hiddenFileIds.map((indexedFileId, index) => ({
+          id: `newer-hidden-mention-${index}`,
+          entity_id: "entity-alice",
+          indexed_file_id: indexedFileId,
+          chunk_index: null,
+          context_snippet: null,
+          confidence: "INFERRED" as const,
+          source: "test",
+          relation: "mentioned" as const,
+          mentioned_at: "2030-01-01T00:00:00.000Z",
+        })),
+      )
+      .execute();
+
+    const result = await handleGetEntityContext({ entityId: "entity-alice", limit: 1 }, deps());
+
+    expect(result.content[0]?.text).toContain('Google_drive: "Alice project"');
+    expect(result.content[0]?.text).not.toContain("newer-hidden");
+  });
+
   it("caps public file content responses", async () => {
     const result = await handleGetFileContent({ fileId: "file-alice" }, deps());
     const text = result.content[0]?.text ?? "";

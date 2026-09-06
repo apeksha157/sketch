@@ -217,6 +217,30 @@ describe("searchFiles — FTS5 query sanitization", () => {
 
     expect(results.map((result) => result.id)).toContain("file-fts");
   });
+
+  it("skips query embedding when an entity scope has no linked files", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ embedding: { values: [1] } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const settings = createSettingsRepository(db);
+    await settings.ensure();
+    await settings.update({ geminiApiKey: "AIza-key", embeddingProvider: "gemini" });
+    const reports: Array<{ stage: string; status: string; summary?: Record<string, unknown> }> = [];
+
+    const results = await search(db, "planning", {
+      entityIds: ["missing-entity"],
+      stageReport: (report) => reports.push(report),
+    });
+
+    expect(results).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(reports).toEqual([
+      expect.objectContaining({
+        stage: "resolveEntities",
+        status: "done",
+        summary: expect.objectContaining({ files: 0 }),
+      }),
+    ]);
+  });
 });
 
 /**
