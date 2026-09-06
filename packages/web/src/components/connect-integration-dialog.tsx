@@ -23,7 +23,8 @@ import {
   computeSelectedFromScope,
 } from "@/components/scope-picker";
 import { type BrowseResult, api } from "@/lib/api";
-import type { IntegrationDefinition } from "@/lib/integrations";
+import type { IntegrationDefinition, SettingsField, SettingsValues } from "@/lib/integrations";
+import { settingsDefaults } from "@/lib/integrations";
 import { useDashboardAuth } from "@/routes/dashboard";
 import {
   ArrowLeftIcon,
@@ -48,6 +49,7 @@ import {
 import { Input } from "@sketch/ui/components/input";
 import { Label } from "@sketch/ui/components/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@sketch/ui/components/select";
+import { Switch } from "@sketch/ui/components/switch";
 import { Textarea } from "@sketch/ui/components/textarea";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -102,6 +104,9 @@ export function ConnectIntegrationDialog({
   // Zoho CRM (and any future multi-DC OAuth connector) picks a data center first.
   const [region, setRegion] = useState<string>("com");
   const [linkedinVisibility, setLinkedinVisibility] = useState<"owner" | "workspace">("workspace");
+  const [connectorSettings, setConnectorSettings] = useState<SettingsValues>(() =>
+    settingsDefaults(integration?.settingsFields),
+  );
 
   // OAuth state
   const [step, setStep] = useState<
@@ -355,7 +360,14 @@ export function ConnectIntegrationDialog({
         connectorType: integration.type,
         authType: integration.authType,
         credentials,
-        ...(integration.type === "linkedin_aimfox" ? { scopeConfig: { visibility: linkedinVisibility } } : {}),
+        ...(integration.type === "linkedin_aimfox"
+          ? {
+              scopeConfig: {
+                visibility: linkedinVisibility,
+                ...(integration.settingsScopeKey ? { [integration.settingsScopeKey]: connectorSettings } : {}),
+              },
+            }
+          : {}),
       });
     },
     onSuccess: (result) => {
@@ -497,6 +509,7 @@ export function ConnectIntegrationDialog({
   const resetAndClose = () => {
     setFieldValues({});
     setLinkedinVisibility("workspace");
+    setConnectorSettings(settingsDefaults(integration?.settingsFields));
     setStep("credentials");
     setSharedDrives([]);
     setSelectedDriveIds(new Set());
@@ -1157,6 +1170,14 @@ export function ConnectIntegrationDialog({
                 <LinkedinVisibilityRadio
                   value={linkedinVisibility}
                   onChange={setLinkedinVisibility}
+                  disabled={isPending}
+                />
+              )}
+              {integration.settingsFields && integration.settingsFields.length > 0 && (
+                <ConnectorSettingsFields
+                  fields={integration.settingsFields}
+                  values={connectorSettings}
+                  onChange={(key, value) => setConnectorSettings((prev) => ({ ...prev, [key]: value }))}
                   disabled={isPending}
                 />
               )}
@@ -1908,6 +1929,99 @@ export function LinkedinVisibilityRadio({
         ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * Renders an integration's `settingsFields` descriptor. Shared by the connect step and
+ * the manage dialog so both surfaces show the same labels, help and defaults.
+ */
+export function ConnectorSettingsFields({
+  fields,
+  values,
+  onChange,
+  disabled,
+  idPrefix = "connector-setting",
+}: {
+  fields: SettingsField[];
+  values: SettingsValues;
+  onChange: (key: string, value: boolean | number) => void;
+  disabled?: boolean;
+  idPrefix?: string;
+}) {
+  const visible = fields.filter((field) => !field.showWhen || values[field.showWhen] === true);
+  const showsCredits = fields.some((field) => field.key === "enabled") && values.enabled === true;
+
+  return (
+    <div className="space-y-2">
+      {visible.map((field) => {
+        const id = `${idPrefix}-${field.key}`;
+        if (field.type === "boolean") {
+          return (
+            <div
+              key={field.key}
+              className="flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2"
+            >
+              <div className="min-w-0">
+                <Label htmlFor={id} className="text-xs font-medium">
+                  {field.label}
+                </Label>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{field.help}</p>
+              </div>
+              <Switch
+                id={id}
+                size="sm"
+                checked={values[field.key] === true}
+                onCheckedChange={(checked) => onChange(field.key, checked)}
+                disabled={disabled}
+                className="mt-0.5"
+              />
+            </div>
+          );
+        }
+        return (
+          <div key={field.key} className="space-y-1 rounded-md border border-border px-3 py-2">
+            <Label htmlFor={id} className="text-xs font-medium">
+              {field.label}
+            </Label>
+            <Input
+              id={id}
+              type="number"
+              min={field.min}
+              value={String(values[field.key] ?? field.default)}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                onChange(field.key, Number.isFinite(next) ? next : Number(field.default));
+              }}
+              disabled={disabled}
+              className="h-7 w-24 text-xs"
+            />
+            <p className="text-[11px] text-muted-foreground">{field.help}</p>
+          </div>
+        );
+      })}
+      {showsCredits && <SalesqlCreditsLine />}
+    </div>
+  );
+}
+
+/** Shared SalesQL credit balance, read from the admin-only allowance route. */
+export function SalesqlCreditsLine() {
+  const allowance = useQuery({
+    queryKey: ["enrichment-allowance"],
+    queryFn: () => api.enrichment.allowance(),
+    retry: false,
+    staleTime: 60_000,
+  });
+  if (allowance.isError) {
+    return <p className="text-[11px] text-muted-foreground">SalesQL credit balance is unavailable right now.</p>;
+  }
+  if (!allowance.data) return null;
+  return (
+    <p className="text-[11px] text-muted-foreground">
+      {allowance.data.remaining.toLocaleString()} shared SalesQL credits left
+      {allowance.data.resetsAt ? ` (resets ${new Date(allowance.data.resetsAt).toLocaleDateString()})` : ""}.
+    </p>
   );
 }
 

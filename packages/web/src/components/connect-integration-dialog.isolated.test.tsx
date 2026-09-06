@@ -425,6 +425,48 @@ describe("ConnectIntegrationDialog Microsoft OAuth setup", () => {
 });
 
 describe("ConnectIntegrationDialog WhatsApp scope", () => {
+  it("posts LinkedIn visibility plus the full enrichment block on connect", async () => {
+    const user = userEvent.setup();
+    const connectBodies: unknown[] = [];
+    const integration = INTEGRATIONS.find((item) => item.type === "linkedin_aimfox");
+    if (!integration) throw new Error("LinkedIn integration is missing");
+
+    server.use(
+      http.post("/api/connectors", async ({ request }) => {
+        connectBodies.push(await request.json());
+        return HttpResponse.json({
+          connector: { id: "linkedin-connector", connectorType: "linkedin_aimfox", syncStatus: "pending" },
+        });
+      }),
+    );
+
+    renderWithProviders(
+      <ConnectIntegrationDialog integration={integration} open={true} onOpenChange={() => {}} onConnected={() => {}} />,
+    );
+
+    await user.type(await screen.findByLabelText(/Aimfox API Key/i), "aimfox-key");
+    expect(screen.queryByLabelText(/Daily lookups/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: /Use SalesQL to enrich and dedup contacts/i }));
+    expect(await screen.findByLabelText(/Daily lookups/i)).toHaveValue(25);
+    expect(screen.getByRole("switch", { name: /Merge clean matches automatically/i })).toBeChecked();
+    expect(await screen.findByText(/4,200 shared SalesQL credits left/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => {
+      expect(connectBodies).toEqual([
+        {
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          credentials: { api_key: "aimfox-key" },
+          scopeConfig: {
+            visibility: "workspace",
+            enrichment: { enabled: true, dailyCap: 25, autoMerge: true },
+          },
+        },
+      ]);
+    });
+  });
+
   it("initializes and saves displayed WhatsApp groups as a map while allowing zero selected", async () => {
     const user = userEvent.setup();
     const connectBodies: unknown[] = [];

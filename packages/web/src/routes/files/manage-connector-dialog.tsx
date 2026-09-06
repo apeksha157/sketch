@@ -1,4 +1,8 @@
-import { IntegrationIcon, LinkedinVisibilityRadio } from "@/components/connect-integration-dialog";
+import {
+  ConnectorSettingsFields,
+  IntegrationIcon,
+  LinkedinVisibilityRadio,
+} from "@/components/connect-integration-dialog";
 /**
  * ManageConnectorDialog — status summary, sync scope configuration, credential
  * update, and disconnect flow for a connected integration.
@@ -12,7 +16,8 @@ import { HierarchyMappingPanel } from "@/components/hierarchy-mapping-panel";
 import { GenericScopeEditor } from "@/components/scope-picker";
 import type { ConnectorConfig, HierarchyLevel, WhatsAppGroupMemberLabel } from "@/lib/api";
 import { ApiRequestError, api } from "@/lib/api";
-import type { IntegrationDefinition } from "@/lib/integrations";
+import type { IntegrationDefinition, SettingsField, SettingsValues } from "@/lib/integrations";
+import { settingsFromScope } from "@/lib/integrations";
 import {
   ArrowsClockwiseIcon,
   CheckCircleIcon,
@@ -258,6 +263,15 @@ export function ManageConnectorDialog({
               {connector.connectorType === "whatsapp" && (
                 <WhatsAppMemberLabelsEditor connectorId={connector.id} scopeConfig={connector.scopeConfig} />
               )}
+              {connector.connectorType === "linkedin_aimfox" &&
+                definition.settingsFields &&
+                definition.settingsScopeKey && (
+                  <LinkedinEnrichmentEditor
+                    connectorId={connector.id}
+                    fields={definition.settingsFields}
+                    stored={connector.scopeConfig?.[definition.settingsScopeKey]}
+                  />
+                )}
             </>
           ) : (
             <div className="rounded-lg border border-border bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
@@ -854,6 +868,74 @@ const EMAIL_MAX_LOOKBACK_DAYS = 1095;
 function normalizeEmailLookbackDays(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 90;
   return Math.max(1, Math.min(Math.floor(value), EMAIL_MAX_LOOKBACK_DAYS));
+}
+
+/**
+ * SalesQL enrichment settings for a LinkedIn connector. Saves through the dedicated
+ * enrichment route rather than the scope PATCH, so a save never resets the sync cursor.
+ */
+function LinkedinEnrichmentEditor({
+  connectorId,
+  fields,
+  stored,
+}: {
+  connectorId: string;
+  fields: SettingsField[];
+  stored: unknown;
+}) {
+  const queryClient = useQueryClient();
+  const current = useMemo(() => settingsFromScope(fields, stored), [fields, stored]);
+  const [values, setValues] = useState<SettingsValues>(current);
+
+  useEffect(() => {
+    setValues(current);
+  }, [current]);
+
+  const dirty = fields.some((field) => values[field.key] !== current[field.key]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.integrations.updateEnrichment(connectorId, {
+        enabled: values.enabled === true,
+        dailyCap: Number(values.dailyCap),
+        autoMerge: values.autoMerge === true,
+      }),
+    onSuccess: () => {
+      toast.success("SalesQL enrichment settings updated.");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="space-y-3 border-t border-border pt-3">
+      <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        SalesQL enrichment
+      </Label>
+      <ConnectorSettingsFields
+        fields={fields}
+        values={values}
+        onChange={(key, value) => setValues((prev) => ({ ...prev, [key]: value }))}
+        disabled={mutation.isPending}
+        idPrefix={`manage-${connectorId}`}
+      />
+      <Button
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => mutation.mutate()}
+        disabled={!dirty || mutation.isPending}
+      >
+        {mutation.isPending ? (
+          <>
+            <SpinnerGapIcon size={12} className="animate-spin" />
+            Saving...
+          </>
+        ) : (
+          "Save enrichment"
+        )}
+      </Button>
+    </div>
+  );
 }
 
 function EmailScopeEditor({

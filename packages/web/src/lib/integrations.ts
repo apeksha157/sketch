@@ -34,6 +34,40 @@ export interface AuthField {
   helpText?: string;
 }
 
+/**
+ * One admin-facing setting stored under a connector's scope config. Both the connect
+ * dialog and the manage dialog render from the same list so labels and defaults never
+ * drift between the two surfaces.
+ */
+export interface SettingsField {
+  key: string;
+  label: string;
+  help: string;
+  type: "boolean" | "number";
+  default: boolean | number;
+  /** Only show this field while the named boolean field is on. */
+  showWhen?: string;
+  min?: number;
+}
+
+export type SettingsValues = Record<string, boolean | number>;
+
+export function settingsDefaults(fields: SettingsField[] | undefined): SettingsValues {
+  return Object.fromEntries((fields ?? []).map((field) => [field.key, field.default]));
+}
+
+export function settingsFromScope(fields: SettingsField[] | undefined, stored: unknown): SettingsValues {
+  const defaults = settingsDefaults(fields);
+  if (!stored || typeof stored !== "object") return defaults;
+  const source = stored as Record<string, unknown>;
+  for (const field of fields ?? []) {
+    const value = source[field.key];
+    if (field.type === "boolean" && typeof value === "boolean") defaults[field.key] = value;
+    if (field.type === "number" && typeof value === "number" && Number.isFinite(value)) defaults[field.key] = value;
+  }
+  return defaults;
+}
+
 export interface ScopeOption {
   id: string;
   name: string;
@@ -116,6 +150,10 @@ export interface IntegrationDefinition {
   requiresOAuthClientSetup: boolean;
   /** OAuth-redirect connectors that pick a data center / region before authorizing. */
   regionOptions?: { value: string; label: string }[];
+  /** Scope config key that holds `settingsFields` (for example `enrichment`). */
+  settingsScopeKey?: string;
+  /** Admin settings shown under the credentials on connect and editable later in the manage dialog. */
+  settingsFields?: SettingsField[];
 }
 
 const MICROSOFT_OAUTH_AUTH_FIELDS: AuthField[] = [
@@ -526,7 +564,34 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       "Open your Aimfox workspace settings",
       "Copy the workspace API key",
       "Paste the key below; all LinkedIn accounts connected to that key will sync",
-      "Choose who can search the synced LinkedIn content",
+      "Choose who can search the synced LinkedIn content and whether SalesQL enriches contacts",
+    ],
+    settingsScopeKey: "enrichment",
+    settingsFields: [
+      {
+        key: "enabled",
+        label: "Use SalesQL to enrich and dedup contacts",
+        help: "Finds work emails and phones for LinkedIn contacts, attaches their company, and merges duplicates by email. Uses shared SalesQL credits.",
+        type: "boolean",
+        default: false,
+      },
+      {
+        key: "dailyCap",
+        label: "Daily lookups",
+        help: "Most SalesQL lookups this workspace spends per day.",
+        type: "number",
+        default: 25,
+        min: 0,
+        showWhen: "enabled",
+      },
+      {
+        key: "autoMerge",
+        label: "Merge clean matches automatically",
+        help: "When exactly one existing person has the same work email. Personal addresses, role inboxes and multi-matches still go to review.",
+        type: "boolean",
+        default: true,
+        showWhen: "enabled",
+      },
     ],
     perUserAuth: false,
     requiresOAuthClientSetup: false,

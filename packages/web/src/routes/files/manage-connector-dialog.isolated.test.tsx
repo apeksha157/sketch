@@ -11,6 +11,7 @@ import { ManageConnectorDialog } from "./manage-connector-dialog";
 
 const fireflies = getIntegration("fireflies") ?? null;
 const gmail = getIntegration("gmail") ?? null;
+const linkedin = getIntegration("linkedin_aimfox") ?? null;
 const googleCalendar = getIntegration("google_calendar") ?? null;
 const otter = getIntegration("otter") ?? null;
 const whatsapp = getIntegration("whatsapp") ?? null;
@@ -337,6 +338,53 @@ describe("ManageConnectorDialog connector capabilities", () => {
 
     await waitFor(() => {
       expect(rotateBody).toEqual({ credentials: { email: "person@example.com", password: "new-password" } });
+    });
+  });
+
+  it("round-trips LinkedIn enrichment settings through the enrichment route", async () => {
+    const user = userEvent.setup();
+    let putBody: unknown;
+    server.use(
+      http.put("/api/connectors/:id/enrichment", async ({ request }) => {
+        putBody = await request.json();
+        return HttpResponse.json({
+          connector: {
+            id: "linkedin-conn",
+            connectorType: "linkedin_aimfox",
+            scopeConfig: { enrichment: { enabled: true, dailyCap: 25, autoMerge: true, batch: 50 } },
+            visibility: "owner",
+            syncStatus: "active",
+          },
+        });
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={linkedin}
+        connector={connector({
+          id: "linkedin-conn",
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          scopeConfig: { accountIds: ["acct-1"], visibility: "owner", enrichment: { enabled: false } },
+          visibility: "owner",
+          fileCount: 3,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    const save = await screen.findByRole("button", { name: "Save enrichment" });
+    expect(save).toBeDisabled();
+    await user.click(screen.getByRole("switch", { name: /Use SalesQL to enrich and dedup contacts/i }));
+    expect(await screen.findByLabelText(/Daily lookups/i)).toHaveValue(25);
+    await user.click(save);
+
+    await waitFor(() => {
+      expect(putBody).toEqual({ enabled: true, dailyCap: 25, autoMerge: true });
     });
   });
 
