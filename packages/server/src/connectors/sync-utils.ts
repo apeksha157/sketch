@@ -1,5 +1,11 @@
+import type { Kysely } from "kysely";
+import { sql } from "kysely";
+import { isPg } from "../db/dialect";
+import { fileVisibilityRuleSql } from "../db/repositories/file-visibility-rule";
+import type { DB } from "../db/schema";
 import { yieldToEventLoop } from "../lib/event-loop";
-import type { ConnectorCredentials } from "./types";
+import { idInList } from "./id-in-list";
+import { type AccessPrincipalInput, type ConnectorCredentials, normalizeAccessPrincipals } from "./types";
 
 export const MAX_ERROR_MESSAGE_LENGTH = 500;
 
@@ -26,6 +32,47 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
     chunks.push(items.slice(i, i + size));
   }
   return chunks;
+}
+
+/**
+ * Filter indexed file IDs by the standard visibility rule. An omitted principal list is a
+ * trusted bypass, an empty principal list fails closed, and a populated list applies the
+ * row-level visibility rule. IDs are deduplicated before one Postgres array-predicate query or
+ * fixed-size SQLite queries, so duplicate-heavy caller input cannot inflate query size or count.
+ */
+export async function filterAccessibleFileIds(
+  db: Kysely<DB>,
+  fileIds: string[],
+  userPrincipals?: AccessPrincipalInput[],
+  slackEntitySyncEnabled = true,
+): Promise<Set<string>> {
+  if (fileIds.length === 0) return new Set();
+  const uniqueFileIds = [...new Set(fileIds)];
+  if (userPrincipals === undefined) return new Set(uniqueFileIds);
+  const principals = normalizeAccessPrincipals(userPrincipals);
+  if (principals.length === 0) return new Set();
+
+  if (isPg(db)) {
+    const files = await db
+      .selectFrom("indexed_files")
+      .select("id")
+      .where(idInList(db, sql.ref("indexed_files.id"), uniqueFileIds))
+      .where(fileVisibilityRuleSql({ principals, slackEntitySyncEnabled, archived: "exclude" }))
+      .execute();
+    return new Set(files.map((file) => file.id));
+  }
+
+  const visibleFileIds = new Set<string>();
+  for (const fileIdChunk of chunk(uniqueFileIds, IN_CLAUSE_CHUNK_SIZE)) {
+    const files = await db
+      .selectFrom("indexed_files")
+      .select("id")
+      .where("id", "in", fileIdChunk)
+      .where(fileVisibilityRuleSql({ principals, slackEntitySyncEnabled, archived: "exclude" }))
+      .execute();
+    for (const file of files) visibleFileIds.add(file.id);
+  }
+  return visibleFileIds;
 }
 
 /**
