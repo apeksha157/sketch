@@ -66,7 +66,19 @@ export type CorroborationEntry = {
   observedAt: string;
 };
 
-export type StoreVerdictDisposition = "inserted" | "bounced" | "corroborated" | "ripened" | "revived";
+export type StoreVerdictDisposition = "inserted" | "bounced" | "corroborated" | "ripened" | "revived" | "existing";
+
+export interface StoreGraphVerdictsOptions {
+  /**
+   * `"human"` keeps a machine proposer's pair merge in `awaiting_human` instead
+   * of the corroboration lane, and returns an existing `awaiting_human` row for
+   * the same pair untouched (disposition `existing`) rather than superseding it.
+   * The SalesQL sweep needs both: its evidence carries no file ids, so
+   * `pending_corroboration` could never ripen and the UI offers only Dismiss
+   * there, and the sweep re-proposes the same pair on every rerun.
+   */
+  lane?: "human";
+}
 
 export function parseCorroboration(raw: string | null): CorroborationEntry[] {
   if (!raw) return [];
@@ -304,6 +316,7 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
      */
     async storeVerdicts(
       verdicts: StoreGraphVerdictInput[],
+      options: StoreGraphVerdictsOptions = {},
     ): Promise<{ ids: string[]; rows: StoreGraphVerdictInput[]; dispositions: StoreVerdictDisposition[] }> {
       const now = new Date().toISOString();
       const rows: StoreGraphVerdictInput[] = [];
@@ -448,6 +461,16 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
             continue;
           }
 
+          if (options.lane === "human") {
+            const existing = pairRows.find((row) => row.status === "awaiting_human");
+            if (existing) {
+              rows.push({ ...verdict, status: "awaiting_human" });
+              dispositions.push("existing");
+              presetIds.push(existing.id);
+              continue;
+            }
+          }
+
           await db
             .updateTable("graph_verdicts")
             .set({ superseded_at: now, updated_at: now })
@@ -457,7 +480,7 @@ export function createGraphVerdictRepository(db: Kysely<DB>) {
             .where("superseded_at", "is", null)
             .execute();
           let status: GraphVerdictStatus = "awaiting_human";
-          if (machineProposer) {
+          if (machineProposer && options.lane !== "human") {
             const clusters = await loadEvidenceClusters(db, evidenceFileIdsOf(verdict.evidenceJson));
             const distinct = new Set([...clusters.values()].map((cluster) => cluster.clusterKey));
             status = distinct.size >= 2 ? "veto_window" : "pending_corroboration";
