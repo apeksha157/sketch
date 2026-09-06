@@ -187,6 +187,7 @@ function EntityDrawerBody({ entityId, stackDepth, previousName, onBack, onOpenEn
         <SummaryBlock entity={entity} accent={accent} />
         <DrawerTabs
           entityId={entity.id}
+          entityName={entity.name}
           sourceType={entity.sourceType}
           relations={relationsQuery.data}
           relationsLoading={relationsQuery.isLoading}
@@ -1178,6 +1179,7 @@ function formatShortDate(iso: string): string {
 
 interface DrawerTabsProps {
   entityId: string;
+  entityName: string;
   sourceType: string;
   relations: EntityRelationsResponse | undefined;
   relationsLoading: boolean;
@@ -1188,7 +1190,7 @@ function tasksKey(entityId: string): unknown[] {
   return ["entity-drawer", "tasks", entityId];
 }
 
-function DrawerTabs({ entityId, sourceType, relations, relationsLoading, isAdmin }: DrawerTabsProps) {
+function DrawerTabs({ entityId, entityName, sourceType, relations, relationsLoading, isAdmin }: DrawerTabsProps) {
   const isProject = sourceType === "project";
   const [tab, setTab] = useState<"timeline" | "relationships" | "tasks" | "scope">("timeline");
   const timelineQuery = useQuery({
@@ -1239,7 +1241,7 @@ function DrawerTabs({ entityId, sourceType, relations, relationsLoading, isAdmin
       ) : tab === "tasks" && isProject ? (
         <TasksPanel entityId={entityId} tasksQuery={tasksQuery} />
       ) : tab === "timeline" ? (
-        <TimelinePanel entityId={entityId} timelineQuery={timelineQuery} />
+        <TimelinePanel entityId={entityId} entityName={entityName} timelineQuery={timelineQuery} />
       ) : (
         <RelationshipsPanel
           relations={relations}
@@ -1283,10 +1285,11 @@ function TabButton({
 
 interface TimelinePanelProps {
   entityId: string;
+  entityName: string;
   timelineQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof api.entities.timeline>>>>;
 }
 
-function TimelinePanel({ entityId, timelineQuery }: TimelinePanelProps) {
+function TimelinePanel({ entityId, entityName, timelineQuery }: TimelinePanelProps) {
   if (timelineQuery.isLoading) {
     return <Skeleton className="h-24 w-full" />;
   }
@@ -1294,7 +1297,7 @@ function TimelinePanel({ entityId, timelineQuery }: TimelinePanelProps) {
   if (groups.length === 0) {
     return <p className="text-xs text-muted-foreground">No file mentions yet.</p>;
   }
-  return <TimelineStrip groups={groups} entityId={entityId} />;
+  return <TimelineStrip groups={groups} entityId={entityId} highlight={entityName} />;
 }
 
 /** Convenience re-export so callers can pull both the provider mount and the drawer from one place. */

@@ -1,35 +1,34 @@
 /**
  * TimelineStrip contract:
- *  - day-grouped rows lead with the file title (email subject), snippet
- *    clamped under it, junk fact-snippets suppressed, no midnight clock time
- *  - the title opens the file itself in a FileDetailSheet the strip owns; the
- *    chevron beside it toggles the inline quotes and only exists where quotes
- *    can exist, so CRM activity rows open but never sprout a chevron
- *  - expanding a row prefers read-time chunk quotes (/snippets) and falls
- *    back to stored mention snippets when the chunks yield nothing
+ *  - day-grouped rows lead with the file title (email subject), line two names
+ *    the relation · source · passage count, no midnight clock time, no ×N
+ *  - the whole row is one button that expands in place; nothing opens a sheet
+ *  - structural rows (no passages) expand straight into the file's text
+ *  - LLM rows show their passages first and reveal the text under
+ *    "Show whole file"; review hosts get the same shape from `loadQuotes`
+ *  - a gated file expands into the inline no-access line, strip intact
  *  - CRM activity rows show the activity label, not the raw source string
  */
 import { server } from "@/test/msw";
 import { renderWithProviders } from "@/test/utils";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 import { TimelineStrip } from "./timeline-strip";
 
-/**
- * The row's two controls live as siblings in one wrapper (nesting them would be
- * invalid HTML), so scoping chevron queries to a row means scoping to the
- * title button's parent.
- */
-function rowControls(title: string): HTMLElement {
-  const titleButton = screen.getByText(title).closest("button");
-  if (!titleButton?.parentElement) throw new Error(`No timeline row found for "${title}"`);
-  return titleButton.parentElement;
+function rowToggle(title: string): HTMLElement {
+  const button = screen.getByText(title).closest("button");
+  if (!button) throw new Error(`No timeline row found for "${title}"`);
+  return button;
 }
 
-function chevron(title: string): HTMLElement {
-  return within(rowControls(title)).getByRole("button", { name: "Show quotes" });
+/** The expansion region is a sibling of the row button, addressed by aria-controls. */
+function expansionRegion(toggle: HTMLElement): HTMLElement {
+  const id = toggle.getAttribute("aria-controls");
+  const region = id ? document.getElementById(id) : null;
+  if (!region) throw new Error("Row button has no expansion region");
+  return region;
 }
 
 function fileContentResponse(overrides: Record<string, unknown> = {}) {
@@ -65,6 +64,8 @@ function item(overrides: Record<string, unknown>) {
     mentionConfidence: "EXTRACTED" as const,
     mentionCount: 1,
     contextSnippet: null,
+    relations: [] as string[],
+    passageCount: 0,
     url: null,
     rollupGroupId: null,
     crmActivity: null,
@@ -78,24 +79,25 @@ const groups = [
     items: [
       item({
         fileId: "f1",
-        fileName: "Verification engine - feedback received",
+        fileName: "Int. call: Building OW AI capability",
+        sourceType: "fireflies",
+        occurredAt: "2026-05-22T00:00:00",
+        relations: ["attended"],
+      }),
+      item({
+        fileId: "f2",
+        fileName: "Re: IPROC SUPPLIER REQUEST",
         sourceType: "gmail",
         occurredAt: "2026-05-22T00:00:00",
         mentionCount: 2,
-        contextSnippet: "Sanaa confirmed the feedback is in",
-      }),
-      item({
-        fileId: "f-junk",
-        fileName: "Re: Isometry AI | Payroll May 2026",
-        sourceType: "gmail",
-        occurredAt: "2026-05-22T00:00:00",
-        contextSnippet: "Corresponded 19e87b7823248128",
+        relations: ["mentioned"],
+        passageCount: 2,
       }),
     ],
   },
   {
     month: "2026-04",
-    items: [item({ fileId: "f2", fileName: "Helios spec", occurredAt: "2026-04-10T00:00:00" })],
+    items: [item({ fileId: "f3", fileName: "Helios spec", occurredAt: "2026-04-10T00:00:00" })],
   },
 ];
 
@@ -118,82 +120,112 @@ const crmGroups = [
 ];
 
 describe("TimelineStrip", () => {
-  it("leads with the file title under day headers and suppresses junk fact snippets", () => {
+  it("leads with the file title under day headers and attributes relation, source and passages", () => {
     renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
     expect(screen.getByText(/3 entries/)).toBeInTheDocument();
     expect(screen.getByText("May 22")).toBeInTheDocument();
     expect(screen.getByText("Apr 10")).toBeInTheDocument();
-    expect(screen.getByText("Verification engine - feedback received")).toBeInTheDocument();
-    expect(screen.getByText("Sanaa confirmed the feedback is in")).toBeInTheDocument();
-    expect(screen.getByText("Re: Isometry AI | Payroll May 2026")).toBeInTheDocument();
-    expect(screen.queryByText(/Corresponded 19e87b/)).not.toBeInTheDocument();
+    expect(screen.getByText("Int. call: Building OW AI capability")).toBeInTheDocument();
+    expect(screen.getByText("Attended · fireflies")).toBeInTheDocument();
+    expect(screen.getByText("Mentioned · gmail · 2 passages")).toBeInTheDocument();
+    expect(screen.getByText("google drive")).toBeInTheDocument();
+    expect(screen.queryByText(/×2/)).not.toBeInTheDocument();
     expect(screen.queryByText(/12:00/)).not.toBeInTheDocument();
   });
 
-  it("expands into stored mention snippets when the file's chunks yield no quotes", async () => {
+  it("expands a structural row inline into the file's text with no sheet anywhere", async () => {
     server.use(
-      http.get("/api/entities/e-1/mentions", ({ request }) => {
-        if (new URL(request.url).searchParams.get("fileId") !== "f1") {
-          return HttpResponse.json({ mentions: [], total: 0, hiddenCount: 0 });
-        }
-        return HttpResponse.json({
-          mentions: [
-            { id: "m1", contextSnippet: "Sanaa confirmed the feedback is in", chunkIndex: 0 },
-            { id: "m2", contextSnippet: "Sanaa will own the rollout comms", chunkIndex: 3 },
-            { id: "m3", contextSnippet: "Corresponded 19e87b7823248128", chunkIndex: 4 },
-          ],
-          total: 3,
-          hiddenCount: 0,
-        });
-      }),
+      http.get("/api/connectors/files/f1/content", () =>
+        HttpResponse.json(
+          fileContentResponse({
+            id: "f1",
+            fileName: "Int. call: Building OW AI capability",
+            source: "fireflies",
+            content: "Sanaa Khalloq walked the team through the AI capability roadmap.",
+          }),
+        ),
+      ),
     );
     const user = userEvent.setup();
     renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
 
-    const toggle = chevron("Verification engine - feedback received");
+    const toggle = rowToggle("Int. call: Building OW AI capability");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
+
     expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(await screen.findByText("Sanaa will own the rollout comms")).toBeInTheDocument();
-    expect(screen.getAllByText("Sanaa confirmed the feedback is in")).toHaveLength(1);
-    expect(screen.queryByText(/Corresponded 19e87b/)).not.toBeInTheDocument();
-    expect(within(rowControls("Helios spec")).queryByRole("button", { name: "Show quotes" })).toBeNull();
+    const body = await screen.findByText(/walked the team through the AI capability roadmap/);
+    expect(expansionRegion(toggle).contains(body)).toBe(true);
+    expect(toggle.contains(body)).toBe(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("Show whole file")).not.toBeInTheDocument();
   });
 
-  it("prefers read-time chunk quotes over stored mention snippets", async () => {
-    let mentionsCalled = false;
+  it("shows an LLM row's passages first and reveals the file text under Show whole file", async () => {
     server.use(
       http.get("/api/entities/e-1/snippets", ({ request }) => {
-        if (new URL(request.url).searchParams.get("fileId") !== "f1") return HttpResponse.json({ quotes: [] });
-        return HttpResponse.json({ quotes: ["Sanaa flagged the verification gap in standup"] });
+        const url = new URL(request.url);
+        if (url.searchParams.get("mode") !== "passages" || url.searchParams.get("fileId") !== "f2")
+          return HttpResponse.json({ passages: [] });
+        return HttpResponse.json({
+          passages: [
+            { chunkIndex: 3, text: "…with Sanaa Khalloq following up on the submission…" },
+            { chunkIndex: 7, text: "…cc Sanaa Khalloq so OW has the trail…" },
+          ],
+        });
       }),
-      http.get("/api/entities/e-1/mentions", () => {
-        mentionsCalled = true;
-        return HttpResponse.json({ mentions: [], total: 0, hiddenCount: 0 });
-      }),
+      http.get("/api/connectors/files/f2/content", () =>
+        HttpResponse.json(
+          fileContentResponse({
+            id: "f2",
+            fileName: "Re: IPROC SUPPLIER REQUEST",
+            source: "gmail",
+            content: "Full supplier request thread body.",
+          }),
+        ),
+      ),
     );
     const user = userEvent.setup();
-    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
+    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" highlight="Sanaa Khalloq" />);
 
-    await user.click(chevron("Verification engine - feedback received"));
-    expect(await screen.findByText("Sanaa flagged the verification gap in standup")).toBeInTheDocument();
-    expect(mentionsCalled).toBe(false);
-  });
-
-  it("stays quiet when expansion finds nothing beyond the snippet already shown", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
-
-    const toggle = chevron("Verification engine - feedback received");
+    const toggle = rowToggle("Re: IPROC SUPPLIER REQUEST");
     await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    await waitFor(() => expect(screen.queryByText(/Loading mentions/)).not.toBeInTheDocument());
-    expect(screen.queryByText(/No quotable text found/)).not.toBeInTheDocument();
-    expect(screen.getByText("Sanaa confirmed the feedback is in")).toBeInTheDocument();
+    const region = expansionRegion(toggle);
+
+    await within(region).findByText("Where they come up");
+    expect(region.textContent).toContain("following up on the submission");
+    expect(region.textContent).toContain("cc Sanaa Khalloq so OW has the trail");
+    const marks = within(region).getAllByText("Sanaa Khalloq");
+    expect(marks).toHaveLength(2);
+    expect(marks.every((m) => m.tagName === "MARK")).toBe(true);
+    expect(region.textContent).not.toContain("Full supplier request thread body");
+
+    await user.click(within(region).getByRole("button", { name: "Show whole file" }));
+    expect(await within(region).findByText(/Full supplier request thread body/)).toBeInTheDocument();
+    expect(region.textContent).toContain("following up on the submission");
   });
 
-  it("expands a snippetless row through a custom quote loader (review evidence)", async () => {
-    const load = async () => ["Shashank walked the team through the demo funnel", "Corresponded 19e87b7823248128"];
+  it("renders the inline no-access line when the content endpoint denies the file", async () => {
+    server.use(
+      http.get("/api/connectors/files/crm-task-1/content", () =>
+        HttpResponse.json({ error: { code: "FORBIDDEN", message: "No content access" } }, { status: 403 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(<TimelineStrip groups={crmGroups} entityId="e-1" />);
+
+    const toggle = rowToggle("Follow up on renewal - Jane Buyer");
+    await user.click(toggle);
+
+    const denial = await screen.findByText("You don't have access to this file's contents.");
+    expect(expansionRegion(toggle).contains(denial)).toBe(true);
+    expect(screen.getByTestId("timeline-strip")).toBeInTheDocument();
+    expect(screen.getByText("Task")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("expands a review-evidence row through a custom quote loader", async () => {
+    const load = async () => ["Shashank walked the team through the demo funnel", null];
     const user = userEvent.setup();
     renderWithProviders(
       <TimelineStrip
@@ -207,11 +239,14 @@ describe("TimelineStrip", () => {
         quotesScope="review-1"
       />,
     );
-    const toggle = chevron("Daily CD Training – 2026-08-20");
+
+    const toggle = rowToggle("Daily CD Training – 2026-08-20");
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     await user.click(toggle);
-    expect(await screen.findByText("Shashank walked the team through the demo funnel")).toBeInTheDocument();
-    expect(screen.queryByText(/Corresponded 19e87b/)).not.toBeInTheDocument();
+
+    const region = expansionRegion(toggle);
+    expect(await within(region).findByText("Shashank walked the team through the demo funnel")).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: "Show whole file" })).toBeInTheDocument();
   });
 
   it("renders CRM activity rows with the activity label instead of the raw source", () => {
@@ -220,67 +255,5 @@ describe("TimelineStrip", () => {
     expect(screen.getByText("Follow up on renewal - Jane Buyer")).toBeInTheDocument();
     expect(screen.getByText("Task")).toBeInTheDocument();
     expect(screen.queryByText(/zoho_crm/)).not.toBeInTheDocument();
-  });
-
-  it("opens a CRM activity row into the file sheet showing the file's contents", async () => {
-    server.use(http.get("/api/connectors/files/crm-task-1/content", () => HttpResponse.json(fileContentResponse())));
-    const user = userEvent.setup();
-    renderWithProviders(<TimelineStrip groups={crmGroups} entityId="e-1" />);
-
-    expect(
-      within(rowControls("Follow up on renewal - Jane Buyer")).queryByRole("button", { name: "Show quotes" }),
-    ).toBeNull();
-    await user.click(screen.getByText("Follow up on renewal - Jane Buyer"));
-
-    expect(await screen.findByText(/Jane asked for the renewal quote by Friday/)).toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-  });
-
-  it("keeps the chevron and the title on separate jobs", async () => {
-    server.use(
-      http.get("/api/entities/e-1/snippets", () =>
-        HttpResponse.json({ quotes: ["Sanaa flagged the verification gap in standup"] }),
-      ),
-      http.get("/api/connectors/files/f1/content", () =>
-        HttpResponse.json(
-          fileContentResponse({
-            id: "f1",
-            fileName: "Verification engine thread",
-            source: "gmail",
-            content: "Sanaa: the verification engine feedback is all in.",
-          }),
-        ),
-      ),
-    );
-    const user = userEvent.setup();
-    renderWithProviders(<TimelineStrip groups={groups} entityId="e-1" />);
-
-    const title = screen.getByText("Verification engine - feedback received");
-    const toggle = chevron("Verification engine - feedback received");
-
-    await user.click(toggle);
-    expect(await screen.findByText("Sanaa flagged the verification gap in standup")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-
-    await user.click(title);
-    expect(await screen.findByText(/the verification engine feedback is all in/)).toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-  });
-
-  it("shows the no-access panel when the content endpoint denies the file", async () => {
-    server.use(
-      http.get("/api/connectors/files/crm-task-1/content", () =>
-        HttpResponse.json({ error: { code: "FORBIDDEN", message: "No content access" } }, { status: 403 }),
-      ),
-    );
-    const user = userEvent.setup();
-    renderWithProviders(<TimelineStrip groups={crmGroups} entityId="e-1" />);
-
-    await user.click(screen.getByText("Follow up on renewal - Jane Buyer"));
-
-    expect(await screen.findByText("You don't have access to this file's contents.")).toBeInTheDocument();
-    expect(screen.getByTestId("timeline-strip")).toBeInTheDocument();
-    expect(screen.getByText("Task")).toBeInTheDocument();
   });
 });
