@@ -22,7 +22,7 @@ import type { SketchMcpDeps } from "./types";
 
 export interface SearchTraceCapture {
   report: StageReporter;
-  /** Records the tool's own post-sort — the order the caller actually received. */
+  /** Records settled positions in the order returned by search(). */
   rerank: (results: HybridSearchResult[], applied: boolean, rerankSetSize: number) => void;
   /** Records the rendered blocks the agent received, paired with their result rows. */
   finalOutput: (results: HybridSearchResult[], agentBlocks: string[]) => void;
@@ -74,7 +74,7 @@ export function createSearchTraceCapture(args: {
 
       stages.push({
         stage: "rerank",
-        label: "Entity re-sort",
+        label: "Settled positions",
         kind: "code",
         status: applied ? "done" : "skipped",
         ...(applied

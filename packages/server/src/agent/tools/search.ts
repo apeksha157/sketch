@@ -2,7 +2,6 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { sql } from "kysely";
 import { z } from "zod/v4";
 import { resolveContentPrincipals } from "../../access/principals";
-import { findEntityLinkedFileIds } from "../../connectors/entity-scope";
 import {
   KIND_TO_RULES,
   SEARCHABLE_SOURCES,
@@ -287,7 +286,7 @@ export async function handleSearch(
   let entityMatches: EntityRow[] = [];
   const skipAutoEntityBoost = callerProvidedEntityIds || trimmedQuery === "";
   if (!skipAutoEntityBoost) {
-    entityMatches = await entityRepo.searchEntities(trimmedQuery, { limit: 5 });
+    entityMatches = await entityRepo.searchEntities(trimmedQuery, { limit: 10, tokenFallback: true });
   } else if (callerProvidedEntityIds) {
     const ids = entityIds && entityIds.length > 0 ? entityIds : entityId ? [entityId] : [];
     entityMatches = await entityRepo.getEntities(ids);
@@ -295,7 +294,7 @@ export async function handleSearch(
   entityMatches = await filterEntityRowsForPublic(deps, entityMatches);
 
   if (entityMatches.length > 0) {
-    const entityParts = entityMatches.map((e) => {
+    const entityParts = entityMatches.slice(0, 5).map((e) => {
       const aliases = parseAliases(e.aliases);
       const aliasStr = aliases.length > 0 ? `, aliases: ${aliases.join(", ")}` : "";
       const subtype = displayEntitySubtype(e.source_type, e.subtype);
@@ -312,6 +311,12 @@ export async function handleSearch(
     const label = trimmedQuery ? `"${trimmedQuery}"` : "the given filters";
     return done("empty", `No results found for ${label}.`, 0, "public MCP caller resolved to no principals");
   }
+  /**
+   * Public filtering cannot hide a file that would otherwise receive this
+   * boost. An entity filtered from this set has no visible mentioning file, so
+   * none of its entity links can occur in the caller's result set.
+   */
+  const boostEntityIds = !skipAutoEntityBoost ? entityMatches.map((entity) => entity.id) : undefined;
   const results = await search(deps.db, trimmedQuery, {
     stageReport,
     kindRules: kind ? KIND_TO_RULES[kind] : undefined,
@@ -327,6 +332,7 @@ export async function handleSearch(
     ...(userPrincipals === undefined ? { accessBypassReason: "admin" as const } : {}),
     slackEntitySyncEnabled: deps.slackEntitySyncEnabled,
     skipAutoEntityBoost,
+    ...(boostEntityIds !== undefined ? { boostEntityIds } : {}),
     geminiMaxRpm: deps.geminiConfig?.maxRpm,
     geminiMaxRetries: deps.geminiConfig?.maxRetries,
     openRouterApiKey: deps.openRouterApiKey,
@@ -334,27 +340,12 @@ export async function handleSearch(
     logger: deps.logger,
   });
 
-  const entityFileIds =
-    !skipAutoEntityBoost && entityMatches.length > 0 && results.length > 0
-      ? await findEntityLinkedFileIds(
-          deps.db,
-          results.map((result) => result.id),
-          entityMatches.map((entity) => entity.id),
-        )
-      : undefined;
-
-  const effectiveSortBy = sortBy ?? "relevance";
-  const rerankApplied =
-    effectiveSortBy === "relevance" && !callerProvidedEntityIds && !!entityFileIds && entityFileIds.size > 0;
-  if (rerankApplied) {
-    results.sort((a, b) => {
-      const aLinked = entityFileIds?.has(a.id) ? 1 : 0;
-      const bLinked = entityFileIds?.has(b.id) ? 1 : 0;
-      if (aLinked !== bLinked) return bLinked - aLinked;
-      return b.score - a.score;
-    });
-  }
-  trace?.rerank(results, rerankApplied, entityFileIds?.size ?? 0);
+  /**
+   * Dev search-trace consumers still use the rerank stage to receive settled
+   * candidate positions. The tool no longer partitions results after search(),
+   * so the compatibility stage is always emitted as an unapplied zero-size set.
+   */
+  trace?.rerank(results, false, 0);
 
   /**
    * On zero file results, tell the model which filters were in force and how
@@ -434,6 +425,7 @@ export async function handleSearchEntities(
       await entityRepo.searchEntities(query, {
         sourceTypes: types,
         limit: 20,
+        tokenFallback: true,
       }),
     );
     for (const entity of matches) {

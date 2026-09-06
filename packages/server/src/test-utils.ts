@@ -65,12 +65,19 @@ export async function createTestDb(): Promise<Kysely<DB>> {
   return db;
 }
 
-export function spyOnExecutedSql(db: Kysely<DB>): { readonly count: number; sqls: string[] } {
+export function spyOnExecutedSql(db: Kysely<DB>): {
+  readonly count: number;
+  sqls: string[];
+  queries: Array<{ sql: string; parameters: readonly unknown[] }>;
+  mockRestore: () => void;
+} {
   const sqls: string[] = [];
+  const queries: Array<{ sql: string; parameters: readonly unknown[] }> = [];
   const executor = db.getExecutor();
   const executeQuery = executor.executeQuery.bind(executor);
-  vi.spyOn(executor, "executeQuery").mockImplementation((query) => {
+  const spy = vi.spyOn(executor, "executeQuery").mockImplementation((query) => {
     sqls.push(query.sql);
+    queries.push({ sql: query.sql, parameters: query.parameters });
     return executeQuery(query);
   });
   return {
@@ -78,6 +85,8 @@ export function spyOnExecutedSql(db: Kysely<DB>): { readonly count: number; sqls
       return sqls.length;
     },
     sqls,
+    queries,
+    mockRestore: () => spy.mockRestore(),
   };
 }
 
