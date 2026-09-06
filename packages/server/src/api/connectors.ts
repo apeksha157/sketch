@@ -48,6 +48,7 @@ import {
   LinkedinVisibilityScopeValidationError,
   normalizeLinkedinEnrichmentScopeConfig,
   normalizeLinkedinVisibilityScopeConfig,
+  parseLinkedinEnrichmentScope,
   parseLinkedinVisibilityScopeConfig,
 } from "../connectors/enrichment/scope";
 import { buildCredentialHint } from "../connectors/fireflies";
@@ -404,6 +405,12 @@ const updateScopeSchema = z.object({
 
 const updateVisibilitySchema = z.object({
   visibility: z.enum(LINKEDIN_VISIBILITY_MODES),
+});
+
+const updateEnrichmentSchema = z.object({
+  enabled: z.boolean(),
+  dailyCap: z.number().int().min(0, "Daily lookups must be 0 or more"),
+  autoMerge: z.boolean(),
 });
 
 const CANVAS_APP_BY_CONNECTOR: Partial<Record<ConnectorType, string>> = {
@@ -1152,6 +1159,7 @@ export function connectorRoutes(
           createdBy: config.created_by,
           ...metadata,
           ...connectorVisibilityField(config),
+          ...(config.connector_type === "linkedin_aimfox" ? { scopeConfig: JSON.parse(config.scope_config) } : {}),
           syncStatus: config.sync_status,
           lastSyncedAt: config.last_synced_at,
           errorMessage: config.error_message,
@@ -2609,6 +2617,63 @@ export function connectorRoutes(
       return txConnectorRepo.findConfigById(config.id);
     });
 
+    if (!updated) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found after update" } }, 404);
+    }
+    return c.json({
+      connector: {
+        id: updated.id,
+        connectorType: updated.connector_type,
+        scopeConfig: JSON.parse(updated.scope_config),
+        ...connectorVisibilityField(updated),
+        syncStatus: updated.sync_status,
+      },
+    });
+  });
+
+  /**
+   * Update the SalesQL enrichment block of a LinkedIn connector's scope config.
+   *
+   * Deliberately not the scope PATCH: that route nulls the sync cursor and kicks a
+   * full resync, and it shallow-merges the top level so a partial enrichment object
+   * would reset sibling fields to defaults. This writes only `enrichment`, keeps the
+   * server-side `batch` knob, and leaves the cursor alone.
+   */
+  routes.put("/:id/enrichment", async (c) => {
+    const config = await connectorRepo.findConfigById(c.req.param("id"));
+    if (!config || !configVisible(config)) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    if (config.connector_type !== "linkedin_aimfox") {
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: "Enrichment settings are only supported for LinkedIn" } },
+        400,
+      );
+    }
+
+    const { permissions } = permissionsForConfig(c, config);
+    const denied = denyUnless(c, permissions.canChangeScope);
+    if (denied) return denied;
+
+    const parsed = updateEnrichmentSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
+
+    const currentScope =
+      config.scope_config && typeof config.scope_config === "string"
+        ? (JSON.parse(config.scope_config) as Record<string, unknown>)
+        : {};
+    const currentEnrichment =
+      currentScope.enrichment && typeof currentScope.enrichment === "object"
+        ? (currentScope.enrichment as Record<string, unknown>)
+        : {};
+    const enrichment = parseLinkedinEnrichmentScope({ enrichment: { ...currentEnrichment, ...parsed.data } });
+    await connectorRepo.updateConfig(config.id, {
+      scopeConfig: JSON.stringify({ ...currentScope, enrichment }),
+    });
+    const updated = await connectorRepo.findConfigById(config.id);
     if (!updated) {
       return c.json({ error: { code: "NOT_FOUND", message: "Connector not found after update" } }, 404);
     }

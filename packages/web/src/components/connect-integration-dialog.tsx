@@ -23,7 +23,8 @@ import {
   computeSelectedFromScope,
 } from "@/components/scope-picker";
 import { type BrowseResult, api } from "@/lib/api";
-import type { IntegrationDefinition } from "@/lib/integrations";
+import type { IntegrationDefinition, SettingsField, SettingsValues } from "@/lib/integrations";
+import { settingsDefaults } from "@/lib/integrations";
 import { useDashboardAuth } from "@/routes/dashboard";
 import {
   ArrowLeftIcon,
@@ -48,9 +49,11 @@ import {
 import { Input } from "@sketch/ui/components/input";
 import { Label } from "@sketch/ui/components/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@sketch/ui/components/select";
+import { Switch } from "@sketch/ui/components/switch";
 import { Textarea } from "@sketch/ui/components/textarea";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 
 interface SharedDrive {
@@ -102,6 +105,9 @@ export function ConnectIntegrationDialog({
   // Zoho CRM (and any future multi-DC OAuth connector) picks a data center first.
   const [region, setRegion] = useState<string>("com");
   const [linkedinVisibility, setLinkedinVisibility] = useState<"owner" | "workspace">("workspace");
+  const [connectorSettings, setConnectorSettings] = useState<SettingsValues>(() =>
+    settingsDefaults(integration?.settingsFields),
+  );
 
   // OAuth state
   const [step, setStep] = useState<
@@ -355,7 +361,14 @@ export function ConnectIntegrationDialog({
         connectorType: integration.type,
         authType: integration.authType,
         credentials,
-        ...(integration.type === "linkedin_aimfox" ? { scopeConfig: { visibility: linkedinVisibility } } : {}),
+        ...(integration.type === "linkedin_aimfox"
+          ? {
+              scopeConfig: {
+                visibility: linkedinVisibility,
+                ...(integration.settingsScopeKey ? { [integration.settingsScopeKey]: connectorSettings } : {}),
+              },
+            }
+          : {}),
       });
     },
     onSuccess: (result) => {
@@ -497,6 +510,7 @@ export function ConnectIntegrationDialog({
   const resetAndClose = () => {
     setFieldValues({});
     setLinkedinVisibility("workspace");
+    setConnectorSettings(settingsDefaults(integration?.settingsFields));
     setStep("credentials");
     setSharedDrives([]);
     setSelectedDriveIds(new Set());
@@ -1154,11 +1168,21 @@ export function ConnectIntegrationDialog({
                 </div>
               ))}
               {integration.type === "linkedin_aimfox" && (
-                <LinkedinVisibilityRadio
-                  value={linkedinVisibility}
-                  onChange={setLinkedinVisibility}
-                  disabled={isPending}
-                />
+                <div className="space-y-2">
+                  <LinkedinVisibilitySwitch
+                    value={linkedinVisibility}
+                    onChange={setLinkedinVisibility}
+                    disabled={isPending}
+                  />
+                  {integration.settingsFields && (
+                    <ConnectorSettingsFields
+                      fields={integration.settingsFields}
+                      values={connectorSettings}
+                      onChange={(key, value) => setConnectorSettings((prev) => ({ ...prev, [key]: value }))}
+                      disabled={isPending}
+                    />
+                  )}
+                </div>
               )}
             </div>
 
@@ -1860,54 +1884,133 @@ export function NotionRootPagePicker({
   );
 }
 
-export function LinkedinVisibilityRadio({
+/** One labelled setting: text on the left, its control on the right. Shared by every LinkedIn row. */
+export function SettingRow({
+  id,
+  label,
+  help,
+  control,
+}: {
+  id: string;
+  label: string;
+  help: string;
+  control: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2">
+      <div className="min-w-0">
+        <Label htmlFor={id} className="text-xs font-medium">
+          {label}
+        </Label>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{help}</p>
+      </div>
+      {control}
+    </div>
+  );
+}
+
+export function LinkedinVisibilitySwitch({
   value,
   onChange,
   disabled,
+  id = "linkedin-visibility",
 }: {
   value: "owner" | "workspace";
   onChange: (value: "owner" | "workspace") => void;
   disabled?: boolean;
+  id?: string;
 }) {
-  const options: Array<{ value: "workspace" | "owner"; label: string; description: string }> = [
-    {
-      value: "workspace",
-      label: "Everyone in the workspace",
-      description: "LinkedIn profiles and conversations are available to workspace search.",
-    },
-    {
-      value: "owner",
-      label: "Connector owner only",
-      description: "Only the account that manages this connector receives file access.",
-    },
-  ];
+  return (
+    <SettingRow
+      id={id}
+      label="Everyone in the workspace"
+      help="Teammates can search the synced LinkedIn profiles and conversations. Off keeps them to the connector owner."
+      control={
+        <Switch
+          id={id}
+          size="sm"
+          checked={value === "workspace"}
+          onCheckedChange={(checked) => onChange(checked ? "workspace" : "owner")}
+          disabled={disabled}
+          className="mt-0.5"
+        />
+      }
+    />
+  );
+}
+
+/**
+ * Renders an integration's `settingsFields` descriptor. Shared by the connect step and
+ * the manage dialog so both surfaces show the same labels, help and defaults.
+ */
+export function ConnectorSettingsFields({
+  fields,
+  values,
+  onChange,
+  disabled,
+  idPrefix = "connector-setting",
+}: {
+  fields: SettingsField[];
+  values: SettingsValues;
+  onChange: (key: string, value: boolean | number) => void;
+  disabled?: boolean;
+  idPrefix?: string;
+}) {
+  const visible = fields.filter((field) => !field.hidden && (!field.showWhen || values[field.showWhen] === true));
+  const showsCredits = fields.some((field) => field.key === "enabled") && values.enabled === true;
 
   return (
     <div className="space-y-2">
-      <Label className="text-xs">Visibility</Label>
-      <div className="grid gap-2">
-        {options.map((option) => (
-          <label
-            key={option.value}
-            className="flex cursor-pointer gap-2 rounded-md border border-border px-3 py-2 text-xs has-[:checked]:border-primary has-[:checked]:bg-primary/5"
-          >
-            <input
-              type="radio"
-              name="linkedin-visibility"
-              value={option.value}
-              checked={value === option.value}
-              onChange={() => onChange(option.value)}
+      {visible.map((field) => {
+        const id = `${idPrefix}-${field.key}`;
+        const control =
+          field.type === "boolean" ? (
+            <Switch
+              id={id}
+              size="sm"
+              checked={values[field.key] === true}
+              onCheckedChange={(checked) => onChange(field.key, checked)}
               disabled={disabled}
               className="mt-0.5"
             />
-            <span className="min-w-0">
-              <span className="block font-medium">{option.label}</span>
-              <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.description}</span>
-            </span>
-          </label>
-        ))}
-      </div>
+          ) : (
+            <Input
+              id={id}
+              type="number"
+              min={field.min}
+              value={String(values[field.key] ?? field.default)}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                onChange(field.key, Number.isFinite(next) ? next : Number(field.default));
+              }}
+              disabled={disabled}
+              className="h-7 w-20 shrink-0 text-right text-xs"
+            />
+          );
+        return <SettingRow key={field.key} id={id} label={field.label} help={field.help} control={control} />;
+      })}
+      {showsCredits && <LookupTokensLine />}
     </div>
+  );
+}
+
+/** Shared lookup-token balance, read from the admin-only allowance route. */
+export function LookupTokensLine() {
+  const allowance = useQuery({
+    queryKey: ["enrichment-allowance"],
+    queryFn: () => api.enrichment.allowance(),
+    retry: false,
+    staleTime: 60_000,
+  });
+  if (allowance.isError) {
+    return <p className="text-[11px] text-muted-foreground">Token balance is unavailable right now.</p>;
+  }
+  if (!allowance.data) return null;
+  return (
+    <p className="text-[11px] text-muted-foreground">
+      {allowance.data.remaining.toLocaleString()} lookup tokens left this month
+      {allowance.data.resetsAt ? `, resets ${new Date(allowance.data.resetsAt).toLocaleDateString()}` : ""}.
+    </p>
   );
 }
 
