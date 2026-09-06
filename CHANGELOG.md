@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.5] -- 2026-09-06
+
+- Fixes entity-mention fan-out that exceeded the Postgres bind limit (int16 parameter count wraps above 65,535 IDs) by switching to `= ANY($1::text[])` on Postgres and chunked `IN` on SQLite; deduplicates file IDs in `filterAccessibleFileIds` and adds an integration test seeding 70,000 mentions.
+- Pushes entity scope into SQL as correlated `EXISTS` predicates instead of materialising every mention row into JS, eliminating 3–6 s per entity-scoped call on large tenants; empty scopes are short-circuited with a `LIMIT 1` probe before the paid embedding.
+- Replaces planner-ordered `LIKE '%q%'` entity search with tiered ranking (exact name > exact alias > prefix > substring, then hotness DESC) and an opt-in token-fallback query requiring 3+ char non-stop-words matched by at least half; collapses two per-search entity lookups into one visibility-filtered lookup that drives both the fusion boost and tool-side rerank.
+- Pushes RBAC into the FTS and KNN SQL arms as a pre-filter, using a visible-set regime (`= ANY($visibleIds)`) for principals under 10,000 files and an inline-rule regime for broad principals; adds a partial index on public files and returns full result sets for previously starved restricted principals without changing broad-principal behaviour.
+- Defaults `scope_config.enrichment.autoMerge` to `true` so clean SalesQL work-email matches (exactly one existing person with the same address) merge without review; personal addresses, role inboxes and multi-matches still file proposals into the human queue.
+- Hides bodyless CRM activities (`content_category = 'structured'`) on every search path—`searchFiles`, `hybridSearch` FTS, KNN arms, metadata query and `browseLatest`—using a shared predicate with NULL-safe form; moves `CRM_ACTIVITY_FILE_TYPES` to `connectors/types.ts` for cross-module reuse.
+- Expands entity timeline rows inline into the file's text: structural links (attendee, sender, assignee) show the file directly while "mentioned" rows show name-matched passages first with a "Show whole file" toggle; two-line rows replace snippet windows, and gated files render a no-access line in the strip.
+
 ## [1.7.4] -- 2026-09-06
 
 - Adds LinkedIn connector visibility choice (`owner` or `workspace`), letting admins control whether synced conversations and profiles are searchable by everyone or only the connector owner; includes a dedicated `PUT /api/connectors/:id/visibility` route that reconciles file grants without resetting the sync cursor.
