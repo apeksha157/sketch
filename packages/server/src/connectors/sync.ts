@@ -670,6 +670,8 @@ export async function runConnectorSync(
 
     activeSyncs.delete(config.id);
 
+    const syncDiagnostics = connector.getSyncDiagnostics?.() ?? {};
+
     syncLogger.info(
       {
         processed: result.itemsProcessed,
@@ -677,10 +679,23 @@ export async function runConnectorSync(
         updated: result.itemsUpdated,
         archived: result.itemsArchived,
         errors: result.errors.length,
+        ...syncDiagnostics,
         ...heapStats(startHeapMb),
       },
       "Sync complete",
     );
+
+    if (
+      connectorType === "linkedin_aimfox" &&
+      typeof syncDiagnostics.threadsListed === "number" &&
+      syncDiagnostics.threadsListed > 0 &&
+      result.itemsProcessed === 0
+    ) {
+      syncLogger.warn(
+        { threadsListed: syncDiagnostics.threadsListed, ...syncDiagnostics },
+        `LinkedIn sync walked ${syncDiagnostics.threadsListed} threads and persisted nothing`,
+      );
+    }
 
     return result;
   } catch (err) {

@@ -663,7 +663,7 @@ export function eventToSyncedItem(
     mimeType: "text/calendar",
     accessPrincipals: (() => {
       const emails = eventAccessEmails(event, ownerEmail, calendlyPeople);
-      return emails ? toEmailPrincipals(emails) : null;
+      return emails && emails.length > 0 ? toEmailPrincipals(emails) : null;
     })(),
     attendees: people.length > 0 ? people : undefined,
     authorEmail,
