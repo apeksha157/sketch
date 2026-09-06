@@ -101,6 +101,7 @@ export function ConnectIntegrationDialog({
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   // Zoho CRM (and any future multi-DC OAuth connector) picks a data center first.
   const [region, setRegion] = useState<string>("com");
+  const [linkedinVisibility, setLinkedinVisibility] = useState<"owner" | "workspace">("workspace");
 
   // OAuth state
   const [step, setStep] = useState<
@@ -354,6 +355,7 @@ export function ConnectIntegrationDialog({
         connectorType: integration.type,
         authType: integration.authType,
         credentials,
+        ...(integration.type === "linkedin_aimfox" ? { scopeConfig: { visibility: linkedinVisibility } } : {}),
       });
     },
     onSuccess: (result) => {
@@ -494,6 +496,7 @@ export function ConnectIntegrationDialog({
 
   const resetAndClose = () => {
     setFieldValues({});
+    setLinkedinVisibility("workspace");
     setStep("credentials");
     setSharedDrives([]);
     setSelectedDriveIds(new Set());
@@ -1150,6 +1153,13 @@ export function ConnectIntegrationDialog({
                   {field.helpText && <p className="text-[11px] text-muted-foreground">{field.helpText}</p>}
                 </div>
               ))}
+              {integration.type === "linkedin_aimfox" && (
+                <LinkedinVisibilityRadio
+                  value={linkedinVisibility}
+                  onChange={setLinkedinVisibility}
+                  disabled={isPending}
+                />
+              )}
             </div>
 
             <DialogFooter>
@@ -1846,6 +1856,57 @@ export function NotionRootPagePicker({
         ))}
       </ScopeList>
       <ScopeCount selected={selectedIds.size} total={pages.length} noun="pages" />
+    </div>
+  );
+}
+
+export function LinkedinVisibilityRadio({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: "owner" | "workspace";
+  onChange: (value: "owner" | "workspace") => void;
+  disabled?: boolean;
+}) {
+  const options: Array<{ value: "workspace" | "owner"; label: string; description: string }> = [
+    {
+      value: "workspace",
+      label: "Everyone in the workspace",
+      description: "LinkedIn profiles and conversations are available to workspace search.",
+    },
+    {
+      value: "owner",
+      label: "Connector owner only",
+      description: "Only the account that manages this connector receives file access.",
+    },
+  ];
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs">Visibility</Label>
+      <div className="grid gap-2">
+        {options.map((option) => (
+          <label
+            key={option.value}
+            className="flex cursor-pointer gap-2 rounded-md border border-border px-3 py-2 text-xs has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+          >
+            <input
+              type="radio"
+              name="linkedin-visibility"
+              value={option.value}
+              checked={value === option.value}
+              onChange={() => onChange(option.value)}
+              disabled={disabled}
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="block font-medium">{option.label}</span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </div>
     </div>
   );
 }

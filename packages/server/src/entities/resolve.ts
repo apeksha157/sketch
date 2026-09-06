@@ -438,9 +438,25 @@ async function materializeEvidence(
   confidence: "confirmed" | "inferred",
 ): Promise<void> {
   const targetEmail = target.source_type === "person" ? readEmail(target.metadata) : null;
+  const fileSources =
+    targetEmail && evidence.length > 0
+      ? new Map(
+          (
+            await ctx.db
+              .selectFrom("indexed_files")
+              .select(["id", "source"])
+              .where(
+                "id",
+                "in",
+                evidence.map((ev) => ev.indexed_file_id),
+              )
+              .execute()
+          ).map((file) => [file.id, file.source]),
+        )
+      : new Map<string, string | null>();
   for (const ev of evidence) {
     if (ev.source === "llm_extraction") continue;
-    if (targetEmail) {
+    if (targetEmail && fileSources.get(ev.indexed_file_id) !== "linkedin_aimfox") {
       await ensureFileAccess(ctx, ev.indexed_file_id, targetEmail);
     }
     await insertHeldMention(ctx, target.id, ev.indexed_file_id, ev.source, confidence);

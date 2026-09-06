@@ -54,7 +54,7 @@ export const searchToolSchema = {
     .describe(
       "Semantic content kind. meeting=Teams/Fireflies/Otter meeting transcripts, " +
         "doc=Drive/Notion/ClickUp Docs/Linear projects, task=ClickUp tasks/Linear issues, " +
-        "message=conversation/WhatsApp/Slack chats, email=Outlook/Gmail emails.",
+        "message=conversation/WhatsApp/Slack/LinkedIn, email=Outlook/Gmail emails.",
     ),
   source: z.enum(SEARCHABLE_SOURCES).optional().describe("Filter to a specific source. Omit to search all."),
   sortBy: z
