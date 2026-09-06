@@ -50,12 +50,15 @@ import { birthOrigin, entityEmail, humanSourceType, isWeeklyPassProjectRow } fro
  * rows are per-mention; fold them per file so ×N matches the drawer, keeping
  * the first snippet that survives the junk filter.
  */
-function evidenceTimelineGroups(evidence: EntityReviewEvidenceRow[]): EntityTimelineGroup[] {
+type TimelineEvidenceRow = EntityReviewEvidenceRow & { relation?: string | null };
+
+function evidenceTimelineGroups(evidence: TimelineEvidenceRow[]): EntityTimelineGroup[] {
   const byFile = new Map<string, EntityTimelineItem>();
   for (const e of evidence) {
     const existing = byFile.get(e.indexed_file_id);
     if (existing) {
       existing.mentionCount += 1;
+      if (e.relation && !existing.relations?.includes(e.relation)) existing.relations?.push(e.relation);
       if (!usefulSnippet(existing.contextSnippet, existing.fileName) && e.contextSnippet)
         existing.contextSnippet = e.contextSnippet;
       if (e.seen_at > existing.occurredAt) existing.occurredAt = e.seen_at;
@@ -71,6 +74,7 @@ function evidenceTimelineGroups(evidence: EntityReviewEvidenceRow[]): EntityTime
       mentionConfidence: "EXTRACTED",
       mentionCount: 1,
       contextSnippet: e.contextSnippet ?? null,
+      relations: e.relation ? [e.relation] : [],
       url: e.file.providerUrl,
       rollupGroupId: null,
       crmActivity: null,
@@ -100,6 +104,7 @@ export function mentionTimelineGroups(mentions: EntityMention[]): EntityTimeline
       note: null,
       seen_at: m.sourceDate,
       contextSnippet: m.contextSnippet,
+      relation: m.relation ?? null,
       file: { name: m.file.fileName, providerUrl: m.file.providerUrl, sourcePath: m.file.sourcePath },
     })),
   );
