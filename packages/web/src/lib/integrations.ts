@@ -48,6 +48,8 @@ export interface SettingsField {
   /** Only show this field while the named boolean field is on. */
   showWhen?: string;
   min?: number;
+  /** Stored with its default but never rendered; keeps the payload explicit without a control. */
+  hidden?: boolean;
 }
 
 export type SettingsValues = Record<string, boolean | number>;
@@ -564,25 +566,25 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       "Open your Aimfox workspace settings",
       "Copy the workspace API key",
       "Paste the key below; all LinkedIn accounts connected to that key will sync",
-      "Choose who can search the synced LinkedIn content and whether SalesQL enriches contacts",
+      "Choose who can search the synced LinkedIn content and whether to look up contact details",
     ],
     settingsScopeKey: "enrichment",
     settingsFields: [
       {
         key: "enabled",
-        label: "Use SalesQL to enrich and dedup contacts",
-        help: "Finds work emails and phones for LinkedIn contacts, attaches their company, and merges duplicates by email. Uses shared SalesQL credits.",
+        label: "Look up contact details",
+        help: "Finds work emails and phone numbers for LinkedIn contacts, adds their company, and merges duplicates that share an email. Each lookup uses one token from your shared pool.",
         type: "boolean",
         default: false,
       },
       {
         key: "dailyCap",
-        label: "Daily lookups",
-        help: "Most SalesQL lookups this workspace spends per day.",
+        label: "Lookups per day",
+        help: "Most tokens this workspace spends in a day.",
         type: "number",
         default: 25,
         min: 0,
-        showWhen: "enabled",
+        hidden: true,
       },
       {
         key: "autoMerge",
@@ -590,7 +592,7 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
         help: "When exactly one existing person has the same work email. Personal addresses, role inboxes and multi-matches still go to review.",
         type: "boolean",
         default: true,
-        showWhen: "enabled",
+        hidden: true,
       },
     ],
     perUserAuth: false,

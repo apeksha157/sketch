@@ -53,6 +53,7 @@ import { Switch } from "@sketch/ui/components/switch";
 import { Textarea } from "@sketch/ui/components/textarea";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 
 interface SharedDrive {
@@ -1167,19 +1168,21 @@ export function ConnectIntegrationDialog({
                 </div>
               ))}
               {integration.type === "linkedin_aimfox" && (
-                <LinkedinVisibilityRadio
-                  value={linkedinVisibility}
-                  onChange={setLinkedinVisibility}
-                  disabled={isPending}
-                />
-              )}
-              {integration.settingsFields && integration.settingsFields.length > 0 && (
-                <ConnectorSettingsFields
-                  fields={integration.settingsFields}
-                  values={connectorSettings}
-                  onChange={(key, value) => setConnectorSettings((prev) => ({ ...prev, [key]: value }))}
-                  disabled={isPending}
-                />
+                <div className="space-y-2">
+                  <LinkedinVisibilitySwitch
+                    value={linkedinVisibility}
+                    onChange={setLinkedinVisibility}
+                    disabled={isPending}
+                  />
+                  {integration.settingsFields && (
+                    <ConnectorSettingsFields
+                      fields={integration.settingsFields}
+                      values={connectorSettings}
+                      onChange={(key, value) => setConnectorSettings((prev) => ({ ...prev, [key]: value }))}
+                      disabled={isPending}
+                    />
+                  )}
+                </div>
               )}
             </div>
 
@@ -1881,54 +1884,58 @@ export function NotionRootPagePicker({
   );
 }
 
-export function LinkedinVisibilityRadio({
+/** One labelled setting: text on the left, its control on the right. Shared by every LinkedIn row. */
+export function SettingRow({
+  id,
+  label,
+  help,
+  control,
+}: {
+  id: string;
+  label: string;
+  help: string;
+  control: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2">
+      <div className="min-w-0">
+        <Label htmlFor={id} className="text-xs font-medium">
+          {label}
+        </Label>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">{help}</p>
+      </div>
+      {control}
+    </div>
+  );
+}
+
+export function LinkedinVisibilitySwitch({
   value,
   onChange,
   disabled,
+  id = "linkedin-visibility",
 }: {
   value: "owner" | "workspace";
   onChange: (value: "owner" | "workspace") => void;
   disabled?: boolean;
+  id?: string;
 }) {
-  const options: Array<{ value: "workspace" | "owner"; label: string; description: string }> = [
-    {
-      value: "workspace",
-      label: "Everyone in the workspace",
-      description: "LinkedIn profiles and conversations are available to workspace search.",
-    },
-    {
-      value: "owner",
-      label: "Connector owner only",
-      description: "Only the account that manages this connector receives file access.",
-    },
-  ];
-
   return (
-    <div className="space-y-2">
-      <Label className="text-xs">Visibility</Label>
-      <div className="grid gap-2">
-        {options.map((option) => (
-          <label
-            key={option.value}
-            className="flex cursor-pointer gap-2 rounded-md border border-border px-3 py-2 text-xs has-[:checked]:border-primary has-[:checked]:bg-primary/5"
-          >
-            <input
-              type="radio"
-              name="linkedin-visibility"
-              value={option.value}
-              checked={value === option.value}
-              onChange={() => onChange(option.value)}
-              disabled={disabled}
-              className="mt-0.5"
-            />
-            <span className="min-w-0">
-              <span className="block font-medium">{option.label}</span>
-              <span className="mt-0.5 block text-[11px] text-muted-foreground">{option.description}</span>
-            </span>
-          </label>
-        ))}
-      </div>
-    </div>
+    <SettingRow
+      id={id}
+      label="Everyone in the workspace"
+      help="Teammates can search the synced LinkedIn profiles and conversations. Off keeps them to the connector owner."
+      control={
+        <Switch
+          id={id}
+          size="sm"
+          checked={value === "workspace"}
+          onCheckedChange={(checked) => onChange(checked ? "workspace" : "owner")}
+          disabled={disabled}
+          className="mt-0.5"
+        />
+      }
+    />
   );
 }
 
@@ -1949,41 +1956,24 @@ export function ConnectorSettingsFields({
   disabled?: boolean;
   idPrefix?: string;
 }) {
-  const visible = fields.filter((field) => !field.showWhen || values[field.showWhen] === true);
+  const visible = fields.filter((field) => !field.hidden && (!field.showWhen || values[field.showWhen] === true));
   const showsCredits = fields.some((field) => field.key === "enabled") && values.enabled === true;
 
   return (
     <div className="space-y-2">
       {visible.map((field) => {
         const id = `${idPrefix}-${field.key}`;
-        if (field.type === "boolean") {
-          return (
-            <div
-              key={field.key}
-              className="flex items-start justify-between gap-3 rounded-md border border-border px-3 py-2"
-            >
-              <div className="min-w-0">
-                <Label htmlFor={id} className="text-xs font-medium">
-                  {field.label}
-                </Label>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">{field.help}</p>
-              </div>
-              <Switch
-                id={id}
-                size="sm"
-                checked={values[field.key] === true}
-                onCheckedChange={(checked) => onChange(field.key, checked)}
-                disabled={disabled}
-                className="mt-0.5"
-              />
-            </div>
-          );
-        }
-        return (
-          <div key={field.key} className="space-y-1 rounded-md border border-border px-3 py-2">
-            <Label htmlFor={id} className="text-xs font-medium">
-              {field.label}
-            </Label>
+        const control =
+          field.type === "boolean" ? (
+            <Switch
+              id={id}
+              size="sm"
+              checked={values[field.key] === true}
+              onCheckedChange={(checked) => onChange(field.key, checked)}
+              disabled={disabled}
+              className="mt-0.5"
+            />
+          ) : (
             <Input
               id={id}
               type="number"
@@ -1994,19 +1984,18 @@ export function ConnectorSettingsFields({
                 onChange(field.key, Number.isFinite(next) ? next : Number(field.default));
               }}
               disabled={disabled}
-              className="h-7 w-24 text-xs"
+              className="h-7 w-20 shrink-0 text-right text-xs"
             />
-            <p className="text-[11px] text-muted-foreground">{field.help}</p>
-          </div>
-        );
+          );
+        return <SettingRow key={field.key} id={id} label={field.label} help={field.help} control={control} />;
       })}
-      {showsCredits && <SalesqlCreditsLine />}
+      {showsCredits && <LookupTokensLine />}
     </div>
   );
 }
 
-/** Shared SalesQL credit balance, read from the admin-only allowance route. */
-export function SalesqlCreditsLine() {
+/** Shared lookup-token balance, read from the admin-only allowance route. */
+export function LookupTokensLine() {
   const allowance = useQuery({
     queryKey: ["enrichment-allowance"],
     queryFn: () => api.enrichment.allowance(),
@@ -2014,13 +2003,13 @@ export function SalesqlCreditsLine() {
     staleTime: 60_000,
   });
   if (allowance.isError) {
-    return <p className="text-[11px] text-muted-foreground">SalesQL credit balance is unavailable right now.</p>;
+    return <p className="text-[11px] text-muted-foreground">Token balance is unavailable right now.</p>;
   }
   if (!allowance.data) return null;
   return (
     <p className="text-[11px] text-muted-foreground">
-      {allowance.data.remaining.toLocaleString()} shared SalesQL credits left
-      {allowance.data.resetsAt ? ` (resets ${new Date(allowance.data.resetsAt).toLocaleDateString()})` : ""}.
+      {allowance.data.remaining.toLocaleString()} lookup tokens left this month
+      {allowance.data.resetsAt ? `, resets ${new Date(allowance.data.resetsAt).toLocaleDateString()}` : ""}.
     </p>
   );
 }

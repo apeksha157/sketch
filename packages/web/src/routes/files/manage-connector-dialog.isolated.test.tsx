@@ -341,10 +341,23 @@ describe("ManageConnectorDialog connector capabilities", () => {
     });
   });
 
-  it("round-trips LinkedIn enrichment settings through the enrichment route", async () => {
+  it("saves LinkedIn visibility and lookup settings from one button", async () => {
     const user = userEvent.setup();
     let putBody: unknown;
+    let visibilityBody: unknown;
     server.use(
+      http.put("/api/connectors/:id/visibility", async ({ request }) => {
+        visibilityBody = await request.json();
+        return HttpResponse.json({
+          connector: {
+            id: "linkedin-conn",
+            connectorType: "linkedin_aimfox",
+            scopeConfig: {},
+            visibility: "workspace",
+            syncStatus: "active",
+          },
+        });
+      }),
       http.put("/api/connectors/:id/enrichment", async ({ request }) => {
         putBody = await request.json();
         return HttpResponse.json({
@@ -377,13 +390,15 @@ describe("ManageConnectorDialog connector capabilities", () => {
       />,
     );
 
-    const save = await screen.findByRole("button", { name: "Save enrichment" });
+    const save = await screen.findByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
-    await user.click(screen.getByRole("switch", { name: /Use SalesQL to enrich and dedup contacts/i }));
-    expect(await screen.findByLabelText(/Daily lookups/i)).toHaveValue(25);
+    expect(screen.getAllByRole("switch")).toHaveLength(2);
+    await user.click(screen.getByRole("switch", { name: /Everyone in the workspace/i }));
+    await user.click(screen.getByRole("switch", { name: /Look up contact details/i }));
     await user.click(save);
 
     await waitFor(() => {
+      expect(visibilityBody).toEqual({ visibility: "workspace" });
       expect(putBody).toEqual({ enabled: true, dailyCap: 25, autoMerge: true });
     });
   });

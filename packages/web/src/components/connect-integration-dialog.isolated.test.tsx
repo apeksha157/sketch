@@ -445,11 +445,10 @@ describe("ConnectIntegrationDialog WhatsApp scope", () => {
     );
 
     await user.type(await screen.findByLabelText(/Aimfox API Key/i), "aimfox-key");
-    expect(screen.queryByLabelText(/Daily lookups/i)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("switch", { name: /Use SalesQL to enrich and dedup contacts/i }));
-    expect(await screen.findByLabelText(/Daily lookups/i)).toHaveValue(25);
-    expect(screen.getByRole("switch", { name: /Merge clean matches automatically/i })).toBeChecked();
-    expect(await screen.findByText(/4,200 shared SalesQL credits left/)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /Everyone in the workspace/i })).toBeChecked();
+    expect(screen.getAllByRole("switch")).toHaveLength(2);
+    await user.click(screen.getByRole("switch", { name: /Look up contact details/i }));
+    expect(await screen.findByText(/4,200 lookup tokens left/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     await waitFor(() => {
