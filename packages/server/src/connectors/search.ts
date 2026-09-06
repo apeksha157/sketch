@@ -408,7 +408,10 @@ export const KIND_TO_RULES: Record<SearchKind, KindRule[]> = {
     { sources: ["clickup"], fileTypes: ["task", "subtask"] },
     { sources: ["linear"], fileTypes: ["issue"] },
   ],
-  message: [{ sources: ["conversation", "whatsapp", "slack"] }],
+  message: [
+    { sources: ["conversation", "whatsapp", "slack"] },
+    { sources: ["linkedin_aimfox"], fileTypes: ["linkedin_conversation"] },
+  ],
   email: [{ sources: ["outlook", "gmail"], fileTypes: ["email_message"] }],
 };
 

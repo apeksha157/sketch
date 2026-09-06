@@ -526,6 +526,7 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
       "Open your Aimfox workspace settings",
       "Copy the workspace API key",
       "Paste the key below; all LinkedIn accounts connected to that key will sync",
+      "Choose who can search the synced LinkedIn content",
     ],
     perUserAuth: false,
     requiresOAuthClientSetup: false,

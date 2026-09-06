@@ -1374,6 +1374,7 @@ export interface ConnectorConfig {
   authType: string;
   credentialSource?: "local" | "canvas";
   scopeConfig: Record<string, unknown>;
+  visibility?: "owner" | "workspace";
   hierarchyLevels?: HierarchyLevel[] | null;
   containerClassificationEnabled?: boolean;
 
@@ -2661,8 +2662,23 @@ export const api = {
           canUpdateCredentials?: boolean;
           canBrowseScope?: boolean;
           canEnrich?: boolean;
+          visibility?: "owner" | "workspace";
         }>;
       }>("/api/connectors/mine");
+    },
+    updateVisibility(id: string, visibility: "owner" | "workspace") {
+      return request<{
+        connector: {
+          id: string;
+          connectorType: string;
+          scopeConfig: Record<string, unknown>;
+          visibility: "owner" | "workspace";
+          syncStatus: string;
+        };
+      }>(`/api/connectors/${id}/visibility`, {
+        method: "PUT",
+        body: JSON.stringify({ visibility }),
+      });
     },
     rotateKey(id: string, apiKey: string) {
       return request<{ ok: boolean }>(`/api/connectors/${id}/rotate-key`, {

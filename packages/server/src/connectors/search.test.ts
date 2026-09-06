@@ -283,8 +283,11 @@ describe("searchFiles — FTS5 column weights", () => {
 });
 
 describe("KIND_TO_RULES", () => {
-  it("maps message kind to local conversation, WhatsApp, and Slack slice sources", () => {
-    expect(KIND_TO_RULES.message).toEqual([{ sources: ["conversation", "whatsapp", "slack"] }]);
+  it("maps message kind to local conversation, WhatsApp, Slack, and LinkedIn conversation sources", () => {
+    expect(KIND_TO_RULES.message).toEqual([
+      { sources: ["conversation", "whatsapp", "slack"] },
+      { sources: ["linkedin_aimfox"], fileTypes: ["linkedin_conversation"] },
+    ]);
   });
 
   it("maps email kind to Outlook and Gmail email messages, disjoint from message", () => {
@@ -610,6 +613,25 @@ describe("search — recency browse applies RBAC before limit", () => {
     });
 
     expect(results.map((r) => r.id)).toEqual(["teams-transcript", "fireflies-transcript"]);
+  });
+
+  it("returns LinkedIn conversations for message kind without sweeping LinkedIn profiles", async () => {
+    await insertMeeting("linkedin-profile", "2026-04-30T11:00:00.000Z", {
+      source: "linkedin_aimfox",
+      fileType: "linkedin_profile",
+    });
+    await insertMeeting("linkedin-conversation", "2026-04-30T10:00:00.000Z", {
+      source: "linkedin_aimfox",
+      fileType: "linkedin_conversation",
+    });
+
+    const results = await search(db, "", {
+      kindRules: KIND_TO_RULES.message,
+      sortBy: "recency",
+      limit: 10,
+    });
+
+    expect(results.map((r) => r.id)).toEqual(["linkedin-conversation"]);
   });
 
   it("includes manually shared and org-wide files in non-empty search", async () => {

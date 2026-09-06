@@ -1,4 +1,4 @@
-import { IntegrationIcon } from "@/components/connect-integration-dialog";
+import { IntegrationIcon, LinkedinVisibilityRadio } from "@/components/connect-integration-dialog";
 /**
  * ManageConnectorDialog — status summary, sync scope configuration, credential
  * update, and disconnect flow for a connected integration.
@@ -11,7 +11,7 @@ import { IntegrationIcon } from "@/components/connect-integration-dialog";
 import { HierarchyMappingPanel } from "@/components/hierarchy-mapping-panel";
 import { GenericScopeEditor } from "@/components/scope-picker";
 import type { ConnectorConfig, HierarchyLevel, WhatsAppGroupMemberLabel } from "@/lib/api";
-import { api } from "@/lib/api";
+import { ApiRequestError, api } from "@/lib/api";
 import type { IntegrationDefinition } from "@/lib/integrations";
 import {
   ArrowsClockwiseIcon,
@@ -74,8 +74,15 @@ export function ManageConnectorDialog({
 
   const canDisconnect = connector?.canDisconnect === true;
   const canSync = connector?.canSync === true;
+  const canManage = connector?.canManage === true;
   const canChangeScope = connector?.canChangeScope === true;
   const canUpdateCredentials = connector?.canUpdateCredentials === true;
+  const currentLinkedinVisibility = connector?.visibility ?? "owner";
+  const [linkedinVisibility, setLinkedinVisibility] = useState<"owner" | "workspace">(currentLinkedinVisibility);
+
+  useEffect(() => {
+    setLinkedinVisibility(currentLinkedinVisibility);
+  }, [currentLinkedinVisibility]);
 
   // Fetch entity count when disconnect confirmation opens — used in the dialog copy
   // so the user knows how much extracted data they're about to remove.
@@ -115,6 +122,23 @@ export function ManageConnectorDialog({
       if (definition) onReconnect(definition);
     },
     onError: (error: Error) => toast.error(error.message),
+  });
+
+  const linkedinVisibilityMutation = useMutation({
+    mutationFn: () => api.integrations.updateVisibility(connector?.id ?? "", linkedinVisibility),
+    onSuccess: () => {
+      toast.success("LinkedIn visibility updated.");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+      queryClient.invalidateQueries({ queryKey: ["all-files"] });
+      queryClient.invalidateQueries({ queryKey: ["hybrid-search"] });
+    },
+    onError: (error: Error) => {
+      if (error instanceof ApiRequestError && error.status === 409) {
+        toast.error(error.code === "SYNC_IN_PROGRESS" ? "Sync in progress, try again in a moment" : error.message);
+        return;
+      }
+      toast.error(error.message);
+    },
   });
 
   // For local credential connectors, "Update credentials" validates replacement
@@ -243,6 +267,30 @@ export function ManageConnectorDialog({
 
           {connector.connectorType === "gmail" && <GmailFilteredEmails connectorId={connector.id} />}
           {connector.connectorType === "gmail" && <GmailConversations connector={connector} />}
+          {connector.connectorType === "linkedin_aimfox" && canManage && (
+            <div className="space-y-3 border-t border-border pt-3">
+              <LinkedinVisibilityRadio
+                value={linkedinVisibility}
+                onChange={setLinkedinVisibility}
+                disabled={linkedinVisibilityMutation.isPending}
+              />
+              <Button
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => linkedinVisibilityMutation.mutate()}
+                disabled={linkedinVisibility === currentLinkedinVisibility || linkedinVisibilityMutation.isPending}
+              >
+                {linkedinVisibilityMutation.isPending ? (
+                  <>
+                    <SpinnerGapIcon size={12} className="animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save visibility"
+                )}
+              </Button>
+            </div>
+          )}
 
           <div className="flex items-center justify-between border-t border-border pt-3">
             {canDisconnect ? (
