@@ -27,6 +27,70 @@ const SYSTEM_ENTITY_SOURCE_TYPES = ["clickup_workspace", "clickup_space"];
 export const PROTECTED_ENTITY_SOURCES = ["team", "team_directory"];
 const HOTNESS_WINDOW_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ENTITY_SEARCH_TOKEN_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "what",
+  "who",
+  "how",
+  "of",
+  "is",
+  "are",
+  "was",
+  "were",
+  "our",
+  "your",
+  "their",
+  "about",
+  "into",
+  "meeting",
+  "call",
+  "email",
+  "re",
+  "fwd",
+]);
+
+type EntitySearchExpressions = {
+  exactName: RawBuilder<boolean>;
+  exactAlias: RawBuilder<boolean>;
+  prefix: RawBuilder<boolean>;
+  substring: RawBuilder<boolean>;
+  tier: RawBuilder<number>;
+};
+
+function escapeLikePattern(value: string): string {
+  return value.replaceAll("#", "##").replaceAll("%", "#%").replaceAll("_", "#_");
+}
+
+function entitySearchExpressions(normalizedQuery: string): EntitySearchExpressions {
+  const escaped = escapeLikePattern(normalizedQuery);
+  const exactName = sql<boolean>`lower(entities.name) = ${normalizedQuery}`;
+  const exactAlias = sql<boolean>`lower(entities.aliases) LIKE ${`%"${escaped}"%`} ESCAPE '#'`;
+  const prefix = sql<boolean>`(
+    lower(entities.name) LIKE ${`${escaped}%`} ESCAPE '#'
+    OR lower(entities.aliases) LIKE ${`%"${escaped}%`} ESCAPE '#'
+  )`;
+  const substring = sql<boolean>`(
+    lower(entities.name) LIKE ${`%${escaped}%`} ESCAPE '#'
+    OR lower(entities.aliases) LIKE ${`%${escaped}%`} ESCAPE '#'
+  )`;
+  const tier = sql<number>`CASE
+    WHEN ${exactName} THEN 1
+    WHEN ${exactAlias} THEN 2
+    WHEN ${prefix} THEN 3
+    ELSE 4
+  END`;
+  return { exactName, exactAlias, prefix, substring, tier };
+}
+
+function isPhoneShapedEntityQuery(query: string): boolean {
+  return /^[\d\s+\-().]+$/.test(query) && (query.match(/\d/g)?.length ?? 0) >= 6;
+}
 
 /**
  * Entities processed per `recomputeHotnessBatch` page when recomputing the
@@ -1267,57 +1331,165 @@ export function createEntityRepository(db: Kysely<DB>) {
 
     // ── Search ──
 
+    /**
+     * Resolves entity text in stable semantic tiers: exact name, exact JSON alias,
+     * name-or-alias prefix, then substring. Hotness only breaks ties inside a
+     * tier because it is recency-dominated and can be inflated by CRM activity.
+     * Alias tiers use the compact JSON encoding written by every entity alias
+     * path. An alias containing an escaped double quote remains an accepted
+     * residual and can false-positive the portable quoted-element exact tier.
+     *
+     * The whole string always runs first. When `tokenFallback` is explicitly
+     * enabled, whitespace-delimited tokens run in at most one fallback query,
+     * only when the first result set has no tier 1–3 hit. Tokens shorter than
+     * three characters and common stop words are ignored. A row must match at
+     * least half of the usable tokens, and a single-token match counts only
+     * when that token is an exact or prefix hit on the name or an alias:
+     * "Capmob finance" keeps "Capmob Financial Services", while "onboarding
+     * automation" does not admit every company whose name merely contains
+     * "automation". "meeting", "call", and
+     * "email" are stop words because they frame user queries while naming nearly
+     * every entity from their respective source type. Email and phone-shaped
+     * input is never tokenized because a domain or phone fragment would resolve
+     * unrelated people and companies. Recency search returns the whole-string
+     * rows as-is because its LIMIT is activity-ordered, making the strong-hit
+     * fallback trigger meaningless and incompatible with appending
+     * relevance-ordered rows.
+     *
+     * These predicates retain the sequential scan over `entities` used before
+     * tiered ranking, which measures approximately 10–100 ms at 10k entities.
+     */
     async searchEntities(
       query: string,
-      opts?: { sourceTypes?: string[]; limit?: number; sortBy?: "relevance" | "recency" },
+      opts?: {
+        sourceTypes?: string[];
+        limit?: number;
+        sortBy?: "relevance" | "recency";
+        tokenFallback?: boolean;
+      },
     ) {
-      const pattern = `%${query.toLowerCase()}%`;
-      let q = db
-        .selectFrom("entities")
-        .selectAll()
-        .where(whereLiveEntity())
-        .where((eb) =>
-          eb.or([
-            eb(sql<string>`lower(entities.name)`, "like", pattern),
-            eb(sql<string>`lower(entities.aliases)`, "like", pattern),
-          ]),
-        );
+      const normalizedQuery = query.trim().toLowerCase();
+      if (!normalizedQuery) return [];
 
-      if (opts?.sourceTypes && opts.sourceTypes.length > 0) {
-        q = q.where("source_type", "in", opts.sourceTypes);
-      } else {
-        const hiddenTypes = Array.from(HIDDEN_ENTITY_SOURCE_TYPES);
-        if (hiddenTypes.length > 0) q = q.where("source_type", "not in", hiddenTypes);
-      }
+      const limit = opts?.limit ?? 50;
 
-      if (opts?.sortBy === "recency") {
-        // Most-recent activity per entity. LEFT JOIN against the aggregated
-        // derived table so entities with zero mentions still appear; coalesce
-        // the timestamp to '' so DESC ordering puts them last in both SQLite
-        // (NULLS-last default) and Postgres (NULLS-first default) without
-        // resorting to dialect-specific NULLS LAST syntax.
-        const lastActivityByEntity = db
-          .selectFrom("entity_mentions")
-          .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
-          .select((eb) => [
-            "entity_mentions.entity_id",
-            eb.fn
-              .max(
-                sql<string>`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
-              )
-              .as("last_activity"),
-          ])
-          .groupBy("entity_mentions.entity_id")
-          .as("la");
+      const runRankedQuery = async (
+        needles: string[],
+        tokenized: boolean,
+        queryLimit: number,
+        matchedTokenThreshold = 1,
+      ) => {
+        const expressions = needles.map(entitySearchExpressions);
+        const bestTier =
+          expressions.length === 1
+            ? expressions[0].tier
+            : sql<number>`CASE
+                WHEN (${sql.join(
+                  expressions.map((expression) => expression.exactName),
+                  sql` OR `,
+                )}) THEN 1
+                WHEN (${sql.join(
+                  expressions.map((expression) => expression.exactAlias),
+                  sql` OR `,
+                )}) THEN 2
+                WHEN (${sql.join(
+                  expressions.map((expression) => expression.prefix),
+                  sql` OR `,
+                )}) THEN 3
+                ELSE 4
+              END`;
+        const matchedTokenCount = sql<number>`${sql.join(
+          expressions.map((expression) => sql<number>`CASE WHEN ${expression.substring} THEN 1 ELSE 0 END`),
+          sql` + `,
+        )}`;
 
-        q = q
-          .leftJoin(lastActivityByEntity, "la.entity_id", "entities.id")
-          .orderBy(sql`COALESCE(la.last_activity, '')`, "desc")
-          .orderBy("entities.name", "asc");
-      }
+        let ranked = db
+          .selectFrom("entities")
+          .selectAll("entities")
+          .select(bestTier.as("entity_search_tier"))
+          .select(matchedTokenCount.as("entity_search_matched_tokens"))
+          .where(whereLiveEntity())
+          .where(
+            tokenized
+              ? sql<boolean>`(${matchedTokenCount} >= ${matchedTokenThreshold} AND (${matchedTokenCount} >= 2 OR ${bestTier} <= 3))`
+              : sql<boolean>`(${expressions[0].substring})`,
+          );
 
-      q = q.limit(opts?.limit ?? 50);
-      return q.execute();
+        if (opts?.sourceTypes && opts.sourceTypes.length > 0) {
+          ranked = ranked.where("source_type", "in", opts.sourceTypes);
+        } else {
+          const hiddenTypes = Array.from(HIDDEN_ENTITY_SOURCE_TYPES);
+          if (hiddenTypes.length > 0) ranked = ranked.where("source_type", "not in", hiddenTypes);
+        }
+
+        if (tokenized) {
+          ranked = ranked
+            .orderBy(sql.ref("entity_search_matched_tokens"), "desc")
+            .orderBy(sql.ref("entity_search_tier"), "asc")
+            .orderBy("entities.hotness", "desc")
+            .orderBy(sql`lower(entities.name)`, "asc")
+            .orderBy("entities.id", "asc");
+        } else if (opts?.sortBy === "recency") {
+          /**
+           * The derived table retains entities with no mentions. Coalescing to
+           * an empty string makes descending null placement agree across SQLite
+           * and Postgres without dialect-specific NULLS LAST syntax.
+           */
+          const lastActivityByEntity = db
+            .selectFrom("entity_mentions")
+            .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+            .select((eb) => [
+              "entity_mentions.entity_id",
+              eb.fn
+                .max(
+                  sql<string>`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
+                )
+                .as("last_activity"),
+            ])
+            .groupBy("entity_mentions.entity_id")
+            .as("la");
+
+          ranked = ranked
+            .leftJoin(lastActivityByEntity, "la.entity_id", "entities.id")
+            .orderBy(sql`COALESCE(la.last_activity, '')`, "desc")
+            .orderBy(sql.ref("entity_search_tier"), "asc")
+            .orderBy(sql`lower(entities.name)`, "asc")
+            .orderBy("entities.id", "asc");
+        } else {
+          ranked = ranked
+            .orderBy(sql.ref("entity_search_tier"), "asc")
+            .orderBy("entities.hotness", "desc")
+            .orderBy(sql`lower(entities.name)`, "asc")
+            .orderBy("entities.id", "asc");
+        }
+
+        const rows = await ranked.limit(queryLimit).execute();
+        return rows.map(({ entity_search_matched_tokens, entity_search_tier, ...row }) => ({
+          row,
+          tier: Number(entity_search_tier),
+        }));
+      };
+
+      const wholeString = await runRankedQuery([normalizedQuery], false, limit);
+      const tokens = [...new Set(normalizedQuery.split(/\s+/))];
+      const matchTokens = tokens.filter((token) => token.length >= 3 && !ENTITY_SEARCH_TOKEN_STOP_WORDS.has(token));
+      const shouldTokenize =
+        opts?.tokenFallback === true &&
+        opts.sortBy !== "recency" &&
+        /\s/.test(normalizedQuery) &&
+        matchTokens.length > 0 &&
+        !normalizedQuery.includes("@") &&
+        !isPhoneShapedEntityQuery(normalizedQuery) &&
+        !wholeString.some(({ tier }) => tier <= 3);
+      if (!shouldTokenize) return wholeString.map(({ row }) => row);
+
+      const matchedTokenThreshold = Math.ceil(matchTokens.length / 2);
+      const tokenMatches = await runRankedQuery(matchTokens, true, limit + wholeString.length, matchedTokenThreshold);
+      const seen = new Set(wholeString.map(({ row }) => row.id));
+      return [
+        ...wholeString.map(({ row }) => row),
+        ...tokenMatches.filter(({ row }) => !seen.has(row.id)).map(({ row }) => row),
+      ].slice(0, limit);
     },
 
     /**

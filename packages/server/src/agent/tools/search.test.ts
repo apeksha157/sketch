@@ -1,9 +1,10 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod/v4";
+import { search } from "../../connectors/search";
 import { createUserRepository } from "../../db/repositories/users";
 import type { DB } from "../../db/schema";
-import { createTestDb } from "../../test-utils";
+import { createTestDb, spyOnExecutedSql } from "../../test-utils";
 import {
   handleGetEntityContext,
   handleGetFileContent,
@@ -375,6 +376,87 @@ function zeroEmailDeps() {
 }
 
 describe("public search handlers", () => {
+  it("resolves boost entities once and preserves search() result order", async () => {
+    const now = new Date().toISOString();
+    await db
+      .insertInto("indexed_files")
+      .values(
+        Array.from({ length: 30 }, (_, index) => ({
+          id: `alice-strong-${index}`,
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: `alice-strong-${index}`,
+          file_name: `Alice evidence ${index}`,
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          content: "Alice ".repeat(20),
+          access_scope_id: "scope-alice",
+          source_updated_at: now,
+          synced_at: now,
+        })),
+      )
+      .execute();
+    await db
+      .updateTable("indexed_files")
+      .set({ file_name: "Weak entity-linked record", content: "Alice", summary: "Alice" })
+      .where("id", "=", "file-alice")
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "alice-linked-weak",
+        connector_config_id: "cfg-search-tools",
+        provider_file_id: "alice-linked-weak",
+        file_name: "Weak linked evidence",
+        file_type: "doc",
+        content_category: "document",
+        source: "google_drive",
+        content: "Alice",
+        summary: "Alice",
+        access_scope_id: "scope-alice",
+        source_updated_at: now,
+        synced_at: now,
+      })
+      .execute();
+    await db.deleteFrom("entity_mentions").where("id", "=", "mention-alice").execute();
+    await db
+      .insertInto("entity_mentions")
+      .values({
+        id: "mention-alice-linked-weak",
+        entity_id: "entity-alice",
+        indexed_file_id: "alice-linked-weak",
+        chunk_index: 0,
+        context_snippet: "alice context",
+        confidence: "INFERRED",
+        source: "llm_extraction",
+        relation: "mentioned",
+        mentioned_at: now,
+      })
+      .execute();
+
+    const expected = await search(db, "Alice", {
+      limit: 40,
+      userPrincipals: ["alice@example.com"],
+      boostEntityIds: ["entity-alice"],
+    });
+    const executed = spyOnExecutedSql(db);
+
+    const result = await handleSearch({ query: "Alice", limit: 40 }, deps());
+    const actualOrder = [...(result.content[0]?.text ?? "").matchAll(/ {2}sketchId: ([^\n]+)/g)].map(
+      (match) => match[1],
+    );
+    const entityResolutionQueries = executed.queries.filter((query) => query.sql.includes("entity_search_tier"));
+    const boostQuery = executed.queries.find((query) =>
+      query.sql.includes('select distinct "indexed_file_id" from "entity_mentions"'),
+    );
+
+    expect(entityResolutionQueries).toHaveLength(1);
+    expect(boostQuery?.parameters).toContain("entity-alice");
+    expect(actualOrder).toEqual(expected.map((row) => row.id));
+    expect(actualOrder[0]).not.toBe("alice-linked-weak");
+    expect(actualOrder).toContain("alice-linked-weak");
+  });
+
   it("filters entity search results to RBAC-accessible mentions", async () => {
     const result = await handleSearchEntities({ queries: ["Project"] }, deps());
     const text = result.content[0]?.text ?? "";

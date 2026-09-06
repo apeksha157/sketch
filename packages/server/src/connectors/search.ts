@@ -1820,6 +1820,15 @@ export async function search(
     sortBy?: "relevance" | "recency";
     /** Suppress search()'s own auto-entity-boost when the caller manages entity matching. */
     skipAutoEntityBoost?: boolean;
+    /**
+     * Entity ids already resolved by the caller for the fusion boost. When this
+     * option is present, including as an empty array, search uses exactly these
+     * ids and performs no entity discovery. When absent, search discovers up to
+     * ten unfiltered entities unless `skipAutoEntityBoost` is set. A hard entity
+     * scope from `entityId` or `entityIds` takes precedence, and no fusion boost
+     * is applied at all in that case.
+     */
+    boostEntityIds?: string[];
     geminiMaxRpm?: number;
     geminiMaxRetries?: number;
     openRouterApiKey?: string;
@@ -1948,13 +1957,39 @@ export async function search(
         },
   );
 
-  // Auto-entity-discovery boost. Suppressed when the caller already pinned
-  // entityIds (would double-count) or asked to skip it.
   let entityBoostEntityIds: string[] | undefined;
-  if (allEntityIds.length === 0 && !opts?.skipAutoEntityBoost) {
+  if (allEntityIds.length > 0) {
+    opts?.stageReport?.({
+      stage: "discoverEntities",
+      label: "Discover entities",
+      kind: "code",
+      status: "skipped",
+      error: "Caller supplied a hard entity scope — no fusion boost discovery applied",
+    });
+  } else if (opts?.boostEntityIds !== undefined) {
+    entityBoostEntityIds = opts.boostEntityIds;
+    opts?.stageReport?.({
+      stage: "discoverEntities",
+      label: "Discover entities",
+      kind: "code",
+      status: "done",
+      summary: {
+        set: "fuse boost",
+        entitiesMatched: entityBoostEntityIds.length,
+        source: "caller-provided",
+        note: "Caller-resolved and visibility-filtered ids; search() performed no entity discovery.",
+      },
+      outcomes: entityBoostEntityIds.map((entityId) => ({
+        subject: entityId,
+        kind: "entity",
+        result: "linked" as const,
+        reason: "boosts files mentioning this entity",
+      })),
+    });
+  } else if (!opts?.skipAutoEntityBoost) {
     try {
       const entityRepo = createEntityRepository(db);
-      const matchingEntities = await entityRepo.searchEntities(trimmedQuery, { limit: 10 });
+      const matchingEntities = await entityRepo.searchEntities(trimmedQuery, { limit: 10, tokenFallback: true });
       if (matchingEntities.length > 0) {
         entityBoostEntityIds = matchingEntities.map((entity) => entity.id);
       }
@@ -1966,6 +2001,7 @@ export async function search(
         summary: {
           set: "fuse boost",
           entitiesMatched: matchingEntities.length,
+          source: "search-discovery",
           note: "search()'s own discovery, limit 10, not public-filtered. Links are loaded only for fused candidates.",
         },
         outcomes: matchingEntities.map((entity) => ({
@@ -1985,6 +2021,14 @@ export async function search(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  } else {
+    opts?.stageReport?.({
+      stage: "discoverEntities",
+      label: "Discover entities",
+      kind: "code",
+      status: "skipped",
+      error: "Caller suppressed automatic entity discovery",
+    });
   }
 
   // Recency: overfetch from the hybrid pipeline so the truly newest file isn't
