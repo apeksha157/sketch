@@ -3,12 +3,18 @@ import { z } from "zod";
 export const LINKEDIN_VISIBILITY_MODES = ["owner", "workspace"] as const;
 export type LinkedinVisibilityMode = (typeof LINKEDIN_VISIBILITY_MODES)[number];
 
+/**
+ * `autoMerge` defaults on: a clean match (exactly one existing person with the same
+ * work email) merges without review. Personal addresses, role inboxes and multi-matches
+ * still file proposals regardless. Rows that never stored the key pick this up on their
+ * next sweep, which is intended.
+ */
 const enrichmentScopeSchema = z
   .object({
     enabled: z.boolean().optional().default(false),
     dailyCap: z.coerce.number().int().min(0).optional().default(25),
     batch: z.coerce.number().int().min(1).optional().default(50),
-    autoMerge: z.boolean().optional().default(false),
+    autoMerge: z.boolean().optional().default(true),
   })
   .strict();
 
