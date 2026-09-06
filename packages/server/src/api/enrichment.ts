@@ -16,6 +16,22 @@ export interface EnrichmentRouteConfig {
 export function enrichmentRoutes(routeConfig: EnrichmentRouteConfig, logger: Logger) {
   const routes = new Hono();
 
+  routes.get("/allowance", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    if (!routeConfig.service) {
+      return c.json(
+        {
+          error: { code: "ENRICHMENT_SWEEP_UNAVAILABLE", message: "SalesQL enrichment is not running in this process" },
+        },
+        503,
+      );
+    }
+
+    const allowance = await routeConfig.service.allowance();
+    return c.json({ remaining: allowance.remainingCalls, resetsAt: allowance.resetsAt ?? null });
+  });
+
   routes.post("/runs", async (c) => {
     const denied = denyIfNotAdmin(c);
     if (denied) return denied;
