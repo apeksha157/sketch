@@ -4,13 +4,15 @@
  * browseFiles: LIKE wildcard escaping (Phase 2)
  * searchFiles / hybridSearch: FTS5 query sanitization (Phase 7)
  */
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMBEDDING_DIMENSIONS } from "../db/index";
 import { createSettingsRepository } from "../db/repositories/settings";
 import type { DB } from "../db/schema";
-import { createTestDb } from "../test-utils";
+import { createTestDb, createTestSqliteVecDb } from "../test-utils";
 import {
   KIND_TO_RULES,
+  RBAC_MODE_SQLITE,
   SEARCHABLE_SOURCES,
   browseFiles,
   filterAccessibleFileIds,
@@ -685,6 +687,75 @@ describe("search — recency browse applies RBAC before limit", () => {
     const results = await search(db, "planning", { userPrincipals: [] });
 
     expect(results).toEqual([]);
+  });
+});
+
+describe("hybridSearch — SQLite vector RBAC fallback", () => {
+  let db: Kysely<DB>;
+
+  beforeEach(async () => {
+    db = await createTestSqliteVecDb();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "connector-sqlite-vector-rbac",
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "sqlite-hidden-vector",
+        connector_config_id: "connector-sqlite-vector-rbac",
+        provider_file_id: "sqlite-hidden-vector",
+        file_name: "unrelated.txt",
+        file_type: "text",
+        content_category: "document",
+        source: "google_drive",
+        access_scope_id: null,
+        source_updated_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
+      })
+      .execute();
+    await db
+      .insertInto("file_access")
+      .values({
+        indexed_file_id: "sqlite-hidden-vector",
+        principal_type: "email",
+        principal_value: "someone-else@example.com",
+      })
+      .execute();
+
+    const embedding = new Array(EMBEDDING_DIMENSIONS).fill(0);
+    embedding[0] = 1;
+    await sql`INSERT INTO file_embeddings (indexed_file_id, embedding)
+      VALUES ('sqlite-hidden-vector', ${JSON.stringify(embedding)})`.execute(db);
+  });
+
+  afterEach(async () => {
+    await db.destroy();
+  });
+
+  it("post-filters an invisible vector-only hit and reports the mixed mode", async () => {
+    const reports: import("./enrichment-stage-report").StageReport[] = [];
+    const queryEmbedding = new Array(EMBEDDING_DIMENSIONS).fill(0);
+    queryEmbedding[0] = 1;
+
+    const results = await hybridSearch(db, "word-that-does-not-match", {
+      queryEmbedding,
+      userPrincipals: [{ type: "email", value: "sqlite-viewer@example.com" }],
+      stageReport: (report) => reports.push(report),
+    });
+
+    expect(results).toEqual([]);
+    const rbac = reports.find((report) => report.stage === "rbac");
+    expect(rbac?.summary?.mode).toBe(RBAC_MODE_SQLITE);
+    expect(rbac?.summary?.allowed).toBe(0);
+    expect(rbac?.summary?.denied).toBe(1);
+    expect(rbac?.outcomes?.some((outcome) => outcome.result === "dropped")).toBe(true);
   });
 });
 

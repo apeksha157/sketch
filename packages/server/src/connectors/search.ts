@@ -15,13 +15,13 @@
  *   and ranking functions (bm25 vs ts_rank, sqlite-vec MATCH vs pgvector KNN), so a shared
  *   query builder abstraction would add complexity without benefit.
  */
-import type { Kysely, SqlBool } from "kysely";
+import type { Kysely, RawBuilder, SqlBool } from "kysely";
 import { sql } from "kysely";
 import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
 import { createEntityRepository } from "../db/repositories/entities";
-import { fileVisibilityRuleSql } from "../db/repositories/file-visibility-rule";
+import { fileVisibilityRuleSql, visibleFileIdsSql } from "../db/repositories/file-visibility-rule";
 import { createSettingsRepository } from "../db/repositories/settings";
 import type { DB } from "../db/schema";
 import { parseEmailAddrJson, parseEmailAddrListJson } from "./email/envelope-metadata";
@@ -69,6 +69,17 @@ function buildSearchableSources(connectorTypes: readonly ConnectorType[]): [Sear
 export const SEARCHABLE_SOURCES = buildSearchableSources(CONNECTOR_TYPES);
 
 export { filterAccessibleFileIds } from "./sync-utils";
+
+export const RBAC_MODE_VISIBLE_SET = "visible-set";
+export const RBAC_MODE_INLINE_RULE = "inline-rule";
+export const RBAC_MODE_SQLITE = "pre-filter (fts) + post-filter (vector)";
+
+/**
+ * Materialised ID arrays are much faster for restricted principals, but beyond roughly
+ * 10k visible files the bitmap scan costs tens of milliseconds and the inline visibility
+ * rule is cheap once at least about 10% of HNSW tuples pass.
+ */
+export const VISIBLE_SET_CAP = 10_000;
 
 export interface SearchOptions {
   /** Filter by source provider. */
@@ -491,12 +502,118 @@ export interface HybridSearchResult {
   participants?: string[];
 }
 
+export interface ResolvedAccessPredicate {
+  predicate: RawBuilder<unknown>;
+  mode: typeof RBAC_MODE_VISIBLE_SET | typeof RBAC_MODE_INLINE_RULE;
+  visibleCount?: number;
+}
+
+/**
+ * Internal-only controls used by `search()` and focused tests. Public callers should pass
+ * normal `HybridSearchOptions`; the precomputed predicate exists so `search()` can resolve
+ * RBAC before the embedding round-trip.
+ */
+interface HybridSearchInternalOptions {
+  resolvedAccessPredicate?: ResolvedAccessPredicate;
+  visibleSetCap?: number;
+}
+
+const NO_SCORED_CANDIDATE_REMAINDER = [
+  ["filter", "Metadata filters"],
+  ["finalize", "Collapse and slice"],
+] as const satisfies ReadonlyArray<readonly [StageKey, string]>;
+
+function reportNoScoredCandidateRemainder(stageReport: StageReporter | undefined, error: string): void {
+  for (const [stage, label] of NO_SCORED_CANDIDATE_REMAINDER) {
+    stageReport?.({
+      stage,
+      label,
+      kind: "code",
+      status: "skipped",
+      error,
+    });
+  }
+}
+
 /**
  * pgvector caps `hnsw.ef_search` at 1000. Sized to the requested candidate limit, because
  * a non-iterative scan cannot return more rows than this.
  */
 function hnswEfSearch(vecLimit: number): number {
   return Math.min(1000, Math.max(40, vecLimit));
+}
+
+/**
+ * Resolves principal-scoped Postgres RBAC into either a materialised visible-file snapshot
+ * or the inline SQL rule. The visible-set regime is a snapshot taken before the embedding
+ * round-trip, so a grant revoked during that window is still honoured for that search; the
+ * inline-rule regime evaluates fresh in SQL.
+ */
+async function resolveAccessPredicate(
+  db: Kysely<DB>,
+  opts?: {
+    userPrincipals?: AccessPrincipalInput[];
+    accessBypassReason?: "admin";
+    slackEntitySyncEnabled?: boolean;
+    visibleSetCap?: number;
+  },
+): Promise<ResolvedAccessPredicate | undefined> {
+  if (!isPg(db) || opts?.accessBypassReason === "admin") return undefined;
+  const principalList = opts?.userPrincipals ?? [];
+  if (principalList.length === 0) return undefined;
+
+  const principals = normalizeAccessPrincipals(principalList);
+  if (principals.length === 0) {
+    return {
+      predicate: sql`AND FALSE`,
+      mode: RBAC_MODE_VISIBLE_SET,
+      visibleCount: 0,
+    };
+  }
+
+  const slackEntitySyncEnabled = opts?.slackEntitySyncEnabled ?? true;
+  const cap = opts?.visibleSetCap ?? VISIBLE_SET_CAP;
+  const visibleRows = await visibleFileIdsSql(
+    {
+      principals,
+      slackEntitySyncEnabled,
+      archived: "exclude",
+    },
+    cap + 1,
+  ).execute(db);
+  const visibleIds = [...new Set(visibleRows.rows.map((row) => row.id))];
+
+  if (visibleIds.length <= cap) {
+    return {
+      predicate: sql`AND ${idInList(db, sql.ref("indexed_files.id"), visibleIds)}`,
+      mode: RBAC_MODE_VISIBLE_SET,
+      visibleCount: visibleIds.length,
+    };
+  }
+
+  return {
+    predicate: sql`AND ${fileAccessFilterSql(principalList, slackEntitySyncEnabled)}`,
+    mode: RBAC_MODE_INLINE_RULE,
+  };
+}
+
+function reportPostgresRbacStage(
+  stageReport: StageReporter | undefined,
+  principalCount: number,
+  access: ResolvedAccessPredicate,
+): void {
+  stageReport?.({
+    stage: "rbac",
+    label: "Access filter",
+    kind: "code",
+    status: "done",
+    summary: {
+      principals: principalCount,
+      mode: access.mode,
+      ...(access.visibleCount !== undefined ? { visibleFiles: access.visibleCount } : {}),
+      note: "predicate applied inside the FTS and KNN WHERE",
+    },
+  });
 }
 
 /** RRF constant — standard value from the original paper. */
@@ -514,20 +631,22 @@ const ENTITY_BOOST = 0.005;
  * their own database instead.
  *
  * Strategy:
- * 1. Run FTS5 search → ranked keyword results
+ * 1. Run FTS search with access pre-filtering → ranked keyword results
  * 2. Run vector KNN search → ranked semantic results
  * 3. Merge via reciprocal rank fusion (RRF)
  * 4. Apply metadata filters (time, type, source)
- * 5. Apply RBAC
+ * 5. Post-filter SQLite vector candidates for access
  */
 export async function hybridSearch(
   db: Kysely<DB>,
   query: string,
   opts?: HybridSearchOptions,
+  internal?: HybridSearchInternalOptions,
 ): Promise<HybridSearchResult[]> {
   const limit = opts?.limit ?? 10;
   const candidateLimit = Math.max(limit * 40, 200);
   if (opts?.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
+  const principalList = opts?.userPrincipals ?? [];
   let scoredChunks: VectorChunkHit[] = [];
   /** Counted over every scored chunk, not the capped display slice. */
   let totalChunksScored = 0;
@@ -549,6 +668,27 @@ export async function hybridSearch(
   const entityScopeFilter = opts?.entityScope
     ? sql`AND ${entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope)}`
     : sql``;
+  const accessResolution =
+    internal?.resolvedAccessPredicate ??
+    (await resolveAccessPredicate(db, {
+      userPrincipals: opts?.userPrincipals,
+      accessBypassReason: opts?.accessBypassReason,
+      slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+      visibleSetCap: internal?.visibleSetCap,
+    }));
+  if (isPg(db) && principalList.length > 0 && opts?.accessBypassReason !== "admin" && !accessResolution) {
+    throw new Error("access predicate missing for a principal-scoped Postgres search");
+  }
+  if (accessResolution) {
+    reportPostgresRbacStage(opts?.stageReport, principalList.length, accessResolution);
+    if (accessResolution.mode === RBAC_MODE_VISIBLE_SET && accessResolution.visibleCount === 0) return [];
+  }
+  const accessFilter =
+    isPg(db) && accessResolution
+      ? accessResolution.predicate
+      : !isPg(db) && principalList.length > 0
+        ? sql`AND ${fileAccessFilterSql(principalList, opts?.slackEntitySyncEnabled ?? true)}`
+        : null;
   // Push `kind` and `sources` into FTS so candidates outside the requested
   // kind don't crowd out matches; we'd otherwise lose them past `limit * 3`.
   const kindFilter = opts?.kindRules?.length ? kindFilterSql(opts.kindRules) : sql``;
@@ -571,6 +711,7 @@ export async function hybridSearch(
         AND indexed_files.is_archived = 0
         ${fileIdFilter}
         ${entityScopeFilter}
+        ${accessFilter ?? sql``}
         ${kindFilter}
         ${sourcesFilter}
         ORDER BY rank DESC
@@ -604,6 +745,7 @@ export async function hybridSearch(
         AND indexed_files.is_archived = 0
         ${fileIdFilter}
         ${entityScopeFilter}
+        ${accessFilter ?? sql``}
         ${kindFilter}
         ${sourcesFilter}
         ORDER BY rank
@@ -631,7 +773,7 @@ export async function hybridSearch(
 
     if (isPg(db)) {
       const dims = EMBEDDING_DIMENSIONS;
-      const vectorFilter = vectorPredicateSql(db, opts);
+      const vectorFilter = vectorPredicateSql(db, opts, accessFilter);
 
       /**
        * Both KNN reads run inside one transaction, because `SET LOCAL` outside a
@@ -644,7 +786,9 @@ export async function hybridSearch(
        * truncates the candidate pool. `iterative_scan` then covers the filtered case,
        * where a plain scan would hand back `ef_search` tuples and let the WHERE discard
        * most of them. `relaxed_order` is safe here because candidates are re-sorted by
-       * distance in JS before ranks are assigned.
+       * distance in JS before ranks are assigned. In the inline-rule regime the visibility
+       * rule sits in the WHERE and the scan stops at pgvector's default hnsw.max_scan_tuples,
+       * which is enough because that regime only runs above VISIBLE_SET_CAP files.
        */
       const vectorRows = await db.transaction().execute(async (trx) => {
         await sql`SET LOCAL hnsw.ef_search = ${sql.lit(hnswEfSearch(vecLimit))}`.execute(trx);
@@ -927,19 +1071,33 @@ export async function hybridSearch(
      * that simply stops is indistinguishable from one that crashed, and "no candidates
      * survived scoring" is the answer someone opened the trace to find.
      */
-    for (const [stage, label] of [
-      ["filter", "Metadata filters"],
-      ["rbac", "Access filter"],
-      ["finalize", "Collapse and slice"],
-    ] as const) {
+    if (!isPg(db) && principalList.length > 0 && opts?.accessBypassReason !== "admin") {
       opts?.stageReport?.({
-        stage,
-        label,
+        stage: "rbac",
+        label: "Access filter",
+        kind: "code",
+        status: "done",
+        summary: {
+          principals: principalList.length,
+          mode: RBAC_MODE_SQLITE,
+          allowed: 0,
+          denied: 0,
+        },
+      });
+    }
+    if (!accessResolution && (isPg(db) || principalList.length === 0 || opts?.accessBypassReason === "admin")) {
+      opts?.stageReport?.({
+        stage: "rbac",
+        label: "Access filter",
         kind: "code",
         status: "skipped",
         error: "No candidates were scored — keyword and vector search both returned nothing",
       });
     }
+    reportNoScoredCandidateRemainder(
+      opts?.stageReport,
+      "No candidates were scored — keyword and vector search both returned nothing",
+    );
     return [];
   }
 
@@ -1055,11 +1213,15 @@ export async function hybridSearch(
     })),
   });
 
-  // ── 6. Apply RBAC (batch query — same pattern as searchFiles) ─
-  const principalList = opts?.userPrincipals ?? [];
+  // ── 6. Apply RBAC ──────────────────────────────────────────
   let accessFiltered = filteredFiles;
 
-  if (principalList.length > 0 && filteredFiles.length > 0) {
+  /**
+   * Postgres candidates all arrive pre-filtered. SQLite pre-filters FTS but its vector
+   * arm has no indexed_files join, so vector-only hits are post-filtered here. Keeping
+   * that SQLite check deliberately departs from D8's original drop-post-filter plan.
+   */
+  if (!isPg(db) && principalList.length > 0 && filteredFiles.length > 0) {
     const fileIds = filteredFiles.map((f) => f.id);
 
     const accessRows = await sql<{ id: string }>`
@@ -1076,38 +1238,35 @@ export async function hybridSearch(
     accessFiltered = filteredFiles.filter((f) => allowedIds.has(f.id));
   }
 
-  if (opts?.stageReport && principalList.length > 0) {
-    const allowed = new Set(accessFiltered.map((file) => file.id));
-    opts.stageReport({
+  if (!isPg(db) || principalList.length === 0 || opts?.accessBypassReason === "admin") {
+    opts?.stageReport?.({
       stage: "rbac",
       label: "Access filter",
       kind: "code",
-      status: "done",
-      outcomes: filteredFiles.map((file) => ({
-        subject: file.file_name,
-        kind: file.source,
-        result: allowed.has(file.id) ? ("kept" as const) : ("dropped" as const),
-        reason: allowed.has(file.id) ? "visible to these principals" : "no matching access principal",
-      })),
+      status: principalList.length > 0 ? "done" : "skipped",
+      ...(opts?.accessBypassReason === "admin"
+        ? { error: "skipped — admin bypass" }
+        : principalList.length > 0
+          ? {
+              summary: {
+                principals: principalList.length,
+                mode: RBAC_MODE_SQLITE,
+                allowed: accessFiltered.length,
+                denied: filteredFiles.length - accessFiltered.length,
+              },
+              outcomes: (() => {
+                const allowed = new Set(accessFiltered.map((file) => file.id));
+                return filteredFiles.map((file) => ({
+                  subject: file.file_name,
+                  kind: file.source,
+                  result: allowed.has(file.id) ? ("kept" as const) : ("dropped" as const),
+                  reason: allowed.has(file.id) ? "visible to these principals" : "no matching access principal",
+                }));
+              })(),
+            }
+          : { error: "No principals supplied — access filter not applied" }),
     });
   }
-  opts?.stageReport?.({
-    stage: "rbac",
-    label: "Access filter",
-    kind: "code",
-    status: principalList.length > 0 ? "done" : "skipped",
-    ...(opts?.accessBypassReason === "admin"
-      ? { error: "skipped — admin bypass" }
-      : principalList.length > 0
-        ? {
-            summary: {
-              principals: principalList.length,
-              allowed: accessFiltered.length,
-              denied: filteredFiles.length - accessFiltered.length,
-            },
-          }
-        : { error: "No principals supplied — access filter not applied" }),
-  });
 
   // ── 7. Build final results ─────────────────────────────────
   const collapsed = await collapseEmailSearchResults(
@@ -1169,10 +1328,11 @@ export async function hybridSearch(
  * it was about to discard. Entity-scoped searches were the worst case — a scope covering a
  * small fraction of the corpus expected almost no surviving candidates.
  *
- * Time and RBAC stay out for now. Both are more expensive predicates and want a plan
- * measured against a real corpus before being pushed down.
+ * Time stays out because it wants a plan measured against a real corpus before being
+ * pushed down. On Postgres, RBAC is included so selective visibility cannot consume the
+ * candidate budget before fusion.
  */
-function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions) {
+function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions, accessFilter: RawBuilder<unknown> | null) {
   const parts = [];
   if (opts.fileIds && opts.fileIds.length > 0) {
     parts.push(sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`);
@@ -1191,6 +1351,7 @@ function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions) {
   }
   if (opts.category) parts.push(sql`AND indexed_files.content_category = ${opts.category}`);
   if (opts.kindRules?.length) parts.push(kindFilterSql(opts.kindRules));
+  if (accessFilter) parts.push(accessFilter);
   return parts.length > 0 ? sql`${sql.join(parts, sql` `)}` : sql``;
 }
 
@@ -1896,6 +2057,22 @@ export async function search(
     });
   }
 
+  if (opts?.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
+
+  const resolvedAccessPredicate = await resolveAccessPredicate(db, {
+    userPrincipals: opts?.userPrincipals,
+    accessBypassReason: opts?.accessBypassReason,
+    slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+  });
+  if (resolvedAccessPredicate?.mode === RBAC_MODE_VISIBLE_SET && resolvedAccessPredicate.visibleCount === 0) {
+    reportPostgresRbacStage(opts?.stageReport, opts?.userPrincipals?.length ?? 0, resolvedAccessPredicate);
+    reportNoScoredCandidateRemainder(
+      opts?.stageReport,
+      "No candidates were scored — the principal has no visible files",
+    );
+    return [];
+  }
+
   let queryEmbedding: number[] | undefined;
   let embedSkippedReason: string | null = null;
   const embedStartedAt = Date.now();
@@ -2035,21 +2212,26 @@ export async function search(
   // dropped past `limit` by RRF, then sort in JS and trim.
   const fetchLimit = isRecency ? Math.max(limit * 5, 50) : limit;
 
-  const results = await hybridSearch(db, trimmedQuery, {
-    stageReport: opts?.stageReport,
-    source: opts?.source,
-    sources: opts?.sources,
-    kindRules: opts?.kindRules,
-    category: opts?.category,
-    limit: fetchLimit,
-    queryEmbedding,
-    userPrincipals: opts?.userPrincipals,
-    ...(opts?.accessBypassReason ? { accessBypassReason: opts.accessBypassReason } : {}),
-    slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
-    entityScope,
-    entityBoostEntityIds,
-    timeFilter: opts?.after || opts?.before ? { after: opts?.after, before: opts?.before } : undefined,
-  });
+  const results = await hybridSearch(
+    db,
+    trimmedQuery,
+    {
+      stageReport: opts?.stageReport,
+      source: opts?.source,
+      sources: opts?.sources,
+      kindRules: opts?.kindRules,
+      category: opts?.category,
+      limit: fetchLimit,
+      queryEmbedding,
+      userPrincipals: opts?.userPrincipals,
+      ...(opts?.accessBypassReason ? { accessBypassReason: opts.accessBypassReason } : {}),
+      slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+      entityScope,
+      entityBoostEntityIds,
+      timeFilter: opts?.after || opts?.before ? { after: opts?.after, before: opts?.before } : undefined,
+    },
+    { resolvedAccessPredicate },
+  );
 
   if (isRecency) {
     results.sort(byRecencyDesc);

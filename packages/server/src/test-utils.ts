@@ -7,6 +7,7 @@ import { Kysely, SqliteDialect, sql } from "kysely";
 import pino from "pino";
 import { inject, vi } from "vitest";
 import type { Config } from "./config";
+import { ensureSqliteVecTables } from "./db/index";
 import type { DB } from "./db/schema";
 import { PG_TEMPLATE_PATH } from "./test-global-setup-pg";
 
@@ -61,6 +62,18 @@ export async function createTestDb(): Promise<Kysely<DB>> {
   });
   // Force driver initialization so destroy() works correctly
   // (Kysely's RuntimeDriver.destroy() is a no-op if init() was never called).
+  await db.selectFrom("users").select("id").limit(0).execute();
+  return db;
+}
+
+/** Creates an isolated in-memory SQLite database with the search vector tables available. */
+export async function createTestSqliteVecDb(): Promise<Kysely<DB>> {
+  const buf = await getTemplateBuffer();
+  const raw = new Database(buf);
+  const sqliteVec = await import("sqlite-vec");
+  sqliteVec.load(raw);
+  ensureSqliteVecTables(raw);
+  const db = new Kysely<DB>({ dialect: new SqliteDialect({ database: raw }) });
   await db.selectFrom("users").select("id").limit(0).execute();
   return db;
 }
