@@ -94,13 +94,24 @@ export function entityShareDoorSql(input: VisibilityRuleInput): RawBuilder<boole
   const emails = emailSql(input.principals);
   return sql<boolean>`EXISTS (
     SELECT 1 FROM entity_mentions em_shared
-    INNER JOIN entities ent_shared ON ent_shared.id = em_shared.entity_id
-    LEFT JOIN entity_share_emails ese
-      ON ese.entity_id = ent_shared.id ${emails ? sql`AND ese.email IN (${emails})` : sql``}
     WHERE em_shared.indexed_file_id = ${alias}.id
-      AND ent_shared.deleted_at IS NULL
-      AND ent_shared.merged_into_entity_id IS NULL
-      AND (ent_shared.share_with_everyone = 1 OR ${emails ? sql`ese.email IS NOT NULL` : sql`0 = 1`})
+      AND em_shared.entity_id IN (
+        SELECT ent_shared.id
+        FROM entities ent_shared
+        WHERE ent_shared.deleted_at IS NULL
+          AND ent_shared.merged_into_entity_id IS NULL
+          AND (
+            ent_shared.share_with_everyone = 1
+            OR ${
+              emails
+                ? sql`EXISTS (
+                  SELECT 1 FROM entity_share_emails ese
+                  WHERE ese.entity_id = ent_shared.id AND ese.email IN (${emails})
+                )`
+                : sql`0 = 1`
+            }
+          )
+      )
   )`;
 }
 
@@ -135,4 +146,100 @@ export function fileVisibilityRuleSql(input: VisibilityRuleInput): RawBuilder<bo
     OR ${entityShareDoorSql(input)}
   )`;
   return input.archived === "exclude" ? sql<boolean>`(${alias}.is_archived = 0 AND ${doors})` : doors;
+}
+
+/**
+ * The same six visibility doors as `fileVisibilityRuleSql`, rendered as set-producing
+ * branches so restricted searches can materialise visible IDs before entering FTS or KNN.
+ * Each branch is capped independently, and branches that can repeat one file use DISTINCT
+ * before their cap. That makes the JS-deduped result exact for visible-set selection:
+ * either every branch completed, or one branch supplied `cap + 1` distinct IDs and forces
+ * the inline-rule regime on its own. Keep this equivalent with `fileVisibilityRuleSql`;
+ * the Postgres integration test pins the contract.
+ */
+export function visibleFileIdsSql(
+  input: Omit<VisibilityRuleInput, "alias">,
+  limit: number,
+): RawBuilder<{ id: string }> {
+  const archived = input.archived === "exclude" ? sql`AND f.is_archived = 0` : sql``;
+  const emails = emailSql(input.principals);
+  const branches: RawBuilder<{ id: string }>[] = [
+    sql<{ id: string }>`SELECT id FROM (
+      SELECT f.id FROM indexed_files f
+      WHERE 1 = 1
+        ${archived}
+        AND ${accessDoor(input, sql.raw("f"))}
+        AND f.access_scope_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM file_access fa WHERE fa.indexed_file_id = f.id)
+      LIMIT ${limit}
+    ) branch_unrestricted`,
+    sql<{ id: string }>`SELECT id FROM (
+      SELECT f.id FROM indexed_files f
+      WHERE 1 = 1
+        ${archived}
+        AND f.access_scope_id <> ''
+        AND f.access_scope_id IN (
+          SELECT asm.access_scope_id
+          FROM access_scope_members asm
+          WHERE ${accessPrincipalPredicateSql("asm", input.principals)}
+        )
+      LIMIT ${limit}
+    ) branch_scope_membership`,
+    sql<{ id: string }>`SELECT id FROM (
+      SELECT DISTINCT fa.indexed_file_id AS id FROM file_access fa
+      INNER JOIN indexed_files f ON f.id = fa.indexed_file_id
+      WHERE 1 = 1
+        ${archived}
+        AND ${accessDoor(input, sql.raw("f"))}
+        AND ${accessPrincipalPredicateSql("fa", input.principals)}
+      LIMIT ${limit}
+    ) branch_per_file_access`,
+  ];
+
+  if (emails) {
+    branches.push(sql<{ id: string }>`SELECT id FROM (
+      SELECT DISTINCT fse.indexed_file_id AS id FROM file_share_emails fse
+      INNER JOIN indexed_files f ON f.id = fse.indexed_file_id
+      WHERE 1 = 1
+        ${archived}
+        AND fse.email IN (${emails})
+      LIMIT ${limit}
+    ) branch_manual_share`);
+  }
+
+  branches.push(
+    sql<{ id: string }>`SELECT id FROM (
+      SELECT f.id FROM indexed_files f
+      WHERE 1 = 1
+        ${archived}
+        AND f.share_with_everyone = 1
+      LIMIT ${limit}
+    ) branch_file_org_wide`,
+    sql<{ id: string }>`SELECT id FROM (
+      SELECT DISTINCT em.indexed_file_id AS id FROM entity_mentions em
+      INNER JOIN indexed_files f ON f.id = em.indexed_file_id
+      WHERE 1 = 1
+        ${archived}
+        AND em.entity_id IN (
+          SELECT e.id
+          FROM entities e
+          WHERE e.deleted_at IS NULL
+            AND e.merged_into_entity_id IS NULL
+            AND (
+              e.share_with_everyone = 1
+              OR ${
+                emails
+                  ? sql`EXISTS (
+                    SELECT 1 FROM entity_share_emails ese
+                    WHERE ese.entity_id = e.id AND ese.email IN (${emails})
+                  )`
+                  : sql`0 = 1`
+              }
+            )
+        )
+      LIMIT ${limit}
+    ) branch_entity_share`,
+  );
+
+  return sql<{ id: string }>`SELECT id FROM (${sql.join(branches, sql` UNION ALL `)}) visible_files`;
 }
