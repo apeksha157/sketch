@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
-import { filterAccessibleFileIds } from "../../connectors/search";
-import type { AccessPrincipalInput } from "../../connectors/types";
+import { filterAccessibleFileIds } from "../../connectors/sync-utils";
 import {
   type AgentKnowledgeRefs,
   type AgentOutputItemInput,
@@ -47,7 +46,6 @@ export const DAILY_BRIEF_ENTITY_WINDOW_DAYS = 7;
 export const DAILY_BRIEF_EVIDENCE_WINDOW_DAYS = 30;
 export const DAILY_BRIEF_RECENT_ENTITY_LIMIT = 30;
 export const DAILY_BRIEF_HOT_FALLBACK_LIMIT = 10;
-const FILE_ACCESS_FILTER_CHUNK_SIZE = 500;
 const DAILY_BRIEF_SUMMARY_OUTPUT_LIMIT = 10;
 const DAILY_BRIEF_HISTORY_PAGE_SIZE = 25;
 const DAILY_BRIEF_HISTORY_PAGE_LIMIT = 2;
@@ -236,22 +234,6 @@ function toCandidate(group: CandidateAccumulator, reason: DailyBriefCandidateRea
   };
 }
 
-async function filterVisibleCandidateFileIds(
-  db: Kysely<DB>,
-  fileIds: string[],
-  contentUserPrincipals: AccessPrincipalInput[] | undefined,
-  slackEntitySyncEnabled: boolean,
-): Promise<Set<string>> {
-  const uniqueFileIds = [...new Set(fileIds)];
-  const visibleFileIds = new Set<string>();
-  for (let i = 0; i < uniqueFileIds.length; i += FILE_ACCESS_FILTER_CHUNK_SIZE) {
-    const chunk = uniqueFileIds.slice(i, i + FILE_ACCESS_FILTER_CHUNK_SIZE);
-    const visibleChunk = await filterAccessibleFileIds(db, chunk, contentUserPrincipals, slackEntitySyncEnabled);
-    for (const fileId of visibleChunk) visibleFileIds.add(fileId);
-  }
-  return visibleFileIds;
-}
-
 function outputDateWindowEndMs(outputDate: string, timezone: string): number {
   const parsed = parseOnceSchedule(`${outputDate}T23:59:59.999`, timezone);
   const ms = parsed.getTime();
@@ -326,7 +308,7 @@ export async function buildTodaysMeetings({
         slackEntitySyncEnabled,
       })
     : [];
-  const visibleFileIds = await filterVisibleCandidateFileIds(
+  const visibleFileIds = await filterAccessibleFileIds(
     db,
     files.map((file) => file.id),
     readerPrincipals,
@@ -492,7 +474,7 @@ export async function buildDailyBriefCandidateContext({
     );
 
   const rows = await query.execute();
-  const visibleFileIds = await filterVisibleCandidateFileIds(
+  const visibleFileIds = await filterAccessibleFileIds(
     db,
     rows.map((row) => row.indexed_file_id),
     candidateUserPrincipals,

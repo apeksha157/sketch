@@ -28,6 +28,8 @@ import { parseEmailAddrJson, parseEmailAddrListJson } from "./email/envelope-met
 import type { EmailAddr } from "./email/normalized-email";
 import { createEnrichmentQueryEmbedder, resolveOpenRouterEnrichmentConfig } from "./enrichment-providers";
 import type { SearchCandidate, StageKey, StageReporter, VectorChunkHit } from "./enrichment-stage-report";
+import { idInList } from "./id-in-list";
+import { filterAccessibleFileIds } from "./sync-utils";
 import { type AccessPrincipalInput, CONNECTOR_TYPES, type ConnectorType, normalizeAccessPrincipals } from "./types";
 import {
   type ScoredVector,
@@ -58,6 +60,8 @@ function buildSearchableSources(connectorTypes: readonly ConnectorType[]): [Sear
 }
 
 export const SEARCHABLE_SOURCES = buildSearchableSources(CONNECTOR_TYPES);
+
+export { filterAccessibleFileIds } from "./sync-utils";
 
 export interface SearchOptions {
   /** Filter by source provider. */
@@ -242,37 +246,6 @@ export async function getFileContent(
     providerUrl: file.provider_url,
     enrichmentStatus: file.enrichment_status,
   };
-}
-
-/**
- * Filter a list of indexed file IDs down to only those the user can access.
- *
- * Contract mirrors `getFileContent`:
- *   - `userPrincipals === undefined` → trusted bypass (server/agent boot, admin
- *     bypass): returns the input set unchanged.
- *   - `userPrincipals === []`        → caller has no resolvable principal → fail closed:
- *     returns an empty set.
- *   - `userPrincipals.length > 0`    → 3-tier check (unrestricted / scope / per-file).
- */
-export async function filterAccessibleFileIds(
-  db: Kysely<DB>,
-  fileIds: string[],
-  userPrincipals?: AccessPrincipalInput[],
-  slackEntitySyncEnabled = true,
-): Promise<Set<string>> {
-  if (fileIds.length === 0) return new Set();
-  if (userPrincipals === undefined) return new Set(fileIds);
-  const principals = normalizeAccessPrincipals(userPrincipals);
-  if (principals.length === 0) return new Set();
-
-  const files = await db
-    .selectFrom("indexed_files")
-    .select("id")
-    .where("id", "in", fileIds)
-    .where(fileVisibilityRuleSql({ principals, slackEntitySyncEnabled, archived: "exclude" }))
-    .execute();
-
-  return new Set(files.map((file) => file.id));
 }
 
 /**
@@ -556,14 +529,12 @@ export async function hybridSearch(
   let totalImageVectors = 0;
   const ftsResults = new Map<string, { rank: number; snippet: string | null }>();
   const vecResults = new Map<string, { rank: number; similarity: number; snippet: string | null }>();
+  const fileIdScope = opts?.fileIds && opts.fileIds.length > 0 ? new Set(opts.fileIds) : null;
 
   // ── 0. Build filter fragments ────────────────────────────────
   const fileIdFilter =
     opts?.fileIds && opts.fileIds.length > 0
-      ? sql`AND indexed_files.id IN (${sql.join(
-          opts.fileIds.map((id) => sql`${id}`),
-          sql`,`,
-        )})`
+      ? sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`
       : sql``;
   // Push `kind` and `sources` into FTS so candidates outside the requested
   // kind don't crowd out matches; we'd otherwise lose them past `limit * 3`.
@@ -645,7 +616,7 @@ export async function hybridSearch(
 
     if (isPg(db)) {
       const dims = EMBEDDING_DIMENSIONS;
-      const vectorFilter = vectorPredicateSql(opts);
+      const vectorFilter = vectorPredicateSql(db, opts);
 
       /**
        * Both KNN reads run inside one transaction, because `SET LOCAL` outside a
@@ -799,8 +770,7 @@ export async function hybridSearch(
        * belonging to files that never reach the result set. On Postgres this is a no-op,
        * because the rows arrived scoped already.
        */
-      const scope = opts.fileIds && opts.fileIds.length > 0 ? new Set(opts.fileIds) : null;
-      const inScope = (fileId: string) => !scope || scope.has(fileId);
+      const inScope = (fileId: string) => !fileIdScope || fileIdScope.has(fileId);
 
       const hits: ScoredVector[] = [];
       for (const row of chunkRows.rows) {
@@ -832,10 +802,9 @@ export async function hybridSearch(
     }
 
     // Filter by file IDs if entity-scoped
-    const filteredVecResults =
-      opts?.fileIds && opts.fileIds.length > 0
-        ? allVecResults.filter((r) => opts.fileIds?.includes(r.fileId))
-        : allVecResults;
+    const filteredVecResults = fileIdScope
+      ? allVecResults.filter((result) => fileIdScope.has(result.fileId))
+      : allVecResults;
 
     // Sort by distance (ascending) and assign ranks
     filteredVecResults.sort((a, b) => a.distance - b.distance);
@@ -1182,15 +1151,10 @@ export async function hybridSearch(
  * Time and RBAC stay out for now. Both are more expensive predicates and want a plan
  * measured against a real corpus before being pushed down.
  */
-function vectorPredicateSql(opts: HybridSearchOptions) {
+function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions) {
   const parts = [];
   if (opts.fileIds && opts.fileIds.length > 0) {
-    parts.push(
-      sql`AND indexed_files.id IN (${sql.join(
-        opts.fileIds.map((id) => sql`${id}`),
-        sql`,`,
-      )})`,
-    );
+    parts.push(sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`);
   }
   if (opts.source) parts.push(sql`AND indexed_files.source = ${opts.source}`);
   if (opts.sources && opts.sources.length > 0) {
@@ -1794,7 +1758,7 @@ async function browseLatest(
     );
   }
   if (opts.sources?.length) q = q.where("source", "in", opts.sources);
-  if (opts.fileIds?.length) q = q.where("id", "in", opts.fileIds);
+  if (opts.fileIds?.length) q = q.where(idInList(db, sql.ref("indexed_files.id"), opts.fileIds));
 
   if ((opts.userPrincipals ?? []).length > 0) {
     const userPrincipals = opts.userPrincipals ?? [];
