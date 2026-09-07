@@ -1579,7 +1579,7 @@ describe("web chat API", () => {
       generation: 1,
     });
     expect(runAgent.mock.calls[0]?.[0]).toMatchObject({
-      maxTurns: 24,
+      maxTurns: 96,
       maxPersistedTextBytes: 24 * 1024,
       taskContext: { planOnly: false },
     });
@@ -2131,7 +2131,7 @@ describe("web chat API", () => {
     }
   });
 
-  it("allows a valid builder turn to exceed the former 20-call budget", async () => {
+  it("allows a valid builder turn to exceed the former 96-call budget", async () => {
     const admin = await seedAdmin(db);
     await createScheduledTaskConversationRepository(db).upsert({
       taskId: "task-builder-budget",
@@ -2140,7 +2140,7 @@ describe("web chat API", () => {
       kind: "builder",
     });
     const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
-      for (let index = 0; index < 21; index += 1) {
+      for (let index = 0; index < 97; index += 1) {
         await params.onProgressEvent({
           kind: "tool_use",
           toolName: "mcp__sketch__ManageScheduledTasks",
@@ -2191,7 +2191,7 @@ describe("web chat API", () => {
       invocation += 1;
       await params.onRunStart?.();
       if (invocation === 1) {
-        for (let index = 0; index < 24; index += 1) {
+        for (let index = 0; index < 96; index += 1) {
           await params.onProgressEvent({
             kind: "tool_use",
             toolName: "mcp__sketch__ManageScheduledTasks",
@@ -2200,7 +2200,7 @@ describe("web chat API", () => {
         }
         return {
           ...makeAgentResult(""),
-          rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: 24 },
+          rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: 96 },
         };
       }
       return makeAgentResult("Completed after reloading the saved automation state.");
@@ -2245,7 +2245,7 @@ describe("web chat API", () => {
     const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
       invocation += 1;
       await params.onRunStart?.();
-      const maxTurns = invocation === 1 ? 24 : 12;
+      const maxTurns = invocation === 1 ? 96 : 48;
       return {
         ...makeAgentResult(""),
         rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: maxTurns },
@@ -2295,7 +2295,7 @@ describe("web chat API", () => {
       if (invocation === 1) {
         return {
           ...makeAgentResult(""),
-          rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: 24 },
+          rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: 96 },
         };
       }
       continuationStarted.resolve();
@@ -4665,8 +4665,8 @@ describe("web chat API", () => {
       if (reason === "runtime_error") throw new Error("fixture provider error");
       const result = makeAgentResult();
       if (reason === "step_limit")
-        return { ...result, rawUsage: { ...result.rawUsage, stopReason: "tool_use", numTurns: 24 } };
-      for (let index = 0; index < 97; index += 1) {
+        return { ...result, rawUsage: { ...result.rawUsage, stopReason: "tool_use", numTurns: 96 } };
+      for (let index = 0; index < 385; index += 1) {
         await params.onProgressEvent({
           kind: "tool_use",
           toolName: "Read",
