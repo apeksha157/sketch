@@ -62,9 +62,11 @@ export async function personScopeKey(
  * mailboxes only.
  */
 const ROLE_ACCOUNT_LOCAL_PARTS = new Set([
+  "accounts",
   "admin",
   "billing",
   "contact",
+  "finance",
   "help",
   "hello",
   "hr",
