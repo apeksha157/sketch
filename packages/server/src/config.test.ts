@@ -51,7 +51,7 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_HISTORY_LOOKBACK_DAYS).toBe(30);
         expect(result.data.WHATSAPP_CHUNK_WINDOW_MESSAGES).toBe(250);
         expect(result.data.WHATSAPP_CHUNK_WINDOW_TOKENS).toBe(7500);
-        expect(result.data.WHATSAPP_CHUNK_MIN_MESSAGES).toBe(10);
+        expect(result.data.WHATSAPP_CHUNK_MIN_MESSAGES).toBe(5);
         expect(result.data.WHATSAPP_CHUNK_TARGET_MESSAGES).toBe(40);
         expect(result.data.WHATSAPP_CHUNK_MAX_MESSAGES).toBe(80);
         expect(result.data.WHATSAPP_CHUNK_MAX_TOKENS).toBe(1500);
@@ -67,7 +67,7 @@ describe("configSchema", () => {
         expect(result.data.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN).toBe(4);
         expect(result.data.SLACK_CHUNK_WINDOW_MESSAGES).toBe(250);
         expect(result.data.SLACK_CHUNK_WINDOW_TOKENS).toBe(7500);
-        expect(result.data.SLACK_CHUNK_MIN_MESSAGES).toBe(10);
+        expect(result.data.SLACK_CHUNK_MIN_MESSAGES).toBe(5);
         expect(result.data.SLACK_CHUNK_TARGET_MESSAGES).toBe(40);
         expect(result.data.SLACK_CHUNK_MAX_MESSAGES).toBe(80);
         expect(result.data.SLACK_CHUNK_MAX_TOKENS).toBe(1500);

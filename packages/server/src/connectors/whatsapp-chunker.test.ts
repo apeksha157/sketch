@@ -83,7 +83,7 @@ describe("resolveWhatsAppLlmChunkerKnobs", () => {
     expect(resolveWhatsAppLlmChunkerKnobs(group)).toEqual({
       windowMessages: 250,
       windowTokens: 7500,
-      minMessages: 10,
+      minMessages: 5,
       targetMessages: 40,
       maxMessages: 80,
       maxTokens: 1500,
