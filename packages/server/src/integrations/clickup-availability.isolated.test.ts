@@ -78,24 +78,38 @@ describe("managed integration availability", () => {
     });
   });
 
-  it("fails closed when provider discovery times out", async () => {
+  it.each(["discovery", "mint"])("waits for valid ClickUp access when %s exceeds three seconds", async (stage) => {
     vi.useFakeTimers();
     const logger = { warn: vi.fn() };
+    const delay = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 4_000));
+    };
+    const canvas = provider(
+      vi.fn(async () => {
+        if (stage === "discovery") await delay();
+        return [connection("clickup")];
+      }),
+      vi.fn(async () => {
+        if (stage === "mint") await delay();
+        return { accessToken: "test-token" };
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (url: string) =>
+          new Response(JSON.stringify(url.endsWith("/user") ? { user: { id: 1 } } : { teams: [{ id: "team-1" }] })),
+      ),
+    );
     const availability = listAvailableManagedIntegrations({
-      loadIntegrationProvider: vi
-        .fn()
-        .mockResolvedValue(provider(vi.fn(() => new Promise<IntegrationConnection[]>(() => {})))),
+      loadIntegrationProvider: async () => canvas,
       userEmail: "user@example.com",
       currentUserId: "user-1",
       logger,
     });
-
-    await vi.advanceTimersByTimeAsync(3_000);
-    await expect(availability).resolves.toEqual(new Set());
-    expect(logger.warn).toHaveBeenCalledWith(
-      { event: "managed_integration_availability_failed", reason: "timeout" },
-      "Managed integration availability lookup failed closed",
-    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    await expect(availability).resolves.toEqual(new Set(["clickup"]));
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("fails closed when Canvas is absent or misconfigured", async () => {
@@ -116,18 +130,16 @@ describe("managed integration availability", () => {
     ).resolves.toEqual(new Set());
   });
 
-  it("does not hide other integrations while a ClickUp mint is inconclusive", async () => {
-    vi.useFakeTimers();
+  it("does not hide other integrations when the ClickUp credential request times out", async () => {
     const result = listAvailableManagedIntegrations({
       loadIntegrationProvider: async () =>
         provider(
           vi.fn().mockResolvedValue([connection("github"), connection("linear"), connection("clickup")]),
-          vi.fn(() => new Promise<never>(() => {})),
+          vi.fn().mockRejectedValue(new DOMException("Request timed out", "TimeoutError")),
         ),
       userEmail: "user@example.com",
       currentUserId: "user-1",
     });
-    await vi.advanceTimersByTimeAsync(3_000);
     await expect(result).resolves.toEqual(new Set(["github", "linear"]));
   });
 
