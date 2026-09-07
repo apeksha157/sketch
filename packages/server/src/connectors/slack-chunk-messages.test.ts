@@ -9,15 +9,13 @@ function msg(overrides: Partial<SlackChunkerMessage> & { id: number }): SlackChu
     text: `message ${overrides.id}`,
     attachments: null,
     isBot: false,
-    addressedToSketch: false,
     ...overrides,
   };
 }
 
 describe("isIndexableSlackChunkMessage", () => {
-  it("drops bot rows, Sketch chatter, placeholders, join/leave, and emoji-only", () => {
+  it("drops bot rows, placeholders, join/leave, and emoji-only", () => {
     expect(isIndexableSlackChunkMessage(msg({ id: 1, isBot: true }))).toBe(false);
-    expect(isIndexableSlackChunkMessage(msg({ id: 2, addressedToSketch: true }))).toBe(false);
     expect(isIndexableSlackChunkMessage(msg({ id: 3, text: "   " }))).toBe(false);
     expect(isIndexableSlackChunkMessage(msg({ id: 4, text: "See attached files." }))).toBe(false);
     expect(isIndexableSlackChunkMessage(msg({ id: 5, text: "<@U0123ABC> has joined the channel" }))).toBe(false);
@@ -30,6 +28,12 @@ describe("isIndexableSlackChunkMessage", () => {
   it("keeps ordinary user messages, including ones that mention joining", () => {
     expect(isIndexableSlackChunkMessage(msg({ id: 1, text: "ship it 🚀" }))).toBe(true);
     expect(isIndexableSlackChunkMessage(msg({ id: 2, text: "Priya has joined the channel team today" }))).toBe(true);
+  });
+
+  it("keeps the human side of a Sketch exchange, matching the WhatsApp gate", () => {
+    expect(isIndexableSlackChunkMessage(msg({ id: 1, text: "<@U0SKETCH> can you tell me what time it is" }))).toBe(
+      true,
+    );
   });
 
   it("keeps numeric-only replies despite digits being Unicode emoji components", () => {

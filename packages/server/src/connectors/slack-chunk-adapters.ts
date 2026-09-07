@@ -25,7 +25,6 @@ const MESSAGE_COLUMNS = [
   "provider_message_id",
   "sender_name",
   "is_bot",
-  "addressed_to_sketch",
   "text",
   "attachments",
   "provider_timestamp",
@@ -35,7 +34,6 @@ const MESSAGE_COLUMNS = [
 
 interface SlackEngineMessage extends ChunkEngineMessage {
   senderName: string;
-  addressedToSketch: boolean;
 }
 
 interface SlackMessageRow {
@@ -43,7 +41,6 @@ interface SlackMessageRow {
   provider_message_id: string;
   sender_name: string;
   is_bot: number;
-  addressed_to_sketch: number;
   text: string;
   attachments: string | null;
   provider_timestamp: string | null;
@@ -74,7 +71,6 @@ function toMessage(row: SlackMessageRow): SlackEngineMessage {
     providerMessageId: row.provider_message_id,
     senderName: row.sender_name,
     isBot: row.is_bot === 1,
-    addressedToSketch: row.addressed_to_sketch === 1,
     text: renderSlackChunkMessageText(row.text, row.attachments),
     attachments: row.attachments,
     effectiveAt: row.effective_at ?? row.provider_timestamp ?? row.received_at,
@@ -83,12 +79,7 @@ function toMessage(row: SlackMessageRow): SlackEngineMessage {
 }
 
 function isSlackEngineMessage(message: ChunkEngineMessage): message is SlackEngineMessage {
-  return (
-    "senderName" in message &&
-    typeof message.senderName === "string" &&
-    "addressedToSketch" in message &&
-    typeof message.addressedToSketch === "boolean"
-  );
+  return "senderName" in message && typeof message.senderName === "string";
 }
 
 function requireSlackEngineMessage(message: ChunkEngineMessage): SlackEngineMessage {

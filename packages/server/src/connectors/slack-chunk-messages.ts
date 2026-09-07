@@ -9,7 +9,6 @@ export interface SlackChunkerMessage {
   text: string;
   attachments: string | null;
   isBot: boolean;
-  addressedToSketch: boolean;
 }
 
 const JOIN_LEAVE_PATTERN = /^<@U[A-Z0-9]+>\s+has\s+(joined|left)\s+the\s+(channel|group)\.?$/iu;
@@ -31,13 +30,13 @@ export function parseSlackChunkAttachments(attachments: string | null): {
 }
 
 /**
- * Denoise gate for Slack slices. Bot rows and Sketch-directed chatter are
- * agent conversation, not team knowledge; join/leave patterns cover rows
- * captured before the capture-side subtype blocklist shipped.
+ * Denoise gate for Slack slices. Bot rows are Sketch's own replies, not team
+ * knowledge; the human side of a Sketch exchange stays indexable, matching the
+ * WhatsApp gate. Join/leave patterns cover rows captured before the
+ * capture-side subtype blocklist shipped.
  */
 export function isIndexableSlackChunkMessage(message: SlackChunkerMessage): boolean {
   if (message.isBot) return false;
-  if (message.addressedToSketch) return false;
   const trimmed = message.text.trim();
   if (trimmed.length === 0) return false;
   if (

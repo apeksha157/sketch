@@ -212,7 +212,6 @@ describe("Slack chunk adapters", () => {
       text: "see attached files.",
       attachments,
       isBot: false,
-      addressedToSketch: false,
     };
     expect(isIndexableSlackChunkMessage(message)).toBe(true);
     expect(renderSlackChunkMessageText(message.text, attachments)).toBe("[shared file: roadmap.pdf]");
