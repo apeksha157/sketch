@@ -711,6 +711,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
     getSlack: deps?.getSlack,
     whatsappRuntime: deps?.whatsappRuntime,
     sendTargetMessage: deps?.sendTargetMessage,
+    isAdminReadAllEnabled: deps?.isAdminReadAllEnabled,
   });
   if (config.GRAPH_CURATION_TOOLS_ENABLED) {
     mountMcpServer({
