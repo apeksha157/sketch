@@ -121,6 +121,77 @@ async function seedWhatsAppGroupMembership(groupJid: string, participantJid: str
     .execute();
 }
 
+async function seedPublicMcpSearchFiles(email: string) {
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-public-mcp-search",
+      connector_type: "google_drive",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .execute();
+  await db
+    .insertInto("access_scopes")
+    .values([
+      {
+        id: "scope-public-mcp-user",
+        connector_config_id: "cfg-public-mcp-search",
+        scope_type: "drive",
+        provider_scope_id: "drive-user",
+      },
+      {
+        id: "scope-public-mcp-other",
+        connector_config_id: "cfg-public-mcp-search",
+        scope_type: "drive",
+        provider_scope_id: "drive-other",
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("access_scope_members")
+    .values({
+      access_scope_id: "scope-public-mcp-user",
+      principal_type: "email",
+      principal_value: email,
+    })
+    .execute();
+
+  const now = new Date().toISOString();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-public-mcp-user",
+        connector_config_id: "cfg-public-mcp-search",
+        provider_file_id: "file-public-mcp-user",
+        file_name: "Public MCP user visible",
+        file_type: "doc",
+        content_category: "document",
+        source: "google_drive",
+        content: "public mcp gate marker user",
+        source_updated_at: now,
+        synced_at: now,
+        access_scope_id: "scope-public-mcp-user",
+      },
+      {
+        id: "file-public-mcp-other",
+        connector_config_id: "cfg-public-mcp-search",
+        provider_file_id: "file-public-mcp-other",
+        file_name: "Public MCP other visible",
+        file_type: "doc",
+        content_category: "document",
+        source: "google_drive",
+        content: "public mcp gate marker other",
+        source_updated_at: now,
+        synced_at: now,
+        access_scope_id: "scope-public-mcp-other",
+      },
+    ])
+    .execute();
+}
+
 describe("public MCP server", () => {
   it("is available and advertises OAuth discovery", async () => {
     const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
@@ -282,6 +353,83 @@ describe("public MCP server", () => {
       targetType: "group",
       targetId: "120363000000001@g.us",
       message: "hello group",
+    });
+  });
+
+  it("keeps public MCP search scoped for admins when read-all is off", async () => {
+    const { token, user } = await createOAuthTokenForUser({ email: "admin@example.com" });
+    await db.updateTable("users").set({ auth_role: "admin" }).where("id", "=", user.id).execute();
+    await seedPublicMcpSearchFiles("admin@example.com");
+    const app = createApp(db, createTestConfig({}), {
+      logger: createTestLogger(),
+      isAdminReadAllEnabled: async () => false,
+    });
+
+    const body = await callMcpTool(token, app, "sketch_search", {
+      query: "public mcp gate marker",
+      limit: 10,
+    });
+    const text = body.result.content[0]?.text ?? "";
+
+    expect(text).toContain("Public MCP user visible");
+    expect(text).not.toContain("Public MCP other visible");
+    await vi.waitFor(async () => {
+      const row = await db
+        .selectFrom("external_mcp_tool_calls")
+        .select("access_bypass")
+        .where("tool_name", "=", "sketch_search")
+        .executeTakeFirst();
+      expect(row?.access_bypass).toBeNull();
+    });
+  });
+
+  it("keeps public MCP search scoped for members when read-all is on", async () => {
+    const { token } = await createOAuthTokenForUser({ email: "member@example.com" });
+    await seedPublicMcpSearchFiles("member@example.com");
+    const app = createApp(db, createTestConfig({}), {
+      logger: createTestLogger(),
+      isAdminReadAllEnabled: async () => true,
+    });
+
+    const body = await callMcpTool(token, app, "sketch_search", {
+      query: "public mcp gate marker",
+      limit: 10,
+    });
+    const text = body.result.content[0]?.text ?? "";
+
+    expect(text).toContain("Public MCP user visible");
+    expect(text).not.toContain("Public MCP other visible");
+    await vi.waitFor(async () => {
+      const row = await db
+        .selectFrom("external_mcp_tool_calls")
+        .select("access_bypass")
+        .where("tool_name", "=", "sketch_search")
+        .executeTakeFirst();
+      expect(row?.access_bypass).toBeNull();
+    });
+  });
+
+  it("audits public MCP admin read-all bypass", async () => {
+    const { token, user } = await createOAuthTokenForUser({ email: "admin@example.com" });
+    await db.updateTable("users").set({ auth_role: "admin" }).where("id", "=", user.id).execute();
+    await seedPublicMcpSearchFiles("admin@example.com");
+    const app = createApp(db, createTestConfig({}), {
+      logger: createTestLogger(),
+      isAdminReadAllEnabled: async () => true,
+    });
+
+    const body = await callMcpTool(token, app, "sketch_search", { query: "public mcp gate marker", limit: 10 });
+    const text = body.result.content[0]?.text ?? "";
+
+    expect(text).toContain("Public MCP user visible");
+    expect(text).toContain("Public MCP other visible");
+    await vi.waitFor(async () => {
+      const row = await db
+        .selectFrom("external_mcp_tool_calls")
+        .select("access_bypass")
+        .where("tool_name", "=", "sketch_search")
+        .executeTakeFirst();
+      expect(row?.access_bypass).toBe("admin");
     });
   });
 
