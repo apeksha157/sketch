@@ -1300,6 +1300,17 @@ export interface CrmObjectSummariesTable {
   updated_at: Generated<string>;
 }
 
+export interface CrmFieldHistoryTable {
+  id: string;
+  indexed_file_id: string;
+  entity_id: string | null;
+  field: string;
+  old_value: string | null;
+  new_value: string;
+  observed_at: Generated<string>;
+  source_modified_at: string | null;
+}
+
 export interface ContainerClassificationsTable {
   connector_config_id: string;
   container_id: string;
@@ -2155,6 +2166,7 @@ export interface DB {
   email_suppressed_messages: EmailSuppressedMessagesTable;
   email_thread_summaries: EmailThreadSummariesTable;
   crm_object_summaries: CrmObjectSummariesTable;
+  crm_field_history: CrmFieldHistoryTable;
   container_classifications: ContainerClassificationsTable;
   containers: ContainersTable;
   access_scopes: AccessScopesTable;

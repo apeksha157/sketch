@@ -42,6 +42,92 @@ export function readSourceMeta(row: Pick<IndexedFilesTable, "source_meta">): Rec
   }
 }
 
+export interface ZohoCrmSourceMeta {
+  module: string;
+  recordId: string;
+  related?: Array<{ role: "what" | "who" | "parent"; module: string; id: string }>;
+  owner?: string;
+  createdTime?: string;
+  modifiedTime?: string;
+  stage?: string;
+  amount?: string;
+  closingDate?: string;
+  probability?: string;
+  leadStatus?: string;
+  leadSource?: string;
+  status?: string;
+  priority?: string;
+  dueDate?: string;
+  callType?: string;
+  callDuration?: string;
+  callStart?: string;
+  industry?: string;
+  website?: string;
+  companySize?: string;
+  tag?: string;
+  lastActivityTime?: string;
+  backfilled?: boolean;
+}
+
+export type ZohoCrmMetaStringKey = {
+  [K in keyof ZohoCrmSourceMeta]-?: ZohoCrmSourceMeta[K] extends string | undefined ? K : never;
+}[keyof ZohoCrmSourceMeta];
+
+export function readZohoCrmMeta(sourceMeta: Record<string, unknown> | null | undefined): ZohoCrmSourceMeta | null {
+  const raw = sourceMeta?.zohoCrm;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const module = typeof value.module === "string" ? value.module : null;
+  const recordId = typeof value.recordId === "string" ? value.recordId : null;
+  if (!module || !recordId) return null;
+  const meta: ZohoCrmSourceMeta = { module, recordId };
+  for (const key of [
+    "owner",
+    "createdTime",
+    "modifiedTime",
+    "stage",
+    "amount",
+    "closingDate",
+    "probability",
+    "leadStatus",
+    "leadSource",
+    "status",
+    "priority",
+    "dueDate",
+    "callType",
+    "callDuration",
+    "callStart",
+    "industry",
+    "website",
+    "companySize",
+    "tag",
+    "lastActivityTime",
+  ] as const) {
+    const rendered = readZohoCrmMetaString(value[key]);
+    if (rendered) meta[key] = rendered;
+  }
+  if (value.backfilled === true) meta.backfilled = true;
+  if (Array.isArray(value.related)) {
+    const related = value.related.filter((item): item is NonNullable<ZohoCrmSourceMeta["related"]>[number] => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const row = item as Record<string, unknown>;
+      return (
+        (row.role === "what" || row.role === "who" || row.role === "parent") &&
+        typeof row.module === "string" &&
+        typeof row.id === "string"
+      );
+    });
+    if (related.length > 0) meta.related = related;
+  }
+  return meta;
+}
+
+function readZohoCrmMetaString(value: unknown): string | undefined {
+  if (typeof value === "string") return value || undefined;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
 function serializeSourceMeta(value: Record<string, unknown> | undefined): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }

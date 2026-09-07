@@ -4,6 +4,7 @@ import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import { z } from "zod";
 import { fileVisibilityPredicate } from "../../db/repositories/connectors";
+import { createCrmFieldHistoryRepository } from "../../db/repositories/crm-field-history";
 import {
   createEntityRepository,
   entityVisibilityPredicate,
@@ -105,11 +106,13 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
   const repo = createEntityRepository(db);
   const relRepo = createEntityRelationshipsRepository(db);
   const timelineRepo = createEntityTimelineRepository(db);
+  const crmFieldHistoryRepo = createCrmFieldHistoryRepository(db);
   const sharesRepo = createEntitySharesRepository(db);
 
   const RELATIONS_LIMIT = 200;
   const EVIDENCE_LIMIT = 100;
   const TIMELINE_LIMIT = 100;
+  const CRM_FIELD_HISTORY_LIMIT = 50;
 
   /**
    * GET /api/entities
@@ -942,6 +945,27 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
     }
     const result = await timelineRepo.listTimelineForEntity(entity.id, { limit: TIMELINE_LIMIT, viewer });
     return c.json(result);
+  });
+
+  routes.get("/:id/crm-field-history", async (c) => {
+    const viewer = getFileViewer(c);
+    const entity = await repo.getEntity(c.req.param("id"), viewer);
+    if (!entity) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Entity not found" } }, 404);
+    }
+    const rows = await crmFieldHistoryRepo.listForEntity(entity.id, { limit: CRM_FIELD_HISTORY_LIMIT, viewer });
+    return c.json({
+      rows: rows.map((row) => ({
+        id: row.id,
+        indexedFileId: row.indexed_file_id,
+        entityId: row.entity_id,
+        field: row.field,
+        oldValue: row.old_value,
+        newValue: row.new_value,
+        observedAt: row.observed_at,
+        sourceModifiedAt: row.source_modified_at,
+      })),
+    });
   });
 
   /**

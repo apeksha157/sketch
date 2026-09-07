@@ -42,6 +42,17 @@ Apply after reviewing the JSON census:
 
 ```bash
 . ~/.nvm/nvm.sh && nvm use > /dev/null 2>&1 && pnpm --dir packages/server exec tsx src/scripts/backfill-entity-mentions.ts --db sketch_capmobfinance_gates --apply
+
+## Backfill Zoho source meta
+
+Dry-run first; the script prints a JSON census and does not write without `--apply`.
+
+```bash
+. ~/.nvm/nvm.sh && nvm use > /dev/null 2>&1 && pnpm --dir packages/server exec tsx src/scripts/backfill-zoho-source-meta.ts --db sketch_capmobfinance_gates
+```
+
+```bash
+. ~/.nvm/nvm.sh && nvm use > /dev/null 2>&1 && pnpm --dir packages/server exec tsx src/scripts/backfill-zoho-source-meta.ts --db sketch_capmobfinance_gates --apply
 ```
 
 ## Verify the harness

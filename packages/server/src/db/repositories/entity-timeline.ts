@@ -8,7 +8,7 @@ import { sql } from "kysely";
 import { idInList } from "../../connectors/id-in-list";
 import type { AccessPrincipal } from "../../connectors/types";
 import type { DB } from "../schema";
-import { type FileViewer, viewerPrincipals } from "./connectors";
+import { type FileViewer, readSourceMeta, readZohoCrmMeta, viewerPrincipals } from "./connectors";
 import { fileVisibilityRuleSql } from "./file-visibility-rule";
 
 export interface TimelineItem {
@@ -25,6 +25,14 @@ export interface TimelineItem {
   url: string | null;
   rollupGroupId: string | null;
   crmActivity: CrmTimelineActivity | null;
+  crmFields?: {
+    stage?: string;
+    status?: string;
+    leadStatus?: string;
+    priority?: string;
+    dueDate?: string;
+    leadSource?: string;
+  };
 }
 
 export interface TimelineGroup {
@@ -168,6 +176,7 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
         "indexed_files.source as file_source",
         "indexed_files.provider_url",
         "indexed_files.rollup_group_id",
+        "indexed_files.source_meta",
         "entity_mentions.entity_id",
         "entity_mentions.confidence",
         "entity_mentions.relation",
@@ -207,6 +216,7 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
         url: row.provider_url ?? null,
         rollupGroupId: row.rollup_group_id ?? null,
         crmActivity: crmActivityFor(row.file_type, row.content_category),
+        crmFields: crmFieldsFor(readZohoCrmMeta(readSourceMeta({ source_meta: row.source_meta }))),
         viaEntityIds: [row.entity_id],
       });
     }
@@ -267,6 +277,19 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
       return { groups, truncated: page.nextCursor !== null, totalCount: page.items.length };
     },
   };
+}
+
+function crmFieldsFor(meta: ReturnType<typeof readZohoCrmMeta>): TimelineItem["crmFields"] {
+  if (!meta) return undefined;
+  const fields = {
+    stage: meta.stage,
+    status: meta.status,
+    leadStatus: meta.leadStatus,
+    priority: meta.priority,
+    dueDate: meta.dueDate,
+    leadSource: meta.leadSource,
+  };
+  return Object.values(fields).some(Boolean) ? fields : undefined;
 }
 
 function relationListFor(relation: string): string[] {
