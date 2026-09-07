@@ -2,14 +2,13 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { DB } from "../db/schema";
-import { type ChunkCursorState, type ChunkEngineKnobs, evaluateIdleClose, runChunkingPass } from "./chunk-engine";
+import { type ChunkEngineKnobs, evaluateIdleClose } from "./chunk-engine";
+import { runStreamTick } from "./chunk-engine-runner";
 import type { ChunkGenerate } from "./chunk-generate";
 import { createSlackChannelChunkAdapter, createSlackThreadChunkAdapter } from "./slack-chunk-adapters";
 import { discoverSlackChunkStreams } from "./slack-chunk-discovery";
 import { SLACK_CHANNEL_STREAM_KEY, SLACK_ROUTER_STREAM_KEY } from "./slack-chunk-messages";
 import { runWithConcurrency } from "./sync-utils";
-
-const BURST_SCAN_MAX_PAGES = 4;
 
 export interface RunSlackChunkStreamOptions {
   db: Kysely<DB>;
@@ -26,6 +25,7 @@ export interface SlackChunkStreamRunResult {
   slicesClosed: number;
   pendingRemaining: boolean;
   tickSkipped: boolean;
+  failed: boolean;
   skippedReason?: string;
 }
 
@@ -60,97 +60,59 @@ function adapterFor(options: RunSlackChunkStreamOptions) {
       });
 }
 
-async function countPendingIndexable(options: RunSlackChunkStreamOptions, threshold: number): Promise<number> {
-  const adapter = adapterFor(options);
-  const row = await createConversationSlicesRepository(options.db).getStreamCursor(
-    options.conversationId,
-    options.streamKey,
-  );
-  if (!row) return 0;
-  let cursor: ChunkCursorState = {
-    lastEffectiveAt: null,
-    lastMessageId: row.last_message_id,
-    claimToken: row.claim_token,
-    pendingSince: row.pending_since,
-  };
-  let count = 0;
-  for (let page = 0; page < BURST_SCAN_MAX_PAGES; page += 1) {
-    const loaded = await adapter.loadOpenAndPending(options.db, undefined, cursor, threshold, { mode: "live" });
-    count += loaded.pendingRaw.filter((message) => adapter.isIndexable(message)).length;
-    if (count >= threshold || !loaded.pageFull) break;
-    const tail = loaded.pendingRaw.at(-1);
-    if (!tail) break;
-    cursor = { ...cursor, lastMessageId: tail.id };
-  }
-  return count;
-}
-
-async function burstThreshold(options: RunSlackChunkStreamOptions): Promise<number> {
-  if (options.knobs.burstThresholdMessages !== null) return Math.max(1, options.knobs.burstThresholdMessages);
-  const open = await createConversationSlicesRepository(options.db).getOpenSlice(options.conversationId, null);
-  return Math.max(1, options.knobs.windowMessages - (open?.message_count ?? 0));
-}
-
+/**
+ * Thread streams never call the LLM for boundaries, so a missing generator is
+ * only fatal if the engine tries to use it anyway.
+ */
 export async function runSlackChunkStream(options: RunSlackChunkStreamOptions): Promise<SlackChunkStreamRunResult> {
-  const adapter = adapterFor(options);
-  if (options.streamKey === SLACK_CHANNEL_STREAM_KEY) {
-    if (!options.generate) {
-      return {
-        windowsProcessed: 0,
-        slicesClosed: 0,
-        pendingRemaining: true,
-        tickSkipped: false,
-        skippedReason: "no_generator",
-      };
-    }
-    const cursor = await createConversationSlicesRepository(options.db).getStreamCursor(
-      options.conversationId,
-      options.streamKey,
-    );
-    const lastAttemptMs = cursor?.llm_last_attempt_at ? Date.parse(cursor.llm_last_attempt_at) : Number.NaN;
-    const insideTick =
-      Number.isFinite(lastAttemptMs) && options.now.getTime() - lastAttemptMs < options.knobs.tickMinutes * 60_000;
-    if (insideTick) {
-      const threshold = await burstThreshold(options);
-      const pendingCount = await countPendingIndexable(options, threshold);
-      if (pendingCount < threshold) {
-        return { windowsProcessed: 0, slicesClosed: 0, pendingRemaining: true, tickSkipped: true };
-      }
-    }
-  }
-
-  const generate: ChunkGenerate =
-    options.generate ?? (async () => Promise.reject(new Error("Slack thread boundary generation must not run")));
-  const result = await runChunkingPass(
-    { db: options.db, logger: options.logger, generate, now: () => options.now.getTime() },
-    {
-      adapter,
-      mode: "live",
-      maxWindows: options.knobs.maxWindowsPerRun,
-      onPassClaimed: async ({ claimToken }) => {
-        if (options.streamKey !== SLACK_CHANNEL_STREAM_KEY) return;
-        await options.db
-          .updateTable("conversation_slice_stream_cursors")
-          .set({ llm_last_attempt_at: options.now.toISOString(), updated_at: options.now.toISOString() })
-          .where("conversation_id", "=", options.conversationId)
-          .where("stream_key", "=", options.streamKey)
-          .where("claim_token", "=", claimToken)
-          .execute();
-      },
-      onPassComplete: async (completion) => {
-        if (completion.pendingRemaining || completion.skippedReason || completion.pendingSinceAtClaim === null) return;
-        await options.db
-          .updateTable("conversation_slice_stream_cursors")
-          .set({ pending_since: null, updated_at: options.now.toISOString() })
-          .where("conversation_id", "=", options.conversationId)
-          .where("stream_key", "=", options.streamKey)
-          .where("claim_token", "=", completion.claimToken)
-          .where("pending_since", "=", completion.pendingSinceAtClaim)
-          .execute();
-      },
+  const repo = createConversationSlicesRepository(options.db);
+  const isChannelStream = options.streamKey === SLACK_CHANNEL_STREAM_KEY;
+  const result = await runStreamTick({
+    db: options.db,
+    logger: options.logger,
+    now: options.now,
+    adapter: adapterFor(options),
+    generate:
+      options.generate ?? (async () => Promise.reject(new Error("Slack thread boundary generation must not run"))),
+    llmGated: isChannelStream,
+    hasGenerator: options.generate !== undefined,
+    maxWindows: options.knobs.maxWindowsPerRun,
+    readLastAttempt: async () =>
+      (await repo.getStreamCursor(options.conversationId, options.streamKey))?.llm_last_attempt_at ?? null,
+    stampAttempt: async ({ claimToken }) => {
+      if (claimToken === null) return;
+      await options.db
+        .updateTable("conversation_slice_stream_cursors")
+        .set({ llm_last_attempt_at: options.now.toISOString(), updated_at: options.now.toISOString() })
+        .where("conversation_id", "=", options.conversationId)
+        .where("stream_key", "=", options.streamKey)
+        .where("claim_token", "=", claimToken)
+        .execute();
     },
-  );
-  return { ...result, tickSkipped: false };
+    stampWhen: "on_claim",
+    onPassComplete: async (completion) => {
+      if (completion.pendingRemaining || completion.skippedReason || completion.pendingSinceAtClaim === null) return;
+      await options.db
+        .updateTable("conversation_slice_stream_cursors")
+        .set({ pending_since: null, updated_at: options.now.toISOString() })
+        .where("conversation_id", "=", options.conversationId)
+        .where("stream_key", "=", options.streamKey)
+        .where("claim_token", "=", completion.claimToken)
+        .where("pending_since", "=", completion.pendingSinceAtClaim)
+        .execute();
+    },
+    logContext: { conversationId: options.conversationId, streamKey: options.streamKey },
+    failureMessage: "Slack chunk stream failed",
+    backoffMessage: "Slack chunk provider backoff",
+  });
+  return {
+    windowsProcessed: result.windowsProcessed,
+    slicesClosed: result.slicesClosed,
+    pendingRemaining: result.pendingRemaining,
+    tickSkipped: result.tickSkipped,
+    failed: result.failed,
+    ...(result.skippedReason ? { skippedReason: result.skippedReason } : {}),
+  };
 }
 
 interface StreamWork {
@@ -218,23 +180,19 @@ export async function runSlackChunkEngine(options: SlackChunkEngineRunOptions): 
   const pendingGroups = [...groupByConversation(pending).entries()];
   await runWithConcurrency(pendingGroups, options.channelKnobs.groupWorkerPool, async ([conversationId, streams]) => {
     for (const streamKey of streams) {
-      try {
-        const result = await runSlackChunkStream({
-          db: options.db,
-          logger: options.logger,
-          now,
-          conversationId,
-          streamKey,
-          knobs: streamKey === SLACK_CHANNEL_STREAM_KEY ? options.channelKnobs : options.threadKnobs,
-          generate: options.generate,
-        });
-        summary.windowsRun += result.windowsProcessed;
-        summary.slicesClosed += result.slicesClosed;
-        if (result.tickSkipped) summary.tickSkips += 1;
-      } catch (err) {
-        summary.streamFailures += 1;
-        options.logger.warn({ err, conversationId, streamKey }, "Slack chunk stream failed");
-      }
+      const result = await runSlackChunkStream({
+        db: options.db,
+        logger: options.logger,
+        now,
+        conversationId,
+        streamKey,
+        knobs: streamKey === SLACK_CHANNEL_STREAM_KEY ? options.channelKnobs : options.threadKnobs,
+        generate: options.generate,
+      });
+      summary.windowsRun += result.windowsProcessed;
+      summary.slicesClosed += result.slicesClosed;
+      if (result.tickSkipped) summary.tickSkips += 1;
+      if (result.failed) summary.streamFailures += 1;
     }
   });
 

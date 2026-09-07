@@ -14,13 +14,18 @@ import { MAX_MATERIALIZATION_ATTEMPTS } from "../entities/materialize-replay";
 import { isReasoningTextCommand, isToolProgressCommand } from "../progress-settings";
 import { WHATSAPP_PROVIDER_TIMESTAMP_MAX_FUTURE_MS } from "../whatsapp/provider-timestamp";
 import type { ChunkEngineKnobs } from "./chunk-engine";
+import { runStreamTick, withProviderBackoff } from "./chunk-engine-runner";
 import { estimateTokens } from "./chunking";
 import { resolveChunkEngineKnobs } from "./config-default";
-import { isRetryableProviderError } from "./provider-fallback";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import { runWithConcurrency } from "./sync-utils";
 import { ATTACHMENT_PLACEHOLDER_TEXT, parseAttachmentsJson } from "./transcript";
-import { evaluateIdleClose, runLlmChunkingPass } from "./whatsapp-llm-chunker";
+import {
+  type WhatsAppLlmChunkerDeps,
+  createWhatsAppChunkStreamAdapter,
+  evaluateIdleClose,
+  runLlmChunkingPass,
+} from "./whatsapp-llm-chunker";
 
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES = 500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS = 20_000;
@@ -350,36 +355,6 @@ async function listMessagesAfterCursor(
   }));
 }
 
-/** Scans at most four keyset pages so burst detection stays bounded under non-indexable noise. */
-async function countPendingDenoisedMessages(
-  db: Kysely<DB>,
-  conversationId: number,
-  cursor: ConversationSliceCursorRow,
-  burstThreshold: number,
-  openFirstMessageId?: number,
-): Promise<number> {
-  const pageSize = burstThreshold + 1;
-  let count = 0;
-  let after: { effectiveAt: string; id: number } | undefined;
-  for (let page = 0; page < 4; page += 1) {
-    const messages = await listMessagesAfterCursor(
-      db,
-      conversationId,
-      cursor,
-      pageSize,
-      openFirstMessageId,
-      true,
-      after,
-    );
-    count += messages.filter(isIndexableWhatsAppChunkMessage).length;
-    if (count >= burstThreshold || messages.length < pageSize) break;
-    const last = messages[messages.length - 1];
-    if (!last) break;
-    after = { effectiveAt: last.effectiveAt, id: last.id };
-  }
-  return count;
-}
-
 async function countLateArrivals(
   db: Kysely<DB>,
   conversationId: number,
@@ -413,27 +388,26 @@ async function runLlmChunkingWithBackoff(
       openSliceId: null,
     };
   }
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await runLlmChunkingPass(
+  return withProviderBackoff(
+    () =>
+      runLlmChunkingPass(
         {
           db: options.db,
           logger: options.logger,
-          generate: options.llmGenerate,
+          generate: options.llmGenerate as WhatsAppLlmGenerate,
           now: () => (options.now ?? new Date()).getTime(),
           onOpenChunkShrunk:
             options.onOpenChunkShrunk ??
             ((indexedFileId) => purgeConversationalFactsForFile(options.db, indexedFileId)),
         },
         params,
-      );
-    } catch (error) {
-      if (!isRetryableProviderError(error) || attempt >= 2) throw error;
-      const waitMs = Math.min(100 * 2 ** attempt, 1000);
-      options.logger.warn({ groupJid: params.groupJid, attempt: attempt + 1, waitMs }, "WhatsApp LLM provider backoff");
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
-  }
+      ),
+    {
+      logger: options.logger,
+      logContext: { groupJid: params.groupJid },
+      message: "WhatsApp LLM provider backoff",
+    },
+  );
 }
 
 async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<WhatsAppChunkerRunSummary> {
@@ -488,50 +462,52 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
     return { ...emptyRunSummary(), conversationsProcessed: 1, lateArrivals };
   }
 
-  const lastAttemptMs = group.chunkLastLlmAttemptAt ? Date.parse(group.chunkLastLlmAttemptAt) : Number.NaN;
-  const open = await repo.getOpenSlice(conversation.id, null);
-  const burstThreshold = knobs.burstThresholdMessages ?? Math.max(1, knobs.windowMessages - (open?.message_count ?? 0));
-  const tickGated = Number.isFinite(lastAttemptMs) && now.getTime() - lastAttemptMs < knobs.tickMinutes * MINUTE_MS;
-  const pendingDenoisedMessages = tickGated
-    ? await countPendingDenoisedMessages(
-        db,
-        conversation.id,
-        cursor,
-        burstThreshold,
-        open?.first_message_id ?? openBeforeIdleClose?.first_message_id,
-      )
-    : 0;
-  if (tickGated && pendingDenoisedMessages < burstThreshold) {
-    return emptyRunSummary();
-  }
-
-  await db
-    .updateTable("whatsapp_groups")
-    .set({ chunk_last_llm_attempt_at: now.toISOString() })
-    .where("jid", "=", group.jid)
-    .where("index_enabled", "=", 1)
-    .execute();
-
-  try {
-    const result = await runLlmChunkingWithBackoff(options, {
+  const llmGenerate = options.llmGenerate;
+  const chunkDeps: WhatsAppLlmChunkerDeps = {
+    db,
+    logger,
+    generate: llmGenerate,
+    now: () => now.getTime(),
+    onOpenChunkShrunk:
+      options.onOpenChunkShrunk ?? ((indexedFileId) => purgeConversationalFactsForFile(db, indexedFileId)),
+  };
+  const tick = await runStreamTick({
+    db,
+    logger,
+    now,
+    adapter: createWhatsAppChunkStreamAdapter(chunkDeps, {
       conversationId: conversation.id,
       groupJid: group.jid,
       knobs,
-      mode: "live",
-      historyStartId: openBeforeIdleClose?.first_message_id,
-    });
-    return {
-      conversationsProcessed: 1,
-      slicesCreated: result.slicesClosed,
-      lateArrivals,
-      messagesProcessed: result.messagesProcessed,
-      maxAgeFlushes: 0,
-      maxSizeFlushes: 0,
-    };
-  } catch (error) {
-    logger.warn({ err: error, conversationId: conversation.id, groupJid: group.jid }, "WhatsApp LLM chunking failed");
-    return emptyRunSummary();
-  }
+    }),
+    generate: llmGenerate,
+    onOpenChunkShrunk: chunkDeps.onOpenChunkShrunk,
+    llmGated: true,
+    hasGenerator: true,
+    historyStartId: openBeforeIdleClose?.first_message_id,
+    readLastAttempt: async () => group.chunkLastLlmAttemptAt ?? null,
+    stampAttempt: async () => {
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ chunk_last_llm_attempt_at: now.toISOString() })
+        .where("jid", "=", group.jid)
+        .where("index_enabled", "=", 1)
+        .execute();
+    },
+    stampWhen: "before_pass",
+    logContext: { conversationId: conversation.id, groupJid: group.jid },
+    failureMessage: "WhatsApp LLM chunking failed",
+    backoffMessage: "WhatsApp LLM provider backoff",
+  });
+  if (tick.tickSkipped || tick.failed) return emptyRunSummary();
+  return {
+    conversationsProcessed: 1,
+    slicesCreated: tick.slicesClosed,
+    lateArrivals,
+    messagesProcessed: tick.messagesProcessed,
+    maxAgeFlushes: 0,
+    maxSizeFlushes: 0,
+  };
 }
 
 interface WhatsAppBackfillGraphBacklog {
