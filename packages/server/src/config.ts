@@ -240,6 +240,10 @@ export const configSchema = z.object({
   // Security
   ENCRYPTION_KEY: z.string().optional(),
   SYSTEM_SECRET: z.string().optional(),
+  BENCHMARKS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 
   // Bootstrap (managed seed)
   BOOTSTRAP_ADMIN_EMAIL: z.preprocess((v) => (v === "" ? undefined : v), z.string().email().optional()),

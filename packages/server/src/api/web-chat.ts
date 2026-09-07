@@ -51,6 +51,7 @@ import {
   type AutomationTaskConversationLockSummary,
   createAutomationTaskConversationService,
 } from "../automation/task-conversations";
+import { benchmarkReadEvidence } from "../benchmarks/tool-evidence";
 import { TOOL_PROGRESS_OPTIONS, type ToolProgressCommand } from "../commands";
 import type { Config } from "../config";
 import { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -260,6 +261,7 @@ type AutomationBuilderContext = {
 } | null;
 
 type WebChatUiChunk =
+  | { type: "data-benchmark-read"; data: { taskIds: string[] } }
   | { type: "start"; messageId: string; messageMetadata?: { createdAt: string } }
   | { type: "start-step" }
   | { type: "data-progress"; id: string; data: WebChatProgressData }
@@ -3449,6 +3451,10 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               await publishActivity(activity.finish(event.toolCallId, event.status, event.endedAt));
             },
             onToolResult: async (event) => {
+              if (deps.config.BENCHMARKS_ENABLED && conversationId.startsWith("benchmark-")) {
+                const evidence = benchmarkReadEvidence(event);
+                if (evidence) write({ type: "data-benchmark-read", data: evidence });
+              }
               if (!activeBuilderContext) return;
               if (!event.isError) {
                 lastBuilderFailure = undefined;
