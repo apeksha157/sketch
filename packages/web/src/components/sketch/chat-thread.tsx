@@ -1522,13 +1522,19 @@ function ProgressTimelineWindow({
   activityLive: boolean;
 }) {
   const [expandedItemKey, setExpandedItemKey] = useState<string | null>(null);
+  const [inspectionOpen, setInspectionOpen] = useState(false);
+  useEffect(() => {
+    if (expandedItemKey || !inspectionOpen) return;
+    const timer = window.setTimeout(() => setInspectionOpen(false), 220);
+    return () => window.clearTimeout(timer);
+  }, [expandedItemKey, inspectionOpen]);
   const targetEntries = useMemo(
-    () => (expandedItemKey ? entries : visibleProgressRenderEntries(entries)),
-    [entries, expandedItemKey],
+    () => (inspectionOpen ? entries : visibleProgressRenderEntries(entries)),
+    [entries, inspectionOpen],
   );
-  const timelineWindow = useAnimatedTimelineWindow(targetEntries, Boolean(expandedItemKey));
+  const timelineWindow = useAnimatedTimelineWindow(targetEntries, inspectionOpen);
   const exitingKeySet = useMemo(() => new Set(timelineWindow.exitingKeys), [timelineWindow.exitingKeys]);
-  const earlierEntries = expandedItemKey ? [] : entries.slice(0, -MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES);
+  const earlierEntries = inspectionOpen ? [] : entries.slice(0, -MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES);
 
   useLayoutEffect(() => {
     if (!expandedItemKey) return;
@@ -1552,7 +1558,7 @@ function ProgressTimelineWindow({
       <div
         ref={timelineWindow.viewportRef}
         aria-live="polite"
-        className={cn("sketch-timeline-window overflow-hidden", expandedItemKey && "max-h-[260px] overflow-y-auto")}
+        className="sketch-timeline-window chat-scrollbar max-h-[260px] overflow-x-hidden overflow-y-auto overscroll-contain"
         style={timelineWindow.viewportStyle}
       >
         <div
@@ -1570,7 +1576,10 @@ function ProgressTimelineWindow({
               exiting={exitingKeySet.has(renderEntry.key)}
               last={index === timelineWindow.entries.length - 1}
               expandedItemKey={expandedItemKey}
-              onItemExpandedChange={(itemKey, expanded) => setExpandedItemKey(expanded ? itemKey : null)}
+              onItemExpandedChange={(itemKey, expanded) => {
+                if (expanded) setInspectionOpen(true);
+                setExpandedItemKey(expanded ? itemKey : null);
+              }}
               activityLive={activityLive}
             />
           ))}
@@ -1871,53 +1880,55 @@ function ProgressItemSummary({
           </button>
         ) : null}
       </span>
-      {expanded && inspectable ? (
-        <div className="mt-[4px] max-w-full rounded-[6px] border border-border/60 bg-muted/20 p-[7px]">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              {technical && item.toolName ? (
+      <CollapsiblePrimitive.Root open={expanded && inspectable}>
+        <CollapsiblePrimitive.Content className="sketch-collapsible-timeline-content">
+          <div className="mt-[4px] max-w-full rounded-[6px] border border-border/60 bg-muted/20 p-[7px]">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                {technical && item.toolName ? (
+                  <div
+                    data-progress-qualified-tool
+                    className="mb-[4px] break-words font-mono text-[11px] leading-[1.5] text-muted-foreground/75"
+                  >
+                    {item.toolName}
+                  </div>
+                ) : null}
+                {technical ? (
+                  <pre
+                    data-progress-details
+                    className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px] leading-[1.5] text-foreground/80"
+                  >
+                    {detail ?? "Technical detail unavailable"}
+                  </pre>
+                ) : detail ? (
+                  <pre
+                    data-progress-details
+                    className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px] leading-[1.5] text-foreground/80"
+                  >
+                    {detail}
+                  </pre>
+                ) : null}
                 <div
-                  data-progress-qualified-tool
-                  className="mb-[4px] break-words font-mono text-[11px] leading-[1.5] text-muted-foreground/75"
+                  data-progress-state-detail
+                  className="mt-[4px] space-y-[1px] text-[11px] leading-[1.5] text-muted-foreground/70"
                 >
-                  {item.toolName}
+                  {inspectionStatus ? <div>Status: {inspectionStatus}</div> : null}
+                  {elapsed !== null ? <div>Elapsed: {formatElapsed(elapsed)}</div> : null}
+                  {completedDuration !== null ? <div>Duration: {formatElapsed(completedDuration)}</div> : null}
                 </div>
-              ) : null}
-              {technical ? (
-                <pre
-                  data-progress-details
-                  className="chat-scrollbar max-h-[180px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.5] text-foreground/80"
-                >
-                  {detail ?? "Technical detail unavailable"}
-                </pre>
-              ) : detail ? (
-                <pre
-                  data-progress-details
-                  className="chat-scrollbar max-h-[180px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.5] text-foreground/80"
-                >
-                  {detail}
-                </pre>
-              ) : null}
-              <div
-                data-progress-state-detail
-                className="mt-[4px] space-y-[1px] text-[11px] leading-[1.5] text-muted-foreground/70"
-              >
-                {inspectionStatus ? <div>Status: {inspectionStatus}</div> : null}
-                {elapsed !== null ? <div>Elapsed: {formatElapsed(elapsed)}</div> : null}
-                {completedDuration !== null ? <div>Duration: {formatElapsed(completedDuration)}</div> : null}
+                {detailNotice ? (
+                  <div className="mt-[4px] whitespace-pre-wrap text-[11px] leading-[1.5] text-muted-foreground/70">
+                    {detailNotice.trim()}
+                  </div>
+                ) : null}
               </div>
-              {detailNotice ? (
-                <div className="mt-[4px] whitespace-pre-wrap text-[11px] leading-[1.5] text-muted-foreground/70">
-                  {detailNotice.trim()}
-                </div>
+              {copyText ? (
+                <CopyIconButton text={copyText} label="Copy technical detail" copiedLabel="Technical detail copied" />
               ) : null}
             </div>
-            {copyText ? (
-              <CopyIconButton text={copyText} label="Copy technical detail" copiedLabel="Technical detail copied" />
-            ) : null}
           </div>
-        </div>
-      ) : null}
+        </CollapsiblePrimitive.Content>
+      </CollapsiblePrimitive.Root>
     </div>
   );
 }
