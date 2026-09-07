@@ -21,6 +21,7 @@ function outlookMessage(
     headers?: Array<{ name: string; value: string }>;
     sentDateTime?: string | null;
     receivedDateTime?: string | null;
+    bodyPreview?: string | null;
   } = {},
 ): OutlookMessage {
   const body = overrides.body ?? "Can we discuss pricing?";
@@ -39,7 +40,7 @@ function outlookMessage(
     ccRecipients: [],
     bccRecipients: [],
     body: { contentType: overrides.bodyType ?? "text", content: body },
-    bodyPreview: body,
+    bodyPreview: overrides.bodyPreview === undefined ? body : overrides.bodyPreview,
     internetMessageHeaders: overrides.headers ?? [{ name: "Message-ID", value: `<${id}@example.com>` }],
   };
 }
@@ -49,13 +50,15 @@ describe("Outlook connector", () => {
     vi.restoreAllMocks();
   });
 
-  it("normalizes Microsoft Graph messages using internetMessageId and lowercased headers", () => {
-    const normalized = toNormalizedOutlookEmail(
+  it("normalizes Microsoft Graph messages with full HTML body content and plain-text fallback behavior", () => {
+    const htmlBody = "<style>.hidden{display:none}</style><p>Hello &amp; welcome</p><div>Full body text</div>";
+    const normalizedHtml = toNormalizedOutlookEmail(
       outlookMessage("outlook-1", {
         internetMessageId: "<stable@example.com>",
         conversationId: "conversation-42",
-        body: "<p>Hello</p>",
+        body: htmlBody,
         bodyType: "html",
+        bodyPreview: "Hello & welcome",
         headers: [
           { name: "Message-ID", value: "<stable@example.com>" },
           { name: "List-Unsubscribe", value: "<mailto:unsubscribe@example.com>" },
@@ -65,17 +68,38 @@ describe("Outlook connector", () => {
       "inbox",
     );
 
-    expect(normalized).toMatchObject({
+    expect(normalizedHtml).toMatchObject({
       providerFileId: "outlook-1",
       providerMessageId: "<stable@example.com>",
       threadId: "conversation-42",
       folder: "inbox",
-      bodyHtml: "<p>Hello</p>",
-      bodyText: "<p>Hello</p>",
+      bodyHtml: htmlBody,
+      bodyText: null,
       ownerEmail: "owner@canvasx.ai",
     });
-    expect(normalized?.headers.get("list-unsubscribe")).toBe("<mailto:unsubscribe@example.com>");
-    expect(normalized?.from).toEqual({ name: "Jane Doe", email: "jane@example.com" });
+    expect(normalizedHtml?.headers.get("list-unsubscribe")).toBe("<mailto:unsubscribe@example.com>");
+    expect(normalizedHtml?.from).toEqual({ name: "Jane Doe", email: "jane@example.com" });
+    const htmlItem = normalizedHtml
+      ? emailToSyncedItem("connector-outlook", normalizedHtml, createSeedGate(normalizedHtml, new Set()))
+      : null;
+    expect(htmlItem?.content).toContain("Hello & welcome\nFull body text");
+    expect(htmlItem?.content).not.toBe("Hello & welcome");
+
+    const normalizedText = toNormalizedOutlookEmail(outlookMessage("outlook-text"), "owner@canvasx.ai", "inbox");
+    expect(normalizedText?.bodyHtml).toBeNull();
+    expect(normalizedText?.bodyText).toBe("Can we discuss pricing?");
+
+    const normalizedHtmlPreviewFallback = toNormalizedOutlookEmail(
+      outlookMessage("outlook-empty-html", {
+        body: "  ",
+        bodyType: "html",
+        bodyPreview: "Preview fallback",
+      }),
+      "owner@canvasx.ai",
+      "inbox",
+    );
+    expect(normalizedHtmlPreviewFallback?.bodyHtml).toBe("  ");
+    expect(normalizedHtmlPreviewFallback?.bodyText).toBe("Preview fallback");
 
     const withoutHeaders = toNormalizedOutlookEmail(
       { ...outlookMessage("outlook-2"), internetMessageHeaders: undefined },
@@ -83,6 +107,130 @@ describe("Outlook connector", () => {
       "sent",
     );
     expect(withoutHeaders?.headers.size).toBe(0);
+  });
+
+  it("runs a one-shot body-version window sweep while preserving legacy delta cursor behavior", async () => {
+    const connector = createOutlookConnector();
+    const requests: URL[] = [];
+    const removals: Array<{ providerFileId?: string; reason: string }> = [];
+    const deltaInbox = outlookMessage("inbox-shared", {
+      from: { name: "Jane Doe", address: "jane@example.com" },
+      to: [{ name: "Owner", address: "owner@canvasx.ai" }],
+    });
+    const listedInbox = outlookMessage("inbox-shared", {
+      from: { name: "Jane Doe", address: "jane@example.com" },
+      to: [{ name: "Owner", address: "owner@canvasx.ai" }],
+      body: "<p>Full HTML body from the sweep.</p>",
+      bodyType: "html",
+      bodyPreview: "Full HTML",
+    });
+    const sentJane = outlookMessage("sent-jane", {
+      from: { name: "Owner", address: "owner@canvasx.ai" },
+      to: [{ name: "Jane Doe", address: "jane@example.com" }],
+    });
+    const bodyFetches: string[] = [];
+    const currentCursor = JSON.stringify({
+      inboxDeltaLink: "https://graph.microsoft.com/inbox-delta-legacy",
+      sentDeltaLink: "https://graph.microsoft.com/sent-delta-legacy",
+      lastSyncedAt: "2026-02-01T00:00:00.000Z",
+      syncWindowStart: "2025-02-01T00:00:00.000Z",
+      reciprocityEmails: ["jane@example.com"],
+    });
+
+    mockGraphFetch((url) => {
+      requests.push(url);
+      if (url.toString() === "https://graph.microsoft.com/inbox-delta-legacy") {
+        return jsonResponse({
+          value: [deltaInbox, { id: "removed-inbox", "@removed": { reason: "deleted" } }],
+          "@odata.deltaLink": "https://graph.microsoft.com/inbox-delta-fresh",
+        });
+      }
+      if (url.toString() === "https://graph.microsoft.com/sent-delta-legacy") {
+        return jsonResponse({ value: [], "@odata.deltaLink": "https://graph.microsoft.com/sent-delta-fresh" });
+      }
+      if (url.toString() === "https://graph.microsoft.com/inbox-delta-fresh") {
+        return jsonResponse({ value: [], "@odata.deltaLink": "https://graph.microsoft.com/inbox-delta-next" });
+      }
+      if (url.toString() === "https://graph.microsoft.com/sent-delta-fresh") {
+        return jsonResponse({ value: [], "@odata.deltaLink": "https://graph.microsoft.com/sent-delta-next" });
+      }
+      if (url.pathname === "/v1.0/me/mailFolders/inbox/messages") {
+        return jsonResponse({ value: [listedInbox] });
+      }
+      if (url.pathname === "/v1.0/me/mailFolders/sentitems/messages") {
+        return jsonResponse({ value: [sentJane] });
+      }
+      if (url.pathname === "/v1.0/me/messages/inbox-shared") {
+        bodyFetches.push("inbox-shared");
+        return jsonResponse(listedInbox);
+      }
+      if (url.pathname === "/v1.0/me/messages/sent-jane") {
+        bodyFetches.push("sent-jane");
+        return jsonResponse(sentJane);
+      }
+      throw new Error(`unexpected fetch ${url.toString()}`);
+    });
+
+    const legacyConnector = createOutlookConnector();
+    const legacyCursor = JSON.parse(
+      (await legacyConnector.getCursor({
+        credentials: validCredentials(),
+        scopeConfig: {},
+        currentCursor,
+        logger,
+      })) ?? "{}",
+    ) as { bodyVersion?: number };
+    expect(legacyCursor.bodyVersion).toBe(0);
+
+    const items = await drain(
+      connector.sync({
+        connectorConfigId: "connector-outlook",
+        credentials: validCredentials(),
+        scopeConfig: { initialDays: 90, maxMessages: 10 },
+        cursor: currentCursor,
+        logger,
+        ownerEmail: "owner@canvasx.ai",
+        onSourceItemRemoved: async (record) => {
+          removals.push(record);
+        },
+      }),
+    );
+
+    expect(requests.map((url) => url.toString())).toContain("https://graph.microsoft.com/inbox-delta-legacy");
+    const inboxWindow = requests.find((url) => url.pathname === "/v1.0/me/mailFolders/inbox/messages");
+    expect(inboxWindow?.searchParams.get("$filter")).toMatch(/^receivedDateTime ge /);
+    expect(bodyFetches.filter((id) => id === "inbox-shared")).toHaveLength(1);
+    expect(removals).toContainEqual({ providerFileId: "removed-inbox", reason: "outlook_inbox_removed" });
+    expect(items.map((item) => item.providerFileId).sort()).toEqual(["inbox-shared", "sent-jane"]);
+
+    const nextCursor = JSON.parse(
+      (await connector.getCursor({
+        credentials: validCredentials(),
+        scopeConfig: {},
+        currentCursor,
+        logger,
+      })) ?? "{}",
+    ) as { bodyVersion?: number; inboxDeltaLink?: string; sentDeltaLink?: string };
+    expect(nextCursor).toMatchObject({
+      bodyVersion: 1,
+      inboxDeltaLink: "https://graph.microsoft.com/inbox-delta-fresh",
+      sentDeltaLink: "https://graph.microsoft.com/sent-delta-fresh",
+    });
+
+    requests.length = 0;
+    bodyFetches.length = 0;
+    await drain(
+      connector.sync({
+        connectorConfigId: "connector-outlook",
+        credentials: validCredentials(),
+        scopeConfig: { initialDays: 90, maxMessages: 10 },
+        cursor: JSON.stringify(nextCursor),
+        logger,
+        ownerEmail: "owner@canvasx.ai",
+      }),
+    );
+    expect(requests.map((url) => url.toString())).toContain("https://graph.microsoft.com/inbox-delta-fresh");
+    expect(requests.some((url) => url.pathname === "/v1.0/me/mailFolders/inbox/messages")).toBe(false);
   });
 
   it("skips messages missing internetMessageId and records a diagnostic marker", async () => {
@@ -280,6 +428,7 @@ describe("Outlook connector", () => {
       throw new Error(`unexpected fetch ${url.toString()}`);
     });
     const cursor = JSON.stringify({
+      bodyVersion: 1,
       inboxDeltaLink: "https://graph.microsoft.com/inbox-delta-old",
       sentDeltaLink: "https://graph.microsoft.com/sent-delta-old",
       lastSyncedAt: "2026-02-01T00:00:00.000Z",
@@ -317,6 +466,7 @@ describe("Outlook connector", () => {
     const connector = createOutlookConnector();
     const gapSentAt = new Date(Date.now() - 60_000).toISOString();
     const cursor = JSON.stringify({
+      bodyVersion: 1,
       inboxDeltaLink: "https://graph.microsoft.com/inbox-delta-current",
       sentDeltaLink: "https://graph.microsoft.com/sent-delta-expired",
       lastSyncedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -387,6 +537,7 @@ describe("Outlook connector", () => {
       throw new Error(`unexpected fetch ${url.toString()}`);
     });
     const cursor = JSON.stringify({
+      bodyVersion: 1,
       inboxDeltaLink: "https://graph.microsoft.com/inbox-delta-current",
       sentDeltaLink: "https://graph.microsoft.com/sent-delta-current",
       lastSyncedAt: "2026-02-01T00:00:00.000Z",
@@ -698,6 +849,7 @@ describe("Outlook connector", () => {
       subject: "Quarterly numbers",
       body: "<p>Here are the <b>numbers</b>.</p>",
       bodyType: "html",
+      bodyPreview: "Here are the numbers.",
     });
     const sentJane = outlookMessage("sent-jane", {
       from: { name: "Owner", address: "owner@canvasx.ai" },

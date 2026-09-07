@@ -33,6 +33,7 @@ const DEFAULT_MAX_INFLIGHT = 4;
 const PAGE_SIZE = 50;
 const BODY_PAGE_SIZE = 50;
 const RECIPROCITY_CURSOR_LIMIT = 5000;
+const OUTLOOK_BODY_VERSION = 1;
 
 type GraphClient = ReturnType<typeof createMicrosoftGraphClient>;
 
@@ -80,6 +81,7 @@ interface OutlookCursor {
   sentDeltaLink?: string;
   lastSyncedAt: string;
   syncWindowStart?: string;
+  bodyVersion: number;
   reciprocityEmails?: string[];
 }
 
@@ -164,7 +166,11 @@ function parseCursor(cursor: string | null): OutlookCursor | null {
       since?: string;
     };
     if (parsed.mode === "time" && parsed.since) {
-      return { lastSyncedAt: parsed.since, reciprocityEmails: parsed.reciprocityEmails };
+      return {
+        lastSyncedAt: parsed.since,
+        bodyVersion: parsed.bodyVersion ?? 0,
+        reciprocityEmails: parsed.reciprocityEmails,
+      };
     }
     if (!parsed.lastSyncedAt) return null;
     return {
@@ -172,6 +178,7 @@ function parseCursor(cursor: string | null): OutlookCursor | null {
       sentDeltaLink: parsed.sentDeltaLink,
       lastSyncedAt: parsed.lastSyncedAt,
       syncWindowStart: parsed.syncWindowStart,
+      bodyVersion: parsed.bodyVersion ?? 0,
       reciprocityEmails: parsed.reciprocityEmails,
     };
   } catch {
@@ -276,7 +283,12 @@ export function toNormalizedOutlookEmail(
     bcc: toEmailAddrs(message.bccRecipients),
     headers,
     bodyHtml: bodyType === "html" ? bodyContent : null,
-    bodyText: bodyType === "html" ? (message.bodyPreview ?? null) : (bodyContent ?? message.bodyPreview ?? null),
+    bodyText:
+      bodyType === "html"
+        ? bodyContent?.trim()
+          ? null
+          : (message.bodyPreview ?? null)
+        : (bodyContent ?? message.bodyPreview ?? null),
     providerUrl: message.webLink ?? null,
     ownerEmail: normalizeEmailValue(ownerEmail),
     folder,
@@ -521,6 +533,7 @@ async function syncFolder(
   folder: FolderConfig,
   cursor: OutlookCursor | null,
   since: string,
+  windowStart: string,
   maxMessages: number,
   logger: Logger,
 ): Promise<FolderSyncResult> {
@@ -529,9 +542,18 @@ async function syncFolder(
     try {
       const result = await readFolderDelta(graph, folder, deltaLink, maxMessages);
       logRemovedMessages(folder.key, result.removedProviderFileIds, logger);
+      const messages =
+        cursor.bodyVersion < OUTLOOK_BODY_VERSION
+          ? mergeFolderMessages(
+              folder,
+              await listFolderMessages(graph, folder, windowStart, maxMessages),
+              result.messages,
+              maxMessages,
+            )
+          : result.messages;
       return {
         folder: folder.key,
-        messages: result.messages,
+        messages,
         cursorLink: result.cursorLink ?? deltaLink,
         removedProviderFileIds: result.removedProviderFileIds,
       };
@@ -641,7 +663,7 @@ export function createOutlookConnector(): Connector {
 
       const folderResults: FolderSyncResult[] = [];
       await runWithConcurrency(FOLDERS, Math.min(maxInflight, FOLDERS.length), async (folder) => {
-        folderResults.push(await syncFolder(graph, folder, parsedCursor, since, maxMessages, logger));
+        folderResults.push(await syncFolder(graph, folder, parsedCursor, since, windowStart, maxMessages, logger));
       });
       folderResults.sort((a, b) => (a.folder === b.folder ? 0 : a.folder === "inbox" ? -1 : 1));
 
@@ -663,6 +685,7 @@ export function createOutlookConnector(): Connector {
       const cursorParts: Omit<OutlookCursor, "reciprocityEmails"> = {
         lastSyncedAt: new Date().toISOString(),
         syncWindowStart: windowStart,
+        bodyVersion: OUTLOOK_BODY_VERSION,
         inboxDeltaLink:
           folderResults.find((result) => result.folder === "inbox")?.cursorLink ?? parsedCursor?.inboxDeltaLink,
         sentDeltaLink:
@@ -696,6 +719,7 @@ export function createOutlookConnector(): Connector {
       const cursorParts: Omit<OutlookCursor, "reciprocityEmails"> = {
         lastSyncedAt: parsedCursor?.lastSyncedAt ?? new Date().toISOString(),
         syncWindowStart: parsedCursor?.syncWindowStart,
+        bodyVersion: parsedCursor?.bodyVersion ?? OUTLOOK_BODY_VERSION,
         inboxDeltaLink: parsedCursor?.inboxDeltaLink,
         sentDeltaLink: parsedCursor?.sentDeltaLink,
       };
