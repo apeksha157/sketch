@@ -212,11 +212,7 @@ function runConnectorSyncSuite(label: string, getDb: () => Promise<Kysely<DB>>) 
         effectiveAt: "2025-01-01T09:06:00.000Z",
       });
 
-      await runConnectorSync(db, connectorConfig.id, createTestLogger(), {
-        WHATSAPP_SLICE_GAP_MINUTES: 5,
-        WHATSAPP_SLICE_MAX_AGE_MINUTES: 120,
-        WHATSAPP_SLICE_MAX_MESSAGES: 50,
-      });
+      await runConnectorSync(db, connectorConfig.id, createTestLogger(), {});
 
       const configuredSlices = await listSlicesForConversation(db, configuredSeeded.conversationId);
       expect(configuredSeeded.group).toMatchObject({

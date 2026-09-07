@@ -147,6 +147,12 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
       return row?.id ?? null;
     },
 
+    /**
+     * Requeued slices (migration 155 cleared their indexed_file_id) still own a
+     * live file row keyed by provider_file_id = slice id. Without the fallback
+     * lookup by provider_file_id, a slice whose conversation no longer resolves
+     * any member would leave that old file active under stale ACLs forever.
+     */
     async archiveSliceFile(sliceId: string, fileType: string): Promise<void> {
       const slice = await db
         .selectFrom("conversation_slices")

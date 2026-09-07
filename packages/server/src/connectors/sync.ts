@@ -170,9 +170,6 @@ export async function runConnectorSync(
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
       | "CONTACT_POINT_DEFAULT_REGION"
-      | "WHATSAPP_SLICE_GAP_MINUTES"
-      | "WHATSAPP_SLICE_MAX_AGE_MINUTES"
-      | "WHATSAPP_SLICE_MAX_MESSAGES"
       | "WHATSAPP_CHUNK_WINDOW_MESSAGES"
       | "WHATSAPP_CHUNK_WINDOW_TOKENS"
       | "WHATSAPP_CHUNK_MIN_MESSAGES"
@@ -268,9 +265,6 @@ export async function runConnectorSync(
         : config.connector_type === "whatsapp"
           ? {
               ...storedScopeConfig,
-              sliceGapMinutes: storedScopeConfig.sliceGapMinutes ?? appConfig?.WHATSAPP_SLICE_GAP_MINUTES,
-              sliceMaxAgeMinutes: storedScopeConfig.sliceMaxAgeMinutes ?? appConfig?.WHATSAPP_SLICE_MAX_AGE_MINUTES,
-              sliceMaxMessages: storedScopeConfig.sliceMaxMessages ?? appConfig?.WHATSAPP_SLICE_MAX_MESSAGES,
               chunkWindowMessages: storedScopeConfig.chunkWindowMessages ?? appConfig?.WHATSAPP_CHUNK_WINDOW_MESSAGES,
               chunkWindowTokens: storedScopeConfig.chunkWindowTokens ?? appConfig?.WHATSAPP_CHUNK_WINDOW_TOKENS,
               chunkMinMessages: storedScopeConfig.chunkMinMessages ?? appConfig?.WHATSAPP_CHUNK_MIN_MESSAGES,

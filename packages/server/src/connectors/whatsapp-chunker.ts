@@ -28,19 +28,9 @@ export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_CYCLE_MESSAGES = 1500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PENDING_SLICES_MAX = 200;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PENDING_FILES_MAX = 500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_OPEN_FACTS_MAX = 5000;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_MESSAGES = 250;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_TOKENS = 7500;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES = 10;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_TARGET_MESSAGES = 40;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_MESSAGES = 80;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_TOKENS = 1500;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_TICK_MINUTES = 30;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_IDLE_CLOSE_HOURS = 96;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES = 15;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_REASONING_EFFORT = "high" as const;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_TOPIC_REGISTRY_CAP = 30;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL = 4;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN = 4;
 
 const MINUTE_MS = 60 * 1000;
 const DEFAULT_CLAIM_STALE_MS = 5 * MINUTE_MS;
@@ -253,7 +243,8 @@ function emptyRunSummary(): WhatsAppChunkerRunSummary {
 }
 
 function hasAttachments(value: string | null): boolean {
-  return parseAttachmentsJson(value).count !== 0;
+  const parsed = parseAttachmentsJson(value);
+  return parsed.count > 0 || parsed.malformed;
 }
 
 function isControlMessage(text: string): boolean {
