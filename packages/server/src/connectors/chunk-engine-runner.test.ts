@@ -215,4 +215,49 @@ describe("shared chunk stream tick", () => {
     expect(generate).not.toHaveBeenCalled();
     expect(stampAttempt).not.toHaveBeenCalled();
   });
+
+  it("never retries a non-retryable pass error and counts it once", async () => {
+    const conversationId = await seedStream({ providerId: "C-fatal", messages: 2 });
+    const adapter = createSlackChannelChunkAdapter({ conversationId, knobs });
+    let calls = 0;
+    const generate = vi.fn(validBoundary);
+
+    const result = await runStreamTick({
+      ...tickOptions(conversationId, { generate }),
+      adapter: {
+        ...adapter,
+        loadOpenAndPending: async () => {
+          calls += 1;
+          throw new Error("column conversation_messages.text does not exist");
+        },
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result.failed).toBe(true);
+    expect(result.windowsProcessed).toBe(0);
+    expect(result.pendingRemaining).toBe(true);
+  });
+
+  it("keeps the before_pass stamp when the pass is then skipped by claim_unavailable", async () => {
+    const conversationId = await seedStream({ providerId: "C-before-pass", messages: 2 });
+    await db
+      .updateTable("conversation_slice_stream_cursors")
+      .set({ claim_token: "other-run", claimed_at: now.toISOString() })
+      .where("conversation_id", "=", conversationId)
+      .where("stream_key", "=", "channel")
+      .execute();
+    const generate = vi.fn(validBoundary);
+    const stampAttempt = vi.fn(async () => {});
+
+    const result = await runStreamTick({
+      ...tickOptions(conversationId, { generate, stampAttempt }),
+      stampWhen: "before_pass" as const,
+    });
+
+    expect(result.skippedReason).toBe("claim_unavailable");
+    expect(result.failed).toBe(false);
+    expect(stampAttempt).toHaveBeenCalledTimes(1);
+    expect(generate).not.toHaveBeenCalled();
+  });
 });

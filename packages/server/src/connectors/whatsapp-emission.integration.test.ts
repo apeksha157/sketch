@@ -1201,6 +1201,90 @@ function runEmissionPagingSuite(label: string, createDb: () => Promise<Kysely<DB
       expect(secondRun).toEqual(ordered.slice(WHATSAPP_EMISSION_PAGE_SIZE));
       expect([...firstRun, ...secondRun]).toEqual(ordered);
     }, 60000);
+
+    it("keeps a started_at tie that straddles a page boundary whole", async () => {
+      const seeded = await seedSlice(db, { verdict: "kept", status: "closed" });
+      const base = await db
+        .selectFrom("conversation_slices")
+        .select(["roster_snapshot"])
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const extra = WHATSAPP_EMISSION_PAGE_SIZE + 4;
+      const distinctStartedAt = (index: number) =>
+        `2026-07-${String(2 + Math.floor(index / 24)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`;
+      const TIE_FIRST = 197;
+      const TIE_LAST = 200;
+      const startedAt = (index: number) =>
+        distinctStartedAt(index >= TIE_FIRST && index <= TIE_LAST ? TIE_FIRST : index);
+      await setSliceWindow(db, seeded.sliceId, "2026-07-01T00:00:00.000Z", "2026-07-01T00:01:00.000Z");
+      await db
+        .insertInto("conversation_messages")
+        .values(
+          Array.from({ length: extra }, (_value, index) => ({
+            conversation_id: seeded.conversationId,
+            provider_message_id: `tied-msg-${String(index).padStart(4, "0")}`,
+            sender_jid: "15550000002@s.whatsapp.net",
+            sender_name: "External Buyer",
+            text: "We agreed the pilot scope today.",
+            received_at: startedAt(index),
+            effective_at: startedAt(index),
+          })),
+        )
+        .execute();
+      const tiedMessages = await db
+        .selectFrom("conversation_messages")
+        .select(["id", "provider_message_id"])
+        .where("conversation_id", "=", seeded.conversationId)
+        .where("provider_message_id", "like", "tied-msg-%")
+        .orderBy("provider_message_id", "asc")
+        .execute();
+      await db
+        .insertInto("conversation_slices")
+        .values(
+          tiedMessages.map((message, index) => ({
+            id: `tied-slice-${String(index).padStart(4, "0")}`,
+            conversation_id: seeded.conversationId,
+            first_message_id: message.id,
+            last_message_id: message.id,
+            started_at: startedAt(index),
+            ended_at: startedAt(index),
+            message_count: 1,
+            denoised_message_ids: JSON.stringify([message.id]),
+            flush_reason: "gap" as const,
+            roster_snapshot: base.roster_snapshot,
+            salience_verdict: "kept",
+            status: "closed" as const,
+          })),
+        )
+        .execute();
+      const ordered = await db
+        .selectFrom("conversation_slices")
+        .select(["id", "started_at"])
+        .where("conversation_id", "=", seeded.conversationId)
+        .orderBy("started_at", "asc")
+        .orderBy("id", "asc")
+        .execute();
+      expect(ordered).toHaveLength(extra + 1);
+      const tieTimestamp = distinctStartedAt(TIE_FIRST);
+      const tiedPositions = ordered.flatMap((row, position) => (row.started_at === tieTimestamp ? [position] : []));
+      expect(tiedPositions).toEqual([198, 199, 200, 201]);
+
+      const emitted: string[] = [];
+      const pages: number[] = [];
+      for await (const item of emitWhatsAppSyncedItems({
+        db,
+        logger: fakeLogger(),
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date("2026-08-01T00:00:00.000Z"),
+        onPageListedSliceCount: (count) => pages.push(count),
+      })) {
+        emitted.push(item.providerFileId);
+      }
+
+      expect(pages).toEqual([WHATSAPP_EMISSION_PAGE_SIZE, ordered.length - WHATSAPP_EMISSION_PAGE_SIZE]);
+      expect(emitted).toEqual(ordered.map((row) => row.id));
+      expect(new Set(emitted).size).toBe(ordered.length);
+    }, 60000);
   });
 }
 
