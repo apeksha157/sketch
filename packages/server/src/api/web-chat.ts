@@ -1037,9 +1037,70 @@ function webChatCurrentMessage(
 const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGES = 12;
 const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGE_LENGTH = 1200;
 const AUTOMATION_BUILDER_MAX_TURNS = 24;
-const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 48;
+const AUTOMATION_BUILDER_CONTINUATION_TURNS = 12;
+const AUTOMATION_BUILDER_MAX_TOTAL_TURNS = AUTOMATION_BUILDER_MAX_TURNS + AUTOMATION_BUILDER_CONTINUATION_TURNS;
+const AUTOMATION_BUILDER_MAX_AUTO_CONTINUATIONS = 1;
+const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 96;
 const AUTOMATION_BUILDER_MAX_REPEATED_TOOL_CALLS = 3;
 const AUTOMATION_BUILDER_MAX_PERSISTED_TEXT_BYTES = 24 * 1024;
+const AUTOMATION_BUILDER_CONTINUATION_PROMPT =
+  "Continue this builder turn from the authoritative automation state now loaded above. Inspect the current revision and saved tool outcomes before acting, reuse completed writes, and finish the user's request if the state is ready. Do not repeat a successful side effect or exploratory request whose outcome is already known.";
+
+function builderResultReachedStepLimit(result: RunAgentResult, maxTurns: number): boolean {
+  return (
+    !result.pendingInteraction &&
+    !result.pendingQuestion &&
+    (result.rawUsage.errorSubtype === "error_max_turns" ||
+      (result.rawUsage.stopReason === "tool_use" && result.rawUsage.numTurns >= maxTurns))
+  );
+}
+
+function mergeBuilderRunResults(previous: RunAgentResult | undefined, next: RunAgentResult): RunAgentResult {
+  if (!previous) return next;
+
+  return {
+    ...next,
+    messageSent: previous.messageSent || next.messageSent,
+    costUsd: previous.costUsd + next.costUsd,
+    auxCostUsd: previous.auxCostUsd + next.auxCostUsd,
+    pendingUploads: [...new Set([...previous.pendingUploads, ...next.pendingUploads])],
+    ...(previous.pendingIntegrationConnections || next.pendingIntegrationConnections
+      ? {
+          pendingIntegrationConnections: [
+            ...(previous.pendingIntegrationConnections ?? []),
+            ...(next.pendingIntegrationConnections ?? []),
+          ],
+        }
+      : {}),
+    ...(next.pendingInteraction || previous.pendingInteraction
+      ? { pendingInteraction: next.pendingInteraction ?? previous.pendingInteraction }
+      : {}),
+    ...(next.pendingQuestion || previous.pendingQuestion
+      ? { pendingQuestion: next.pendingQuestion ?? previous.pendingQuestion }
+      : {}),
+    trace: {
+      ...next.trace,
+      progressEvents: [...previous.trace.progressEvents, ...next.trace.progressEvents],
+      finalText: next.trace.finalText?.trim() ? next.trace.finalText : previous.trace.finalText,
+      automationArtifacts: [...previous.trace.automationArtifacts, ...next.trace.automationArtifacts],
+    },
+    rawUsage: {
+      ...next.rawUsage,
+      inputTokens: previous.rawUsage.inputTokens + next.rawUsage.inputTokens,
+      outputTokens: previous.rawUsage.outputTokens + next.rawUsage.outputTokens,
+      cacheReadTokens: previous.rawUsage.cacheReadTokens + next.rawUsage.cacheReadTokens,
+      cacheCreationTokens: previous.rawUsage.cacheCreationTokens + next.rawUsage.cacheCreationTokens,
+      webSearchRequests: previous.rawUsage.webSearchRequests + next.rawUsage.webSearchRequests,
+      webFetchRequests: previous.rawUsage.webFetchRequests + next.rawUsage.webFetchRequests,
+      durationApiMs: previous.rawUsage.durationApiMs + next.rawUsage.durationApiMs,
+      numTurns: previous.rawUsage.numTurns + next.rawUsage.numTurns,
+      isResumedSession: previous.rawUsage.isResumedSession || next.rawUsage.isResumedSession,
+      toolCalls: [...previous.rawUsage.toolCalls, ...next.rawUsage.toolCalls],
+      auxLlmCalls: [...previous.rawUsage.auxLlmCalls, ...next.rawUsage.auxLlmCalls],
+      sdkCostUsd: previous.rawUsage.sdkCostUsd + next.rawUsage.sdkCostUsd,
+    },
+  };
+}
 
 function isAutomationBuilderPlanOnlyMessage(message: string): boolean {
   return /\b(?:plan only|just plan|planning only|do not (?:make )?(?:any )?changes|don't (?:make )?(?:any )?changes|without (?:making|applying) changes|no changes)\b/i.test(
@@ -2864,6 +2925,14 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
       let sawAutomationTool = false;
       let bufferedTextAfterAutomationTool = "";
       let builderToolCalls = 0;
+      let activeBuilderContext = automationBuilderContext;
+      let activeTaskContext = taskContext;
+      let activeBuilderHistory = builderHistory;
+      let activeUserMessage = userMessage;
+      let builderSegmentMaxTurns = AUTOMATION_BUILDER_MAX_TURNS;
+      let builderTurnsUsed = 0;
+      let builderContinuationCount = 0;
+      let builderStepLimitReached = false;
       const leaseMaintenance =
         automationBuilderContext && builderLease && builderLock?.expiresAt
           ? maintainBuilderRunLease({
@@ -2890,6 +2959,78 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
                 ),
             })
           : undefined;
+      const reloadBuilderContextForContinuation = async () => {
+        if (!automationBuilderContext || !builderLease) return;
+        const refreshedContext = await resolveAutomationBuilderContext({
+          deps,
+          currentUserId: currentUser.id,
+          role: c.get("role"),
+          automationTaskId: automationBuilderContext.task.id,
+          builderConversationId: conversationId,
+          logger: deps.logger,
+        });
+        if (!refreshedContext) {
+          abortBuilderRun("runtime_error");
+          throw new Error("Automation builder state could not be reloaded");
+        }
+
+        const access = await resolveAutomationBuilderConversationAccess({
+          deps,
+          taskId: refreshedContext.task.id,
+          conversationId,
+          transcriptUserId: currentUser.id,
+          lease: builderLease,
+          logger: deps.logger,
+        });
+        if (access.kind !== "active") {
+          abortBuilderRun(access.kind === "stale" || access.kind === "locked" ? "lease_lost" : "runtime_error");
+          throw new Error("Automation builder lease could not be confirmed");
+        }
+
+        builderLock = access.lock;
+        activeBuilderContext = refreshedContext;
+        activeTaskContext = automationBuilderTaskContext({
+          context: refreshedContext,
+          currentUser,
+          role: c.get("role"),
+          conversationId,
+          lease: builderLease,
+          planOnly: builderPlanOnly,
+        });
+        activeBuilderHistory = await automationBuilderHistoryForPrompt({
+          context: refreshedContext,
+          builderConversationId: conversationId,
+          config: deps.config,
+          workspaceDir,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          logger: deps.logger,
+        });
+        activeUserMessage = buildSketchContext({
+          messages: activeBuilderHistory,
+          currentUserName: currentUser.name,
+          currentMessage: webChatCurrentMessage(
+            AUTOMATION_BUILDER_CONTINUATION_PROMPT,
+            refreshedContext,
+            builderPlanOnly,
+          ),
+          currentUserEmail: currentUser.email,
+          currentUserPhone: currentUser.whatsapp_number,
+          workspaceDir,
+          orgDir: deps.config.CLAUDE_CONFIG_DIR,
+          timezone: currentUser.timezone,
+          isSharedContext: false,
+        });
+        deps.logger.info(
+          {
+            taskId: refreshedContext.task.id,
+            conversationId,
+            revision: refreshedContext.task.revision,
+            continuation: builderContinuationCount + 1,
+          },
+          "Reloaded automation builder state before continuation",
+        );
+      };
       let builderSessionId: string | undefined;
       let lastBuilderFailure: ToolResultEvent | undefined;
       let repeatedBuilderFailures = 0;
@@ -3052,13 +3193,15 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           : webChatRunKey(currentUser.id, conversationId);
         const runAgent = async () => {
           const runtimeContextType =
-            taskContext && taskContext.contextType !== "dm" ? ("channel_mention" as const) : ("dm" as const);
+            activeTaskContext && activeTaskContext.contextType !== "dm"
+              ? ("channel_mention" as const)
+              : ("dm" as const);
           const agentEnv = deps.listAgentEnvForRuntime
             ? await deps.listAgentEnvForRuntime({
                 currentUserId: currentUser.id,
                 contextType: runtimeContextType,
                 allowOrgSharedEnv: true,
-                ...(taskContext ? { taskContext } : {}),
+                ...(activeTaskContext ? { taskContext: activeTaskContext } : {}),
               })
             : undefined;
           return deps.runAgent({
@@ -3066,7 +3209,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             workspaceKey: currentUser.id,
             threadTs: conversationId,
             isAdminReadAllEnabled,
-            userMessage,
+            userMessage: activeUserMessage,
             workspaceDir,
             claudeConfigDir: deps.config.CLAUDE_CONFIG_DIR,
             userName: currentUser.name,
@@ -3077,22 +3220,24 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             userPhone: currentUser.whatsapp_number,
             logger: deps.logger,
             getSlack: deps.getSlack,
-            platform: deliveryPlatform,
+            platform: activeTaskContext?.platform ?? deliveryPlatform,
             responseSurface: "web",
             contextType: runtimeContextType,
-            automationBuilderChat: Boolean(automationBuilderContext),
+            automationBuilderChat: Boolean(activeBuilderContext),
             onRunStart: async () => {
-              if (!automationBuilderContext) return;
-              builderExecutionStartedAt = Date.now();
-              builderBudgetTimer = setTimeout(
-                () => abortBuilderRun("elapsed_time_limit"),
-                deps.config.AUTOMATION_BUILDER_MAX_ELAPSED_MS,
-              );
+              if (!activeBuilderContext) return;
+              if (builderExecutionStartedAt === undefined) {
+                builderExecutionStartedAt = Date.now();
+                builderBudgetTimer = setTimeout(
+                  () => abortBuilderRun("elapsed_time_limit"),
+                  deps.config.AUTOMATION_BUILDER_MAX_ELAPSED_MS,
+                );
+              }
               await leaseMaintenance?.refresh();
               abortController.signal.throwIfAborted();
             },
             onProgressEvent: async (event) => {
-              if (automationBuilderContext && event.kind === "tool_use") {
+              if (activeBuilderContext && event.kind === "tool_use") {
                 builderToolCalls += 1;
                 if (builderToolCalls > AUTOMATION_BUILDER_MAX_TOOL_CALLS) {
                   abortBuilderRun("tool_call_limit");
@@ -3126,7 +3271,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               }
             },
             onToolResult: async (event) => {
-              if (!automationBuilderContext) return;
+              if (!activeBuilderContext) return;
               if (!event.isError) {
                 lastBuilderFailure = undefined;
                 repeatedBuilderFailures = 0;
@@ -3153,7 +3298,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             persistSession: true,
             ...(automationBuilderContext
               ? {
-                  maxTurns: AUTOMATION_BUILDER_MAX_TURNS,
+                  maxTurns: builderSegmentMaxTurns,
                   maxPersistedTextBytes: AUTOMATION_BUILDER_MAX_PERSISTED_TEXT_BYTES,
                 }
               : {}),
@@ -3174,17 +3319,53 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             sendDm: deps.sendDm,
             sendTargetMessage: deps.sendTargetMessage,
             ...(attachments.length > 0 ? { attachments } : {}),
-            ...(taskContext ? { taskContext } : {}),
-            ...(taskContext?.currentAutomation ? { currentAutomation: taskContext.currentAutomation } : {}),
+            ...(activeTaskContext ? { taskContext: activeTaskContext } : {}),
+            ...(activeTaskContext?.currentAutomation ? { currentAutomation: activeTaskContext.currentAutomation } : {}),
           });
         };
         let result: RunAgentResult;
         try {
-          result = await withWebChatAgentRunLock(runKey, () =>
-            activeBuilderTaskId
-              ? runAgent()
-              : withActiveWebChatRun(currentUser.id, conversationId, abortController, runAgent),
-          );
+          result = await withWebChatAgentRunLock(runKey, async () => {
+            let aggregateResult: RunAgentResult | undefined;
+            while (true) {
+              const segmentResult = activeBuilderTaskId
+                ? await runAgent()
+                : await withActiveWebChatRun(currentUser.id, conversationId, abortController, runAgent);
+              const reachedStepLimit = Boolean(
+                activeBuilderTaskId && builderResultReachedStepLimit(segmentResult, builderSegmentMaxTurns),
+              );
+              if (activeBuilderTaskId) {
+                builderTurnsUsed += Math.max(
+                  segmentResult.rawUsage.numTurns,
+                  reachedStepLimit ? builderSegmentMaxTurns : 0,
+                );
+              }
+              aggregateResult = mergeBuilderRunResults(aggregateResult, segmentResult);
+              if (!reachedStepLimit) return aggregateResult;
+              if (abortController.signal.aborted) return aggregateResult;
+
+              const turnsRemaining = AUTOMATION_BUILDER_MAX_TOTAL_TURNS - builderTurnsUsed;
+              if (builderContinuationCount >= AUTOMATION_BUILDER_MAX_AUTO_CONTINUATIONS || turnsRemaining <= 0) {
+                builderStepLimitReached = true;
+                return aggregateResult;
+              }
+
+              builderContinuationCount += 1;
+              builderSegmentMaxTurns = Math.min(AUTOMATION_BUILDER_MAX_TURNS, turnsRemaining);
+              deps.logger.info(
+                {
+                  taskId: activeBuilderTaskId,
+                  conversationId,
+                  continuation: builderContinuationCount,
+                  turnsUsed: builderTurnsUsed,
+                  turnsRemaining,
+                  toolCalls: builderToolCalls,
+                },
+                "Continuing automation builder after step budget",
+              );
+              await reloadBuilderContextForContinuation();
+            }
+          });
         } finally {
           leaseMaintenance?.stop();
           clearTimeout(builderBudgetTimer);
@@ -3195,13 +3376,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           throw new Error("Automation builder run aborted");
         }
 
-        if (
-          automationBuilderContext &&
-          !result.pendingInteraction &&
-          !result.pendingQuestion &&
-          (result.rawUsage.errorSubtype === "error_max_turns" ||
-            (result.rawUsage.stopReason === "tool_use" && result.rawUsage.numTurns >= AUTOMATION_BUILDER_MAX_TURNS))
-        ) {
+        if (automationBuilderContext && builderStepLimitReached) {
           abortBuilderRun("step_limit");
           throw new Error("Automation builder step limit reached");
         }
