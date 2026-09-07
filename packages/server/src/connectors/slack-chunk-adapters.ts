@@ -11,6 +11,7 @@ import {
   type ChunkStreamAdapter,
   createStreamChunkCursorStore,
 } from "./chunk-engine";
+import { configDefault, resolveChunkEngineKnobs } from "./config-default";
 import {
   SLACK_CHANNEL_STREAM_KEY,
   isIndexableSlackChunkMessage,
@@ -188,50 +189,21 @@ export function createSlackThreadChunkAdapter(params: SlackThreadAdapterParams):
   return createAdapter(params, params.threadTs);
 }
 
-type SlackChunkEngineConfig = Pick<
-  Config,
-  | "SLACK_CHUNK_WINDOW_MESSAGES"
-  | "SLACK_CHUNK_WINDOW_TOKENS"
-  | "SLACK_CHUNK_MIN_MESSAGES"
-  | "SLACK_CHUNK_TARGET_MESSAGES"
-  | "SLACK_CHUNK_MAX_MESSAGES"
-  | "SLACK_CHUNK_MAX_TOKENS"
-  | "SLACK_THREAD_MIN_MESSAGES"
-  | "SLACK_CHUNK_TICK_MINUTES"
-  | "SLACK_CHUNK_IDLE_CLOSE_HOURS"
-  | "SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
-  | "SLACK_CHUNK_MODEL"
-  | "SLACK_CHUNK_REASONING_EFFORT"
-  | "SLACK_CHUNK_BURST_THRESHOLD_MESSAGES"
-  | "SLACK_CHUNK_TOPIC_REGISTRY_CAP"
-  | "SLACK_CHUNK_CHANNEL_WORKER_POOL"
-  | "SLACK_CHUNK_MAX_WINDOWS_PER_RUN"
->;
-
-export function resolveSlackChunkEngineKnobs(config: SlackChunkEngineConfig): {
+/**
+ * Threads carry their own minimum-message floor; every other knob is shared
+ * with the channel stream.
+ */
+export function resolveSlackChunkEngineKnobs(appConfig: Partial<Config> | undefined): {
   channel: ChunkEngineKnobs;
   thread: ChunkEngineKnobs;
 } {
-  const shared: ChunkEngineKnobs = {
-    windowMessages: config.SLACK_CHUNK_WINDOW_MESSAGES,
-    windowTokens: config.SLACK_CHUNK_WINDOW_TOKENS,
-    minMessages: config.SLACK_CHUNK_MIN_MESSAGES,
-    targetMessages: config.SLACK_CHUNK_TARGET_MESSAGES,
-    maxMessages: config.SLACK_CHUNK_MAX_MESSAGES,
-    maxTokens: config.SLACK_CHUNK_MAX_TOKENS,
-    tickMinutes: config.SLACK_CHUNK_TICK_MINUTES,
-    idleCloseHours: config.SLACK_CHUNK_IDLE_CLOSE_HOURS,
-    provisionalRefreshMessages: config.SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
-    model: config.SLACK_CHUNK_MODEL,
-    reasoningEffort: config.SLACK_CHUNK_REASONING_EFFORT,
-    burstThresholdMessages: config.SLACK_CHUNK_BURST_THRESHOLD_MESSAGES,
-    topicRegistryCap: config.SLACK_CHUNK_TOPIC_REGISTRY_CAP,
-    groupWorkerPool: config.SLACK_CHUNK_CHANNEL_WORKER_POOL,
-    maxWindowsPerRun: config.SLACK_CHUNK_MAX_WINDOWS_PER_RUN,
-  };
+  const channel = resolveChunkEngineKnobs("SLACK_CHUNK", appConfig);
   return {
-    channel: shared,
-    thread: { ...shared, minMessages: config.SLACK_THREAD_MIN_MESSAGES },
+    channel,
+    thread: {
+      ...channel,
+      minMessages: appConfig?.SLACK_THREAD_MIN_MESSAGES ?? configDefault("SLACK_THREAD_MIN_MESSAGES"),
+    },
   };
 }
 

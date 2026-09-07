@@ -13,7 +13,9 @@ import type { DB } from "../db/schema";
 import { MAX_MATERIALIZATION_ATTEMPTS } from "../entities/materialize-replay";
 import { isReasoningTextCommand, isToolProgressCommand } from "../progress-settings";
 import { WHATSAPP_PROVIDER_TIMESTAMP_MAX_FUTURE_MS } from "../whatsapp/provider-timestamp";
+import type { ChunkEngineKnobs } from "./chunk-engine";
 import { estimateTokens } from "./chunking";
+import { resolveChunkEngineKnobs } from "./config-default";
 import { isRetryableProviderError } from "./provider-fallback";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import { runWithConcurrency } from "./sync-utils";
@@ -47,23 +49,7 @@ const SINGLE_EMOJI_PATTERN =
 
 export type WhatsAppLlmReasoningEffort = "low" | "medium" | "high";
 
-export interface WhatsAppLlmChunkerKnobs {
-  windowMessages: number;
-  windowTokens: number;
-  minMessages: number;
-  targetMessages: number;
-  maxMessages: number;
-  maxTokens: number;
-  tickMinutes: number;
-  idleCloseHours: number;
-  provisionalRefreshMessages: number;
-  model: string | null;
-  reasoningEffort: WhatsAppLlmReasoningEffort;
-  burstThresholdMessages: number | null;
-  topicRegistryCap: number;
-  groupWorkerPool: number;
-  maxWindowsPerRun: number;
-}
+export type WhatsAppLlmChunkerKnobs = ChunkEngineKnobs;
 
 export interface WhatsAppLlmChunkerGroupOverrides {
   chunkWindowMessages: number | null;
@@ -182,71 +168,46 @@ function resolveReasoningEffort(
   return defaultValue ?? DEFAULT_WHATSAPP_LLM_CHUNK_REASONING_EFFORT;
 }
 
+/**
+ * Per-group column overrides win over the connector scope config, which wins
+ * over the WHATSAPP_CHUNK schema defaults. Group and scope values arrive
+ * unvalidated, so both stay behind the positive-integer guards.
+ */
 export function resolveWhatsAppLlmChunkerKnobs(
   group: WhatsAppGroupIndexingConfig & Partial<WhatsAppLlmChunkerGroupOverrides>,
   defaults: Partial<WhatsAppLlmChunkerKnobs> = {},
 ): WhatsAppLlmChunkerKnobs {
+  const base = resolveChunkEngineKnobs("WHATSAPP_CHUNK", undefined);
   return {
-    windowMessages: resolvePositiveInteger(
-      group.chunkWindowMessages,
-      defaults.windowMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_MESSAGES,
-    ),
-    windowTokens: resolvePositiveInteger(
-      group.chunkWindowTokens,
-      defaults.windowTokens,
-      DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_TOKENS,
-    ),
-    minMessages: resolvePositiveInteger(
-      group.chunkMinMessages,
-      defaults.minMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES,
-    ),
-    targetMessages: resolvePositiveInteger(
-      group.chunkTargetMessages,
-      defaults.targetMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_TARGET_MESSAGES,
-    ),
-    maxMessages: resolvePositiveInteger(
-      group.chunkMaxMessages,
-      defaults.maxMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_MAX_MESSAGES,
-    ),
-    maxTokens: resolvePositiveInteger(group.chunkMaxTokens, defaults.maxTokens, DEFAULT_WHATSAPP_LLM_CHUNK_MAX_TOKENS),
-    tickMinutes: resolvePositiveInteger(
-      group.chunkTickMinutes,
-      defaults.tickMinutes,
-      DEFAULT_WHATSAPP_LLM_CHUNK_TICK_MINUTES,
-    ),
-    idleCloseHours: resolvePositiveInteger(
-      group.chunkIdleCloseHours,
-      defaults.idleCloseHours,
-      DEFAULT_WHATSAPP_LLM_CHUNK_IDLE_CLOSE_HOURS,
-    ),
+    windowMessages: resolvePositiveInteger(group.chunkWindowMessages, defaults.windowMessages, base.windowMessages),
+    windowTokens: resolvePositiveInteger(group.chunkWindowTokens, defaults.windowTokens, base.windowTokens),
+    minMessages: resolvePositiveInteger(group.chunkMinMessages, defaults.minMessages, base.minMessages),
+    targetMessages: resolvePositiveInteger(group.chunkTargetMessages, defaults.targetMessages, base.targetMessages),
+    maxMessages: resolvePositiveInteger(group.chunkMaxMessages, defaults.maxMessages, base.maxMessages),
+    maxTokens: resolvePositiveInteger(group.chunkMaxTokens, defaults.maxTokens, base.maxTokens),
+    tickMinutes: resolvePositiveInteger(group.chunkTickMinutes, defaults.tickMinutes, base.tickMinutes),
+    idleCloseHours: resolvePositiveInteger(group.chunkIdleCloseHours, defaults.idleCloseHours, base.idleCloseHours),
     provisionalRefreshMessages: resolvePositiveInteger(
       group.chunkProvisionalRefreshMessages,
       defaults.provisionalRefreshMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
+      base.provisionalRefreshMessages,
     ),
-    model: resolveModel(group.chunkModel, defaults.model),
-    reasoningEffort: resolveReasoningEffort(group.chunkReasoningEffort, defaults.reasoningEffort),
+    model: resolveModel(group.chunkModel, defaults.model ?? base.model),
+    reasoningEffort: resolveReasoningEffort(
+      group.chunkReasoningEffort,
+      defaults.reasoningEffort ?? base.reasoningEffort,
+    ),
     burstThresholdMessages:
-      positiveInteger(group.chunkBurstThresholdMessages) ?? positiveInteger(defaults.burstThresholdMessages) ?? null,
+      positiveInteger(group.chunkBurstThresholdMessages) ??
+      positiveInteger(defaults.burstThresholdMessages) ??
+      base.burstThresholdMessages,
     topicRegistryCap: resolvePositiveInteger(
       group.chunkTopicRegistryCap,
       defaults.topicRegistryCap,
-      DEFAULT_WHATSAPP_LLM_CHUNK_TOPIC_REGISTRY_CAP,
+      base.topicRegistryCap,
     ),
-    groupWorkerPool: resolvePositiveInteger(
-      group.chunkGroupWorkerPool,
-      defaults.groupWorkerPool,
-      DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL,
-    ),
-    maxWindowsPerRun: resolvePositiveInteger(
-      undefined,
-      defaults.maxWindowsPerRun,
-      DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN,
-    ),
+    groupWorkerPool: resolvePositiveInteger(group.chunkGroupWorkerPool, defaults.groupWorkerPool, base.groupWorkerPool),
+    maxWindowsPerRun: resolvePositiveInteger(undefined, defaults.maxWindowsPerRun, base.maxWindowsPerRun),
   };
 }
 

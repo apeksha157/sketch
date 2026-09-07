@@ -11,7 +11,7 @@ import {
 } from "../slack/identity-resolution";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
 import { normalizeSourceTimestampForStorage } from "../timestamps";
-import { configDefault } from "./config-default";
+import { configDefault, resolveChunkEngineKnobs } from "./config-default";
 import { buildEmissionAnchor, emissionRefreshTier, parseEmissionAnchor } from "./emission-refresh-tier";
 import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
 import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
@@ -21,10 +21,11 @@ import { SLACK_CONVERSATION_SLICE_FILE_TYPE, type SyncedItem } from "./types";
 export const SLACK_EMISSION_REFRESH_DAYS = 7;
 export const SLACK_EMISSION_PAGE_SIZE = 200;
 const MENTION_TOKEN_PATTERN = /<@(U[A-Z0-9]+)(?:\|[^>]*)?>/g;
+const SLACK_CHUNK_KNOB_DEFAULTS = resolveChunkEngineKnobs("SLACK_CHUNK", undefined);
 const SLACK_EMISSION_DEFAULTS = {
-  minMessages: configDefault("SLACK_CHUNK_MIN_MESSAGES"),
+  minMessages: SLACK_CHUNK_KNOB_DEFAULTS.minMessages,
   threadMinMessages: configDefault("SLACK_THREAD_MIN_MESSAGES"),
-  provisionalRefreshMessages: configDefault("SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"),
+  provisionalRefreshMessages: SLACK_CHUNK_KNOB_DEFAULTS.provisionalRefreshMessages,
   provisionalRefreshMaxMinutes: configDefault("SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"),
   legacyPerRun: configDefault("SLACK_EMISSION_LEGACY_PER_RUN"),
 };
