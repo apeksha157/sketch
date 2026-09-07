@@ -228,6 +228,7 @@ import * as m225 from "./migrations/225-indexed-file-raw-contents";
 import * as m226 from "./migrations/226-linkedin-company-review-continuations";
 import * as m227 from "./migrations/227-person-enrichment-attempts";
 import * as m228 from "./migrations/228-indexed-files-public-visibility-index";
+import * as m229 from "./migrations/229-external-mcp-tool-calls-access-bypass";
 import type { DB } from "./schema";
 
 /**
@@ -465,6 +466,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "226-linkedin-company-review-continuations": m226,
           "227-person-enrichment-attempts": m227,
           "228-indexed-files-public-visibility-index": m228,
+          "229-external-mcp-tool-calls-access-bypass": m229,
         };
       },
     },

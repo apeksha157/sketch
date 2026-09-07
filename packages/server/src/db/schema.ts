@@ -418,6 +418,7 @@ export interface ExternalMcpToolCallsTable {
   tool_name: string;
   success: number;
   duration_ms: number;
+  access_bypass: "admin" | null;
   called_at: Generated<string>;
 }
 
