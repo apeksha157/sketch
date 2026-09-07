@@ -298,8 +298,6 @@ async function listMessagesAfterCursor(
   cursor: ConversationSliceCursorRow,
   limit: number,
   openFirstMessageId?: number,
-  indexableOnly = false,
-  after?: { effectiveAt: string; id: number },
 ): Promise<WhatsAppChunkerMessage[]> {
   const lowerBound = cursorReceivedAtLowerBound(cursor);
   const historyStartId = openFirstMessageId;
@@ -323,7 +321,6 @@ async function listMessagesAfterCursor(
       ...(historyStartId !== undefined ? [eb.and([eb("source", "=", "history"), eb("id", ">=", historyStartId)])] : []),
     ]),
   );
-  if (indexableOnly) query = query.where("is_bot", "=", 0);
   if (cursor.last_effective_at !== null && cursor.last_message_id !== null) {
     query = query.where((eb) =>
       eb.or([
@@ -332,14 +329,6 @@ async function listMessagesAfterCursor(
           eb("effective_at", "=", cursor.last_effective_at as string),
           eb("id", ">", cursor.last_message_id as number),
         ]),
-      ]),
-    );
-  }
-  if (after) {
-    query = query.where((eb) =>
-      eb.or([
-        eb("effective_at", ">", after.effectiveAt),
-        eb.and([eb("effective_at", "=", after.effectiveAt), eb("id", ">", after.id)]),
       ]),
     );
   }
@@ -410,6 +399,17 @@ async function runLlmChunkingWithBackoff(
   );
 }
 
+/**
+ * The live tick resolves the conversation once, up front, and no longer
+ * re-checks that it still exists before the pass. Deleting a conversation
+ * cascades its slice cursor row away, so the pass claim finds nothing and the
+ * tick ends as `claim_unavailable` — the re-check only duplicated that.
+ *
+ * Residual: if the group jid is remapped to a different conversation between
+ * `findGroupConversation` and the tick, the roster is built from the new jid
+ * while the messages still come from the stale conversation id. Remaps are not
+ * observed in practice and the next tick self-corrects.
+ */
 async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<WhatsAppChunkerRunSummary> {
   const { db, group, logger } = options;
   const now = options.now ?? new Date();
