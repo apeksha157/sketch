@@ -143,16 +143,30 @@ export async function buildParticipantBlock(
 }
 
 const SPEAKER_BLOCK_HEADING = "## Conversation participants (spoke in this chunk)";
-const RAW_SLACK_ID_PATTERN = /<@[UW][A-Z0-9]+>|\b[UW][A-Z0-9]{7,}\b/u;
+const RAW_SLACK_MENTION_PATTERN = /<@[UW][A-Z0-9]+>/u;
+const RENDERED_TOKEN_PATTERN = /[A-Za-z0-9]+/gu;
 const SLACK_ROSTER_AFFILIATIONS = new Set(["teammate", "entity", "external"]);
 
 /**
  * Mirrors `assertNoRawWhatsAppIdentifiers`: a chunk speaker block renders
  * resolved names, never the platform's raw member ids.
+ *
+ * Bare ids are caught by exact membership against the roster's own Slack user
+ * ids, not by shape. A `[UW][A-Z0-9]{7,}` shape test also matches ordinary
+ * capitalised display names (UNITEDHEALTH, WELLSFARGO), and the throw is
+ * swallowed into a deterministic `markSummaryFailure`, so any chunk with such a
+ * speaker would silently never be summarised. The resolution ladder can only
+ * ever emit a roster id, so membership is the exact check.
  */
-export function assertNoRawSlackIdentifiers(value: string): void {
-  if (RAW_SLACK_ID_PATTERN.test(value)) {
+export function assertNoRawSlackIdentifiers(value: string, rosterUserIds: Iterable<string>): void {
+  if (RAW_SLACK_MENTION_PATTERN.test(value)) {
     throw new Error("Rendered Slack speaker block contains a raw Slack user id");
+  }
+  const ids = new Set(rosterUserIds);
+  for (const token of value.match(RENDERED_TOKEN_PATTERN) ?? []) {
+    if (ids.has(token)) {
+      throw new Error("Rendered Slack speaker block contains a raw Slack user id");
+    }
   }
 }
 
@@ -231,7 +245,10 @@ async function buildSlackSpeakerBlock(deps: ParticipantBlockDeps, fileId: string
   if (lines.length === 0) return "";
 
   const block = `\n${SPEAKER_BLOCK_HEADING}\n${lines.join("\n")}\n`;
-  assertNoRawSlackIdentifiers(block);
+  assertNoRawSlackIdentifiers(
+    block,
+    roster.participants.map((participant) => participant.slackUserId),
+  );
   return block;
 }
 

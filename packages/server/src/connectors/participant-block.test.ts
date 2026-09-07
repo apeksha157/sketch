@@ -383,9 +383,53 @@ describe("buildSlackSpeakerBlock via buildParticipantBlock", () => {
     expect(await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" })).toBe("");
   });
 
-  it("refuses a block that leaked a raw Slack user id", () => {
-    expect(() => assertNoRawSlackIdentifiers("- Dana Teammate (teammate)")).not.toThrow();
-    expect(() => assertNoRawSlackIdentifiers("- U0SPEAKER1 (external)")).toThrow(/raw Slack user id/);
-    expect(() => assertNoRawSlackIdentifiers("- <@U0SPEAKER1> (external)")).toThrow(/raw Slack user id/);
+  it("refuses a leaked roster id but accepts capitalised company-style names", () => {
+    const rosterIds = ["U0SPEAKER1", "U0SPEAKER2", "U0QUIET001"];
+    expect(() => assertNoRawSlackIdentifiers("- Dana Teammate (teammate)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- UNITEDHEALTH (entity)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- WELLSFARGO (entity)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- UNILEVER1 (entity)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- U0SPEAKER1 (external)", rosterIds)).toThrow(/raw Slack user id/);
+    expect(() => assertNoRawSlackIdentifiers("- <@U123> (external)", rosterIds)).toThrow(/raw Slack user id/);
+  });
+
+  it("renders a chunk whose speakers carry capitalised entity display names", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, {
+      fileId,
+      connectorConfigId: CONNECTOR_ID,
+      rosterSnapshot: JSON.stringify({
+        channelId: "C0PBTEST",
+        channelName: "pb-test",
+        participants: [
+          { slackUserId: "U0SPEAKER1", displayName: "UNITEDHEALTH", kind: "entity", email: null },
+          { slackUserId: "U0SPEAKER2", displayName: "WELLSFARGO", kind: "entity", email: null },
+        ],
+      }),
+    });
+
+    const block = await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" });
+
+    expect(block).toContain("- UNITEDHEALTH (entity)");
+    expect(block).toContain("- WELLSFARGO (entity)");
+  });
+
+  it("refuses a chunk whose roster leaked a raw Slack id as a display name", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, {
+      fileId,
+      connectorConfigId: CONNECTOR_ID,
+      rosterSnapshot: JSON.stringify({
+        channelId: "C0PBTEST",
+        channelName: "pb-test",
+        participants: [{ slackUserId: "U0SPEAKER1", displayName: "U0SPEAKER1", kind: "external", email: null }],
+      }),
+    });
+
+    await expect(buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" })).rejects.toThrow(
+      /raw Slack user id/,
+    );
   });
 });
