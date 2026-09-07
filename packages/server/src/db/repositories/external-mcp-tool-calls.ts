@@ -10,6 +10,7 @@ export function createExternalMcpToolCallRepository(db: Kysely<DB>) {
       toolName: string;
       success: boolean;
       durationMs: number;
+      accessBypass?: "admin" | null;
     }): Promise<void> {
       await db
         .insertInto("external_mcp_tool_calls")
@@ -20,6 +21,7 @@ export function createExternalMcpToolCallRepository(db: Kysely<DB>) {
           tool_name: input.toolName,
           success: input.success ? 1 : 0,
           duration_ms: Math.max(0, Math.round(input.durationMs)),
+          access_bypass: input.accessBypass ?? null,
         })
         .execute();
     },
