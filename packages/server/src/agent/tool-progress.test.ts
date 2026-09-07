@@ -229,8 +229,9 @@ describe("createWebProgressItem", () => {
 
     expect(createWebProgressItem(event, { toolProgress: "friendly", reasoningText: false })).toEqual({
       kind: "file",
-      label: "Reading",
+      label: "Reading notes.md",
       icon: { type: "tool", name: "Read" },
+      mode: "friendly",
       toolName: "Read",
     });
     expect(renderEvents({ toolProgress: "friendly", reasoningText: false }, [event]).lines).toEqual([
@@ -238,7 +239,7 @@ describe("createWebProgressItem", () => {
     ]);
   });
 
-  it("builds technical tool progress metadata with the stripped tool name", () => {
+  it("preserves qualified technical tool names", () => {
     expect(
       createWebProgressItem(
         { kind: "tool_use", toolName: "mcp__sketch__SearchDeliveryTargets", input: { query: "engineering" } },
@@ -246,10 +247,12 @@ describe("createWebProgressItem", () => {
       ),
     ).toEqual({
       kind: "delivery",
-      label: "SearchDeliveryTargets",
       detail: "engineering",
       icon: { type: "tool", name: "SearchDeliveryTargets" },
-      toolName: "SearchDeliveryTargets",
+      detailFormat: "text",
+      mode: "technical",
+      label: "mcp__sketch__SearchDeliveryTargets",
+      toolName: "mcp__sketch__SearchDeliveryTargets",
     });
   });
 
@@ -270,11 +273,12 @@ describe("createWebProgressItem", () => {
       kind: "canvas",
       label: "Running Canvas action",
       icon: { type: "canvas", name: "Canvas" },
+      mode: "friendly",
       toolName: "Bash",
     });
   });
 
-  it("clips friendly tool names before they enter web metadata", () => {
+  it("clips friendly tool names while preserving the qualified name in Technical", () => {
     const toolName = `mcp__plugin_${"x".repeat(120)}__${"y".repeat(120)}`;
     const item = createWebProgressItem(
       { kind: "tool_use", toolName, input: {} },
@@ -283,6 +287,12 @@ describe("createWebProgressItem", () => {
 
     expect(item?.toolName).toHaveLength(43);
     expect(item?.toolName).toMatch(/^y{40}\.\.\.$/);
+    expect(
+      createWebProgressItem(
+        { kind: "tool_use", toolName, input: {} },
+        { toolProgress: "technical", reasoningText: false },
+      )?.toolName,
+    ).toBe(toolName);
   });
 
   it("collapses disabled tool progress to generic thinking metadata", () => {
@@ -306,6 +316,7 @@ describe("createWebProgressItem", () => {
       label: "Thinking",
       detail: "Checking config",
       icon: { type: "generic", name: "reasoning" },
+      mode: "technical",
     });
     expect(createWebProgressItem(event, { toolProgress: "off", reasoningText: true })).toEqual({
       kind: "reasoning",
@@ -322,9 +333,10 @@ describe("createWebProgressItem", () => {
         { toolProgress: "friendly", reasoningText: false },
       ),
     ).toEqual({
-      kind: "integration",
-      label: "Running integration",
-      icon: { type: "generic", name: "integration" },
+      kind: "skill",
+      label: "Loading integration instructions",
+      icon: { type: "skill", name: "Skill" },
+      mode: "friendly",
       toolName: "Skill",
     });
 
@@ -337,6 +349,7 @@ describe("createWebProgressItem", () => {
       kind: "integration",
       label: "Running integration",
       icon: { type: "generic", name: "integration" },
+      mode: "friendly",
       toolName: "list_files",
     });
 
@@ -349,7 +362,21 @@ describe("createWebProgressItem", () => {
       kind: "integration",
       label: "Running integration",
       icon: { type: "generic", name: "integration" },
+      mode: "friendly",
       toolName: "custom_tool",
+    });
+
+    expect(
+      createWebProgressItem(
+        { kind: "tool_use", toolName: "mcp__sketch__clickup_api", input: { method: "GET", path: "/team" } },
+        { toolProgress: "friendly", reasoningText: false },
+      ),
+    ).toMatchObject({
+      kind: "integration",
+      label: "Using ClickUp",
+      integration: { appId: "clickup", name: "ClickUp" },
+      mode: "friendly",
+      toolName: "clickup_api",
     });
   });
 });
@@ -363,8 +390,16 @@ describe("createWebProgressData", () => {
         '📖 Reading "notes.md"',
       ]),
     ).toEqual({
-      lines: ["Reading"],
-      items: [{ kind: "file", label: "Reading", icon: { type: "tool", name: "Read" }, toolName: "Read" }],
+      lines: ["Reading notes.md"],
+      items: [
+        {
+          kind: "file",
+          label: "Reading notes.md",
+          icon: { type: "tool", name: "Read" },
+          mode: "friendly",
+          toolName: "Read",
+        },
+      ],
     });
   });
 
@@ -383,6 +418,8 @@ describe("createWebProgressData", () => {
           label: "Read",
           detail: "notes.md",
           icon: { type: "tool", name: "Read" },
+          detailFormat: "text",
+          mode: "technical",
           toolName: "Read",
         },
       ],

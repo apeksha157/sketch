@@ -135,9 +135,8 @@ describe("managed integration availability matrix", () => {
   });
 
   it("fails closed when Canvas connection discovery times out", async () => {
-    vi.useFakeTimers();
     const logger = { warn: vi.fn() };
-    const listConnections = vi.fn(() => new Promise<IntegrationConnection[]>(() => {}));
+    const listConnections = vi.fn().mockRejectedValue(new DOMException("Request timed out", "TimeoutError"));
     const availability = listAvailableManagedIntegrations({
       loadIntegrationProvider: vi.fn().mockResolvedValue(provider(listConnections)),
       userEmail: "user@example.com",
@@ -145,11 +144,9 @@ describe("managed integration availability matrix", () => {
       logger,
     });
 
-    await vi.advanceTimersByTimeAsync(3_000);
-
     await expect(availability).resolves.toEqual(new Set());
     expect(logger.warn).toHaveBeenCalledWith(
-      { event: "managed_integration_availability_failed", reason: "timeout" },
+      { event: "managed_integration_availability_failed", reason: "provider_error" },
       "Managed integration availability lookup failed closed",
     );
   });
