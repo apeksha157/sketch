@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
-import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
+import { createConnectorRepository } from "../db/repositories/connectors";
 import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { DB } from "../db/schema";
 import {
@@ -10,8 +10,9 @@ import {
   resolveSlackChannelRoster,
 } from "../slack/identity-resolution";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
-import { normalizeSourceTimestampForStorage, parseTimestampMs } from "../timestamps";
+import { normalizeSourceTimestampForStorage } from "../timestamps";
 import { configDefault } from "./config-default";
+import { buildEmissionAnchor, emissionRefreshTier, parseEmissionAnchor } from "./emission-refresh-tier";
 import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
 import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
@@ -317,52 +318,6 @@ function sourcePathForSlice(context: SlackSliceContext): string {
   });
 }
 
-export interface SlackEmissionAnchor {
-  firstMessageId: number;
-  messageCount: number;
-  emittedAt: string;
-  enrichedMessageCount: number;
-  enrichedAt: string;
-}
-
-function parseEmissionAnchor(value: Record<string, unknown> | null): SlackEmissionAnchor | null {
-  if (
-    !value ||
-    !Number.isInteger(value.firstMessageId) ||
-    !Number.isInteger(value.messageCount) ||
-    typeof value.emittedAt !== "string" ||
-    !Number.isInteger(value.enrichedMessageCount) ||
-    typeof value.enrichedAt !== "string"
-  ) {
-    return null;
-  }
-  return value as unknown as SlackEmissionAnchor;
-}
-
-export function slackEmissionRefreshTier(input: {
-  status: string;
-  firstMessageId: number;
-  messageCount: number;
-  previous: SlackEmissionAnchor | null;
-  provisionalRefreshMessages: number;
-  provisionalRefreshMaxMinutes: number;
-  now: Date;
-}): "full" | "embeddings_only" {
-  if (input.status === "closed" || !input.previous) return "full";
-  if (
-    input.firstMessageId !== input.previous.firstMessageId ||
-    input.messageCount < input.previous.messageCount ||
-    input.messageCount - input.previous.enrichedMessageCount >= input.provisionalRefreshMessages
-  ) {
-    return "full";
-  }
-  const enrichedAt = parseTimestampMs(input.previous.enrichedAt);
-  if (enrichedAt === null || input.now.getTime() - enrichedAt >= input.provisionalRefreshMaxMinutes * 60_000) {
-    return "full";
-  }
-  return "embeddings_only";
-}
-
 function isFreshEmissionCandidate(context: SlackSliceContext, refreshedAfter: string): boolean {
   if (context.slice.indexed_file_id === null) return true;
   const endedAt = normalizeSourceTimestampForStorage(context.slice.ended_at);
@@ -455,17 +410,15 @@ export async function* emitSlackSyncedItems(options: {
         const sliceFileId = context.slice.indexed_file_id ?? context.fallbackFileId;
         if (belowFloor && sliceFileId === null) continue;
         const previous = parseEmissionAnchor(
-          readSourceMeta({
-            source_meta: context.slice.indexed_file_id === null ? context.fallbackSourceMeta : context.linkedSourceMeta,
-          }),
+          context.slice.indexed_file_id === null ? context.fallbackSourceMeta : context.linkedSourceMeta,
         );
-        const enrichmentRefresh = slackEmissionRefreshTier({
+        const enrichmentRefresh = emissionRefreshTier({
           status: context.slice.status,
           firstMessageId: context.slice.first_message_id,
           messageCount: context.slice.message_count,
           previous,
-          provisionalRefreshMessages,
-          provisionalRefreshMaxMinutes,
+          refreshMessages: provisionalRefreshMessages,
+          refreshMaxMinutes: provisionalRefreshMaxMinutes,
           now,
         });
 
@@ -536,14 +489,13 @@ export async function* emitSlackSyncedItems(options: {
         }
 
         const emittedAt = now.toISOString();
-        const sourceMeta = {
+        const sourceMeta = buildEmissionAnchor({
           firstMessageId: context.slice.first_message_id,
           messageCount: context.slice.message_count,
           emittedAt,
-          enrichedMessageCount:
-            enrichmentRefresh === "full" ? context.slice.message_count : (previous?.enrichedMessageCount ?? 0),
-          enrichedAt: enrichmentRefresh === "full" ? emittedAt : (previous?.enrichedAt ?? emittedAt),
-        };
+          refreshTier: enrichmentRefresh,
+          previous,
+        });
         if (enrichmentRefresh === "full") summary.tier2Emits += 1;
         else summary.tier1Emits += 1;
         if (lane === "legacy") {

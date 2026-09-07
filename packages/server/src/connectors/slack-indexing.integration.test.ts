@@ -18,7 +18,6 @@ import {
   archiveAllSlackChannelFiles,
   emitSlackSyncedItems,
   reconcileSlackChannelAcls,
-  slackEmissionRefreshTier,
 } from "./slack-emission";
 import { createSlackIndexingConnector } from "./slack-indexing";
 import { ensureSlackConnectorConfig } from "./slack-provisioning";
@@ -283,38 +282,6 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(slice.salience_signals).toContain("invalid_membership");
       expect(slice.salience_claim_token).toBeNull();
       expect(slice.salience_claimed_at).toBeNull();
-    });
-
-    it("selects tier two for count, time, boundary revision, and shrink", () => {
-      const now = new Date("2026-07-17T12:00:00.000Z");
-      const previous = {
-        firstMessageId: 10,
-        messageCount: 12,
-        emittedAt: "2026-07-17T11:30:00.000Z",
-        enrichedMessageCount: 10,
-        enrichedAt: "2026-07-17T11:30:00.000Z",
-      };
-      const base = {
-        status: "open" as const,
-        firstMessageId: 10,
-        messageCount: 12,
-        previous,
-        provisionalRefreshMessages: 5,
-        provisionalRefreshMaxMinutes: 120,
-        now,
-      };
-
-      expect(slackEmissionRefreshTier(base)).toBe("embeddings_only");
-      expect(slackEmissionRefreshTier({ ...base, messageCount: 15 })).toBe("full");
-      expect(
-        slackEmissionRefreshTier({
-          ...base,
-          now: new Date("2026-07-17T14:00:00.000Z"),
-        }),
-      ).toBe("full");
-      expect(slackEmissionRefreshTier({ ...base, firstMessageId: 11 })).toBe("full");
-      expect(slackEmissionRefreshTier({ ...base, messageCount: 11 })).toBe("full");
-      expect(slackEmissionRefreshTier({ ...base, status: "closed" })).toBe("full");
     });
 
     it("rename refresh unlinks kept slices so they re-emit under the new channel name", async () => {

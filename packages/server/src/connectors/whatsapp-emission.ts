@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
-import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
+import { createConnectorRepository } from "../db/repositories/connectors";
 import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { type WhatsAppGroupIndexingConfig, createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
 import type { DB } from "../db/schema";
@@ -14,6 +14,12 @@ import {
   stableWhatsAppParticipantJidRef,
 } from "../whatsapp/identity-resolution";
 import { sanitizeWhatsAppDisplayText } from "../whatsapp/privacy";
+import {
+  type ConversationSliceEmissionAnchor,
+  buildEmissionAnchor,
+  emissionRefreshTier,
+  parseEmissionAnchor,
+} from "./emission-refresh-tier";
 import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
 import {
@@ -54,14 +60,6 @@ interface RenderedSlice {
   serializedRosterSnapshot: string;
   content: string;
   accessPrincipals: AccessPrincipal[];
-}
-
-interface WhatsAppEmissionSourceMeta extends Record<string, unknown> {
-  firstMessageId: number;
-  messageCount: number;
-  emittedAt: string;
-  enrichedMessageCount: number;
-  enrichedAt: string;
 }
 
 function normalizeEmissionRefreshDays(value: number | undefined): number {
@@ -282,20 +280,26 @@ function renderedMessageCount(content: string | null): number {
   return transcript ? transcript.split("\n").length : 0;
 }
 
-function readWhatsAppEmissionSourceMeta(sourceMeta: string | null): WhatsAppEmissionSourceMeta | null {
-  const parsed = readSourceMeta({ source_meta: sourceMeta });
-  if (
-    !parsed ||
-    !Number.isInteger(parsed.firstMessageId) ||
-    !Number.isInteger(parsed.messageCount) ||
-    typeof parsed.emittedAt !== "string" ||
-    !Number.isInteger(parsed.enrichedMessageCount) ||
-    typeof parsed.enrichedAt !== "string" ||
-    Number.isNaN(Date.parse(parsed.enrichedAt))
-  ) {
-    return null;
-  }
-  return parsed as unknown as WhatsAppEmissionSourceMeta;
+/**
+ * Files created before emission anchors existed bootstrap at tier one when the
+ * rendered message count is unchanged, avoiding a rollout-wide LLM refresh.
+ * Synthesizing the anchor the shared tier rule would have read is what keeps
+ * that legacy allowance WhatsApp-only: Slack has no such files and keeps
+ * treating a missing anchor as a full refresh.
+ */
+function bootstrapEmissionAnchor(
+  slice: ConversationSliceRow,
+  existingContent: string | null,
+  emittedAt: string,
+): ConversationSliceEmissionAnchor | null {
+  if (slice.message_count !== renderedMessageCount(existingContent)) return null;
+  return {
+    firstMessageId: slice.first_message_id,
+    messageCount: slice.message_count,
+    emittedAt,
+    enrichedMessageCount: slice.message_count,
+    enrichedAt: emittedAt,
+  };
 }
 
 /**
@@ -337,8 +341,9 @@ async function syncedItemForKeptSlice(
   const titleGroup = sanitizeWhatsAppDisplayText(context.groupName) || "WhatsApp group";
   const content = rendered.content;
   const contentHash = stableContentHash(content);
+  const emittedAt = now.toISOString();
   let enrichmentRefresh: "full" | "embeddings_only" = "full";
-  let previousEmission: WhatsAppEmissionSourceMeta | null = null;
+  let previousEmission: ConversationSliceEmissionAnchor | null = null;
   if (context.slice.status === "open") {
     const minMessages = context.chunkMinMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES;
     if (context.slice.message_count < minMessages) {
@@ -369,36 +374,27 @@ async function syncedItemForKeptSlice(
         return { item: null, skippedNoScope: false, skipReason: "unchanged_content" };
       const refreshMessages =
         context.chunkProvisionalRefreshMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES;
-      previousEmission = readWhatsAppEmissionSourceMeta(existing?.source_meta ?? null);
-      if (previousEmission) {
-        const boundaryChanged = context.slice.first_message_id !== previousEmission.firstMessageId;
-        const shrank = context.slice.message_count < previousEmission.messageCount;
-        const countRefreshDue = context.slice.message_count - previousEmission.enrichedMessageCount >= refreshMessages;
-        const timeRefreshDue =
-          now.getTime() - Date.parse(previousEmission.enrichedAt) >= provisionalRefreshMaxMinutes * 60_000;
-        if (!boundaryChanged && !shrank && !countRefreshDue && !timeRefreshDue) {
-          enrichmentRefresh = "embeddings_only";
-        }
-      } else if (context.slice.message_count === renderedMessageCount(existing?.content ?? null)) {
-        /**
-         * Files created before emission anchors existed bootstrap at tier one
-         * when membership is unchanged, avoiding a rollout-wide LLM refresh.
-         */
-        enrichmentRefresh = "embeddings_only";
-      }
+      previousEmission =
+        parseEmissionAnchor(existing?.source_meta ?? null) ??
+        bootstrapEmissionAnchor(context.slice, existing?.content ?? null, emittedAt);
+      enrichmentRefresh = emissionRefreshTier({
+        status: context.slice.status,
+        firstMessageId: context.slice.first_message_id,
+        messageCount: context.slice.message_count,
+        previous: previousEmission,
+        refreshMessages,
+        refreshMaxMinutes: provisionalRefreshMaxMinutes,
+        now,
+      });
     }
   }
-  const emittedAt = now.toISOString();
-  const sourceMeta: WhatsAppEmissionSourceMeta = {
+  const sourceMeta = buildEmissionAnchor({
     firstMessageId: context.slice.first_message_id,
     messageCount: context.slice.message_count,
     emittedAt,
-    enrichedMessageCount:
-      enrichmentRefresh === "full"
-        ? context.slice.message_count
-        : (previousEmission?.enrichedMessageCount ?? context.slice.message_count),
-    enrichedAt: enrichmentRefresh === "full" ? emittedAt : (previousEmission?.enrichedAt ?? emittedAt),
-  };
+    refreshTier: enrichmentRefresh,
+    previous: previousEmission,
+  });
   return {
     skippedNoScope: false,
     skipReason: null,
