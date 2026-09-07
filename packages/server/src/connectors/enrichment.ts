@@ -1092,6 +1092,13 @@ async function enrichTextDocument(
     assertFreshUpdate(summaryResult, file.id);
   }
 
+  /**
+   * `summaryAlreadyResolved` is true for any file whose summary is already done
+   * or skipped, not only for an embeddings-only chunk refresh. Re-embed paths
+   * that keep the summary (vector reset, entity backfill, stale-enrichment
+   * recovery) therefore skip document-fact re-materialization too, which
+   * preserves their existing facts instead of tombstoning them.
+   */
   if (!summaryAlreadyResolved) {
     await emitAndMaterializeDocumentFactsFromStoredFile(file, deps, generator);
   }

@@ -9,6 +9,7 @@ import { createUserRepository } from "../db/repositories/users";
 import { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger, createTestPgDb } from "../test-utils";
+import { resolveChunkEngineKnobs } from "./config-default";
 import { runEnrichment } from "./enrichment";
 import type { GeminiGenerator } from "./gemini-generate";
 import { runConnectorSync } from "./sync";
@@ -159,7 +160,12 @@ async function seedSlice(
 
 async function collectEmittedWhatsAppItems(
   db: Kysely<DB>,
-  options: { emissionRefreshDays?: number; provisionalRefreshMaxMinutes?: number; now?: Date } = {},
+  options: {
+    emissionRefreshDays?: number;
+    provisionalRefreshMaxMinutes?: number;
+    minMessages?: number;
+    now?: Date;
+  } = {},
 ) {
   const items = [];
   for await (const item of emitWhatsAppSyncedItems({
@@ -167,6 +173,7 @@ async function collectEmittedWhatsAppItems(
     logger: fakeLogger(),
     emissionRefreshDays: options.emissionRefreshDays,
     provisionalRefreshMaxMinutes: options.provisionalRefreshMaxMinutes ?? 120,
+    minMessages: options.minMessages ?? 10,
     now: options.now,
   })) {
     items.push(item);
@@ -272,6 +279,43 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       expect(scopeMembers.map((row) => row.principal_value)).toEqual(
         expect.arrayContaining([seeded.teammatePhone, "+15550000002", seeded.teammateEmail]),
       );
+    });
+
+    it("applies the WHATSAPP_CHUNK_MIN_MESSAGES floor to open slices without a group override", async () => {
+      const seeded = await seedSlice(db, { status: "open", verdict: "kept", chunkMinMessages: null });
+      const config = await seedConnectorConfig(db);
+      const liveNow = new Date().toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: liveNow })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, liveNow, liveNow);
+      await db
+        .updateTable("conversation_slices")
+        .set({ message_count: resolveChunkEngineKnobs("WHATSAPP_CHUNK", undefined).minMessages - 1 })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+      await runConnectorSync(db, config.id, createTestLogger());
+      const belowFloor = await db
+        .selectFrom("indexed_files")
+        .select("id")
+        .where("provider_file_id", "=", seeded.sliceId)
+        .executeTakeFirst();
+      expect(belowFloor).toBeUndefined();
+
+      await db
+        .updateTable("conversation_slices")
+        .set({ message_count: resolveChunkEngineKnobs("WHATSAPP_CHUNK", undefined).minMessages })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+      await runConnectorSync(db, config.id, createTestLogger());
+      const atFloor = await db
+        .selectFrom("indexed_files")
+        .select("id")
+        .where("provider_file_id", "=", seeded.sliceId)
+        .executeTakeFirst();
+      expect(atFloor).toBeDefined();
     });
 
     it("materializes every open growth tick, upgrades at the count threshold, then emits a boundary shrink", async () => {
@@ -1175,6 +1219,7 @@ function runEmissionPagingSuite(label: string, createDb: () => Promise<Kysely<DB
         db,
         logger: fakeLogger(),
         provisionalRefreshMaxMinutes: 120,
+        minMessages: 10,
         now,
         onPageListedSliceCount: (count) => firstRunPages.push(count),
       })) {
@@ -1192,6 +1237,7 @@ function runEmissionPagingSuite(label: string, createDb: () => Promise<Kysely<DB
         db,
         logger: fakeLogger(),
         provisionalRefreshMaxMinutes: 120,
+        minMessages: 10,
         now,
         onPageListedSliceCount: (count) => secondRunPages.push(count),
       })) {
@@ -1275,6 +1321,7 @@ function runEmissionPagingSuite(label: string, createDb: () => Promise<Kysely<DB
         db,
         logger: fakeLogger(),
         provisionalRefreshMaxMinutes: 120,
+        minMessages: 10,
         now: new Date("2026-08-01T00:00:00.000Z"),
         onPageListedSliceCount: (count) => pages.push(count),
       })) {
