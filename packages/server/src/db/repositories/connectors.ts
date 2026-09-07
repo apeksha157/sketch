@@ -78,6 +78,73 @@ export function viewerPrincipals(viewer: FileViewer): AccessPrincipal[] {
   return normalizeAccessPrincipals(principals);
 }
 
+export type ThreadFileSelector = { threadId: string } | { rollupGroupId: string };
+
+interface ThreadFilesOptions {
+  connectorConfigId: string;
+  by: ThreadFileSelector;
+  visibility?: { principals: AccessPrincipal[]; slackEntitySyncEnabled: boolean };
+  excludeProviderFileId?: string;
+}
+
+/**
+ * Files that belong to one conversation: an email/LinkedIn/calendar thread
+ * (`thread_id`) or a CRM record rollup (`rollup_group_id`). One builder feeds
+ * both the page and the count so their predicates cannot drift.
+ */
+function threadFilesQuery(db: Kysely<DB>, opts: ThreadFilesOptions) {
+  let query = db
+    .selectFrom("indexed_files")
+    .where("indexed_files.is_archived", "=", 0)
+    .where("indexed_files.connector_config_id", "=", opts.connectorConfigId);
+  query =
+    "threadId" in opts.by
+      ? query.where("indexed_files.thread_id", "=", opts.by.threadId)
+      : query.where("indexed_files.rollup_group_id", "=", opts.by.rollupGroupId);
+  if (opts.excludeProviderFileId) {
+    query = query.where("indexed_files.provider_file_id", "!=", opts.excludeProviderFileId);
+  }
+  if (opts.visibility) {
+    query = query.where(
+      fileVisibilityRuleSql({
+        principals: opts.visibility.principals,
+        slackEntitySyncEnabled: opts.visibility.slackEntitySyncEnabled,
+        archived: "exclude",
+        alias: "indexed_files",
+      }),
+    );
+  }
+  return query;
+}
+
+export const THREAD_FILE_COLUMNS = [
+  "indexed_files.id",
+  "indexed_files.connector_config_id",
+  "indexed_files.file_name",
+  "indexed_files.file_type",
+  "indexed_files.source",
+  "indexed_files.provider_url",
+  "indexed_files.source_updated_at",
+  "indexed_files.source_created_at",
+  "indexed_files.thread_id",
+  "indexed_files.rollup_group_id",
+] as const;
+
+export async function listThreadFiles(db: Kysely<DB>, opts: ThreadFilesOptions & { limit: number; offset: number }) {
+  return threadFilesQuery(db, opts)
+    .select([...THREAD_FILE_COLUMNS])
+    .orderBy(sql`coalesce(indexed_files.source_updated_at, indexed_files.source_created_at) asc`)
+    .orderBy("indexed_files.id", "asc")
+    .limit(opts.limit)
+    .offset(opts.offset)
+    .execute();
+}
+
+export async function countThreadFiles(db: Kysely<DB>, opts: ThreadFilesOptions): Promise<number> {
+  const row = await threadFilesQuery(db, opts).select(sql<number>`count(*)`.as("count")).executeTakeFirst();
+  return Number(row?.count ?? 0);
+}
+
 type ResolvedPrincipal = { userId: string; userName: string | null; email: string | null };
 
 function principalLookupKey(type: string, value: string): string {
@@ -1252,6 +1319,12 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
           "indexed_files.provider_file_id",
           "indexed_files.rollup_group_id",
           "indexed_files.source",
+          "indexed_files.thread_id",
+          "indexed_files.file_type",
+          "indexed_files.file_name",
+          "indexed_files.provider_url",
+          "indexed_files.source_updated_at",
+          "indexed_files.source_created_at",
         ])
         .where("indexed_files.id", "=", fileId)
         .where("indexed_files.is_archived", "=", 0);
