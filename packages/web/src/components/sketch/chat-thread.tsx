@@ -182,7 +182,7 @@ export interface ChatThreadProps {
 
 const markdownPlugins = [remarkGfm];
 const MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES = 3;
-const TIMELINE_WINDOW_ANIMATION_MS = 220;
+const TIMELINE_WINDOW_ANIMATION_MS = 320;
 
 type ProgressIconComponent = Icon;
 
@@ -610,6 +610,7 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused 
   const latestTargetEntries = useRef(targetEntries);
   const [state, setState] = useState<AnimatedTimelineWindowState>(() => emptyAnimatedTimelineState(targetEntries));
   const stateRef = useRef(state);
+  const renderedSignature = timelineRenderEntriesSignature(state.entries);
   const targetSignature = timelineRenderEntriesSignature(targetEntries);
 
   latestTargetEntries.current = targetEntries;
@@ -642,7 +643,16 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused 
       }
       return;
     }
-    if (timelineRenderEntriesSignature(current.entries) === targetSignature && !current.animating) return;
+    if (renderedSignature === targetSignature && !current.animating) return;
+
+    if (timeoutRef.current !== null && !prefersReducedTimelineMotion()) {
+      const latestByKey = new Map(targetEntries.map((entry) => [entry.key, entry]));
+      setState((previous) => ({
+        ...previous,
+        entries: previous.entries.map((entry) => latestByKey.get(entry.key) ?? entry),
+      }));
+      return;
+    }
 
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current);
@@ -661,7 +671,7 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused 
     const overlap = timelineWindowOverlap(current.entries, targetEntries);
     const removedCount = current.entries.length - overlap;
     const appendedEntries = targetEntries.slice(overlap);
-    if (overlap === 0 || removedCount <= 0 || appendedEntries.length === 0) {
+    if (removedCount <= 0 || appendedEntries.length === 0) {
       setState(emptyAnimatedTimelineState(targetEntries));
       return;
     }
@@ -672,7 +682,11 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused 
     const firstKept = rowRefs.current.get(current.entries[removedCount]?.key ?? "");
     const currentHeight = viewport?.getBoundingClientRect().height ?? 0;
     const removedHeight =
-      firstRemoved && firstKept ? firstKept.getBoundingClientRect().top - firstRemoved.getBoundingClientRect().top : 0;
+      firstRemoved && firstKept
+        ? firstKept.getBoundingClientRect().top - firstRemoved.getBoundingClientRect().top
+        : overlap === 0
+          ? currentHeight
+          : 0;
 
     if (!viewport || !track || currentHeight <= 0 || removedHeight <= 0) {
       setState(emptyAnimatedTimelineState(targetEntries));
@@ -692,20 +706,20 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused 
       frameRef.current = null;
       const nextTrack = trackRef.current;
       const targetHeight = nextTrack ? Math.max(0, nextTrack.scrollHeight - removedHeight) : currentHeight;
-      setState({
-        entries: combinedEntries,
-        exitingKeys: current.entries.slice(0, removedCount).map((entry) => entry.key),
+      setState((previous) => ({
+        ...previous,
         height: targetHeight,
         offsetY: -removedHeight,
         animating: true,
-      });
+      }));
     });
 
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = null;
-      setState(emptyAnimatedTimelineState(latestTargetEntries.current));
-    }, TIMELINE_WINDOW_ANIMATION_MS);
-  }, [paused, targetSignature]);
+      const latestByKey = new Map(latestTargetEntries.current.map((entry) => [entry.key, entry]));
+      setState(emptyAnimatedTimelineState(targetEntries.map((entry) => latestByKey.get(entry.key) ?? entry)));
+    }, TIMELINE_WINDOW_ANIMATION_MS + 32);
+  }, [paused, targetSignature, renderedSignature]);
 
   const setRowRef = (key: string) => (node: HTMLDivElement | null) => {
     if (node) {
