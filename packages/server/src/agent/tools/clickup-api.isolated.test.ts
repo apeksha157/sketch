@@ -2,7 +2,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CanvasProvider } from "../../integrations/canvas";
+import { CanvasProvider, CanvasProviderRequestError } from "../../integrations/canvas";
 import {
   CLICKUP_MAX_ATTACHMENT_BYTES,
   CLICKUP_MAX_BODY_BYTES,
@@ -80,6 +80,58 @@ describe("ClickUp API tool", () => {
     expect(getCanvasAccessToken).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it.each(["truncated", "omitted"])(
+    "returns exact authorized account IDs for a %s account selection",
+    async (selection) => {
+      const provider = new CanvasProvider("https://canvas.example.test", "test-key", "canvas-1");
+      const accountId = "secrets:owner-1:clickup:clickup";
+      const listConnections = vi.spyOn(provider, "listConnections").mockResolvedValue([
+        {
+          id: accountId,
+          appId: "clickup",
+          appName: "ClickUp",
+          providerId: "canvas-1",
+          status: "active",
+          createdAt: "2026-09-07T00:00:00Z",
+          source: "canvas_user_secrets",
+          authType: "oauth",
+          canUse: true,
+        },
+      ]);
+      const getCanvasAccessToken = vi
+        .fn()
+        .mockRejectedValue(
+          selection === "truncated"
+            ? new CanvasProviderRequestError(400, "BAD_REQUEST", "Invalid Canvas-owned account id")
+            : new CanvasProviderRequestError(403, "FORBIDDEN", "Account unavailable"),
+        );
+      const result = await handleClickUpApi(
+        {
+          method: "GET",
+          path: "/team",
+          ...(selection === "truncated" ? { accountId: "secrets:owner-1:clickup" } : {}),
+        },
+        {
+          ...deps(getCanvasAccessToken),
+          loadIntegrationProvider: async () => provider,
+          currentUserId: "viewer-1",
+          currentUserEmail: "viewer@example.test",
+          integrationUserId: "owner-1",
+          integrationUserEmail: "owner@example.test",
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(accountId);
+      expect(result.content[0].text).toContain("verbatim");
+      expect(result.content[0].text).not.toContain("Reconnect it");
+      expect(listConnections).toHaveBeenCalledWith("owner@example.test", undefined, {
+        workspaceId: "canvas-1",
+        userId: "owner-1",
+      });
+      expect(getCanvasAccessToken).toHaveBeenCalledOnce();
+    },
+  );
 
   it("executes a bounded v2 request with a Canvas OAuth token", async () => {
     const getCanvasAccessToken = vi.fn().mockResolvedValue({

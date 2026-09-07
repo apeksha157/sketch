@@ -345,6 +345,7 @@ describe.each(["github", "linear"] as const)("IntegrationsSection %s", (appId) =
     renderSection([
       {
         ...baseConnection,
+        id: "private-account",
         source: "canvas_user_secrets",
         isOwnedByViewer: true,
         canManageAccess: true,

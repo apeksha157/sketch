@@ -16,6 +16,7 @@ import { buildNativeWebhookUrl } from "../../automation/webhook-endpoints";
 import type { WebhookVerification } from "../../automation/webhook-verification";
 import { createScheduledTaskRepository } from "../../db/repositories/scheduled-tasks";
 import { createWebhookEndpointRepository } from "../../db/repositories/webhook-endpoints";
+import { CanvasProviderRequestError } from "../../integrations/canvas";
 import {
   ClickUpApiRateLimitError,
   assertClickUpRequestAllowed,
@@ -105,7 +106,9 @@ const schema = {
     .min(1)
     .max(256)
     .optional()
-    .describe("Opaque Canvas ClickUp account ID. Omit only when Canvas can resolve one usable account."),
+    .describe(
+      "Copy the complete accountId from getProviderConfig.managedAccounts verbatim, including repeated segments. Never shorten it or substitute a ClickUp Workspace or user ID. Omit only when Canvas can resolve one usable account.",
+    ),
   webhookEndpointId: z
     .string()
     .trim()
@@ -834,6 +837,55 @@ export async function executeClickUpApi(
   }
 }
 
+async function accountSelectionError(
+  error: unknown,
+  args: ClickUpApiArgs,
+  deps: SketchMcpDeps,
+): Promise<ToolResult | null> {
+  if (error instanceof ClickUpApiHttpError) return null;
+  const invalidId =
+    error instanceof CanvasProviderRequestError &&
+    error.status === 400 &&
+    /invalid canvas-owned account id/i.test(error.message);
+  if (!invalidId && (args.accountId || !isManagedIntegrationDisconnectedError(error))) return null;
+  const { userId, userEmail } = getIntegrationActor({ ...deps, userEmail: deps.currentUserEmail });
+  let accountIds: string[] = [];
+  if (deps.loadIntegrationProvider && userId && userEmail) {
+    try {
+      const provider = await deps.loadIntegrationProvider();
+      if (provider) {
+        const connections = await provider.listConnections(
+          userEmail,
+          undefined,
+          provider.providerId ? { workspaceId: provider.providerId, userId } : undefined,
+        );
+        accountIds = connections
+          .filter(
+            (connection) =>
+              connection.appId === "clickup" &&
+              connection.source === "canvas_user_secrets" &&
+              connection.authType === "oauth" &&
+              connection.status === "active" &&
+              connection.canUse !== false,
+          )
+          .map((connection) => connection.id);
+      }
+    } catch {
+      accountIds = [];
+    }
+  }
+  if (!invalidId && accountIds.length === 0) return null;
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: `ClickUp account selection is invalid or missing. Copy a complete accountId from getProviderConfig.managedAccounts verbatim, including every repeated segment. ${accountIds.length ? `Currently authorized accountIds: ${JSON.stringify(accountIds)}. ` : ""}Do not infer that the connection was revoked from this selection error. Retry with the exact selected account ID before recommending reconnect. The requested API operation was not retried or switched to another account.`,
+      },
+    ],
+  };
+}
+
 export async function handleClickUpApi(
   args: ClickUpApiArgs,
   deps: SketchMcpDeps,
@@ -849,10 +901,12 @@ export async function handleClickUpApi(
     }
     return { content: [{ type: "text", text: serialized }] };
   } catch (error) {
+    const selectionError = await accountSelectionError(error, args, deps);
+    if (selectionError) return selectionError;
     if (!(error instanceof ClickUpApiHttpError) && isManagedIntegrationDisconnectedError(error)) {
-      return { content: [{ type: "text", text: managedIntegrationReconnectMessage("clickup") }] };
+      return { isError: true, content: [{ type: "text", text: managedIntegrationReconnectMessage("clickup") }] };
     }
-    return { content: [{ type: "text", text: `ClickUp API failed: ${safeErrorMessage(error)}` }] };
+    return { isError: true, content: [{ type: "text", text: `ClickUp API failed: ${safeErrorMessage(error)}` }] };
   }
 }
 
