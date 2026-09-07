@@ -987,6 +987,26 @@ export function createEntityRepository(db: Kysely<DB>) {
       await insert.execute();
     },
 
+    async createMentionIfAbsent(data: CreateMentionData): Promise<boolean> {
+      const entityId = await resolveLiveEntityId(db, data.entityId);
+      const result = await db
+        .insertInto("entity_mentions")
+        .values({
+          id: randomUUID(),
+          entity_id: entityId,
+          indexed_file_id: data.indexedFileId,
+          chunk_index: data.chunkIndex ?? null,
+          context_snippet: data.contextSnippet ?? null,
+          confidence: data.confidence,
+          source: data.source,
+          relation: data.relation,
+          mentioned_at: new Date().toISOString(),
+        })
+        .onConflict((oc) => oc.columns(["entity_id", "indexed_file_id", "relation"]).doNothing())
+        .executeTakeFirst();
+      return Number(result.numInsertedOrUpdatedRows ?? 0) > 0;
+    },
+
     async getMentionsForEntity(
       entityId: string,
       opts?: {
