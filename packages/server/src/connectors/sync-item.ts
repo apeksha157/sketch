@@ -210,6 +210,7 @@ export async function processSyncedItem({
       content: item.content,
       sourcePath: item.sourcePath,
       sourceMeta: item.sourceMeta,
+      enrichmentRefresh: item.enrichmentRefresh,
       contentHash: item.contentHash,
       sourceCreatedAt: item.sourceCreatedAt,
       sourceUpdatedAt: item.sourceUpdatedAt,
@@ -218,7 +219,15 @@ export async function processSyncedItem({
       rollupGroupId: item.rollupGroupId ?? null,
     });
 
-    if (upsertResult.contentChanged || upsertResult.categoryChanged || upsertResult.sourceVersionChanged) {
+    const embeddingsOnlyContentRefresh =
+      item.enrichmentRefresh === "embeddings_only" &&
+      upsertResult.contentChanged &&
+      !upsertResult.categoryChanged &&
+      !upsertResult.sourceVersionChanged;
+    if (
+      !embeddingsOnlyContentRefresh &&
+      (upsertResult.contentChanged || upsertResult.categoryChanged || upsertResult.sourceVersionChanged)
+    ) {
       await clearEnrichmentData(trx, upsertResult.id);
     }
 

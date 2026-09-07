@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  assertNoRawWhatsAppIdentifiers,
-  renderWhatsAppRosterBlock,
-  renderWhatsAppTranscript,
-} from "../connectors/whatsapp-emission";
+import { assertNoRawWhatsAppIdentifiers, renderWhatsAppTranscript } from "../connectors/whatsapp-emission";
 import { createConversationRepository } from "../db/repositories/conversations";
 import { createUserRepository } from "../db/repositories/users";
 import { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
@@ -608,7 +604,7 @@ describe("WhatsApp roster snapshot", () => {
     expect(transcript).not.toContain("Push Alias: I reviewed the proposal.");
   });
 
-  it("masks phone-like digit runs in placeholder entity push names before roster and transcript rendering", async () => {
+  it("masks phone-like digit runs in placeholder entity push names before transcript rendering", async () => {
     const groupJid = "120363000000008@g.us";
     const groups = await seedGroup(groupJid);
     await groups.refreshParticipants(groupJid, [
@@ -631,7 +627,6 @@ describe("WhatsApp roster snapshot", () => {
     const logger = { info: vi.fn() } as unknown as Logger;
 
     const result = await buildWhatsAppRosterSnapshot({ db, groupJid, conversationId: conversation.id, logger });
-    const rosterBlock = renderWhatsAppRosterBlock(result.snapshot);
     const transcript = renderWhatsAppTranscript(result.snapshot, [
       {
         id: message.row.id,
@@ -648,9 +643,8 @@ describe("WhatsApp roster snapshot", () => {
         pushName: "Ravi +**********00",
       }),
     ]);
-    expect(rosterBlock).toContain("Ravi +**********00");
     expect(transcript).toContain("Ravi +**********00: Please mark this done.");
-    expect(`${rosterBlock}\n${transcript}`).not.toContain("99804 70200");
-    assertNoRawWhatsAppIdentifiers(`${rosterBlock}\n${transcript}`);
+    expect(transcript).not.toContain("99804 70200");
+    assertNoRawWhatsAppIdentifiers(transcript);
   });
 });

@@ -12,7 +12,7 @@ import { createTestDb, createTestLogger, createTestPgDb } from "../test-utils";
 import { runEnrichment } from "./enrichment";
 import type { GeminiGenerator } from "./gemini-generate";
 import { runConnectorSync } from "./sync";
-import { emitWhatsAppSyncedItems, reconcileWhatsAppGroupAcls } from "./whatsapp-emission";
+import { WHATSAPP_EMISSION_PAGE_SIZE, emitWhatsAppSyncedItems, reconcileWhatsAppGroupAcls } from "./whatsapp-emission";
 
 const RAW_IDENTIFIER_PATTERN = /(?:\+?[1-9]\d{9,14}\b|@s\.whatsapp\.net|@lid)/iu;
 const SALIENCE_SIGNALS = JSON.stringify({ signals: ["decision"], entities: [] });
@@ -157,12 +157,16 @@ async function seedSlice(
   };
 }
 
-async function collectEmittedWhatsAppItems(db: Kysely<DB>, options: { emissionRefreshDays?: number; now?: Date } = {}) {
+async function collectEmittedWhatsAppItems(
+  db: Kysely<DB>,
+  options: { emissionRefreshDays?: number; provisionalRefreshMaxMinutes?: number; now?: Date } = {},
+) {
   const items = [];
   for await (const item of emitWhatsAppSyncedItems({
     db,
     logger: fakeLogger(),
     emissionRefreshDays: options.emissionRefreshDays,
+    provisionalRefreshMaxMinutes: options.provisionalRefreshMaxMinutes ?? 120,
     now: options.now,
   })) {
     items.push(item);
@@ -270,7 +274,7 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       );
     });
 
-    it("materializes and refreshes one open slice by growth threshold, then emits a boundary shrink", async () => {
+    it("materializes every open growth tick, upgrades at the count threshold, then emits a boundary shrink", async () => {
       const seeded = await seedSlice(db, {
         status: "open",
         verdict: "kept",
@@ -315,7 +319,9 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
         })
         .where("id", "=", seeded.sliceId)
         .execute();
-      await expect(collectEmittedWhatsAppItems(db)).resolves.toEqual([]);
+      const belowThreshold = await collectEmittedWhatsAppItems(db);
+      expect(belowThreshold).toHaveLength(1);
+      expect(belowThreshold[0]?.enrichmentRefresh).toBe("embeddings_only");
 
       const fourth = await messages.insertMessage({
         conversationId: seeded.conversationId,
@@ -353,6 +359,7 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       expect(grown).toHaveLength(1);
       expect(grown[0]?.providerFileId).toBe(seeded.sliceId);
       expect(grown[0]?.contentHash).not.toBe(before.content_hash);
+      expect(grown[0]?.enrichmentRefresh).toBe("full");
       await createWhatsAppGroupRepository(db).setIndexEnabled(seeded.groupJid, true, {
         chunkIdleCloseHours: 100_000,
       });
@@ -382,6 +389,248 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
       await expect(
         db.selectFrom("indexed_files").select("provider_file_id").where("id", "=", before.id).executeTakeFirstOrThrow(),
       ).resolves.toEqual({ provider_file_id: seeded.sliceId });
+    });
+
+    it("bootstraps an unchanged-count linked open slice without rerunning LLM enrichment", async () => {
+      const seeded = await seedSlice(db, {
+        status: "open",
+        verdict: "kept",
+        chunkMinMessages: 1,
+        chunkProvisionalRefreshMessages: 2,
+      });
+      const config = await seedConnectorConfig(db);
+      const initialNow = new Date();
+      const initialTimestamp = initialNow.toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: initialTimestamp })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, initialTimestamp, initialTimestamp);
+      await runConnectorSync(db, config.id, createTestLogger());
+      const linked = await db
+        .selectFrom("conversation_slices")
+        .select("indexed_file_id")
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      await db
+        .updateTable("indexed_files")
+        .set({ source_meta: null, summary_status: "done" })
+        .where("id", "=", linked.indexed_file_id as string)
+        .execute();
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ name: "Renamed rollout group" })
+        .where("jid", "=", seeded.groupJid)
+        .execute();
+
+      const bootstrap = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 60_000),
+      });
+
+      expect(bootstrap).toHaveLength(1);
+      expect(bootstrap[0]?.enrichmentRefresh).toBe("embeddings_only");
+      expect(bootstrap[0]?.sourceMeta).toMatchObject({ messageCount: 2, enrichedMessageCount: 2 });
+
+      await runConnectorSync(db, config.id, createTestLogger());
+      const persisted = await db
+        .selectFrom("indexed_files")
+        .select(["source_meta", "summary_status"])
+        .where("id", "=", linked.indexed_file_id as string)
+        .executeTakeFirstOrThrow();
+      expect(JSON.parse(persisted.source_meta ?? "{}")).toMatchObject({ messageCount: 2, enrichedMessageCount: 2 });
+      expect(persisted.summary_status).toBe("done");
+
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ name: "Renamed rollout group again" })
+        .where("jid", "=", seeded.groupJid)
+        .execute();
+      const following = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 120_000),
+      });
+      expect(following).toHaveLength(1);
+      expect(following[0]?.enrichmentRefresh).toBe("embeddings_only");
+    });
+
+    it("emits changed open content at tier one and upgrades to tier two when the refresh clock expires", async () => {
+      const seeded = await seedSlice(db, {
+        status: "open",
+        verdict: "kept",
+        chunkMinMessages: 1,
+        chunkProvisionalRefreshMessages: 3,
+      });
+      const config = await seedConnectorConfig(db);
+      const initialNow = new Date();
+      const initialTimestamp = initialNow.toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: initialTimestamp })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, initialTimestamp, initialTimestamp);
+      await runConnectorSync(db, config.id, createTestLogger());
+      const initialSlice = await db
+        .selectFrom("conversation_slices")
+        .selectAll()
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const messages = createConversationRepository(db);
+      const third = await messages.insertMessage({
+        conversationId: seeded.conversationId,
+        providerMessageId: `${seeded.groupJid}:tier-one`,
+        senderJid: "15550000002@s.whatsapp.net",
+        senderName: "External Buyer",
+        text: "tier one update",
+        receivedAt: new Date(initialNow.getTime() + 60_000).toISOString(),
+      });
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: third.row.id,
+          ended_at: third.row.receivedAt,
+          message_count: 3,
+          denoised_message_ids: JSON.stringify([
+            initialSlice.first_message_id,
+            initialSlice.last_message_id,
+            third.row.id,
+          ]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const tierOne = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 60_000),
+      });
+
+      expect(tierOne).toHaveLength(1);
+      expect(tierOne[0]?.enrichmentRefresh).toBe("embeddings_only");
+      expect(tierOne[0]?.sourceMeta).toMatchObject({
+        firstMessageId: initialSlice.first_message_id,
+        messageCount: 3,
+        enrichedMessageCount: 2,
+      });
+
+      const fourth = await messages.insertMessage({
+        conversationId: seeded.conversationId,
+        providerMessageId: `${seeded.groupJid}:tier-two-time`,
+        senderJid: "15550000002@s.whatsapp.net",
+        senderName: "External Buyer",
+        text: "time gate update",
+        receivedAt: new Date(initialNow.getTime() + 121 * 60_000).toISOString(),
+      });
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: fourth.row.id,
+          ended_at: fourth.row.receivedAt,
+          message_count: 4,
+          denoised_message_ids: JSON.stringify([
+            initialSlice.first_message_id,
+            initialSlice.last_message_id,
+            third.row.id,
+            fourth.row.id,
+          ]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const tierTwo = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 121 * 60_000),
+      });
+
+      expect(tierTwo).toHaveLength(1);
+      expect(tierTwo[0]?.enrichmentRefresh).toBe("full");
+      expect(tierTwo[0]?.sourceMeta).toMatchObject({
+        firstMessageId: initialSlice.first_message_id,
+        messageCount: 4,
+        enrichedMessageCount: 4,
+      });
+    });
+
+    it("forces tier two when open growth reaches the count gate or the slice shrinks", async () => {
+      const seeded = await seedSlice(db, {
+        status: "open",
+        verdict: "kept",
+        chunkMinMessages: 1,
+        chunkProvisionalRefreshMessages: 3,
+      });
+      const config = await seedConnectorConfig(db);
+      const initialNow = new Date();
+      const initialTimestamp = initialNow.toISOString();
+      await db
+        .updateTable("conversation_messages")
+        .set({ received_at: initialTimestamp })
+        .where("conversation_id", "=", seeded.conversationId)
+        .execute();
+      await setSliceWindow(db, seeded.sliceId, initialTimestamp, initialTimestamp);
+      await runConnectorSync(db, config.id, createTestLogger());
+      const initialSlice = await db
+        .selectFrom("conversation_slices")
+        .selectAll()
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const messages = createConversationRepository(db);
+      const added = [];
+      for (let index = 0; index < 3; index += 1) {
+        added.push(
+          await messages.insertMessage({
+            conversationId: seeded.conversationId,
+            providerMessageId: `${seeded.groupJid}:count-${index}`,
+            senderJid: "15550000002@s.whatsapp.net",
+            senderName: "External Buyer",
+            text: `count update ${index}`,
+            receivedAt: new Date(initialNow.getTime() + (index + 1) * 60_000).toISOString(),
+          }),
+        );
+      }
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: added[2]?.row.id,
+          ended_at: added[2]?.row.receivedAt,
+          message_count: 5,
+          denoised_message_ids: JSON.stringify([
+            initialSlice.first_message_id,
+            initialSlice.last_message_id,
+            ...added.map((message) => message.row.id),
+          ]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const countRefresh = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 3 * 60_000),
+      });
+
+      expect(countRefresh).toHaveLength(1);
+      expect(countRefresh[0]?.enrichmentRefresh).toBe("full");
+      expect(countRefresh[0]?.sourceMeta).toMatchObject({ messageCount: 5, enrichedMessageCount: 5 });
+
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: initialSlice.first_message_id,
+          ended_at: initialSlice.started_at,
+          message_count: 1,
+          denoised_message_ids: JSON.stringify([initialSlice.first_message_id]),
+        })
+        .where("id", "=", seeded.sliceId)
+        .execute();
+
+      const shrinkRefresh = await collectEmittedWhatsAppItems(db, {
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date(initialNow.getTime() + 4 * 60_000),
+      });
+
+      expect(shrinkRefresh).toHaveLength(1);
+      expect(shrinkRefresh[0]?.enrichmentRefresh).toBe("full");
+      expect(shrinkRefresh[0]?.sourceMeta).toMatchObject({ messageCount: 1, enrichedMessageCount: 1 });
     });
 
     it("emits zero structural_seed facts for a kept slice with salience structural entities", async () => {
@@ -838,3 +1087,206 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
 
 runSalienceIntegrationSuite("WhatsApp salience sqlite", createTestDb);
 runSalienceIntegrationSuite("WhatsApp salience postgres", createTestPgDb);
+
+/**
+ * Emission used to load every kept slice in one unbounded query. These assert
+ * the keyset page loop: deterministic order across pages, and a run that dies
+ * between pages resuming rather than re-emitting the drained page.
+ */
+function runEmissionPagingSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
+  describe(label, () => {
+    let db: Kysely<DB>;
+
+    beforeEach(async () => {
+      db = await createDb();
+    }, 30000);
+
+    afterEach(async () => {
+      await db.destroy();
+    });
+
+    it("pages kept slices in keyset order and resumes without re-emitting a drained page", async () => {
+      const seeded = await seedSlice(db, { verdict: "kept", status: "closed" });
+      const config = await seedConnectorConfig(db);
+      const base = await db
+        .selectFrom("conversation_slices")
+        .select(["roster_snapshot"])
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const extra = WHATSAPP_EMISSION_PAGE_SIZE + 4;
+      const startedAt = (index: number) =>
+        `2026-07-${String(2 + Math.floor(index / 24)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`;
+      await setSliceWindow(db, seeded.sliceId, "2026-07-01T00:00:00.000Z", "2026-07-01T00:01:00.000Z");
+      await db
+        .insertInto("conversation_messages")
+        .values(
+          Array.from({ length: extra }, (_value, index) => ({
+            conversation_id: seeded.conversationId,
+            provider_message_id: `paged-msg-${String(index).padStart(4, "0")}`,
+            sender_jid: "15550000002@s.whatsapp.net",
+            sender_name: "External Buyer",
+            text: "We agreed the pilot scope today.",
+            received_at: startedAt(index),
+            effective_at: startedAt(index),
+          })),
+        )
+        .execute();
+      const pagedMessages = await db
+        .selectFrom("conversation_messages")
+        .select(["id", "provider_message_id"])
+        .where("conversation_id", "=", seeded.conversationId)
+        .where("provider_message_id", "like", "paged-msg-%")
+        .orderBy("provider_message_id", "asc")
+        .execute();
+      await db
+        .insertInto("conversation_slices")
+        .values(
+          pagedMessages.map((message, index) => ({
+            id: `paged-slice-${String(index).padStart(4, "0")}`,
+            conversation_id: seeded.conversationId,
+            first_message_id: message.id,
+            last_message_id: message.id,
+            started_at: startedAt(index),
+            ended_at: startedAt(index),
+            message_count: 1,
+            denoised_message_ids: JSON.stringify([message.id]),
+            flush_reason: "gap" as const,
+            roster_snapshot: base.roster_snapshot,
+            salience_verdict: "kept",
+            status: "closed" as const,
+          })),
+        )
+        .execute();
+      const ordered = (
+        await db
+          .selectFrom("conversation_slices")
+          .select("id")
+          .where("conversation_id", "=", seeded.conversationId)
+          .orderBy("started_at", "asc")
+          .orderBy("id", "asc")
+          .execute()
+      ).map((row) => row.id);
+      expect(ordered).toHaveLength(extra + 1);
+
+      const now = new Date("2026-08-01T00:00:00.000Z");
+      const firstRun: string[] = [];
+      const firstRunPages: number[] = [];
+      for await (const item of emitWhatsAppSyncedItems({
+        db,
+        logger: fakeLogger(),
+        provisionalRefreshMaxMinutes: 120,
+        now,
+        onPageListedSliceCount: (count) => firstRunPages.push(count),
+      })) {
+        firstRun.push(item.providerFileId);
+        if (firstRun.length === WHATSAPP_EMISSION_PAGE_SIZE) break;
+      }
+      expect(firstRun).toEqual(ordered.slice(0, WHATSAPP_EMISSION_PAGE_SIZE));
+      expect(firstRunPages).toEqual([WHATSAPP_EMISSION_PAGE_SIZE]);
+
+      for (const sliceId of firstRun) await linkSliceToIndexedFile(db, config.id, sliceId);
+
+      const secondRunPages: number[] = [];
+      const secondRun: string[] = [];
+      for await (const item of emitWhatsAppSyncedItems({
+        db,
+        logger: fakeLogger(),
+        provisionalRefreshMaxMinutes: 120,
+        now,
+        onPageListedSliceCount: (count) => secondRunPages.push(count),
+      })) {
+        secondRun.push(item.providerFileId);
+      }
+      expect(secondRunPages).toEqual([ordered.length - WHATSAPP_EMISSION_PAGE_SIZE]);
+      expect(secondRun).toEqual(ordered.slice(WHATSAPP_EMISSION_PAGE_SIZE));
+      expect([...firstRun, ...secondRun]).toEqual(ordered);
+    }, 60000);
+
+    it("keeps a started_at tie that straddles a page boundary whole", async () => {
+      const seeded = await seedSlice(db, { verdict: "kept", status: "closed" });
+      const base = await db
+        .selectFrom("conversation_slices")
+        .select(["roster_snapshot"])
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const extra = WHATSAPP_EMISSION_PAGE_SIZE + 4;
+      const distinctStartedAt = (index: number) =>
+        `2026-07-${String(2 + Math.floor(index / 24)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`;
+      const TIE_FIRST = 197;
+      const TIE_LAST = 200;
+      const startedAt = (index: number) =>
+        distinctStartedAt(index >= TIE_FIRST && index <= TIE_LAST ? TIE_FIRST : index);
+      await setSliceWindow(db, seeded.sliceId, "2026-07-01T00:00:00.000Z", "2026-07-01T00:01:00.000Z");
+      await db
+        .insertInto("conversation_messages")
+        .values(
+          Array.from({ length: extra }, (_value, index) => ({
+            conversation_id: seeded.conversationId,
+            provider_message_id: `tied-msg-${String(index).padStart(4, "0")}`,
+            sender_jid: "15550000002@s.whatsapp.net",
+            sender_name: "External Buyer",
+            text: "We agreed the pilot scope today.",
+            received_at: startedAt(index),
+            effective_at: startedAt(index),
+          })),
+        )
+        .execute();
+      const tiedMessages = await db
+        .selectFrom("conversation_messages")
+        .select(["id", "provider_message_id"])
+        .where("conversation_id", "=", seeded.conversationId)
+        .where("provider_message_id", "like", "tied-msg-%")
+        .orderBy("provider_message_id", "asc")
+        .execute();
+      await db
+        .insertInto("conversation_slices")
+        .values(
+          tiedMessages.map((message, index) => ({
+            id: `tied-slice-${String(index).padStart(4, "0")}`,
+            conversation_id: seeded.conversationId,
+            first_message_id: message.id,
+            last_message_id: message.id,
+            started_at: startedAt(index),
+            ended_at: startedAt(index),
+            message_count: 1,
+            denoised_message_ids: JSON.stringify([message.id]),
+            flush_reason: "gap" as const,
+            roster_snapshot: base.roster_snapshot,
+            salience_verdict: "kept",
+            status: "closed" as const,
+          })),
+        )
+        .execute();
+      const ordered = await db
+        .selectFrom("conversation_slices")
+        .select(["id", "started_at"])
+        .where("conversation_id", "=", seeded.conversationId)
+        .orderBy("started_at", "asc")
+        .orderBy("id", "asc")
+        .execute();
+      expect(ordered).toHaveLength(extra + 1);
+      const tieTimestamp = distinctStartedAt(TIE_FIRST);
+      const tiedPositions = ordered.flatMap((row, position) => (row.started_at === tieTimestamp ? [position] : []));
+      expect(tiedPositions).toEqual([198, 199, 200, 201]);
+
+      const emitted: string[] = [];
+      const pages: number[] = [];
+      for await (const item of emitWhatsAppSyncedItems({
+        db,
+        logger: fakeLogger(),
+        provisionalRefreshMaxMinutes: 120,
+        now: new Date("2026-08-01T00:00:00.000Z"),
+        onPageListedSliceCount: (count) => pages.push(count),
+      })) {
+        emitted.push(item.providerFileId);
+      }
+
+      expect(pages).toEqual([WHATSAPP_EMISSION_PAGE_SIZE, ordered.length - WHATSAPP_EMISSION_PAGE_SIZE]);
+      expect(emitted).toEqual(ordered.map((row) => row.id));
+      expect(new Set(emitted).size).toBe(ordered.length);
+    }, 60000);
+  });
+}
+
+runEmissionPagingSuite("WhatsApp emission paging sqlite", createTestDb);
+runEmissionPagingSuite("WhatsApp emission paging postgres", createTestPgDb);

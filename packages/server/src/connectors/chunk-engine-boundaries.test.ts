@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  type WhatsAppBoundarySegment,
-  enforceWhatsAppBoundarySize,
-  validateWhatsAppBoundarySegments,
-} from "./whatsapp-llm-chunker";
+import { type BoundarySegment, enforceBoundarySize, validateBoundarySegments } from "./chunk-engine";
 
 function messages(count: number) {
   return Array.from({ length: count }, (_, index) => ({
@@ -19,10 +15,10 @@ function messages(count: number) {
   }));
 }
 
-describe("WhatsApp LLM boundary validation and size enforcement", () => {
+describe("chunk engine boundary validation and size enforcement", () => {
   it("rejects a response with a coverage gap", () => {
     expect(() =>
-      validateWhatsAppBoundarySegments(
+      validateBoundarySegments(
         JSON.stringify({
           segments: [
             { start: 1, end: 1, threads: ["one"] },
@@ -35,10 +31,10 @@ describe("WhatsApp LLM boundary validation and size enforcement", () => {
   });
 
   it("force-splits an oversized segment while preserving its shared thread", () => {
-    const input: WhatsAppBoundarySegment[] = [{ start: 1, end: 5, threads: ["same thread"] }];
+    const input: BoundarySegment[] = [{ start: 1, end: 5, threads: ["same thread"] }];
 
     expect(
-      enforceWhatsAppBoundarySize(input, messages(5), {
+      enforceBoundarySize(input, messages(5), {
         minMessages: 2,
         targetMessages: 4,
         maxMessages: 2,
@@ -53,7 +49,7 @@ describe("WhatsApp LLM boundary validation and size enforcement", () => {
 
   it("defers a below-floor break adjacent to the open tail", () => {
     expect(
-      enforceWhatsAppBoundarySize(
+      enforceBoundarySize(
         [
           { start: 1, end: 3, threads: ["one"] },
           { start: 4, end: 5, threads: ["two"] },
@@ -66,7 +62,7 @@ describe("WhatsApp LLM boundary validation and size enforcement", () => {
 
   it("consolidates adjacent segments that share a thread", () => {
     expect(
-      enforceWhatsAppBoundarySize(
+      enforceBoundarySize(
         [
           { start: 1, end: 2, threads: ["same"] },
           { start: 3, end: 4, threads: ["same"] },

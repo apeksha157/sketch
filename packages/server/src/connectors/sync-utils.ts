@@ -1,4 +1,5 @@
-import type { Kysely } from "kysely";
+import { createHash } from "node:crypto";
+import type { Kysely, SqlBool } from "kysely";
 import { sql } from "kysely";
 import { isPg } from "../db/dialect";
 import { fileVisibilityRuleSql } from "../db/repositories/file-visibility-rule";
@@ -17,6 +18,48 @@ export const MAX_ERROR_MESSAGE_LENGTH = 500;
  * better-sqlite3 prepare cheap.
  */
 export const IN_CLAUSE_CHUNK_SIZE = 500;
+
+export function stableContentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+export function formatSliceTimeRange(slice: { started_at: string; ended_at: string }): string {
+  const start = new Date(slice.started_at);
+  const end = new Date(slice.ended_at);
+  const startText = Number.isNaN(start.getTime()) ? slice.started_at : start.toISOString();
+  const endText = Number.isNaN(end.getTime()) ? slice.ended_at : end.toISOString();
+  return startText === endText ? startText : `${startText} to ${endText}`;
+}
+
+export function buildSliceSourcePath(scheme: string, sliceId: string, params: Record<string, string>): string {
+  return `${scheme}://slice/${sliceId}?${new URLSearchParams(params).toString()}`;
+}
+
+export interface SliceKeysetCursor {
+  timestamp: string;
+  id: string;
+}
+
+/**
+ * Keyset predicate for a page of `conversation_slices`, shared by the Slack
+ * and WhatsApp emission loops. Their surrounding queries differ (different
+ * joins, filters and lanes), so only the paging fragment is shared; it is
+ * built with `sql.ref` because the ordering column varies by lane.
+ *
+ * The caller must order by the same (column, id) pair and direction, or a page
+ * boundary will silently skip rows.
+ */
+export function sliceKeysetAfter(
+  column: "conversation_slices.started_at" | "conversation_slices.ended_at",
+  cursor: SliceKeysetCursor,
+  direction: "asc" | "desc" = "asc",
+) {
+  const ref = sql.ref(column);
+  const id = sql.ref("conversation_slices.id");
+  return direction === "asc"
+    ? sql<SqlBool>`(${ref} > ${cursor.timestamp} OR (${ref} = ${cursor.timestamp} AND ${id} > ${cursor.id}))`
+    : sql<SqlBool>`(${ref} < ${cursor.timestamp} OR (${ref} = ${cursor.timestamp} AND ${id} < ${cursor.id}))`;
+}
 
 /**
  * Split an array into fixed-size chunks (the last chunk holds the remainder).

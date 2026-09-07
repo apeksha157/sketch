@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listActiveRuns, registerActiveRun, unregisterActiveRun } from "../agent/active-runs";
 import { PROMPT_TOO_LONG_RECOVERY_MESSAGE, PROMPT_TOO_LONG_SHARED_RECOVERY_MESSAGE } from "../agent/errors";
 import { NEW_SESSION_CONFIRMATIONS } from "../commands";
-import { refreshSlackChannelName } from "../connectors/slack-salience";
+import { refreshSlackChannelName } from "../connectors/slack-emission";
 import { createAutomationLocksRepository } from "../db/repositories/automation-locks";
 import type { DB } from "../db/schema";
 import { downloadSlackFile } from "../files";
@@ -345,7 +345,7 @@ vi.mock("./api", () => ({
   slackApiCall: vi.fn().mockResolvedValue({ team_id: "T123" }),
 }));
 
-vi.mock("../connectors/slack-salience", () => ({
+vi.mock("../connectors/slack-emission", () => ({
   refreshSlackChannelName: vi.fn().mockResolvedValue(true),
 }));
 
