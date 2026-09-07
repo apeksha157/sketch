@@ -33,6 +33,7 @@ import {
   TerminalWindowIcon,
   WarningCircleIcon,
   WrenchIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { Collapsible as CollapsiblePrimitive } from "radix-ui";
@@ -1829,7 +1830,25 @@ function ProgressItemSummary({
           </span>
         ) : null}
         {statusLabel ? (
-          <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{statusLabel}</span>
+          item.status === "succeeded" || item.status === "failed" ? (
+            <span
+              role="img"
+              aria-label={item.status === "succeeded" ? "Succeeded" : "Failed"}
+              title={item.status === "succeeded" ? "Succeeded" : "Failed"}
+              className={cn(
+                "inline-flex shrink-0 self-center",
+                item.status === "succeeded" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400",
+              )}
+            >
+              {item.status === "succeeded" ? (
+                <CheckIcon size={14} weight="bold" aria-hidden />
+              ) : (
+                <XIcon size={14} weight="bold" aria-hidden />
+              )}
+            </span>
+          ) : (
+            <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{statusLabel}</span>
+          )
         ) : null}
         {elapsed !== null ? (
           <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{formatElapsed(elapsed)}</span>
