@@ -1,4 +1,13 @@
-import { CompiledQuery, type Kysely } from "kysely";
+import {
+  CompiledQuery,
+  type Kysely,
+  type KyselyPlugin,
+  type PluginTransformQueryArgs,
+  type PluginTransformResultArgs,
+  type QueryResult,
+  type RootOperationNode,
+  type UnknownRow,
+} from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { createConversationRepository } from "../db/repositories/conversations";
@@ -6,6 +15,7 @@ import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger, createTestPgDb } from "../test-utils";
 import type { ChunkEngineKnobs } from "./chunk-engine";
 import { runSlackChunkEngine, runSlackChunkStream, slackIdleCloseCandidatesQuery } from "./slack-chunk-engine-runner";
+import { SLACK_ROUTER_STREAM_KEY } from "./slack-chunk-messages";
 
 const knobs: ChunkEngineKnobs = {
   windowMessages: 10,
@@ -24,6 +34,30 @@ const knobs: ChunkEngineKnobs = {
   groupWorkerPool: 2,
   maxWindowsPerRun: 8,
 };
+
+/**
+ * Fails every full `conversation_slice_stream_cursors` read for one
+ * conversation, which is what the tick gate does before the pass starts. A
+ * transient fault there must be absorbed by the tick, not rejected out of the
+ * `Promise.all` that fans streams out.
+ */
+class StreamCursorReadFault implements KyselyPlugin {
+  constructor(private readonly conversationId: number) {}
+
+  transformQuery(args: PluginTransformQueryArgs): RootOperationNode {
+    return args.node;
+  }
+
+  async transformResult(args: PluginTransformResultArgs): Promise<QueryResult<UnknownRow>> {
+    const hit = args.result.rows.some(
+      (row) =>
+        "llm_last_attempt_at" in row &&
+        Number((row as { conversation_id?: unknown }).conversation_id) === this.conversationId,
+    );
+    if (hit) throw new Error("stream cursor read failed");
+    return args.result;
+  }
+}
 
 function runSuite(label: string, createDb: () => Promise<Kysely<DB>>, explainPrefix: string): void {
   describe(label, () => {
@@ -113,6 +147,105 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>, explainPre
       expect(memberships).toContainEqual([root, channel, nextChannel]);
       expect(memberships).toContainEqual([firstReply, secondReply, nextReply]);
       expect(new Set(memberships.flat()).size).toBe(6);
+    });
+
+    it("absorbs a failing stream gate as one failure and still runs the idle lane", async () => {
+      const repo = createConversationRepository(db);
+      const now = new Date("2026-09-05T00:00:00.000Z");
+      await message("healthy-1");
+      await message("healthy-2");
+
+      const faulty = await repo.getOrCreate({
+        platform: "slack",
+        kind: "channel",
+        providerConversationId: `C-fault-${label}`,
+      });
+      for (const providerId of ["fault-1", "fault-2"]) {
+        await repo.insertMessage({
+          conversationId: faulty.id,
+          providerMessageId: providerId,
+          senderJid: "U9",
+          senderName: "Bo",
+          text: providerId,
+          providerThreadId: providerId,
+          providerTimestamp: "2026-09-04T00:00:00.000Z",
+          receivedAt: "2026-09-04T00:00:00.000Z",
+        });
+      }
+
+      const idle = await repo.getOrCreate({
+        platform: "slack",
+        kind: "channel",
+        providerConversationId: `C-idle-${label}`,
+      });
+      const idleMessage = await repo.insertMessage({
+        conversationId: idle.id,
+        providerMessageId: "idle-1",
+        senderJid: "U8",
+        senderName: "Cai",
+        text: "idle-1",
+        providerThreadId: "idle-1",
+        providerTimestamp: "2026-08-01T00:00:00.000Z",
+        receivedAt: "2026-08-01T00:00:00.000Z",
+      });
+      await db
+        .insertInto("conversation_slices")
+        .values({
+          id: `idle-open-slice-${label}`,
+          conversation_id: idle.id,
+          first_message_id: idleMessage.row.id,
+          last_message_id: idleMessage.row.id,
+          started_at: "2026-08-01T00:00:00.000Z",
+          ended_at: "2026-08-01T00:00:00.000Z",
+          message_count: 1,
+          denoised_message_ids: JSON.stringify([idleMessage.row.id]),
+          flush_reason: "gap" as const,
+          roster_snapshot: "[]",
+          salience_verdict: "kept",
+          status: "open" as const,
+        })
+        .execute();
+      await db
+        .insertInto("conversation_slice_stream_cursors")
+        .values({
+          conversation_id: idle.id,
+          stream_key: SLACK_ROUTER_STREAM_KEY,
+          last_message_id: idleMessage.row.id,
+        })
+        .execute();
+
+      const summary = await runSlackChunkEngine({
+        db: db.withPlugin(new StreamCursorReadFault(faulty.id)),
+        logger: createTestLogger(),
+        generate,
+        channelKnobs: knobs,
+        threadKnobs: knobs,
+        discoveryPageRows: 100,
+        discoveryMaxPages: 10,
+        now,
+      });
+
+      expect(summary.streamFailures).toBe(1);
+      expect(summary.idleCloses).toBe(1);
+      expect(summary.windowsRun).toBeGreaterThan(0);
+      const healthySlices = await db
+        .selectFrom("conversation_slices")
+        .select("id")
+        .where("conversation_id", "=", conversationId)
+        .execute();
+      expect(healthySlices.length).toBeGreaterThan(0);
+      const faultySlices = await db
+        .selectFrom("conversation_slices")
+        .select("id")
+        .where("conversation_id", "=", faulty.id)
+        .execute();
+      expect(faultySlices).toHaveLength(0);
+      const idleSlice = await db
+        .selectFrom("conversation_slices")
+        .select(["status", "flush_reason"])
+        .where("conversation_id", "=", idle.id)
+        .executeTakeFirstOrThrow();
+      expect(idleSlice.status).toBe("closed");
     });
 
     it("self-heals an active rollback stream before advancing", async () => {

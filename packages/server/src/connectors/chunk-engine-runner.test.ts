@@ -192,4 +192,27 @@ describe("shared chunk stream tick", () => {
     expect(result.windowsProcessed).toBe(0);
     expect(result.pendingRemaining).toBe(true);
   });
+
+  it("counts a gate failure once instead of letting it escape the tick", async () => {
+    const conversationId = await seedStream({ providerId: "C-gate-fault", messages: 2 });
+    const failing = failingAdapter(conversationId, Number.POSITIVE_INFINITY);
+    const generate = vi.fn(validBoundary);
+    const stampAttempt = vi.fn(async () => {});
+
+    const result = await runStreamTick({
+      ...tickOptions(conversationId, {
+        generate,
+        readLastAttempt: async () => insideTickAttempt,
+        stampAttempt,
+      }),
+      adapter: failing.adapter,
+    });
+
+    expect(failing.calls()).toBe(1);
+    expect(result.failed).toBe(true);
+    expect(result.tickSkipped).toBe(false);
+    expect(result.pendingRemaining).toBe(true);
+    expect(generate).not.toHaveBeenCalled();
+    expect(stampAttempt).not.toHaveBeenCalled();
+  });
 });

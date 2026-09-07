@@ -151,27 +151,34 @@ async function burstOverridesTick(options: ChunkStreamTickOptions): Promise<bool
   return (await countPendingIndexable(options, threshold, historyStartId)) >= threshold;
 }
 
+/**
+ * The gate (last-attempt read, burst scan, `before_pass` stamp) runs inside the
+ * same `try` as the pass. Its reads hit the database, so a transient fault
+ * there must land as one counted stream failure like any other tick fault —
+ * callers fan streams out with `Promise.all`, where a single escaping rejection
+ * would abort the whole connector run before emission and ACL reconciliation.
+ */
 export async function runStreamTick(options: ChunkStreamTickOptions): Promise<ChunkStreamTickResult> {
-  if (options.llmGated) {
-    if (!options.hasGenerator) return skippedTick("no_generator");
-    const lastAttempt = (await options.readLastAttempt?.()) ?? null;
-    const lastAttemptMs = lastAttempt ? Date.parse(lastAttempt) : Number.NaN;
-    const insideTick =
-      Number.isFinite(lastAttemptMs) &&
-      options.now.getTime() - lastAttemptMs < options.adapter.knobs.tickMinutes * MINUTE_MS;
-    if (insideTick && !(await burstOverridesTick(options))) return skippedTick(undefined, true);
-    if (options.stampWhen === "before_pass") await options.stampAttempt?.({ claimToken: null });
-  }
-
-  const deps: ChunkEngineDeps = {
-    db: options.db,
-    logger: options.logger,
-    generate: options.generate,
-    now: () => options.now.getTime(),
-    ...(options.onOpenChunkShrunk ? { onOpenChunkShrunk: options.onOpenChunkShrunk } : {}),
-  };
   const stampOnClaim = options.llmGated && options.stampWhen === "on_claim" ? options.stampAttempt : undefined;
   try {
+    if (options.llmGated) {
+      if (!options.hasGenerator) return skippedTick("no_generator");
+      const lastAttempt = (await options.readLastAttempt?.()) ?? null;
+      const lastAttemptMs = lastAttempt ? Date.parse(lastAttempt) : Number.NaN;
+      const insideTick =
+        Number.isFinite(lastAttemptMs) &&
+        options.now.getTime() - lastAttemptMs < options.adapter.knobs.tickMinutes * MINUTE_MS;
+      if (insideTick && !(await burstOverridesTick(options))) return skippedTick(undefined, true);
+      if (options.stampWhen === "before_pass") await options.stampAttempt?.({ claimToken: null });
+    }
+
+    const deps: ChunkEngineDeps = {
+      db: options.db,
+      logger: options.logger,
+      generate: options.generate,
+      now: () => options.now.getTime(),
+      ...(options.onOpenChunkShrunk ? { onOpenChunkShrunk: options.onOpenChunkShrunk } : {}),
+    };
     const result = await withProviderBackoff(
       () =>
         runChunkingPass(deps, {
