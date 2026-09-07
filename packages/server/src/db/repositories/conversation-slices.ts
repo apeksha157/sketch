@@ -78,12 +78,6 @@ export interface ConversationSliceCursorRelease {
   claimToken: string;
 }
 
-export interface ConversationSliceSalienceClaim {
-  claimToken: string;
-  now: string;
-  staleBefore: string;
-}
-
 export interface WhatsAppBackfillCheckpointSet {
   groupJid: string;
   lastFetchedKey?: string | null;
@@ -221,52 +215,6 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
       return db.selectFrom("conversation_slices").selectAll().where("id", "=", sliceId).executeTakeFirstOrThrow();
     },
 
-    async claimSalienceIfPending(sliceId: string, input: ConversationSliceSalienceClaim): Promise<boolean> {
-      const result = await db
-        .updateTable("conversation_slices")
-        .set({
-          salience_claim_token: input.claimToken,
-          salience_claimed_at: input.now,
-        })
-        .where("id", "=", sliceId)
-        .where("salience_verdict", "is", null)
-        .where((eb) =>
-          eb.or([eb("salience_claimed_at", "is", null), eb("salience_claimed_at", "<", input.staleBefore)]),
-        )
-        .executeTakeFirst();
-
-      return Number(result.numUpdatedRows ?? 0) === 1;
-    },
-
-    async updateSalienceVerdictIfClaimed(
-      sliceId: string,
-      claimToken: string,
-      input: {
-        verdict: ConversationSliceSalienceVerdict;
-        signals?: string | null;
-        indexedFileId?: string | null;
-        rosterSnapshot?: string;
-      },
-    ): Promise<ConversationSliceRow | undefined> {
-      const result = await db
-        .updateTable("conversation_slices")
-        .set({
-          salience_verdict: input.verdict,
-          salience_signals: input.signals ?? null,
-          salience_claim_token: null,
-          salience_claimed_at: null,
-          ...(input.indexedFileId !== undefined ? { indexed_file_id: input.indexedFileId } : {}),
-          ...(input.rosterSnapshot !== undefined ? { roster_snapshot: input.rosterSnapshot } : {}),
-        })
-        .where("id", "=", sliceId)
-        .where("salience_verdict", "is", null)
-        .where("salience_claim_token", "=", claimToken)
-        .executeTakeFirst();
-
-      if (Number(result.numUpdatedRows ?? 0) === 0) return undefined;
-      return db.selectFrom("conversation_slices").selectAll().where("id", "=", sliceId).executeTakeFirstOrThrow();
-    },
-
     /**
      * Clears indexed-file links on kept slices so the next emission pass
      * re-renders and re-upserts them (verdicts persist, no LLM re-judging).
@@ -281,20 +229,6 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
         .where("indexed_file_id", "is not", null)
         .executeTakeFirst();
       return Number(result.numUpdatedRows ?? 0);
-    },
-
-    async clearSalienceClaim(sliceId: string, claimToken: string): Promise<boolean> {
-      const result = await db
-        .updateTable("conversation_slices")
-        .set({
-          salience_claim_token: null,
-          salience_claimed_at: null,
-        })
-        .where("id", "=", sliceId)
-        .where("salience_claim_token", "=", claimToken)
-        .executeTakeFirst();
-
-      return Number(result.numUpdatedRows ?? 0) === 1;
     },
 
     async getCursor(conversationId: number): Promise<ConversationSliceCursorRow | undefined> {

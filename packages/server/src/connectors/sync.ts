@@ -210,7 +210,6 @@ export async function runConnectorSync(
       | "SLACK_DISCOVERY_MAX_PAGES"
       | "SLACK_EMISSION_LEGACY_PER_RUN"
       | "SLACK_ENTITY_SYNC"
-      | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"
       | "WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES"
       | "WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS"
@@ -297,7 +296,6 @@ export async function runConnectorSync(
                 storedScopeConfig.chunkGroupWorkerPool ?? appConfig?.WHATSAPP_CHUNK_GROUP_WORKER_POOL,
               chunkMaxWindowsPerRun:
                 storedScopeConfig.chunkMaxWindowsPerRun ?? appConfig?.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN,
-              salienceBatchLimit: storedScopeConfig.salienceBatchLimit ?? appConfig?.WHATSAPP_SALIENCE_BATCH_LIMIT,
               emissionRefreshDays: storedScopeConfig.emissionRefreshDays ?? appConfig?.WHATSAPP_EMISSION_REFRESH_DAYS,
               backfillGraphPageMessages:
                 storedScopeConfig.backfillGraphPageMessages ?? appConfig?.WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES,
@@ -860,7 +858,6 @@ export interface SyncSchedulerDeps {
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
       | "CONTACT_POINT_DEFAULT_REGION"
-      | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"
       | "WHATSAPP_CHUNK_WINDOW_MESSAGES"
       | "WHATSAPP_CHUNK_WINDOW_TOKENS"

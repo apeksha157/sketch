@@ -66,53 +66,6 @@ function runRepositorySuite(label: string, getDb: () => Promise<Kysely<DB>>, opt
       await expect(countRows(db, "conversation_slices")).resolves.toBe(1);
     });
 
-    it("updates salience verdict only for the active claim", async () => {
-      const { conversationId, firstMessageId, lastMessageId } = await seedConversationWindow(db);
-      const repo = createConversationSlicesRepository(db);
-      const { row } = await repo.insertIfAbsent({
-        conversationId,
-        firstMessageId,
-        lastMessageId,
-        startedAt: "2026-07-07T09:00:00.000Z",
-        endedAt: "2026-07-07T09:05:00.000Z",
-        messageCount: 2,
-        flushReason: "max_age",
-        rosterSnapshot: "[]",
-      });
-
-      const claimed = await repo.claimSalienceIfPending(row.id, {
-        claimToken: "salience-1",
-        now: "2026-07-07T09:00:00.000Z",
-        staleBefore: "2026-07-07T08:55:00.000Z",
-      });
-      const wrongClaim = await repo.updateSalienceVerdictIfClaimed(row.id, "salience-2", {
-        verdict: "dropped",
-        signals: JSON.stringify({ banter: true }),
-      });
-      const kept = await repo.updateSalienceVerdictIfClaimed(row.id, "salience-1", {
-        verdict: "kept",
-        signals: JSON.stringify({ decisions: 1 }),
-      });
-      const dropped = await repo.updateSalienceVerdictIfClaimed(row.id, "salience-1", {
-        verdict: "dropped",
-        signals: JSON.stringify({ banter: true }),
-      });
-      const stored = await db
-        .selectFrom("conversation_slices")
-        .selectAll()
-        .where("id", "=", row.id)
-        .executeTakeFirstOrThrow();
-
-      expect(claimed).toBe(true);
-      expect(wrongClaim).toBeUndefined();
-      expect(kept?.salience_verdict).toBe("kept");
-      expect(dropped).toBeUndefined();
-      expect(stored.salience_verdict).toBe("kept");
-      expect(stored.salience_signals).toBe(JSON.stringify({ decisions: 1 }));
-      expect(stored.salience_claim_token).toBeNull();
-      expect(stored.salience_claimed_at).toBeNull();
-    });
-
     it("preserves dropped verdicts when closing open slices", async () => {
       const first = await seedConversationWindow(db);
       const second = await seedConversationWindow(db);

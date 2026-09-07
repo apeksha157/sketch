@@ -10,7 +10,6 @@ import {
 } from "../whatsapp/identity-resolution";
 import { phoneE164ToWhatsAppJid } from "../whatsapp/provider";
 import {
-  type BoundarySegment,
   type ChunkCursorState,
   type ChunkEngineDeps,
   type ChunkEngineMessage,
@@ -18,10 +17,8 @@ import {
   type ChunkPendingOptions,
   type ChunkStreamAdapter,
   createCompositeChunkCursorStore,
-  enforceBoundarySize,
   evaluateIdleClose as evaluateChunkIdleClose,
   runChunkingPass,
-  validateBoundarySegments,
 } from "./chunk-engine";
 import {
   type WhatsAppChunkerMessage,
@@ -35,8 +32,6 @@ export interface WhatsAppLlmChunkerDeps extends ChunkEngineDeps {
   db: Kysely<DB>;
   logger: Logger;
 }
-
-export type WhatsAppBoundarySegment = BoundarySegment;
 
 export interface WhatsAppLlmBoundaryMessage extends WhatsAppChunkerMessage {
   senderName: string;
@@ -281,18 +276,6 @@ async function findConversationId(db: Kysely<DB>, groupJid: string): Promise<num
     .where("provider_conversation_id", "=", groupJid)
     .executeTakeFirst();
   return row?.id;
-}
-
-export function validateWhatsAppBoundarySegments(raw: string, messageCount: number): WhatsAppBoundarySegment[] {
-  return validateBoundarySegments(raw, messageCount);
-}
-
-export function enforceWhatsAppBoundarySize(
-  segments: WhatsAppBoundarySegment[],
-  messages: Array<Pick<WhatsAppLlmBoundaryMessage, "text">>,
-  knobs: Pick<WhatsAppLlmChunkerKnobs, "minMessages" | "targetMessages" | "maxMessages" | "maxTokens">,
-): WhatsAppBoundarySegment[] {
-  return enforceBoundarySize(segments, messages, knobs);
 }
 
 /** A missing conversation deliberately reports no pending work even though the result is skipped. */

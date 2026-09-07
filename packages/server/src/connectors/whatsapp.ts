@@ -3,7 +3,6 @@ import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import type { BrowseResult, Connector, ConnectorCredentials, SyncedItem } from "./types";
 import {
   type WhatsAppBackfillGraphKnobs,
-  type WhatsAppChunkerKnobs,
   type WhatsAppLlmChunkerKnobs,
   chunkWhatsAppIndexingGroups,
 } from "./whatsapp-chunker";
@@ -23,14 +22,6 @@ function assertSystemCredentials(credentials: ConnectorCredentials): void {
 function positiveInteger(value: unknown): number | undefined {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function chunkerDefaultsFromScopeConfig(scopeConfig: Record<string, unknown>): Partial<WhatsAppChunkerKnobs> {
-  return {
-    gapMinutes: positiveInteger(scopeConfig.sliceGapMinutes),
-    maxAgeMinutes: positiveInteger(scopeConfig.sliceMaxAgeMinutes),
-    maxMessages: positiveInteger(scopeConfig.sliceMaxMessages),
-  };
 }
 
 function emissionRefreshDaysFromScopeConfig(scopeConfig: Record<string, unknown>): number {
@@ -124,7 +115,6 @@ export function createWhatsAppConnector(): Connector {
         db,
         groups,
         logger,
-        defaultKnobs: chunkerDefaultsFromScopeConfig(scopeConfig),
         defaultLlmKnobs: llmChunkerDefaultsFromScopeConfig(scopeConfig),
         llmGenerate: whatsappChunkerGenerate,
         onOpenChunkShrunk: (indexedFileId) => purgeConversationalFactsForFile(db, indexedFileId),

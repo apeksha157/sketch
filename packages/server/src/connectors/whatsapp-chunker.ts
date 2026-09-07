@@ -5,7 +5,6 @@ import { parseSketchCommand } from "../commands";
 import { isPg } from "../db/dialect";
 import {
   type ConversationSliceCursorRow,
-  type ConversationSliceFlushReason,
   createConversationSlicesRepository,
 } from "../db/repositories/conversation-slices";
 import { createWhatsAppBackfillRangeRepository } from "../db/repositories/whatsapp-backfill-ranges";
@@ -20,9 +19,6 @@ import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import { runWithConcurrency } from "./sync-utils";
 import { evaluateIdleClose, runLlmChunkingPass } from "./whatsapp-llm-chunker";
 
-export const DEFAULT_WHATSAPP_SLICE_GAP_MINUTES = 25;
-export const DEFAULT_WHATSAPP_SLICE_MAX_AGE_MINUTES = 120;
-export const DEFAULT_WHATSAPP_SLICE_MAX_MESSAGES = 50;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES = 500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS = 20_000;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_CYCLE_MESSAGES = 1500;
@@ -48,12 +44,6 @@ const DEFAULT_CLAIM_STALE_MS = 5 * MINUTE_MS;
 const SYNTHETIC_ATTACHMENT_TEXT = "see attached files.";
 const SINGLE_EMOJI_PATTERN =
   /^(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\p{Emoji_Modifier}|\uFE0E|\uFE0F)*(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\p{Emoji_Modifier}|\uFE0E|\uFE0F)*)*$/u;
-
-export interface WhatsAppChunkerKnobs {
-  gapMinutes: number;
-  maxAgeMinutes: number;
-  maxMessages: number;
-}
 
 export type WhatsAppLlmReasoningEffort = "low" | "medium" | "high";
 
@@ -110,25 +100,6 @@ export interface WhatsAppChunkerMessage {
   isBot: boolean;
 }
 
-export interface PlannedWhatsAppSlice {
-  firstMessageId: number;
-  lastMessageId: number;
-  startedAt: string;
-  endedAt: string;
-  messageCount: number;
-  denoisedMessageIds: number[];
-  flushReason: ConversationSliceFlushReason;
-  cursor: {
-    lastEffectiveAt: string;
-    lastMessageId: number;
-  };
-}
-
-export interface WhatsAppChunkerPlan {
-  slices: PlannedWhatsAppSlice[];
-  activeTailMessageIds: number[];
-}
-
 export interface WhatsAppChunkerRunSummary {
   conversationsProcessed: number;
   slicesCreated: number;
@@ -136,11 +107,6 @@ export interface WhatsAppChunkerRunSummary {
   messagesProcessed: number;
   maxAgeFlushes: number;
   maxSizeFlushes: number;
-}
-
-interface SortableChunkerMessage extends WhatsAppChunkerMessage {
-  effectiveMs: number;
-  rawIndex: number;
 }
 
 interface ChunkerRawRow {
@@ -161,7 +127,6 @@ interface ChunkWhatsAppGroupOptions {
   now?: Date;
   claimStaleMs?: number;
   onConversationClaimed?: (conversationId: number) => Promise<void>;
-  defaultKnobs?: Partial<WhatsAppChunkerKnobs>;
   defaultLlmKnobs?: Partial<WhatsAppLlmChunkerKnobs>;
   llmGenerate?: WhatsAppLlmGenerate;
   onOpenChunkShrunk?: (indexedFileId: string) => Promise<void>;
@@ -174,7 +139,6 @@ interface ChunkWhatsAppGroupsOptions {
   now?: Date;
   claimStaleMs?: number;
   onConversationClaimed?: (conversationId: number) => Promise<void>;
-  defaultKnobs?: Partial<WhatsAppChunkerKnobs>;
   defaultLlmKnobs?: Partial<WhatsAppLlmChunkerKnobs>;
   llmGenerate?: WhatsAppLlmGenerate;
   onOpenChunkShrunk?: (indexedFileId: string) => Promise<void>;
@@ -192,17 +156,6 @@ type WhatsAppLlmGenerate = (
     label?: string;
   },
 ) => Promise<string>;
-
-export function resolveWhatsAppChunkerKnobs(
-  group: WhatsAppGroupIndexingConfig,
-  defaults: Partial<WhatsAppChunkerKnobs> = {},
-): WhatsAppChunkerKnobs {
-  return {
-    gapMinutes: group.sliceGapMinutes ?? defaults.gapMinutes ?? DEFAULT_WHATSAPP_SLICE_GAP_MINUTES,
-    maxAgeMinutes: group.sliceMaxAgeMinutes ?? defaults.maxAgeMinutes ?? DEFAULT_WHATSAPP_SLICE_MAX_AGE_MINUTES,
-    maxMessages: group.sliceMaxMessages ?? defaults.maxMessages ?? DEFAULT_WHATSAPP_SLICE_MAX_MESSAGES,
-  };
-}
 
 function positiveInteger(value: number | null | undefined): number | undefined {
   return value != null && Number.isInteger(value) && value > 0 ? value : undefined;
@@ -313,19 +266,6 @@ class WhatsAppBackfillGraphInvariantError extends Error {
   }
 }
 
-function effectiveTimeMs(value: string): number {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function isAfterCursor(message: { id: number; effectiveAt: string }, cursor: ConversationSliceCursorRow): boolean {
-  if (cursor.last_effective_at === null || cursor.last_message_id === null) return true;
-  return (
-    message.effectiveAt > cursor.last_effective_at ||
-    (message.effectiveAt === cursor.last_effective_at && message.id > cursor.last_message_id)
-  );
-}
-
 /**
  * Returns a portable SQL lower bound that is only a superset of isAfterCursor.
  * effective_at is provider_timestamp ?? received_at. Any message with
@@ -389,105 +329,6 @@ export function isIndexableWhatsAppChunkMessage(message: WhatsAppChunkerMessage)
   if (isReactionOnly(message)) return false;
   if (isCaptionlessMedia(message)) return false;
   return message.text.trim().length > 0 || hasAttachments(message.attachments);
-}
-
-function toSortableMessages(messages: WhatsAppChunkerMessage[]): SortableChunkerMessage[] {
-  return messages
-    .map((message) => ({ ...message, effectiveMs: effectiveTimeMs(message.effectiveAt), rawIndex: 0 }))
-    .sort((left, right) => left.effectiveMs - right.effectiveMs || left.id - right.id)
-    .map((message, rawIndex) => ({ ...message, rawIndex }));
-}
-
-function buildSlice(
-  sortedMessages: SortableChunkerMessage[],
-  denoisedMessages: SortableChunkerMessage[],
-  startIndex: number,
-  endIndex: number,
-  flushReason: ConversationSliceFlushReason,
-): PlannedWhatsAppSlice {
-  const kept = denoisedMessages.slice(startIndex, endIndex + 1);
-  const firstKept = kept[0];
-  const lastKept = kept[kept.length - 1];
-  if (!firstKept || !lastKept) {
-    throw new Error("Cannot build an empty WhatsApp slice");
-  }
-
-  const rawRange = sortedMessages.slice(firstKept.rawIndex, lastKept.rawIndex + 1);
-  const rangeIds = rawRange.map((message) => message.id);
-
-  return {
-    firstMessageId: Math.min(...rangeIds),
-    lastMessageId: Math.max(...rangeIds),
-    startedAt: firstKept.effectiveAt,
-    endedAt: lastKept.effectiveAt,
-    messageCount: kept.length,
-    denoisedMessageIds: kept.map((message) => message.id),
-    flushReason,
-    cursor: {
-      lastEffectiveAt: lastKept.effectiveAt,
-      lastMessageId: lastKept.id,
-    },
-  };
-}
-
-export function planWhatsAppConversationSlices(
-  messages: WhatsAppChunkerMessage[],
-  knobs: WhatsAppChunkerKnobs,
-  now = new Date(),
-): WhatsAppChunkerPlan {
-  const sortedMessages = toSortableMessages(messages);
-  const denoisedMessages = sortedMessages.filter(isIndexableWhatsAppChunkMessage);
-  const slices: PlannedWhatsAppSlice[] = [];
-  const gapMs = knobs.gapMinutes * MINUTE_MS;
-  const maxAgeMs = knobs.maxAgeMinutes * MINUTE_MS;
-  const maxMessages = Math.max(1, knobs.maxMessages);
-  let currentStartIndex: number | null = null;
-
-  for (let index = 0; index < denoisedMessages.length; index += 1) {
-    const current = denoisedMessages[index];
-    if (!current) continue;
-
-    if (currentStartIndex === null) {
-      currentStartIndex = index;
-      continue;
-    }
-
-    const previous = denoisedMessages[index - 1];
-    if (previous && current.effectiveMs - previous.effectiveMs >= gapMs) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, index - 1, "gap"));
-      currentStartIndex = index;
-      continue;
-    }
-
-    const first = denoisedMessages[currentStartIndex];
-    if (!first) continue;
-    const messageCount = index - currentStartIndex + 1;
-    const ageMs = current.effectiveMs - first.effectiveMs;
-    if (messageCount >= maxMessages) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, index, "max_size"));
-      currentStartIndex = null;
-      continue;
-    }
-    if (ageMs >= maxAgeMs) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, index, "max_age"));
-      currentStartIndex = null;
-    }
-  }
-
-  if (currentStartIndex !== null) {
-    const lastIndex = denoisedMessages.length - 1;
-    const last = denoisedMessages[lastIndex];
-    if (last && last.effectiveMs <= now.getTime() - gapMs) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, lastIndex, "gap"));
-      return { slices, activeTailMessageIds: [] };
-    }
-    return {
-      slices,
-      activeTailMessageIds: denoisedMessages.slice(currentStartIndex).map((message) => message.id),
-    };
-  }
-
-  return { slices, activeTailMessageIds: [] };
 }
 
 async function findGroupConversation(db: Kysely<DB>, groupJid: string): Promise<{ id: number } | undefined> {
