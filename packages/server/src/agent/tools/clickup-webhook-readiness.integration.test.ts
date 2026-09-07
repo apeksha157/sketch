@@ -151,6 +151,10 @@ describe("Postgres ClickUp registration readiness and immutable delivery history
     await verifyScopedWebhookSlots({ db, deps, scheduler, taskId, key: KEY, baseUrl: BASE_URL });
   });
 
+  it("retires an unused default without deleting working provider subscriptions", async () => {
+    await verifyScopedWebhookSlots({ db, deps, scheduler, taskId, key: KEY, baseUrl: BASE_URL, unusedDefault: true });
+  });
+
   it("mismatched remote scope must remain unavailable after a signed delivery", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ webhook: remote({ list_id: null }) })),

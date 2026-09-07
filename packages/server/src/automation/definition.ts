@@ -298,6 +298,13 @@ export function addWebhookEndpointMetadata(
 ): WorkflowTriggerConfig {
   if (config.type !== "webhook") return config;
   const { webhookEndpoints: _storedEndpoints, ...baseConfig } = config;
+  const replacement =
+    options.endpoint?.status === "revoked" && options.endpoint.source_binding === null
+      ? options.endpoints?.find(({ endpoint }) => endpoint.status !== "revoked" || endpoint.source_binding !== null)
+      : undefined;
+  const selected = replacement
+    ? { ...options, endpoint: replacement.endpoint, lastDelivery: replacement.lastDelivery }
+    : options;
   const webhookEndpoints = options.endpoints?.map(({ endpoint, lastDelivery }) => {
     const metadata = addWebhookEndpointMetadata({ type: "webhook" }, taskId, {
       endpoint,
@@ -316,28 +323,28 @@ export function addWebhookEndpointMetadata(
       lastDelivery: metadata.webhookLastDelivery,
     };
   });
-  if (options.endpoint) {
+  if (selected.endpoint) {
     return {
       ...baseConfig,
       ...(webhookEndpoints ? { webhookEndpoints } : {}),
-      webhookUrl: buildNativeWebhookUrl(options.endpoint.id, {
-        baseUrl: options.baseUrl,
-        port: options.port,
+      webhookUrl: buildNativeWebhookUrl(selected.endpoint.id, {
+        baseUrl: selected.baseUrl,
+        port: selected.port,
       }),
-      webhookEndpointId: options.endpoint.id,
+      webhookEndpointId: selected.endpoint.id,
       webhookMethod: "POST",
       webhookContentType: "application/json",
-      webhookAuthentication: options.endpoint.verification_json ? "hmac_sha256" : "none",
-      webhookBinding: webhookBindingMetadata(options.endpoint),
+      webhookAuthentication: selected.endpoint.verification_json ? "hmac_sha256" : "none",
+      webhookBinding: webhookBindingMetadata(selected.endpoint),
       webhookLastDelivery:
-        options.lastDelivery?.endpointId === options.endpoint.id &&
-        options.lastDelivery.endpointGeneration === options.endpoint.generation
-          ? options.lastDelivery
+        selected.lastDelivery?.endpointId === selected.endpoint.id &&
+        selected.lastDelivery.endpointGeneration === selected.endpoint.generation
+          ? selected.lastDelivery
           : undefined,
       webhookStatus:
-        options.endpoint.status === "revoked"
+        selected.endpoint.status === "revoked"
           ? "revoked"
-          : options.endpoint.status === "pending"
+          : selected.endpoint.status === "pending"
             ? "unavailable"
             : "active",
     };

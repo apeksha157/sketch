@@ -176,7 +176,9 @@ async function ensureWebhookEndpoint(
     ]);
   }
   if (hasWebhookTrigger(request)) {
-    await repository.ensureForTask(taskId);
+    const retiredDefault = endpoints.some((endpoint) => endpoint.slot === "default" && endpoint.status === "revoked");
+    if (!retiredDefault || !endpoints.some((endpoint) => endpoint.slot !== "default"))
+      await repository.ensureForTask(taskId);
     if (request.status === "active") {
       try {
         await assertWebhookEndpointReady(db, taskId, encryptionKey);

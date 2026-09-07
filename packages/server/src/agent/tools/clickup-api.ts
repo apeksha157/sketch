@@ -79,7 +79,7 @@ export class ClickUpUploadUncertainError extends Error {
 function providerErrorCode(body: string): string | undefined {
   try {
     const code: unknown = JSON.parse(body)?.ECODE;
-    return typeof code === "string" && /^(OAUTH|SHARD)_\d{1,6}$/.test(code) ? code : undefined;
+    return typeof code === "string" && /^(OAUTH|SHARD|UPLOAD|GBUSED)_\d{1,6}$/.test(code) ? code : undefined;
   } catch {
     return undefined;
   }

@@ -170,6 +170,10 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     await verifyScopedWebhookSlots({ db, deps, scheduler, taskId, key: KEY, baseUrl: BASE_URL });
   });
 
+  it("retires an unused default without deleting working provider subscriptions", async () => {
+    await verifyScopedWebhookSlots({ db, deps, scheduler, taskId, key: KEY, baseUrl: BASE_URL, unusedDefault: true });
+  });
+
   it("discovers provider targets and binds the native endpoint through the builder tools", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

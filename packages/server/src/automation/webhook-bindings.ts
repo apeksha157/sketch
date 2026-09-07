@@ -57,8 +57,12 @@ export async function assertWebhookEndpointReady(
   if (!trigger || !isAutomationWebhookTrigger(trigger)) return;
   const endpoints = await db.selectFrom("webhook_endpoints").selectAll().where("task_id", "=", taskId).execute();
   const intended = endpoints.filter(
-    (endpoint) => endpoint.slot === "default" || endpoint.status !== "revoked" || endpoint.source_binding !== null,
+    (endpoint) =>
+      (endpoints.length === 1 && endpoint.slot === "default") ||
+      endpoint.status !== "revoked" ||
+      endpoint.source_binding !== null,
   );
+  if (intended.length === 0) throw new WebhookNotReadyError();
   for (const endpoint of intended) {
     if (
       intended.length === 1 &&

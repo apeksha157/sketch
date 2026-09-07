@@ -192,12 +192,20 @@ export async function manageWebhookEndpointSlot(params: {
     const endpoints = await repository.listByTaskId(task.id);
     const existing = endpoints.find((endpoint) => endpoint.slot === params.slot);
     if (params.retire) {
-      if (!existing || existing.slot === "default")
-        throw new WebhookBindingError("Only an existing additional endpoint slot can be retired.");
+      if (!existing) throw new WebhookBindingError("Only an existing endpoint slot can be retired.");
       if (existing.source_binding !== null)
         throw new WebhookBindingError(
           "Delete the exact remote subscription through its provider API before retiring this slot.",
         );
+      if (existing.status === "revoked") return existing;
+      if (
+        existing.slot === "default" &&
+        !endpoints.some(
+          (endpoint) =>
+            endpoint.id !== existing.id && endpoint.status === "active_signed" && endpoint.source_binding !== null,
+        )
+      )
+        throw new WebhookBindingError("Connect another source before retiring the default endpoint.");
       return trx
         .updateTable("webhook_endpoints")
         .set({ status: "revoked", generation: sql<number>`generation + 1`, updated_at: new Date().toISOString() })

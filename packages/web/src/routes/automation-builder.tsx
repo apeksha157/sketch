@@ -5250,7 +5250,8 @@ function NativeWebhookFields({ config, paused }: { config: WorkflowTriggerConfig
   const [showDetails, setShowDetails] = useState(false);
   const endpoints = config.webhookEndpoints ?? [];
   const intended = endpoints.filter(
-    (endpoint) => endpoint.slot === "default" || endpoint.status !== "revoked" || endpoint.binding,
+    (endpoint) =>
+      (endpoints.length === 1 && endpoint.slot === "default") || endpoint.status !== "revoked" || endpoint.binding,
   );
   const bindings = intended.map((endpoint) => endpoint.binding).filter((binding) => binding !== undefined);
   if (bindings.length === 0 && config.webhookBinding) bindings.push(config.webhookBinding);

@@ -93,7 +93,7 @@ const manageScheduledTasksSchema = {
 - 'update': modify an automation (requires task_id unless the current builder automation is implicit). Successful update emits the builder-opening artifact.
 - 'open': open an existing automation in its builder (requires task_id). This is a read-only routing action; it does not change the automation.
 - 'ensureWebhookEndpoint': create or retrieve a stable native webhook endpoint slot (task_id and webhook_slot), owner-only while paused. Register the returned endpoint with the existing provider API tool.
-- 'retireWebhookEndpoint': retire an additional endpoint slot after deleting its exact remote subscription, owner-only while paused.
+- 'retireWebhookEndpoint': retire an unused endpoint slot after deleting its exact remote subscription, owner-only while paused. The default slot can be retired once another source is connected; preserve working subscriptions.
 - 'get': inspect one complete automation definition, including step content and run history (requires task_id)
 - 'remove': delete an automation (requires task_id)
 - 'pause': pause an automation (requires task_id)

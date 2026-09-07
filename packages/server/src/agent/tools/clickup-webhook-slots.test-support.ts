@@ -19,6 +19,7 @@ export async function verifyScopedWebhookSlots(params: {
   taskId: string;
   key: string;
   baseUrl: string;
+  unusedDefault?: boolean;
 }) {
   const { db, deps, scheduler, taskId, key, baseUrl } = params;
   if (!deps.taskContext) throw new Error("Missing authoring context");
@@ -32,7 +33,7 @@ export async function verifyScopedWebhookSlots(params: {
   const slots: { slot: string; endpointId: string; url: string; listId: string; secret: string; resourceId: string }[] =
     [];
   for (let index = 0; index < 6; index++) {
-    const slot = index === 0 ? "default" : `list-${index + 1}`;
+    const slot = index === 0 && !params.unusedDefault ? "default" : `list-${index + 1}`;
     const args = { action: "ensureWebhookEndpoint" as const, task_id: taskId, webhook_slot: slot };
     const first = await handleManageScheduledTasks(args, manageDeps);
     const metadata = JSON.parse(first.content[0].text);
@@ -83,8 +84,18 @@ export async function verifyScopedWebhookSlots(params: {
     if (index < slots.length - 1) await expect(scheduler.resumeTask(taskId)).rejects.toThrow(/reconcile/);
   }
   const boundRows = await createWebhookEndpointRepository(db).listByTaskId(taskId);
-  expect(boundRows).toHaveLength(6);
-  expect(new Set(boundRows.map((row) => row.signing_secret_encrypted)).size).toBe(6);
+  expect(boundRows).toHaveLength(params.unusedDefault ? 7 : 6);
+  if (params.unusedDefault) {
+    await expect(scheduler.resumeTask(taskId)).rejects.toThrow(/reconcile/);
+    const retired = await handleManageScheduledTasks(
+      { action: "retireWebhookEndpoint", task_id: taskId, webhook_slot: "default" },
+      manageDeps,
+    );
+    expect(JSON.parse(retired.content[0].text).webhookStatus).toBe("revoked");
+  }
+  expect(
+    new Set(boundRows.filter((row) => row.source_binding !== null).map((row) => row.signing_secret_encrypted)).size,
+  ).toBe(6);
   await scheduler.resumeTask(taskId);
   const enqueue = vi.fn().mockResolvedValue(true);
   const app = new Hono().route(
@@ -115,13 +126,16 @@ export async function verifyScopedWebhookSlots(params: {
   expect(enqueue).toHaveBeenCalledTimes(6);
   const definition = await getAutomationDefinition({ db, taskId, webhookBaseUrl: baseUrl });
   const metadata = definition?.steps.find((step) => step.type === "trigger")?.triggerConfig?.webhookEndpoints;
-  expect(metadata).toHaveLength(6);
+  expect(metadata).toHaveLength(params.unusedDefault ? 7 : 6);
+  expect(definition?.steps.find((step) => step.type === "trigger")?.triggerConfig?.webhookStatus).toBe("active");
   expect(
-    metadata?.every(
-      (endpoint) =>
-        endpoint.lastDelivery?.endpointId === endpoint.endpointId &&
-        endpoint.binding?.subscription?.scope?.field === "list_id",
-    ),
+    metadata
+      ?.filter((endpoint) => endpoint.status !== "revoked")
+      .every(
+        (endpoint) =>
+          endpoint.lastDelivery?.endpointId === endpoint.endpointId &&
+          endpoint.binding?.subscription?.scope?.field === "list_id",
+      ),
   ).toBe(true);
   expect(JSON.stringify(metadata)).not.toContain("signing-secret-");
   await scheduler.pauseTask(taskId);
