@@ -1753,6 +1753,25 @@ function formatElapsed(seconds: number): string {
   return seconds < 1 ? "<1s" : `${Math.floor(seconds)}s`;
 }
 
+function readableToolName(toolName: string): string {
+  const name = toolName.match(/^mcp__.+?__(.+)$/)?.[1] ?? toolName;
+  const words: Record<string, string> = {
+    api: "API",
+    clickup: "ClickUp",
+    github: "GitHub",
+    http: "HTTP",
+    json: "JSON",
+    sql: "SQL",
+    url: "URL",
+  };
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => words[word.toLowerCase()] ?? word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function progressDetailForDisplay(item: ChatThreadProgressItem): string | null {
   if (!item.detail) return null;
   return item.detail;
@@ -1802,6 +1821,7 @@ function ProgressItemSummary({
         item.detailUnavailable,
     );
   const technical = item.mode === "technical";
+  const displayLabel = technical && item.toolName === item.label ? readableToolName(item.label) : item.label;
   const completedDuration = progressDurationSeconds(item);
   const inspectionStatus = progressInspectionStatus(item, activityLive);
   const detailNotice = `${item.detailRedacted ? "\n\nSome sensitive values were redacted." : ""}${
@@ -1826,7 +1846,7 @@ function ProgressItemSummary({
             !itemActive && "text-foreground/80",
           )}
         >
-          {item.label}
+          {displayLabel}
         </span>
         {secondary ? (
           <span
@@ -1866,7 +1886,7 @@ function ProgressItemSummary({
           <button
             type="button"
             aria-expanded={expanded}
-            aria-label={expanded ? `Hide details for ${item.label}` : `Show details for ${item.label}`}
+            aria-label={expanded ? `Hide details for ${displayLabel}` : `Show details for ${displayLabel}`}
             title={expanded ? "Hide details" : "Show details"}
             data-progress-details-toggle
             onClick={() => onExpandedChange?.(!expanded)}
@@ -1888,9 +1908,9 @@ function ProgressItemSummary({
                 {technical && item.toolName ? (
                   <div
                     data-progress-qualified-tool
-                    className="mb-[4px] break-words font-mono text-[11px] leading-[1.5] text-muted-foreground/75"
+                    className="mb-[4px] break-words font-medium text-[11px] leading-[1.5] text-muted-foreground/75"
                   >
-                    {item.toolName}
+                    {readableToolName(item.toolName)}
                   </div>
                 ) : null}
                 {technical ? (
