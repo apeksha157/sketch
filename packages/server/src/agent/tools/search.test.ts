@@ -307,6 +307,228 @@ it("lists the applied filters on an empty result instead of a bare no-results li
   expect(text).toContain("Try broader query terms, or relax a filter");
 });
 
+it("filters empty-query search by fileTypes as a narrowing predicate", async () => {
+  const now = new Date().toISOString();
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-search-tools-zoho-file-types",
+      connector_type: "zoho_crm",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-zoho-call",
+        connector_config_id: "cfg-search-tools-zoho-file-types",
+        provider_file_id: "Calls:1",
+        file_name: "Zoho call record",
+        file_type: "crm_call",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "latest zoho activity",
+        source_updated_at: "2026-01-03T00:00:00.000Z",
+        synced_at: now,
+      },
+      {
+        id: "file-zoho-note",
+        connector_config_id: "cfg-search-tools-zoho-file-types",
+        provider_file_id: "Notes:1",
+        file_name: "Zoho note record",
+        file_type: "crm_note",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "latest zoho activity",
+        source_updated_at: "2026-01-04T00:00:00.000Z",
+        synced_at: now,
+      },
+    ])
+    .execute();
+
+  const result = await handleSearch({ fileTypes: ["crm_call"], sortBy: "recency", limit: 10 }, deps());
+  const text = result.content[0]?.text ?? "";
+
+  expect(text).toContain("Zoho call record");
+  expect(text).not.toContain("Zoho note record");
+});
+
+it("filters by participantEmail and domain facts without matching body-only mentions", async () => {
+  const now = new Date().toISOString();
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-search-tools-outlook-participants",
+      connector_type: "outlook",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-fact-correspondent",
+        connector_config_id: "cfg-search-tools-outlook-participants",
+        provider_file_id: "msg-fact",
+        file_name: "Participant filter marker with matching correspondent fact",
+        file_type: "email_message",
+        content_category: "document",
+        source: "outlook",
+        content: "participant filter marker",
+        thread_id: "thread-participant-a",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-body-only-correspondent",
+        connector_config_id: "cfg-search-tools-outlook-participants",
+        provider_file_id: "msg-body",
+        file_name: "Participant filter marker that only mentions the address",
+        file_type: "email_message",
+        content_category: "document",
+        source: "outlook",
+        content: "participant filter marker vip@example.com",
+        thread_id: "thread-participant-b",
+        source_updated_at: now,
+        synced_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("indexed_file_facts")
+    .values({
+      id: "fact-correspondent-vip",
+      indexed_file_id: "file-fact-correspondent",
+      connector_config_id: "cfg-search-tools-outlook-participants",
+      source: "outlook",
+      fact_type: "correspondent",
+      relation: "sent",
+      subject_name: "VIP",
+      subject_email: "vip@example.com",
+      fact_key: "fact-correspondent-vip",
+    })
+    .execute();
+
+  const byEmail = await handleSearch(
+    { query: "participant filter marker", participantEmail: "VIP@example.com" },
+    deps(),
+  );
+  const byEmailText = byEmail.content[0]?.text ?? "";
+  expect(byEmailText).toContain("with matching correspondent fact");
+  expect(byEmailText).not.toContain("that only mentions the address");
+
+  const byDomain = await handleSearch({ query: "participant filter marker", domain: "@example.com" }, deps());
+  const byDomainText = byDomain.content[0]?.text ?? "";
+  expect(byDomainText).toContain("with matching correspondent fact");
+  expect(byDomainText).not.toContain("that only mentions the address");
+
+  const rejected = await handleSearch(
+    { query: "participant filter marker", participantEmail: "vip@example.com", domain: "example.com" },
+    deps(),
+  );
+  expect(rejected.content[0]?.text).toContain("participantEmail and domain cannot both be provided");
+});
+
+it("filters by threadId and parentRecordId and prints chainable IDs", async () => {
+  const now = new Date().toISOString();
+  await db
+    .insertInto("connector_configs")
+    .values([
+      {
+        id: "cfg-search-tools-outlook-thread",
+        connector_type: "outlook",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+      {
+        id: "cfg-search-tools-zoho-parent",
+        connector_type: "zoho_crm",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-thread-target",
+        connector_config_id: "cfg-search-tools-outlook-thread",
+        provider_file_id: "msg-thread-target",
+        file_name: "Target thread email",
+        file_type: "email_message",
+        content_category: "document",
+        source: "outlook",
+        content: "thread exact marker",
+        thread_id: "thread-target",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-thread-neighbour",
+        connector_config_id: "cfg-search-tools-outlook-thread",
+        provider_file_id: "msg-thread-neighbour",
+        file_name: "Neighbour thread email",
+        file_type: "email_message",
+        content_category: "document",
+        source: "outlook",
+        content: "thread exact marker",
+        thread_id: "thread-neighbour",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-parent-target",
+        connector_config_id: "cfg-search-tools-zoho-parent",
+        provider_file_id: "Calls:parent-target",
+        file_name: "Target parent activity",
+        file_type: "crm_call",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "parent exact marker",
+        rollup_group_id: "Contacts:parent-target",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-parent-neighbour",
+        connector_config_id: "cfg-search-tools-zoho-parent",
+        provider_file_id: "Calls:parent-neighbour",
+        file_name: "Neighbour parent activity",
+        file_type: "crm_call",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "parent exact marker",
+        rollup_group_id: "Contacts:parent-neighbour",
+        source_updated_at: now,
+        synced_at: now,
+      },
+    ])
+    .execute();
+
+  const byThread = await handleSearch({ query: "thread exact marker", threadId: "thread-target" }, deps());
+  const threadText = byThread.content[0]?.text ?? "";
+  expect(threadText).toContain("Target thread email");
+  expect(threadText).toContain("threadId: thread-target");
+  expect(threadText).not.toContain("Neighbour thread email");
+
+  const byParent = await handleSearch(
+    { query: "parent exact marker", parentRecordId: "Contacts:parent-target" },
+    deps(),
+  );
+  const parentText = byParent.content[0]?.text ?? "";
+  expect(parentText).toContain("Target parent activity");
+  expect(parentText).toContain("rollupGroupId: Contacts:parent-target");
+  expect(parentText).not.toContain("Neighbour parent activity");
+});
+
 it("normalizes legacy person subtypes in search and context output", async () => {
   await db
     .insertInto("entities")
