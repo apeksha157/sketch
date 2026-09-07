@@ -5,6 +5,7 @@ import type { Logger } from "pino";
 import { z } from "zod/v4";
 import { handleSearchDeliveryTargets } from "../../agent/tools/delivery-targets";
 import { getEntityToolDescription, getEntityToolSchema, handleGetEntity } from "../../agent/tools/get-entity";
+import { getThreadToolDescription, getThreadToolSchema, handleGetThread } from "../../agent/tools/get-thread";
 import { handleSendMessageToTarget } from "../../agent/tools/messaging";
 import {
   getEntityContextToolDescription,
@@ -207,6 +208,7 @@ export async function createPublicSketchMcpServer(params: {
   );
   register("sketch_search_entities", searchEntitiesToolDescription, searchEntitiesToolSchema, handleSearchEntities);
   register("sketch_get_entity", getEntityToolDescription, getEntityToolSchema, handleGetEntity);
+  register("sketch_get_thread", getThreadToolDescription, getThreadToolSchema, handleGetThread);
   register(
     "sketch_get_entity_context",
     getEntityContextToolDescription,
