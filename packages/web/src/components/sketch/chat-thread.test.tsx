@@ -264,7 +264,7 @@ describe("ChatThread", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Show details for Running command" }));
     expect(document.querySelector("[data-progress-details]")?.textContent).toContain(detail);
-    fireEvent.click(screen.getByRole("button", { name: "Copy technical detail" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy input request" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(detail));
   });
 
@@ -294,9 +294,9 @@ describe("ChatThread", () => {
 
     const line = screen.getByText("Finished command").closest("[data-progress-line]");
     expect(line).not.toHaveClass("sketch-shimmer-progress");
-    expect(screen.getByText("Done")).toBeInTheDocument();
+    expect(screen.getByLabelText("Succeeded")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Show details for Finished command" }));
-    expect(screen.getByText("Duration: 2s")).toBeInTheDocument();
+    expect(screen.queryByText("Duration: 2s")).not.toBeInTheDocument();
   });
 
   it("keeps thinking visible between completed tools without reanimating the completed call", () => {
@@ -317,7 +317,7 @@ describe("ChatThread", () => {
     expect(screen.getByText("Thinking…")).toHaveClass("sketch-shimmer-text");
     expect(screen.getByText("Read task").closest("[data-progress-line]")).not.toHaveClass("sketch-shimmer-progress");
     fireEvent.click(screen.getByRole("button", { name: "Show details for Read task" }));
-    expect(screen.getByText("Duration: <1s")).toBeInTheDocument();
+    expect(screen.getByText("Input request details unavailable for this tool call.")).toBeInTheDocument();
     rerender(<ChatThread messages={[{ id: "finished", role: "assistant", text: "Finished." }]} />);
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
   });
@@ -370,8 +370,8 @@ describe("ChatThread", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Activity timeline 1 tool call" }));
     fireEvent.click(screen.getByRole("button", { name: "Show details for Created GitHub issue" }));
-    expect(screen.getByText("Status: Done")).toBeInTheDocument();
-    expect(screen.getByText("Duration: 2s")).toBeInTheDocument();
+    expect(screen.getByText("Input request details unavailable for this tool call.")).toBeInTheDocument();
+    expect(screen.queryByText("Duration: 2s")).not.toBeInTheDocument();
     expect(screen.queryByText("Technical detail unavailable")).not.toBeInTheDocument();
   });
 

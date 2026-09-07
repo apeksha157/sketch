@@ -5221,11 +5221,16 @@ describe("web chat API", () => {
     ]);
     release.resolve();
     const streamText = await res.text();
+    expect(streamText).toContain('"messageId":"assistant-progress-activity-user"');
+    expect(pendingData.messages.at(-1).id).toBe("assistant-progress-activity-user");
     expect(streamText).toContain('"status":"succeeded"');
     const completed = await app.request("/api/web-chat/messages?conversationId=activity-history", {
       headers: { Cookie: cookie },
     });
-    const finalParts = (await completed.json()).messages.at(-1).parts;
+    const completedMessage = (await completed.json()).messages.at(-1);
+    expect(completedMessage.id).toBe("assistant-progress-activity-user");
+    expect(completedMessage.pending).toBe(false);
+    const finalParts = completedMessage.parts;
     expect(
       finalParts
         .filter((part: { type: string }) => part.type === "data-progress")

@@ -9,7 +9,7 @@ it("keeps an active stream alive with an SSE heartbeat", async () => {
   vi.useFakeTimers();
   let finish!: () => void;
   const response = webChatUiStreamResponse(async (write) => {
-    write({ type: "start" });
+    write({ type: "start", messageId: "assistant-heartbeat" });
     await new Promise<void>((resolve) => {
       finish = resolve;
     });

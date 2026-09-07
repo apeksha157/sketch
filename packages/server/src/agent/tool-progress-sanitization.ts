@@ -93,10 +93,19 @@ function redactAssignments(value: string): { value: string; redacted: boolean } 
   return { value: result, redacted };
 }
 
-function sanitizeCommand(command: string): { value: string; redacted: boolean } {
-  const assignment = redactAssignments(command);
+function sanitizeCommand(command: string): { value: string; redacted: boolean } | null {
+  const credentials = command.replace(
+    /(^|[\s;&|])(-u|--user|--proxy-user)(?:=|\s+)("(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|]+)/g,
+    "$1$2 <redacted>",
+  );
+  const embedded = redactEscapedJson(credentials);
+  const uncertainJson = [
+    ...embedded.value.matchAll(/\\?["']([A-Za-z][A-Za-z0-9_-]{1,40})\\?["']\s*:\s*\\?["']([^"']*)/g),
+  ].some((match) => SECRET_KEY.test(match[1]) && !/^<redacted>\\?$/.test(match[2]));
+  if (uncertainJson) return null;
+  const assignment = redactAssignments(embedded.value);
   const header = redactHeaders(assignment.value);
-  const steps = [assignment, header];
+  const steps = [embedded, assignment, header, { redacted: credentials !== command }];
   const redactedValue = header.value;
   const url = redactUrl(redactedValue);
   return { value: url.value, redacted: steps.some((step) => step.redacted) || url.redacted };
@@ -211,6 +220,7 @@ export function sanitizeProgressDetail(toolName: string, input: Record<string, u
         : detailKey === "command"
           ? sanitizeCommand(value)
           : redactUrl(value);
+    if (!sanitized) return { detailFormat, detailUnavailable: true };
     return {
       detailFormat,
       ...boundDetail(sanitized.value),
@@ -223,6 +233,7 @@ export function sanitizeProgressDetail(toolName: string, input: Record<string, u
     const value = stringifyApprovedValue(input[key]);
     if (value === null) return { detailFormat: "json", detailUnavailable: true };
     const sanitized = key === "command" ? sanitizeCommand(value) : redactUrl(value);
+    if (!sanitized) return { detailFormat: "command", detailUnavailable: true };
     return {
       detailFormat: key === "command" ? "command" : "text",
       ...boundDetail(sanitized.value),

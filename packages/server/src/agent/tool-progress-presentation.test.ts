@@ -51,6 +51,17 @@ describe("technical tool progress presentation", () => {
     expect(detail.detail).toContain("<redacted>");
   });
 
+  it.each([
+    "curl -u fixtureuser:canary https://example.test",
+    "curl --user fixtureuser:canary https://example.test",
+    'curl --user="fixtureuser:canary" https://example.test',
+    String.raw`curl --data "{\"client_secret\":\"canary\"}" https://example.test`,
+  ])("redacts shell credential form %s", (command) => {
+    const detail = sanitizeProgressDetail("Bash", { command });
+    expect(detail.detailRedacted).toBe(true);
+    expect(detail.detail).not.toContain("canary");
+  });
+
   it("redacts extended shell secret flags with quoted and equals values", () => {
     const detail = sanitizeProgressDetail("Bash", {
       command:

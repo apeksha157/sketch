@@ -360,7 +360,6 @@ export function createWebProgressItem(
   if (event.kind !== "tool_use") return genericThinkingItem();
   return {
     ...getFriendlyWebProgressItem(event.toolName, event.input, context),
-    ...sanitizeProgressDetail(event.toolName, event.input),
     mode,
   };
 }

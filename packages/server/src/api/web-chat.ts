@@ -207,6 +207,7 @@ export interface WebChatTranscriptMessage {
   id: string;
   role: "user" | "assistant";
   createdAt?: string;
+  pending?: boolean;
   parts: WebChatStoredPart[];
 }
 
@@ -259,7 +260,7 @@ type AutomationBuilderContext = {
 } | null;
 
 type WebChatUiChunk =
-  | { type: "start"; messageMetadata?: { createdAt: string } }
+  | { type: "start"; messageId: string; messageMetadata?: { createdAt: string } }
   | { type: "start-step" }
   | { type: "data-progress"; id: string; data: WebChatProgressData }
   | { type: "data-file"; id: string; data: WebChatFile }
@@ -1798,7 +1799,13 @@ function sanitizeTranscriptMessage(message: unknown): WebChatTranscriptMessage |
         })
       : parts;
   if (sanitizedParts.length === 0) return null;
-  return { id: message.id, role: message.role, ...(createdAt ? { createdAt } : {}), parts: sanitizedParts };
+  return {
+    id: message.id,
+    role: message.role,
+    ...(createdAt ? { createdAt } : {}),
+    ...(typeof message.pending === "boolean" ? { pending: message.pending } : {}),
+    parts: sanitizedParts,
+  };
 }
 
 export async function readWebChatTranscript(
@@ -1934,11 +1941,13 @@ function createProgressTranscriptMessage(
     id,
     role: "assistant",
     createdAt: new Date().toISOString(),
+    pending: true,
     parts: [{ type: "data-progress", id: "progress", data: progress }],
   };
 }
 
 function isPendingProgressTranscriptMessage(message: WebChatTranscriptMessage): boolean {
+  if (message.pending !== undefined) return message.role === "assistant" && message.pending;
   return (
     message.role === "assistant" &&
     message.parts.length > 0 &&
@@ -2132,7 +2141,12 @@ async function completeWebChatProgressMessage(
       ) ??
       [];
     const completedMessage = assistantMessage
-      ? { ...assistantMessage, parts: [...retainedActivity, ...assistantMessage.parts] }
+      ? {
+          ...assistantMessage,
+          id: progressMessageId,
+          pending: false,
+          parts: [...retainedActivity, ...assistantMessage.parts],
+        }
       : null;
     if (progressIndex === -1) {
       await writeWebChatTranscript(
@@ -2164,7 +2178,7 @@ async function interruptLatestPendingWebChatProgress(
     if (!latest || !isPendingProgressTranscriptMessage(latest)) return false;
 
     const next = [...existing];
-    const interrupted = createInterruptedAssistantTranscriptMessage("");
+    const interrupted = { ...createInterruptedAssistantTranscriptMessage(""), id: latest.id, pending: false };
     interrupted.parts.unshift(
       ...latest.parts
         .filter(
@@ -3079,7 +3093,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             ),
           );
       };
-      write({ type: "start", messageMetadata: { createdAt: new Date().toISOString() } });
+      write({ type: "start", messageId: progressMessageId, messageMetadata: { createdAt: new Date().toISOString() } });
       write({ type: "start-step" });
       let textPartId: string | null = null;
       let textPartIndex = 0;
