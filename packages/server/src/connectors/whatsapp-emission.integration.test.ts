@@ -12,7 +12,7 @@ import { createTestDb, createTestLogger, createTestPgDb } from "../test-utils";
 import { runEnrichment } from "./enrichment";
 import type { GeminiGenerator } from "./gemini-generate";
 import { runConnectorSync } from "./sync";
-import { emitWhatsAppSyncedItems, reconcileWhatsAppGroupAcls } from "./whatsapp-emission";
+import { WHATSAPP_EMISSION_PAGE_SIZE, emitWhatsAppSyncedItems, reconcileWhatsAppGroupAcls } from "./whatsapp-emission";
 
 const RAW_IDENTIFIER_PATTERN = /(?:\+?[1-9]\d{9,14}\b|@s\.whatsapp\.net|@lid)/iu;
 const SALIENCE_SIGNALS = JSON.stringify({ signals: ["decision"], entities: [] });
@@ -1087,3 +1087,122 @@ function runSalienceIntegrationSuite(label: string, createDb: () => Promise<Kyse
 
 runSalienceIntegrationSuite("WhatsApp salience sqlite", createTestDb);
 runSalienceIntegrationSuite("WhatsApp salience postgres", createTestPgDb);
+
+/**
+ * Emission used to load every kept slice in one unbounded query. These assert
+ * the keyset page loop: deterministic order across pages, and a run that dies
+ * between pages resuming rather than re-emitting the drained page.
+ */
+function runEmissionPagingSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
+  describe(label, () => {
+    let db: Kysely<DB>;
+
+    beforeEach(async () => {
+      db = await createDb();
+    }, 30000);
+
+    afterEach(async () => {
+      await db.destroy();
+    });
+
+    it("pages kept slices in keyset order and resumes without re-emitting a drained page", async () => {
+      const seeded = await seedSlice(db, { verdict: "kept", status: "closed" });
+      const config = await seedConnectorConfig(db);
+      const base = await db
+        .selectFrom("conversation_slices")
+        .select(["roster_snapshot"])
+        .where("id", "=", seeded.sliceId)
+        .executeTakeFirstOrThrow();
+      const extra = WHATSAPP_EMISSION_PAGE_SIZE + 4;
+      const startedAt = (index: number) =>
+        `2026-07-${String(2 + Math.floor(index / 24)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:00:00.000Z`;
+      await setSliceWindow(db, seeded.sliceId, "2026-07-01T00:00:00.000Z", "2026-07-01T00:01:00.000Z");
+      await db
+        .insertInto("conversation_messages")
+        .values(
+          Array.from({ length: extra }, (_value, index) => ({
+            conversation_id: seeded.conversationId,
+            provider_message_id: `paged-msg-${String(index).padStart(4, "0")}`,
+            sender_jid: "15550000002@s.whatsapp.net",
+            sender_name: "External Buyer",
+            text: "We agreed the pilot scope today.",
+            received_at: startedAt(index),
+            effective_at: startedAt(index),
+          })),
+        )
+        .execute();
+      const pagedMessages = await db
+        .selectFrom("conversation_messages")
+        .select(["id", "provider_message_id"])
+        .where("conversation_id", "=", seeded.conversationId)
+        .where("provider_message_id", "like", "paged-msg-%")
+        .orderBy("provider_message_id", "asc")
+        .execute();
+      await db
+        .insertInto("conversation_slices")
+        .values(
+          pagedMessages.map((message, index) => ({
+            id: `paged-slice-${String(index).padStart(4, "0")}`,
+            conversation_id: seeded.conversationId,
+            first_message_id: message.id,
+            last_message_id: message.id,
+            started_at: startedAt(index),
+            ended_at: startedAt(index),
+            message_count: 1,
+            denoised_message_ids: JSON.stringify([message.id]),
+            flush_reason: "gap" as const,
+            roster_snapshot: base.roster_snapshot,
+            salience_verdict: "kept",
+            status: "closed" as const,
+          })),
+        )
+        .execute();
+      const ordered = (
+        await db
+          .selectFrom("conversation_slices")
+          .select("id")
+          .where("conversation_id", "=", seeded.conversationId)
+          .orderBy("started_at", "asc")
+          .orderBy("id", "asc")
+          .execute()
+      ).map((row) => row.id);
+      expect(ordered).toHaveLength(extra + 1);
+
+      const now = new Date("2026-08-01T00:00:00.000Z");
+      const firstRun: string[] = [];
+      const firstRunPages: number[] = [];
+      for await (const item of emitWhatsAppSyncedItems({
+        db,
+        logger: fakeLogger(),
+        provisionalRefreshMaxMinutes: 120,
+        now,
+        onPageListedSliceCount: (count) => firstRunPages.push(count),
+      })) {
+        firstRun.push(item.providerFileId);
+        if (firstRun.length === WHATSAPP_EMISSION_PAGE_SIZE) break;
+      }
+      expect(firstRun).toEqual(ordered.slice(0, WHATSAPP_EMISSION_PAGE_SIZE));
+      expect(firstRunPages).toEqual([WHATSAPP_EMISSION_PAGE_SIZE]);
+
+      for (const sliceId of firstRun) await linkSliceToIndexedFile(db, config.id, sliceId);
+
+      const secondRunPages: number[] = [];
+      const secondRun: string[] = [];
+      for await (const item of emitWhatsAppSyncedItems({
+        db,
+        logger: fakeLogger(),
+        provisionalRefreshMaxMinutes: 120,
+        now,
+        onPageListedSliceCount: (count) => secondRunPages.push(count),
+      })) {
+        secondRun.push(item.providerFileId);
+      }
+      expect(secondRunPages).toEqual([ordered.length - WHATSAPP_EMISSION_PAGE_SIZE]);
+      expect(secondRun).toEqual(ordered.slice(WHATSAPP_EMISSION_PAGE_SIZE));
+      expect([...firstRun, ...secondRun]).toEqual(ordered);
+    }, 60000);
+  });
+}
+
+runEmissionPagingSuite("WhatsApp emission paging sqlite", createTestDb);
+runEmissionPagingSuite("WhatsApp emission paging postgres", createTestPgDb);

@@ -20,7 +20,13 @@ import {
   emissionRefreshTier,
   parseEmissionAnchor,
 } from "./emission-refresh-tier";
-import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
+import {
+  type SliceKeysetCursor,
+  buildSliceSourcePath,
+  formatSliceTimeRange,
+  sliceKeysetAfter,
+  stableContentHash,
+} from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
 import {
   type AccessPrincipal,
@@ -35,6 +41,7 @@ import {
 
 export const DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES = 120;
 export const WHATSAPP_EMISSION_REFRESH_DAYS = 7;
+export const WHATSAPP_EMISSION_PAGE_SIZE = 200;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RAW_WHATSAPP_JID_PATTERN = /[^\s"'<>()[\]{}]+@(?:s\.whatsapp\.net|lid)\b/iu;
@@ -157,16 +164,18 @@ export function renderWhatsAppTranscript(
  * Re-emits unlinked slices plus recent linked slices. Recent linked slices refresh
  * indexed content when roster improvements add labels or CRM matches; older linked
  * slices are stable.
+ *
+ * Paged by a (started_at, id) keyset so a group with a long kept-slice history
+ * never loads the whole set into memory; the ordering is the page key, so
+ * emission order is deterministic across pages and runs.
  */
-async function listKeptSliceContexts(
+async function listKeptSliceContextPage(
   db: Kysely<DB>,
-  emissionRefreshDays = WHATSAPP_EMISSION_REFRESH_DAYS,
-  now = new Date(),
+  refreshCutoff: string,
+  cursor: SliceKeysetCursor | null,
+  limit: number,
 ): Promise<SliceContext[]> {
-  const refreshCutoff = new Date(
-    now.getTime() - normalizeEmissionRefreshDays(emissionRefreshDays) * DAY_MS,
-  ).toISOString();
-  const rows = await db
+  let query = db
     .selectFrom("conversation_slices")
     .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
     .innerJoin("whatsapp_groups", "whatsapp_groups.jid", "conversations.provider_conversation_id")
@@ -190,8 +199,9 @@ async function listKeptSliceContexts(
       ]),
     )
     .orderBy("conversation_slices.started_at", "asc")
-    .orderBy("conversation_slices.id", "asc")
-    .execute();
+    .orderBy("conversation_slices.id", "asc");
+  if (cursor) query = query.where(sliceKeysetAfter("conversation_slices.started_at", cursor, "asc"));
+  const rows = await query.limit(limit).execute();
 
   return rows.map((row) => ({
     slice: row,
@@ -435,20 +445,34 @@ export async function* emitWhatsAppSyncedItems(options: {
    * skips many slices per sync, and per-slice lines would bury the signal.
    */
   onSkipReason?: (reason: WhatsAppEmissionSkipReason) => void;
+  /** One call per listed keyset page, mirroring the Slack emitter, so callers can see the loop stays bounded. */
+  onPageListedSliceCount?: (count: number) => void;
 }): AsyncGenerator<SyncedItem> {
   const now = options.now ?? new Date();
-  const kept = await listKeptSliceContexts(options.db, options.emissionRefreshDays, now);
-  for (const context of kept) {
-    const { item, skippedNoScope, skipReason } = await syncedItemForKeptSlice(
-      options.db,
-      context,
-      options.logger,
-      now,
-      options.provisionalRefreshMaxMinutes,
-    );
-    if (skippedNoScope) options.onSkippedNoScope?.();
-    if (skipReason) options.onSkipReason?.(skipReason);
-    if (item) yield item;
+  const refreshCutoff = new Date(
+    now.getTime() - normalizeEmissionRefreshDays(options.emissionRefreshDays) * DAY_MS,
+  ).toISOString();
+  let cursor: SliceKeysetCursor | null = null;
+  for (;;) {
+    const page = await listKeptSliceContextPage(options.db, refreshCutoff, cursor, WHATSAPP_EMISSION_PAGE_SIZE);
+    options.onPageListedSliceCount?.(page.length);
+    if (page.length === 0) break;
+    const last = page[page.length - 1];
+    if (!last) break;
+    cursor = { timestamp: last.slice.started_at, id: last.slice.id };
+    for (const context of page) {
+      const { item, skippedNoScope, skipReason } = await syncedItemForKeptSlice(
+        options.db,
+        context,
+        options.logger,
+        now,
+        options.provisionalRefreshMaxMinutes,
+      );
+      if (skippedNoScope) options.onSkippedNoScope?.();
+      if (skipReason) options.onSkipReason?.(skipReason);
+      if (item) yield item;
+    }
+    if (page.length < WHATSAPP_EMISSION_PAGE_SIZE) break;
   }
 }
 

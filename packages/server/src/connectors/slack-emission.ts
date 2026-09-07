@@ -14,7 +14,13 @@ import { normalizeSourceTimestampForStorage } from "../timestamps";
 import { configDefault, resolveChunkEngineKnobs } from "./config-default";
 import { buildEmissionAnchor, emissionRefreshTier, parseEmissionAnchor } from "./emission-refresh-tier";
 import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
-import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
+import {
+  type SliceKeysetCursor,
+  buildSliceSourcePath,
+  formatSliceTimeRange,
+  sliceKeysetAfter,
+  stableContentHash,
+} from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
 import { SLACK_CONVERSATION_SLICE_FILE_TYPE, type SyncedItem } from "./types";
 
@@ -147,7 +153,7 @@ async function listSliceContextPage(
   db: Kysely<DB>,
   lane: EmissionLane,
   refreshedAfter: string,
-  cursor: { timestamp: string; id: string } | null,
+  cursor: SliceKeysetCursor | null,
   limit: number,
 ): Promise<SlackSliceContext[]> {
   let query = db
@@ -188,33 +194,13 @@ async function listSliceContextPage(
 
   if (lane === "current") {
     query = query.where("conversation_slices.legacy_unjudged_at", "is", null);
-    if (cursor) {
-      query = query.where((eb) =>
-        eb.or([
-          eb("conversation_slices.started_at", ">", cursor.timestamp),
-          eb.and([
-            eb("conversation_slices.started_at", "=", cursor.timestamp),
-            eb("conversation_slices.id", ">", cursor.id),
-          ]),
-        ]),
-      );
-    }
+    if (cursor) query = query.where(sliceKeysetAfter("conversation_slices.started_at", cursor, "asc"));
     query = query.orderBy("conversation_slices.started_at", "asc").orderBy("conversation_slices.id", "asc");
   } else {
     query = query
       .where("conversation_slices.legacy_unjudged_at", "is not", null)
       .where("conversation_slices.indexed_file_id", "is", null);
-    if (cursor) {
-      query = query.where((eb) =>
-        eb.or([
-          eb("conversation_slices.ended_at", "<", cursor.timestamp),
-          eb.and([
-            eb("conversation_slices.ended_at", "=", cursor.timestamp),
-            eb("conversation_slices.id", "<", cursor.id),
-          ]),
-        ]),
-      );
-    }
+    if (cursor) query = query.where(sliceKeysetAfter("conversation_slices.ended_at", cursor, "desc"));
     query = query.orderBy("conversation_slices.ended_at", "desc").orderBy("conversation_slices.id", "desc");
   }
 
@@ -388,7 +374,7 @@ export async function* emitSlackSyncedItems(options: {
     .executeTakeFirstOrThrow();
 
   for (const lane of ["current", "legacy"] as const) {
-    let cursor: { timestamp: string; id: string } | null = null;
+    let cursor: SliceKeysetCursor | null = null;
     let remainingForLane = lane === "legacy" ? legacyPerRun : Number.POSITIVE_INFINITY;
     while (remainingForLane > 0) {
       const pageLimit = Math.min(SLACK_EMISSION_PAGE_SIZE, remainingForLane);
