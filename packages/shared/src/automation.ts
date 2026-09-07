@@ -50,35 +50,6 @@ export const clickupWebhookScopeSchema = z
 
 export type ClickupWebhookScope = z.infer<typeof clickupWebhookScopeSchema>;
 
-export const clickupWebhookPlanSchema = z
-  .object({
-    accountId: z.string().trim().min(1).max(256).optional(),
-    workspaceId: z.string().trim().min(1).max(256),
-    events: z.array(clickupWebhookEventSchema).min(1).max(100),
-    scope: clickupWebhookScopeSchema.nullable(),
-    workspaceWide: z.boolean().default(false),
-    summary: z.string().trim().min(1).max(500),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.scope === null && !value.workspaceWide) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["workspaceWide"],
-        message: "A workspace-wide ClickUp webhook must be explicitly requested",
-      });
-    }
-    if (value.scope !== null && value.workspaceWide) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["workspaceWide"],
-        message: "A scoped ClickUp webhook cannot also be workspace-wide",
-      });
-    }
-  });
-
-export type ClickupWebhookPlan = z.infer<typeof clickupWebhookPlanSchema>;
-
 export const webhookDeliveryReceiptSchema = z.object({
   endpointId: z.string(),
   endpointGeneration: z.number(),
@@ -88,6 +59,17 @@ export const webhookDeliveryReceiptSchema = z.object({
   status: z.string(),
 });
 export type WebhookDeliveryReceipt = z.infer<typeof webhookDeliveryReceiptSchema>;
+
+export const webhookEndpointMetadataSchema = z.object({
+  slot: z.string(),
+  endpointId: z.string(),
+  url: z.string().url(),
+  status: z.enum(["active", "revoked", "unavailable"]),
+  authentication: z.enum(["none", "hmac_sha256"]),
+  generation: z.number().int(),
+  binding: webhookSourceBindingSchema.optional(),
+  lastDelivery: webhookDeliveryReceiptSchema.optional(),
+});
 
 export const workflowTriggerConfigSchema = z
   .object({
@@ -105,7 +87,7 @@ export const workflowTriggerConfigSchema = z
     webhookContentType: z.literal("application/json").optional(),
     webhookAuthentication: z.enum(["none", "hmac_sha256"]).optional(),
     webhookBinding: webhookSourceBindingSchema.optional(),
-    clickupWebhookPlan: clickupWebhookPlanSchema.optional(),
+    webhookEndpoints: z.array(webhookEndpointMetadataSchema).max(32).optional(),
     webhookLastDelivery: webhookDeliveryReceiptSchema.optional(),
     webhookStatus: z.enum(["active", "revoked", "unavailable"]).optional(),
     canvasEndpoint: canvasWebhookEndpointSchema.optional(),

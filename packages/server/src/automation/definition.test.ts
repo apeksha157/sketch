@@ -135,33 +135,6 @@ describe("automation trigger validation", () => {
     );
   });
 
-  it("accepts a flexible native ClickUp webhook plan with an exact scope", () => {
-    const request = requestForAction({ sketchTools: ["searchEntities"], usesIntegrationActions: false });
-    request.status = "paused";
-    request.scheduleType = "external";
-    request.scheduleValue = "webhook";
-    request.steps[0] = {
-      ...request.steps[0],
-      triggerConfig: {
-        type: "webhook",
-        webhookMethod: "POST",
-        webhookContentType: "application/json",
-        webhookAuthentication: "hmac_sha256",
-        clickupWebhookPlan: {
-          workspaceId: "workspace-1",
-          events: ["futureTaskEvent"],
-          scope: { field: "list_id", id: "list-1", name: "Bug reports" },
-          workspaceWide: false,
-          summary: "Task events for the Bug reports list",
-        },
-      },
-    };
-
-    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
-  });
-});
-
-describe("automation action capability validation", () => {
   it("allows a final delivery action to return structured output", () => {
     const request = requestForAction({ sketchTools: ["searchEntities"], usesIntegrationActions: false });
     request.status = "active";
@@ -228,17 +201,10 @@ describe("automation action capability validation", () => {
     );
   });
 
-  it("requires a capability when an action explicitly disables integrations", () => {
-    expect(() =>
-      validateAutomationBuilderSaveRequest({
-        request: requestForAction({ sketchTools: [], usesIntegrationActions: false }),
-        brokerCapable: false,
-      }),
-    ).toThrowError(
-      expect.objectContaining({
-        issues: expect.arrayContaining([expect.objectContaining({ code: "ACTION_CAPABILITIES_REQUIRED" })]),
-      }),
-    );
+  it("accepts a pure transform with no integration or Sketch capabilities", () => {
+    const request = requestForAction({ sketchTools: [], usesIntegrationActions: false });
+    request.stepContent.action.content = "return { taskId: input.data.task_id };";
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
   });
 
   it("rejects the legacy Sketch tool namespace", () => {
@@ -304,20 +270,18 @@ describe("automation action capability validation", () => {
     expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
   });
 
-  it("rejects encoded ClickUp attachment bytes in a managed action script", () => {
-    const request = requestForAction({ sketchTools: ["clickup"], usesIntegrationActions: false });
-    request.stepContent.action.content =
-      'return ctx.tools.clickup({ method: "POST", path: "/task/task-1/attachment", accountId: "opaque-account", body: { base64: "bytes" } });';
-
-    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).toThrowError(
-      expect.objectContaining({
-        issues: expect.arrayContaining([expect.objectContaining({ code: "CLICKUP_ATTACHMENT_ENCODING_UNSUPPORTED" })]),
-      }),
-    );
+  it("allows ordinary ClickUp data and other authorized integrations in the same recipe", () => {
+    const request = requestForAction({ sketchTools: ["clickup"], usesIntegrationActions: true });
+    request.stepContent.action.content = `
+      const task = await ctx.tools.clickup({ method: "POST", path: "/list/list-1/task", accountId: "opaque-account", body: { name: "Fix base64 parsing" } });
+      return ctx.integrations.executeAction({ componentKey: "slack-send-message", configuredProps: { text: task.id } });
+    `;
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: true })).not.toThrow();
   });
 
   it("deduplicates identical validation issues from repeated persisted step ids", () => {
     const request = requestForAction({ sketchTools: [], usesIntegrationActions: false });
+    request.stepContent.action.content = "";
     request.steps.push({ ...request.steps[1] });
 
     let error: unknown;
@@ -329,7 +293,7 @@ describe("automation action capability validation", () => {
 
     expect(error).toBeInstanceOf(AutomationValidationError);
     const issues = (error as AutomationValidationError).issues.filter(
-      (issue) => issue.code === "ACTION_CAPABILITIES_REQUIRED",
+      (issue) => issue.code === "ACTION_SCRIPT_REQUIRED",
     );
     expect(issues).toHaveLength(1);
   });

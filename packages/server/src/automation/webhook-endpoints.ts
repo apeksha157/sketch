@@ -1,12 +1,15 @@
 import type { WebhookDeliveryReceipt } from "@sketch/shared";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import {
   type WebhookEndpointRepositoryOptions,
   type WebhookEndpointRow,
   createWebhookEndpointsRepository,
 } from "../db/repositories/webhook-endpoints";
 import type { DB } from "../db/schema";
-import { type WebhookSourceBinding, webhookBindingMetadata } from "./webhook-bindings";
+import { WebhookBindingError, type WebhookSourceBinding, webhookBindingMetadata } from "./webhook-bindings";
+
+import { authorizeAuthoringLease } from "./lock-service";
+import { isAutomationWebhookTrigger, parseAutomationTriggerConfig } from "./webhook";
 
 export const WEBHOOK_ENDPOINT_PATH = "/api/webhooks/v1";
 export const WEBHOOK_BODY_LIMIT_BYTES = 1_000_000;
@@ -22,6 +25,7 @@ export const NATIVE_WEBHOOK_CONTENT_TYPE = "application/json" as const;
 export async function lastWebhookDeliveryMetadata(
   db: Kysely<DB>,
   taskId: string,
+  endpointId?: string,
 ): Promise<WebhookDeliveryReceipt | undefined> {
   return db
     .selectFrom("webhook_deliveries as delivery")
@@ -35,6 +39,7 @@ export async function lastWebhookDeliveryMetadata(
       "delivery.status as status",
     ])
     .where("endpoint.task_id", "=", taskId)
+    .$if(endpointId !== undefined, (query) => query.where("endpoint.id", "=", endpointId as string))
     .whereRef("delivery.endpoint_generation", "=", "endpoint.generation")
     .orderBy("delivery.created_at", "desc")
     .orderBy("delivery.id", "desc")
@@ -144,4 +149,64 @@ export function createWebhookEndpointService(
       await repository.deleteByTaskId(taskId);
     },
   };
+}
+
+/** Stable provider-neutral slots let an agent bind disjoint subscriptions without broadening their scopes. */
+export async function manageWebhookEndpointSlot(params: {
+  db: Kysely<DB>;
+  taskId: string;
+  userId: string;
+  slot: string;
+  retire?: boolean;
+  lease: { sessionId: string; generation: number };
+}): Promise<WebhookEndpointRow> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(params.slot))
+    throw new WebhookBindingError(
+      "Use a stable endpoint slot of 1-100 letters, digits, dots, colons, underscores, or hyphens.",
+    );
+  return params.db.transaction().execute(async (trx) => {
+    const authorization = await authorizeAuthoringLease(trx, {
+      taskId: params.taskId,
+      userId: params.userId,
+      ...params.lease,
+    });
+    if (authorization.kind !== "held")
+      throw new WebhookBindingError("The automation editing lease changed or expired.");
+    const task = await trx
+      .updateTable("scheduled_tasks")
+      .set({ revision: sql<number>`revision` })
+      .where("id", "=", params.taskId)
+      .where("created_by", "=", params.userId)
+      .where("status", "=", "paused")
+      .returningAll()
+      .executeTakeFirst();
+    const trigger =
+      task &&
+      parseAutomationTriggerConfig(task.steps, {
+        scheduleType: task.schedule_type,
+        scheduleValue: task.schedule_value,
+      });
+    if (!task || !trigger || !isAutomationWebhookTrigger(trigger))
+      throw new WebhookBindingError("Only the owner of a paused native webhook automation can manage endpoint slots.");
+    const repository = createWebhookEndpointsRepository(trx);
+    const endpoints = await repository.listByTaskId(task.id);
+    const existing = endpoints.find((endpoint) => endpoint.slot === params.slot);
+    if (params.retire) {
+      if (!existing || existing.slot === "default")
+        throw new WebhookBindingError("Only an existing additional endpoint slot can be retired.");
+      if (existing.source_binding !== null)
+        throw new WebhookBindingError(
+          "Delete the exact remote subscription through its provider API before retiring this slot.",
+        );
+      return trx
+        .updateTable("webhook_endpoints")
+        .set({ status: "revoked", generation: sql<number>`generation + 1`, updated_at: new Date().toISOString() })
+        .where("id", "=", existing.id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+    }
+    if (!existing && endpoints.length >= 32)
+      throw new WebhookBindingError("An automation supports at most 32 endpoint slots.");
+    return (await repository.ensureForTask(task.id, params.slot)).endpoint;
+  });
 }

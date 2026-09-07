@@ -115,7 +115,7 @@ describe.each([
     );
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(await repo.getById(endpoint.id)).toMatchObject({
-      status: "pending",
+      status: "active_signed",
       signing_secret_encrypted: expect.stringMatching(/^enc:/),
     });
     await expect(repo.deleteByTaskId("task")).rejects.toThrow("remote webhook");

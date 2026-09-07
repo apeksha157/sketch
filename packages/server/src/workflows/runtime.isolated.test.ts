@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withActiveRun } from "../agent/active-runs";
 import { runAgentRuntimeCore } from "../agent/runtime/core";
 import { DEFAULT_AGENT_RUNTIME_COST_TABLE } from "../agent/runtime/pricing";
-import { MAX_AUTOMATION_OUTPUT_BYTES } from "../automation/capabilities";
+import { MAX_AUTOMATION_OUTPUT_BYTES, createAutomationCapabilityRegistry } from "../automation/capabilities";
 import type { ScheduledTaskRow } from "../db/repositories/scheduled-tasks";
 import {
   executeAutomation,
@@ -1244,6 +1244,99 @@ describe("executeAutomation action steps", () => {
     expect(automationCapabilityRegistry.createTools).not.toHaveBeenCalled();
     expect(loadIntegrationProvider).not.toHaveBeenCalled();
   });
+
+  it("runs a pure event transform without loading a provider or tools", async () => {
+    const loadIntegrationProvider = vi.fn();
+    const params = makeParams({
+      task: makeActionTask(
+        [
+          {
+            id: "act1",
+            type: "action",
+            label: "Record event",
+            icon: "code",
+            position: { x: 0, y: 100 },
+            actionCapabilities: { sketchTools: [], usesIntegrationActions: false },
+          },
+        ],
+        { output_mode: "silent" },
+      ),
+      triggerData: { data: { task_id: "event-task", history_items: [{ id: "change-1" }] } },
+      stepContentRepo: makeStepContent([
+        { stepId: "act1", content: "return { taskId: input.data.task_id, changes: input.data.history_items };" },
+      ]),
+      loadIntegrationProvider,
+    });
+    const result = await executeAutomation(params as never);
+    expect(result.status).toBe("completed");
+    expect(result.stepOutputs.act1.output).toEqual({ taskId: "event-task", changes: [{ id: "change-1" }] });
+    expect(loadIntegrationProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([400, 500, "uncertain"] as const)(
+    "preserves a created task when the script handles attachment failure %s",
+    async (failure) => {
+      const dir = await mkdtemp(join(tmpdir(), "clickup-runtime-"));
+      const path = join(dir, "report.txt");
+      await writeFile(path, "attachment bytes");
+      const fetchMock = vi
+        .spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(new Response(JSON.stringify({ id: "created-task" })));
+      if (failure === "uncertain") fetchMock.mockRejectedValueOnce(new Error("connection lost"));
+      else fetchMock.mockResolvedValueOnce(new Response("upload failed", { status: failure }));
+      const registry = createAutomationCapabilityRegistry();
+      const params = makeParams({
+        task: makeActionTask(
+          [
+            {
+              id: "act1",
+              type: "action",
+              label: "Create with attachments",
+              icon: "clickup",
+              position: { x: 0, y: 100 },
+              actionCapabilities: { sketchTools: ["clickup"], usesIntegrationActions: false },
+            },
+          ],
+          { output_mode: "silent" },
+        ),
+        stepContentRepo: makeStepContent([
+          {
+            stepId: "act1",
+            content: `
+        const task = await ctx.tools.clickup({ method: "POST", path: "/list/list-1/task", accountId: "account-1", body: { name: "Report" } });
+        try {
+          await ctx.tools.clickup({ method: "POST", path: "/task/" + task.id + "/attachment", accountId: "account-1", files: [{ path: ${JSON.stringify(path)} }] });
+          return { taskId: task.id, attachments: "uploaded" };
+        } catch {
+          return { taskId: task.id, attachments: "needs reconciliation" };
+        }
+      `,
+          },
+        ]),
+        automationCapabilityRegistry: {
+          createTools: (options: Parameters<typeof registry.createTools>[0]) =>
+            registry.createTools({
+              ...options,
+              context: {
+                ...options.context,
+                workspaceDir: dir,
+                getCanvasAccessToken: async () => ({ accessToken: "runtime-token" }),
+              },
+            }),
+        },
+      });
+      try {
+        const result = await executeAutomation(params as never);
+        expect(result.status).toBe("completed");
+        expect(result.stepOutputs.act1.output).toEqual({ taskId: "created-task", attachments: "needs reconciliation" });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1]?.[1]?.body).toBeInstanceOf(FormData);
+      } finally {
+        fetchMock.mockRestore();
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("fails a run when a Sketch capability fails even if the script catches it", async () => {
     const search = vi.fn().mockRejectedValue(new Error("search backend unavailable"));

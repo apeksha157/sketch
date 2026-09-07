@@ -673,7 +673,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       : new WebhookBindingError("The webhook binding could not be reserved. No provider request was sent.");
   }
   const reserved = endpoint;
-  const save = async (remote: { id: string; secret?: string } | null) => {
+  const save = async (remote: { id: string; secret?: string } | null, ready = false) => {
     try {
       return await updateWebhookBinding({
         db,
@@ -687,7 +687,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
             ? encrypt(remote.secret, encryptionKey)
             : previous.signing_secret_encrypted
           : null,
-        status: remote ? "pending" : "revoked",
+        status: remote ? (ready ? "active_signed" : "pending") : "revoked",
       });
     } catch (error) {
       throw error instanceof WebhookBindingError
@@ -703,7 +703,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       if (args.method === "POST") {
         await save(null);
       } else {
-        const restored = await updateWebhookBinding({
+        await updateWebhookBinding({
           db,
           endpoint: reserved,
           userId,
@@ -713,14 +713,6 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
           encryptedSecret: previous.signing_secret_encrypted,
           status: previous.status === "active_signed" || previous.status === "revoked" ? previous.status : "pending",
         });
-        if (previous.status === "active_signed") {
-          await db
-            .updateTable("webhook_deliveries")
-            .set({ endpoint_generation: restored.generation })
-            .where("endpoint_id", "=", restored.id)
-            .where("endpoint_generation", "=", previous.generation)
-            .execute();
-        }
       }
     },
     finish: async (data: unknown) => {
@@ -767,7 +759,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       } catch (error) {
         if (!(error instanceof WebhookBindingError)) throw error;
       }
-      const saved = await save(remote.data);
+      const saved = await save(remote.data, ready);
       if (!ready) {
         const health = clickUpRemoteHealth(remote.data);
         throw new WebhookBindingError(
@@ -786,7 +778,8 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
           accountId: binding.accountId,
           resourceId: remote.data.id,
           status: saved.status,
-          verification: "awaiting_signed_receipt",
+          verification: "registration_validated",
+          delivery: "awaiting_first_delivery",
         },
       };
     },

@@ -1657,6 +1657,56 @@ describe("AutomationBuilderPage", () => {
     expect(writeText).toHaveBeenCalledWith("https://sketch.example/api/webhooks/v1/endpoint-123");
   });
 
+  it("shows each scoped signed subscription and separates readiness from first delivery", async () => {
+    const user = userEvent.setup();
+    mocks.getAutomation.mockResolvedValue({
+      ...automation,
+      scheduleType: "external",
+      scheduleValue: "webhook",
+      steps: [
+        {
+          ...automation.steps[0],
+          label: "Scoped ClickUp events",
+          triggerConfig: {
+            type: "webhook",
+            webhookUrl: "https://sketch.example/api/webhooks/v1/first",
+            webhookEndpointId: "first",
+            webhookAuthentication: "hmac_sha256",
+            webhookStatus: "active",
+            webhookEndpoints: ["default", "list-second"].map((slot, index) => ({
+              slot,
+              endpointId: String(index),
+              url: `https://sketch.example/api/webhooks/v1/${index}`,
+              status: index === 0 ? "active" : "unavailable",
+              authentication: "hmac_sha256",
+              generation: 1,
+              binding: {
+                integration: "clickup",
+                accountId: "account",
+                workspaceId: "workspace",
+                collectionPath: "/team/workspace/webhook",
+                resourceId: `remote-${index}`,
+                callbackUrl: `https://sketch.example/api/webhooks/v1/${index}`,
+                subscription: { events: ["taskCreated"], scope: { field: "list_id", id: `list-${index}` } },
+              },
+            })),
+          } as WorkflowTriggerConfig,
+        },
+        ...automation.steps.slice(1),
+      ],
+    });
+    renderBuilder();
+    await user.click(await screen.findByRole("button", { name: "Scoped ClickUp events" }));
+    const panel = await screen.findByTestId("native-webhook-details");
+    expect(panel).toHaveTextContent("Setup pending");
+    expect(panel).toHaveTextContent("list-second");
+    expect(panel).toHaveTextContent("list_id: list-1");
+    expect(panel).toHaveTextContent("Awaiting first delivery");
+    expect(panel).toHaveTextContent("Registration pending");
+    expect(screen.getByDisplayValue("HMAC-SHA256 provider signature")).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("no authentication is required");
+  });
+
   it("shows setup pending when the native webhook endpoint is unavailable", async () => {
     const user = userEvent.setup();
     mocks.getAutomation.mockResolvedValue({

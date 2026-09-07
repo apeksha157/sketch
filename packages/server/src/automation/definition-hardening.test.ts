@@ -121,7 +121,7 @@ describe("automation definition hardening", () => {
           taskId: "task-1",
           stepId: "action",
           contentType: "script",
-          content: "return null;",
+          content: "",
           apps: null,
         },
       },
@@ -136,7 +136,7 @@ describe("automation definition hardening", () => {
 
     expect(error).toBeInstanceOf(AutomationValidationError);
     expect(
-      (error as AutomationValidationError).issues.filter((issue) => issue.code === "ACTION_CAPABILITIES_REQUIRED"),
+      (error as AutomationValidationError).issues.filter((issue) => issue.code === "ACTION_SCRIPT_REQUIRED"),
     ).toHaveLength(1);
   });
 });

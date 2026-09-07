@@ -154,6 +154,17 @@ describe("automation Sketch capability registry", () => {
     );
   });
 
+  it.each([401, 403])("keeps authorization failure %s fatal even when caught", async (status) => {
+    const onFailure = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("denied", { status }));
+    const tools = createAutomationCapabilityRegistry().createTools({
+      context: createContext({ onFailure, getCanvasAccessToken: async () => ({ accessToken: "token" }) }) as never,
+      allowedTools: ["clickup"],
+    });
+    await expect(tools.clickup?.({ method: "GET", path: "/team", accountId: "account-1" })).rejects.toThrow();
+    expect(onFailure).toHaveBeenCalledWith("clickup", expect.any(Error));
+  });
+
   it("requires an exact account before invoking the managed ClickUp transport", async () => {
     const getCanvasAccessToken = vi.fn();
     const fetchMock = vi.spyOn(globalThis, "fetch");

@@ -229,7 +229,7 @@ export interface ScheduledTaskConversationsResponse {
   transcriptAccess: "owner" | "admin" | "viewer";
 }
 
-export type WebhookAuthentication = "none";
+export type WebhookAuthentication = "none" | "hmac_sha256";
 export type WebhookStatus = "active" | "revoked" | "unavailable";
 
 export interface WorkflowTriggerConfig {
@@ -246,6 +246,9 @@ export interface WorkflowTriggerConfig {
   webhookMethod?: "POST";
   webhookContentType?: "application/json";
   webhookAuthentication?: WebhookAuthentication;
+  webhookBinding?: import("@sketch/shared").WorkflowTriggerConfig["webhookBinding"];
+  webhookLastDelivery?: import("@sketch/shared").WebhookDeliveryReceipt;
+  webhookEndpoints?: import("@sketch/shared").WorkflowTriggerConfig["webhookEndpoints"];
   webhookStatus?: WebhookStatus;
   canvasEndpoint?: CanvasWebhookEndpoint;
   configuredProps?: Record<string, unknown>;

@@ -32,6 +32,14 @@ describe("MANAGED_CLICKUP_SKILL", () => {
     expect(MANAGED_CLICKUP_SKILL).not.toContain('"action":"create"');
   });
 
+  it("teaches multiple subscriptions in the ClickUp skill only", () => {
+    for (const instruction of ["ensureWebhookEndpoint", "retireWebhookEndpoint", "webhookEndpoints"]) {
+      expect(MANAGED_CLICKUP_SKILL).toContain(instruction);
+      expect(MANAGED_LINEAR_SKILL).not.toContain(instruction);
+    }
+    expect(MANAGED_LINEAR_SKILL).not.toContain("clickup_api");
+  });
+
   it("keeps OAuth, signing secrets, ownership, and callback binding safe", () => {
     expect(MANAGED_CLICKUP_SKILL).toContain("Only the automation owner in the matching authoring context");
     expect(MANAGED_CLICKUP_SKILL).toContain("public HTTPS URL from `BASE_URL`");
@@ -51,7 +59,7 @@ describe("MANAGED_CLICKUP_SKILL", () => {
     expect(MANAGED_CLICKUP_SKILL).toContain("X-RateLimit-Reset");
     expect(MANAGED_CLICKUP_SKILL).toContain("do not borrow ClickUp in-app Automation Actions limits");
     expect(MANAGED_CLICKUP_SKILL).toContain("no at-most-once or exactly-once promise");
-    expect(MANAGED_CLICKUP_SKILL).toContain("Verify one authentic representative ClickUp delivery");
+    expect(MANAGED_CLICKUP_SKILL).toContain("A valid quiet webhook can be resumed while awaiting its first delivery");
     expect(MANAGED_CLICKUP_SKILL).toContain("do not repeat it");
     expect(MANAGED_CLICKUP_SKILL).toContain("OAUTH_171");
   });

@@ -1,7 +1,13 @@
 import { type AutomationSketchToolName, automationSketchToolNameSchema } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import { z } from "zod/v4";
-import { type ClickUpApiArgs, executeClickUpApi, parseClickUpApiArgs } from "../agent/tools/clickup-api";
+import {
+  type ClickUpApiArgs,
+  ClickUpApiHttpError,
+  ClickUpUploadUncertainError,
+  executeClickUpApi,
+  parseClickUpApiArgs,
+} from "../agent/tools/clickup-api";
 import { type SearchUsersArgs, handleSearchUsers, searchUsersToolSchema } from "../agent/tools/messaging";
 import {
   type GetEntityContextArgs,
@@ -265,7 +271,12 @@ async function invoke<T>(
     });
     return result;
   } catch (error) {
-    context.onFailure?.(capability, error);
+    const recoverableProviderFailure =
+      capability === "clickup" &&
+      !context.signal.aborted &&
+      ((error instanceof ClickUpApiHttpError && error.status !== 401 && error.status !== 403) ||
+        error instanceof ClickUpUploadUncertainError);
+    if (!recoverableProviderFailure) context.onFailure?.(capability, error);
     await reportCall(context, {
       taskId: context.taskId,
       runId: context.runId,

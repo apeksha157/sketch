@@ -232,6 +232,7 @@ import * as m229 from "./migrations/229-external-mcp-tool-calls-access-bypass";
 import * as m230 from "./migrations/230-slack-chunk-engine-streams";
 import * as m231 from "./migrations/231-benchmarks";
 import * as m232 from "./migrations/232-benchmark-owner-history";
+import * as m233 from "./migrations/233-webhook-endpoint-slots";
 import type { DB } from "./schema";
 
 /**
@@ -473,6 +474,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "230-slack-chunk-engine-streams": m230,
           "231-benchmarks": m231,
           "232-benchmark-owner-history": m232,
+          "233-webhook-endpoint-slots": m233,
         };
       },
     },

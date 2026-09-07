@@ -42,6 +42,7 @@ describe("webhook endpoint repository", () => {
 
     const stored = await db.selectFrom("webhook_endpoints").selectAll().executeTakeFirstOrThrow();
     expect(stored).toEqual({
+      slot: "default",
       id: "endpoint-1",
       task_id: "task-1",
       status: "active",

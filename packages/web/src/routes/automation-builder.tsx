@@ -5247,19 +5247,34 @@ function TriggerFields({ draft, taskId }: { draft: DraftAutomation; taskId: stri
 function NativeWebhookFields({ config }: { config: WorkflowTriggerConfig }) {
   const metadata = config;
   const hasEndpoint = Boolean(metadata.webhookUrl);
-  const statusDetails = hasEndpoint
-    ? {
-        label: "Active",
-        guidance: "Send POST requests with JSON to the canonical URL above; no authentication is required.",
-        isError: false,
-        toneClass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-      }
-    : {
-        label: "Setup pending",
-        guidance: "Sketch is still setting up this trigger. Refresh this automation before sending requests.",
-        isError: false,
-        toneClass: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-      };
+  const endpoints = metadata.webhookEndpoints ?? [];
+  const intended = endpoints.filter(
+    (endpoint) => endpoint.slot === "default" || endpoint.status !== "revoked" || endpoint.binding,
+  );
+  const signed =
+    metadata.webhookAuthentication === "hmac_sha256" ||
+    intended.some((endpoint) => endpoint.authentication === "hmac_sha256");
+  const ready =
+    hasEndpoint &&
+    metadata.webhookStatus === "active" &&
+    intended.every(
+      (endpoint) =>
+        endpoint.status === "active" && (intended.length === 1 || endpoint.authentication === "hmac_sha256"),
+    );
+  const statusDetails = {
+    label: ready ? "Active" : metadata.webhookStatus === "revoked" ? "Revoked" : "Setup pending",
+    guidance: ready
+      ? signed
+        ? "Provider signatures are verified separately for each subscription. A validated subscription can run while awaiting its first delivery."
+        : "Send POST requests with JSON to the canonical URL above; no authentication is required."
+      : hasEndpoint
+        ? "Complete or reconcile every intended subscription before activating this automation."
+        : "Sketch is still setting up this trigger. Refresh this automation before sending requests.",
+    isError: metadata.webhookStatus === "revoked",
+    toneClass: ready
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+      : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  };
   const handleCopy = async () => {
     if (!metadata.webhookUrl) return;
     try {
@@ -5303,6 +5318,36 @@ function NativeWebhookFields({ config }: { config: WorkflowTriggerConfig }) {
       >
         <p>{statusDetails.guidance}</p>
       </div>
+      {endpoints.length > 0 ? (
+        <div aria-label="Webhook subscriptions" className="space-y-2">
+          {endpoints.map((endpoint) => (
+            <div key={endpoint.endpointId} className="rounded border border-border/70 p-2 text-[11px]">
+              <p className="font-medium">{endpoint.slot}</p>
+              <p>
+                {endpoint.binding?.subscription?.scope
+                  ? `${endpoint.binding.subscription.scope.field}: ${endpoint.binding.subscription.scope.id}`
+                  : endpoint.binding
+                    ? "Workspace-wide"
+                    : "No provider binding"}
+              </p>
+              <p>{endpoint.binding?.subscription?.events.join(", ")}</p>
+              <p>
+                {endpoint.status === "active"
+                  ? "Registration ready"
+                  : endpoint.status === "revoked"
+                    ? "Retired"
+                    : "Registration pending"}
+                {endpoint.authentication === "hmac_sha256" && endpoint.status === "active"
+                  ? endpoint.lastDelivery
+                    ? " · Signed delivery observed"
+                    : " · Awaiting first delivery"
+                  : ""}
+              </p>
+              <p className="break-all text-muted-foreground">{endpoint.url}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <Field label="Canonical URL">
         <div className="flex gap-2">
           <Input
@@ -5344,7 +5389,12 @@ function NativeWebhookFields({ config }: { config: WorkflowTriggerConfig }) {
       </div>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Authentication mode">
-          <Input value="None required" className={builderReadOnlyInputClass} readOnly aria-readonly="true" />
+          <Input
+            value={signed ? "HMAC-SHA256 provider signature" : "None required"}
+            className={builderReadOnlyInputClass}
+            readOnly
+            aria-readonly="true"
+          />
         </Field>
         <Field label="Payload shape">
           <Input value="Any JSON value" className={builderReadOnlyInputClass} readOnly aria-readonly="true" />

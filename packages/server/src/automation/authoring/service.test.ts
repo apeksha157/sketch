@@ -243,7 +243,7 @@ describe("automation authoring service", () => {
       service.create(createRequest("When a ClickUp task is created, summarize it in Slack")),
     ).resolves.toMatchObject({ kind: "definition" });
     expect(generate).toHaveBeenCalledOnce();
-    expect(generate.mock.calls[0]?.[0].instructions).toContain("clickupWebhookPlan");
+    expect(generate.mock.calls[0]?.[0].instructions).toContain("tool-capable builder");
     expect(generate.mock.calls[0]?.[0].instructions).toContain("trusted local file paths");
   });
 

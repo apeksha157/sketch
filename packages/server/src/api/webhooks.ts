@@ -345,21 +345,6 @@ async function admitAndQueue(
         endpointGeneration: params.endpoint.generation,
         status: paused ? "cancelled" : "pending",
       });
-      if (
-        params.signed &&
-        currentEndpoint.status === "pending" &&
-        currentTask.status === "paused" &&
-        currentEndpoint.source_binding !== null &&
-        currentEndpoint.verification_json !== null &&
-        currentEndpoint.signing_secret_encrypted !== null
-      ) {
-        await trx
-          .updateTable("webhook_endpoints")
-          .set({ status: WEBHOOK_ENDPOINT_STATUS_SIGNED, updated_at: new Date().toISOString() })
-          .where("id", "=", currentEndpoint.id)
-          .where("generation", "=", currentEndpoint.generation)
-          .execute();
-      }
       return { kind: "admitted" as const, ...delivery, paused };
     });
   } catch (error) {

@@ -149,6 +149,17 @@ describe("ClickUp API tool", () => {
     );
   });
 
+  it("rejects attachment JSON bytes at the transport boundary before authorization", async () => {
+    const getCanvasAccessToken = vi.fn();
+    await expect(
+      executeClickUpApi(
+        { method: "POST", path: "/task/task-1/attachment", accountId: "account-1", body: { base64: "bytes" } },
+        deps(getCanvasAccessToken),
+      ),
+    ).rejects.toThrow("require trusted local files");
+    expect(getCanvasAccessToken).not.toHaveBeenCalled();
+  });
+
   it("serializes trusted local files as native ClickUp multipart attachments", async () => {
     const root = await createTemporaryRoot();
     const filePath = join(root, "report.txt");

@@ -271,7 +271,7 @@ describe("automation webhook routes", () => {
     expect(enqueueWebhookDelivery).not.toHaveBeenCalled();
   });
 
-  it("admits a signed receipt for a pending endpoint while the task is paused", async () => {
+  it("records pending signed receipts without validating a rejected registration", async () => {
     const task = await addTask("paused");
     const endpoint = await signedEndpointForTask(task.id);
     await db.updateTable("webhook_endpoints").set({ status: "pending" }).where("id", "=", endpoint.id).execute();
@@ -286,7 +286,7 @@ describe("automation webhook routes", () => {
     expect(response.status).toBe(202);
     await expect(response.json()).resolves.toMatchObject({ paused: true, ignored: true, duplicate: false });
     await expect(createWebhookEndpointRepository(db).getById(endpoint.id)).resolves.toMatchObject({
-      status: "active_signed",
+      status: "pending",
     });
     expect(enqueueWebhookDelivery).not.toHaveBeenCalled();
     await expect(createWebhookDeliveryRepository(db).list({ endpointId: endpoint.id })).resolves.toHaveLength(1);

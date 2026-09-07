@@ -13,6 +13,7 @@ import type { DB } from "../../db/schema";
 import { TaskScheduler, type TaskSchedulerDeps } from "../../scheduler/service";
 import { createTestConfig, createTestDb, createTestLogger } from "../../test-utils";
 import { type ClickUpApiArgs, createClickUpApiTool, executeClickUpApi, handleClickUpApi } from "./clickup-api";
+import { verifyScopedWebhookSlots } from "./clickup-webhook-slots.test-support";
 import { handleManageScheduledTasks } from "./scheduled-tasks";
 import { type SketchMcpDeps, UploadCollector } from "./types";
 
@@ -149,6 +150,99 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     return executeClickUpApi(request(), deps);
   }
 
+  it.each(["other owner", "plan only", "stale lease"])(
+    "does not provision an additional endpoint for %s",
+    async (reason) => {
+      if (!deps.taskContext) throw new Error("Missing test task context");
+      const context = { ...deps.taskContext };
+      if (reason === "other owner") context.createdBy = "other";
+      if (reason === "plan only") context.planOnly = true;
+      if (reason === "stale lease") context.authoringLease = { sessionId: "expired", generation: 999 };
+      await handleManageScheduledTasks(
+        { action: "ensureWebhookEndpoint", task_id: taskId, webhook_slot: "second-list" },
+        { db, scheduler, taskContext: context, config: { BASE_URL, PORT: 3000 }, encryptionKey: KEY },
+      );
+      expect(await createWebhookEndpointRepository(db).listByTaskId(taskId)).toHaveLength(1);
+    },
+  );
+
+  it("runs six disjoint list subscriptions under one automation and fences cleanup across all slots", async () => {
+    await verifyScopedWebhookSlots({ db, deps, scheduler, taskId, key: KEY, baseUrl: BASE_URL });
+  });
+
+  it("discovers provider targets and binds the native endpoint through the builder tools", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ teams: [{ id: "123", name: "Workspace" }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ spaces: [{ id: "space-1", name: "Engineering" }] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ lists: [{ id: "456", name: "Bugs" }] })))
+      .mockResolvedValueOnce(success());
+    const api = async (path: string) => executeClickUpApi({ method: "GET", path, accountId: "canvas-account-1" }, deps);
+    const workspaces = (await api("/team")) as { teams: { id: string }[] };
+    const workspace = workspaces.teams[0];
+    const spaces = (await api(`/team/${workspace.id}/space`)) as { spaces: { id: string }[] };
+    const lists = (await api(`/space/${spaces.spaces[0].id}/list`)) as { lists: { id: string; name: string }[] };
+    const matches = lists.lists.filter((list) => list.name === "Bugs");
+    expect(matches).toHaveLength(1);
+    const registration = await handleClickUpApi(
+      {
+        method: "POST",
+        path: `/team/${workspace.id}/webhook`,
+        accountId: "canvas-account-1",
+        webhookEndpointId: endpointId,
+        body: { endpoint: callbackUrl, events: ["taskStatusUpdated"], list_id: matches[0].id },
+      },
+      deps,
+    );
+    expect(registration.isError).not.toBe(true);
+    expect(fetchMock.mock.calls[3]?.[1]?.body).toBe(
+      JSON.stringify({ endpoint: callbackUrl, events: ["taskStatusUpdated"], list_id: "456" }),
+    );
+    await scheduler.resumeTask(taskId);
+    const first = await admitSignedReceipt();
+    expect(first.enqueue).toHaveBeenCalledWith(first.receipt.deliveryId);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("mismatched remote scope must remain unavailable after a signed delivery", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ webhook: remote({ list_id: null }) })),
+    );
+    await expect(executeClickUpApi(request(), deps)).rejects.toThrow(/events or location/);
+    expect((await storedEndpoint()).status).toBe("pending");
+    await admitSignedReceipt();
+    await expect(scheduler.resumeTask(taskId)).rejects.toThrow();
+  });
+
+  it("rejected update must not rewrite historical receipt generations", async () => {
+    await register();
+    await admitSignedReceipt();
+    const before = await db
+      .selectFrom("webhook_deliveries")
+      .selectAll()
+      .where("endpoint_id", "=", endpointId)
+      .executeTakeFirstOrThrow();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ECODE: "INPUT_001" }), { status: 400 }),
+    );
+    await expect(executeClickUpApi(request("PUT"), deps)).rejects.toThrow();
+    const after = await db
+      .selectFrom("webhook_deliveries")
+      .selectAll()
+      .where("id", "=", before.id)
+      .executeTakeFirstOrThrow();
+    expect(after.endpoint_generation).toBe(before.endpoint_generation);
+  });
+
+  it("activates a validated quiet webhook without discarding its first real event", async () => {
+    await register();
+    await expect(scheduler.resumeTask(taskId)).resolves.toBeUndefined();
+    const first = await admitSignedReceipt();
+    expect(first.response.status).toBe(202);
+    expect(first.receipt.paused).not.toBe(true);
+    expect(first.enqueue).toHaveBeenCalledWith(first.receipt.deliveryId);
+  });
+
   it("captures the API-created secret through the tool handler and admits an authenticated delivery", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       const pending = await storedEndpoint();
@@ -173,9 +267,9 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     );
     expect(JSON.stringify(result)).not.toContain(SIGNING_SECRET);
     expect(JSON.stringify(result)).not.toContain(OAUTH_TOKEN);
-    expect(JSON.stringify(result)).toContain("awaiting_signed_receipt");
+    expect(JSON.stringify(result)).toContain("awaiting_first_delivery");
     const saved = await storedEndpoint();
-    expect(saved.status).toBe("pending");
+    expect(saved.status).toBe("active_signed");
     expect(saved.signing_secret_encrypted).toMatch(/^enc:/);
     expect(decrypt(saved.signing_secret_encrypted ?? "", KEY)).toBe(SIGNING_SECRET);
     expect(deps.getCanvasAccessToken).toHaveBeenCalledWith({
@@ -269,7 +363,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     expect((await storedEndpoint()).source_binding).not.toBeNull();
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ webhooks: [remote()] })));
     const restored = await executeClickUpApi(request("GET"), deps);
-    expect(restored).toMatchObject({ webhookBinding: { resourceId: "hook-1", status: "pending" } });
+    expect(restored).toMatchObject({ webhookBinding: { resourceId: "hook-1", status: "active_signed" } });
     await admitSignedReceipt();
     expect(await storedEndpoint()).toMatchObject({ status: "active_signed" });
     expect(JSON.stringify(restored)).not.toContain(SIGNING_SECRET);
@@ -519,7 +613,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     await expect(executeClickUpApi(request(), deps)).rejects.toThrow(/do not repeat POST/);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ webhooks: [remote()] })));
     await expect(executeClickUpApi(request("GET"), deps)).resolves.toMatchObject({
-      webhookBinding: { status: "pending" },
+      webhookBinding: { status: "active_signed" },
     });
     await admitSignedReceipt();
     expect(await storedEndpoint()).toMatchObject({ status: "active_signed" });
@@ -534,7 +628,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     expect((await storedEndpoint()).status).toBe("revoked");
     fetchMock.mockResolvedValueOnce(success());
     await expect(executeClickUpApi(request(), deps)).resolves.toMatchObject({
-      webhookBinding: { status: "pending" },
+      webhookBinding: { status: "active_signed" },
     });
   });
 });

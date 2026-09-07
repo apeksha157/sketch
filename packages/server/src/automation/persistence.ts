@@ -166,8 +166,8 @@ async function ensureWebhookEndpoint(
   encryptionKey?: string,
 ): Promise<void> {
   const repository = createWebhookEndpointRepository(db);
-  const endpoint = await repository.getByTaskId(taskId);
-  if (endpoint?.source_binding != null && !hasWebhookTrigger(request)) {
+  const endpoints = await repository.listByTaskId(taskId);
+  if (endpoints.some((endpoint) => endpoint.source_binding != null) && !hasWebhookTrigger(request)) {
     throw new AutomationValidationError([
       {
         code: "WEBHOOK_CLEANUP_REQUIRED",
@@ -454,20 +454,27 @@ export async function getAutomationDefinition(params: {
 }): Promise<AutomationDefinition | null> {
   const row = await createScheduledTaskRepository(params.db).getById(params.taskId);
   if (!row) return null;
-  const [stepContentRows, runRows, webhookEndpoint, webhookLastDelivery] = await Promise.all([
+  const [stepContentRows, runRows, endpointRows] = await Promise.all([
     createAutomationStepContentRepository(params.db).getByTask(params.taskId),
     createAutomationRunsRepository(params.db).list(params.taskId),
-    createWebhookEndpointRepository(params.db, params.encryptionKey).getByTaskId(params.taskId),
-    lastWebhookDeliveryMetadata(params.db, params.taskId),
+    createWebhookEndpointRepository(params.db, params.encryptionKey).listByTaskId(params.taskId),
   ]);
+  const webhookEndpoints = await Promise.all(
+    endpointRows.map(async (endpoint) => ({
+      endpoint,
+      lastDelivery: await lastWebhookDeliveryMetadata(params.db, params.taskId, endpoint.id),
+    })),
+  );
+  const primary = webhookEndpoints.find((value) => value.endpoint.slot === "default");
   return buildAutomationDefinition({
     row,
     stepContentRows,
     runRows,
     webhookBaseUrl: params.webhookBaseUrl,
     webhookPort: params.webhookPort,
-    webhookEndpoint,
-    webhookLastDelivery,
+    webhookEndpoint: primary?.endpoint,
+    webhookLastDelivery: primary?.lastDelivery,
+    webhookEndpoints,
   });
 }
 
@@ -518,8 +525,9 @@ export async function deleteAutomation(params: {
         .set({ revision: sql<number>`revision` })
         .where("id", "=", params.taskId)
         .execute();
-      const endpoint = await createWebhookEndpointRepository(trx).getByTaskId(params.taskId);
-      if (endpoint?.source_binding != null) return { kind: "webhook_cleanup_required" as const };
+      const endpoints = await createWebhookEndpointRepository(trx).listByTaskId(params.taskId);
+      if (endpoints.some((endpoint) => endpoint.source_binding != null))
+        return { kind: "webhook_cleanup_required" as const };
 
       await createScheduledTaskConversationRepository(trx).deleteByTaskId(params.taskId);
       await createAutomationStepContentRepository(trx).deleteByTaskId(params.taskId);
@@ -847,8 +855,8 @@ export async function createAutomationDraft(params: {
           runsRepo.list(candidate.id),
         ]);
         if (!isAutomationPlaceholderDraft({ row: candidate, stepContentRows, runRows })) continue;
-        const endpoint = await createWebhookEndpointRepository(trx).getByTaskId(candidate.id);
-        if (endpoint?.source_binding != null) continue;
+        const endpoints = await createWebhookEndpointRepository(trx).listByTaskId(candidate.id);
+        if (endpoints.some((endpoint) => endpoint.source_binding != null)) continue;
         const builderConversations = await conversationsRepo.listByTaskAndTranscriptUser(candidate.id, createdBy, {
           kind: "builder",
         });

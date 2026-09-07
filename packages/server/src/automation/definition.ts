@@ -290,15 +290,36 @@ export function addWebhookEndpointMetadata(
   taskId: string,
   options: {
     endpoint?: WebhookEndpointRow | null;
+    endpoints?: { endpoint: WebhookEndpointRow; lastDelivery?: WebhookDeliveryReceipt }[];
     lastDelivery?: WebhookDeliveryReceipt;
     baseUrl?: string | null;
     port?: number;
   } = {},
 ): WorkflowTriggerConfig {
   if (config.type !== "webhook") return config;
+  const { webhookEndpoints: _storedEndpoints, ...baseConfig } = config;
+  const webhookEndpoints = options.endpoints?.map(({ endpoint, lastDelivery }) => {
+    const metadata = addWebhookEndpointMetadata({ type: "webhook" }, taskId, {
+      endpoint,
+      lastDelivery,
+      baseUrl: options.baseUrl,
+      port: options.port,
+    });
+    return {
+      slot: endpoint.slot,
+      endpointId: endpoint.id,
+      url: metadata.webhookUrl as string,
+      status: metadata.webhookStatus ?? "unavailable",
+      authentication: metadata.webhookAuthentication ?? "none",
+      generation: endpoint.generation,
+      binding: metadata.webhookBinding,
+      lastDelivery: metadata.webhookLastDelivery,
+    };
+  });
   if (options.endpoint) {
     return {
-      ...config,
+      ...baseConfig,
+      ...(webhookEndpoints ? { webhookEndpoints } : {}),
       webhookUrl: buildNativeWebhookUrl(options.endpoint.id, {
         baseUrl: options.baseUrl,
         port: options.port,
@@ -328,7 +349,7 @@ export function addWebhookEndpointMetadata(
     webhookBinding: _legacyWebhookBinding,
     webhookLastDelivery: _legacyWebhookLastDelivery,
     ...withoutLegacyEndpoint
-  } = config;
+  } = baseConfig;
   return {
     ...withoutLegacyEndpoint,
     webhookMethod: "POST",
@@ -348,6 +369,7 @@ export function buildAutomationDefinition(params: {
   webhookBaseUrl?: string | null;
   webhookPort?: number;
   webhookEndpoint?: WebhookEndpointRow | null;
+  webhookEndpoints?: { endpoint: WebhookEndpointRow; lastDelivery?: WebhookDeliveryReceipt }[];
   webhookLastDelivery?: WebhookDeliveryReceipt;
   includeWebhookMetadata?: boolean;
 }): AutomationDefinition {
@@ -358,6 +380,7 @@ export function buildAutomationDefinition(params: {
         ...step,
         triggerConfig: addWebhookEndpointMetadata(step.triggerConfig, params.row.id, {
           endpoint: params.webhookEndpoint,
+          endpoints: params.webhookEndpoints,
           lastDelivery: params.webhookLastDelivery,
           baseUrl: params.webhookBaseUrl,
           port: params.webhookPort,
@@ -369,6 +392,7 @@ export function buildAutomationDefinition(params: {
       ...step,
       triggerConfig: addWebhookEndpointMetadata(step.triggerConfig, params.row.id, {
         endpoint: params.webhookEndpoint,
+        endpoints: params.webhookEndpoints,
         lastDelivery: params.webhookLastDelivery,
         baseUrl: params.webhookBaseUrl,
         port: params.webhookPort,
@@ -612,56 +636,6 @@ function isClickUpValue(value: string | undefined): boolean {
   );
 }
 
-function validateClickUpWebhookPlan(
-  request: AutomationBuilderSaveRequest,
-  trigger: WorkflowStep | undefined,
-  issues: BuilderValidationIssue[],
-): void {
-  const plan = trigger?.triggerConfig?.clickupWebhookPlan;
-  if (!plan) return;
-  if (trigger?.triggerConfig?.type !== "webhook") {
-    addIssue(
-      issues,
-      "CLICKUP_WEBHOOK_PLAN_TRIGGER_REQUIRED",
-      "A managed ClickUp webhook plan requires the native Sketch webhook trigger",
-      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan`,
-    );
-    return;
-  }
-  if (request.status === "active" && !plan.accountId) {
-    addIssue(
-      issues,
-      "CLICKUP_ACCOUNT_REQUIRED",
-      "An active ClickUp webhook automation must pin its opaque Canvas account ID",
-      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.accountId`,
-    );
-  }
-  if (new Set(plan.events).size !== plan.events.length) {
-    addIssue(
-      issues,
-      "CLICKUP_WEBHOOK_EVENTS_DUPLICATE",
-      "ClickUp webhook events must be unique",
-      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.events`,
-    );
-  }
-  if (plan.scope?.field === "list_id" && plan.scope.id.trim().length === 0) {
-    addIssue(
-      issues,
-      "CLICKUP_WEBHOOK_SCOPE_REQUIRED",
-      "ClickUp list scope must use an exact non-empty list ID",
-      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.scope.id`,
-    );
-  }
-  if (plan.scope === null && !plan.workspaceWide) {
-    addIssue(
-      issues,
-      "CLICKUP_WORKSPACE_SCOPE_NOT_EXPLICIT",
-      "Workspace-wide ClickUp webhook scope must be explicitly requested",
-      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.workspaceWide`,
-    );
-  }
-}
-
 export function validateAutomationBuilderSaveRequest(params: {
   request: AutomationBuilderSaveRequest;
   brokerCapable: boolean;
@@ -754,25 +728,6 @@ export function validateAutomationBuilderSaveRequest(params: {
             `stepContent.${step.id}`,
           );
         }
-        const usesManagedClickUp = (step.actionCapabilities?.sketchTools ?? []).some(
-          (tool) => tool === "clickup" || tool === "clickup_api",
-        );
-        if (usesManagedClickUp && step.actionCapabilities?.usesIntegrationActions === true) {
-          addIssue(
-            issues,
-            "CLICKUP_CAPABILITY_MIXED_WITH_CANVAS",
-            `Action step "${step.label}" must use the managed ClickUp capability without Canvas integration actions`,
-            `steps.${step.id}.actionCapabilities.usesIntegrationActions`,
-          );
-        }
-        if (usesManagedClickUp && /\bbase64\b|data:[^,\s]+,/i.test(content.content)) {
-          addIssue(
-            issues,
-            "CLICKUP_ATTACHMENT_ENCODING_UNSUPPORTED",
-            `Action step "${step.label}" must pass trusted local file paths to managed ClickUp uploads; do not encode file bytes in the script`,
-            `stepContent.${step.id}`,
-          );
-        }
         for (const tool of undeclaredAutomationSketchTools(
           content.content,
           step.actionCapabilities?.sketchTools ?? [],
@@ -787,18 +742,6 @@ export function validateAutomationBuilderSaveRequest(params: {
       }
       if (step.actionCapabilities) {
         const cliIntegrations = step.actionCapabilities.cliIntegrations ?? [];
-        if (
-          !step.actionCapabilities.usesIntegrationActions &&
-          step.actionCapabilities.sketchTools.length === 0 &&
-          cliIntegrations.length === 0
-        ) {
-          addIssue(
-            issues,
-            "ACTION_CAPABILITIES_REQUIRED",
-            `Action step "${step.label}" must declare a Sketch tool, CLI integration, or integration action capability`,
-            `steps.${step.id}.actionCapabilities`,
-          );
-        }
         const duplicateTools = [
           ...new Set(step.actionCapabilities.sketchTools.filter((tool, index, tools) => tools.indexOf(tool) !== index)),
         ];
@@ -860,7 +803,6 @@ export function validateAutomationBuilderSaveRequest(params: {
       `steps.${trigger?.id ?? "trigger"}.triggerConfig`,
     );
   }
-  validateClickUpWebhookPlan(request, trigger, issues);
 
   validateTriggerSchedule(request, trigger, issues);
   validateScheduleValue(request, issues, params.validateScheduleFuture ?? true);
