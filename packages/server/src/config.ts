@@ -26,8 +26,8 @@ export const configSchema = z.object({
     .number()
     .int()
     .min(60_000)
-    .max(10 * 60_000)
-    .default(10 * 60_000),
+    .max(60 * 60_000)
+    .default(30 * 60_000),
 
   // Files
   MAX_FILE_SIZE_MB: z.coerce.number().default(20),
