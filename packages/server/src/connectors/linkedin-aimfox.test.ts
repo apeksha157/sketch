@@ -1119,6 +1119,13 @@ describe("LinkedIn Aimfox conversation ingest", () => {
       fileType: "linkedin_profile",
       contentCategory: "structured",
       rollupGroupId: "linkedin:acct-1:profile:lead-thread",
+      parentEntities: [
+        {
+          source: "aimfox",
+          sourceId: "lead-thread",
+          contextSnippet: "LinkedIn profile of Alice Smith",
+        },
+      ],
       accessPrincipals: [{ type: "email", value: "member@example.com" }],
     });
     expect(items[0].contactPoints?.find((point) => point.kind === "linkedin")).toMatchObject({

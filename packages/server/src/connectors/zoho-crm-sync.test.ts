@@ -325,6 +325,13 @@ describe("Zoho CRM connector sync integration", () => {
         fact_type: "parent_entity",
         relation: "mentioned",
         subject_source: "zoho_crm",
+        subject_source_id: "Accounts:a1",
+        context_snippet: "Zoho CRM / Zoho in / Accounts",
+      },
+      {
+        fact_type: "parent_entity",
+        relation: "mentioned",
+        subject_source: "zoho_crm",
         subject_source_id: "Contacts:c1",
         context_snippet: "CRM activity participant",
       },
@@ -334,6 +341,13 @@ describe("Zoho CRM connector sync integration", () => {
         subject_source: "zoho_crm",
         subject_source_id: "Deals:d1",
         context_snippet: "CRM activity parent",
+      },
+      {
+        fact_type: "parent_entity",
+        relation: "mentioned",
+        subject_source: "zoho_crm",
+        subject_source_id: "Deals:d1",
+        context_snippet: "Zoho CRM / Zoho in / Deals",
       },
       {
         fact_type: "person_seed",

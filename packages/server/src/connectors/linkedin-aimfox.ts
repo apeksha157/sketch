@@ -681,6 +681,13 @@ function buildLinkedinProfileSyncedItem(input: {
     mimeType: "application/json",
     accessPrincipals: linkedinAccessPrincipals(input.visibility, input.ownerEmail),
     personSeeds: [personSeed],
+    parentEntities: [
+      {
+        source: "aimfox",
+        sourceId: input.seed.leadId,
+        contextSnippet: `LinkedIn profile of ${input.seed.name}`,
+      },
+    ],
     contactPoints,
   };
 }

@@ -1,8 +1,19 @@
+import { createEntityRelationshipsRepository } from "../db/repositories/entity-relationships";
 import { readJsonObject } from "./materialize-json";
 import { createMentionFromFact } from "./materialize-mentions";
 import { materializeSpineCandidate } from "./materialize-spine-candidate";
 import { isProjectCandidateSeed } from "./materialize-structural-gate";
 import type { EntityRow, IndexedFileFactRow, MaterializeDeps, MaterializeResult } from "./materialize-types";
+
+const ROLLUP_EDGE_SOURCES: Record<string, string[]> = {
+  zoho_crm: ["zoho_crm"],
+  linkedin_aimfox: ["linkedin"],
+};
+
+const ROLLUP_LABEL: Record<string, string> = {
+  zoho_crm: "zoho_crm_account_rollup",
+  linkedin_aimfox: "linkedin_company_rollup",
+};
 
 function readCrmAccountDomains(metadata: Record<string, unknown> | undefined): string[] {
   const value = metadata?.crmAccountDomains;
@@ -119,5 +130,21 @@ export async function materializeParentEntity(
     source: `${fact.source}_parent_entity`,
     relation: "mentioned",
   });
+  const edgeSources = ROLLUP_EDGE_SOURCES[fact.source];
+  const rollupLabel = ROLLUP_LABEL[fact.source];
+  if (entity.source_type === "person" && edgeSources && rollupLabel) {
+    const relationshipsRepo = createEntityRelationshipsRepository(deps.db);
+    const companyIds = await relationshipsRepo.listLiveWorksAtCompanyIds(entity.id, { sources: edgeSources });
+    for (const companyId of companyIds) {
+      await deps.entityRepo.createMentionIfAbsent({
+        entityId: companyId,
+        indexedFileId: fact.indexed_file_id,
+        contextSnippet: fact.context_snippet ?? null,
+        confidence: "EXTRACTED",
+        source: rollupLabel,
+        relation: "mentioned",
+      });
+    }
+  }
   return { kind: "entity_linked", entity, mentionWritten: true, countEntity: false };
 }
