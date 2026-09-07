@@ -6,7 +6,7 @@ import { type ChunkCursorState, type ChunkEngineKnobs, evaluateIdleClose, runChu
 import type { ChunkGenerate } from "./chunk-generate";
 import { createSlackChannelChunkAdapter, createSlackThreadChunkAdapter } from "./slack-chunk-adapters";
 import { discoverSlackChunkStreams } from "./slack-chunk-discovery";
-import { SLACK_CHANNEL_STREAM_KEY, SLACK_ROUTER_STREAM_KEY } from "./slack-chunker";
+import { SLACK_CHANNEL_STREAM_KEY, SLACK_ROUTER_STREAM_KEY } from "./slack-chunk-messages";
 import { runWithConcurrency } from "./sync-utils";
 
 const BURST_SCAN_MAX_PAGES = 4;

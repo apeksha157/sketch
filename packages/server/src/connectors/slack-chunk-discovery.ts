@@ -1,6 +1,6 @@
 import { type Kysely, sql } from "kysely";
 import type { DB } from "../db/schema";
-import { SLACK_CHANNEL_STREAM_KEY, SLACK_ROUTER_STREAM_KEY } from "./slack-chunker";
+import { SLACK_CHANNEL_STREAM_KEY, SLACK_ROUTER_STREAM_KEY } from "./slack-chunk-messages";
 import { IN_CLAUSE_CHUNK_SIZE, chunk } from "./sync-utils";
 
 interface DiscoveryRow {

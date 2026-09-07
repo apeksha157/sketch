@@ -11,7 +11,7 @@ import {
   renderSlackChunkMessageText,
   resolveSlackChunkEngineKnobs,
 } from "./slack-chunk-adapters";
-import { isIndexableSlackChunkMessage } from "./slack-chunker";
+import { isIndexableSlackChunkMessage } from "./slack-chunk-messages";
 
 const baseKnobs = {
   windowMessages: 250,

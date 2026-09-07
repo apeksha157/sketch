@@ -12,11 +12,11 @@ import {
   createStreamChunkCursorStore,
 } from "./chunk-engine";
 import {
-  SLACK_ATTACHMENT_PLACEHOLDER,
   SLACK_CHANNEL_STREAM_KEY,
   isIndexableSlackChunkMessage,
   parseSlackChunkAttachments,
-} from "./slack-chunker";
+} from "./slack-chunk-messages";
+import { ATTACHMENT_PLACEHOLDER_TEXT } from "./transcript";
 
 const LOAD_MARGIN = 50;
 const MESSAGE_COLUMNS = [
@@ -61,7 +61,7 @@ interface SlackThreadAdapterParams extends SlackAdapterParams {
 
 /** Normalizes attachment placeholders for boundary prompts and slice transcripts. */
 export function renderSlackChunkMessageText(text: string, attachments: string | null): string {
-  if (text.trim().toLowerCase() !== SLACK_ATTACHMENT_PLACEHOLDER) return text;
+  if (text.trim().toLowerCase() !== ATTACHMENT_PLACEHOLDER_TEXT) return text;
   const parsed = parseSlackChunkAttachments(attachments);
   if (!parsed.hasAttachments) return text;
   return parsed.firstName ? `[shared file: ${parsed.firstName}]` : "[shared file]";

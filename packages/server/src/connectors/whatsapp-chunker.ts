@@ -17,6 +17,7 @@ import { estimateTokens } from "./chunking";
 import { isRetryableProviderError } from "./provider-fallback";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import { runWithConcurrency } from "./sync-utils";
+import { ATTACHMENT_PLACEHOLDER_TEXT, parseAttachmentsJson } from "./transcript";
 import { evaluateIdleClose, runLlmChunkingPass } from "./whatsapp-llm-chunker";
 
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES = 500;
@@ -41,7 +42,6 @@ export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_WINDOWS_PER_RUN = 4;
 
 const MINUTE_MS = 60 * 1000;
 const DEFAULT_CLAIM_STALE_MS = 5 * MINUTE_MS;
-const SYNTHETIC_ATTACHMENT_TEXT = "see attached files.";
 const SINGLE_EMOJI_PATTERN =
   /^(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\p{Emoji_Modifier}|\uFE0E|\uFE0F)*(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\p{Emoji_Modifier}|\uFE0E|\uFE0F)*)*$/u;
 
@@ -292,13 +292,7 @@ function emptyRunSummary(): WhatsAppChunkerRunSummary {
 }
 
 function hasAttachments(value: string | null): boolean {
-  if (!value) return false;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) && parsed.length > 0;
-  } catch {
-    return value.trim().length > 0;
-  }
+  return parseAttachmentsJson(value).count !== 0;
 }
 
 function isControlMessage(text: string): boolean {
@@ -320,7 +314,7 @@ function isReactionOnly(message: WhatsAppChunkerMessage): boolean {
 function isCaptionlessMedia(message: WhatsAppChunkerMessage): boolean {
   if (!hasAttachments(message.attachments)) return false;
   const text = message.text.trim();
-  return text.length === 0 || text.toLowerCase() === SYNTHETIC_ATTACHMENT_TEXT;
+  return text.length === 0 || text.toLowerCase() === ATTACHMENT_PLACEHOLDER_TEXT;
 }
 
 export function isIndexableWhatsAppChunkMessage(message: WhatsAppChunkerMessage): boolean {
