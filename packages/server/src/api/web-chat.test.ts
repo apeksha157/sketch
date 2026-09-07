@@ -237,11 +237,11 @@ describe("web chat API", () => {
     expect(webChatStreamChunks(text).find((chunk) => chunk.type === "data-progress")).toMatchObject({
       type: "data-progress",
       data: {
-        lines: ["Reading"],
+        lines: ["Reading notes.md"],
         items: [
           {
             kind: "file",
-            label: "Reading",
+            label: "Reading notes.md",
             icon: { type: "tool", name: "Read" },
             toolName: "Read",
           },
@@ -1579,7 +1579,7 @@ describe("web chat API", () => {
       generation: 1,
     });
     expect(runAgent.mock.calls[0]?.[0]).toMatchObject({
-      maxTurns: 24,
+      maxTurns: 96,
       maxPersistedTextBytes: 24 * 1024,
       taskContext: { planOnly: false },
     });
@@ -1920,6 +1920,92 @@ describe("web chat API", () => {
     expect(JSON.stringify(saved)).toContain(failing ? "error-json" : "Saved fixture state");
   });
 
+  it("continues the real AI SDK builder runtime after its step budget", async () => {
+    const admin = await seedAdmin(db);
+    const config = createTestConfig({ DATA_DIR: dataDir });
+    const workspaceDir = await ensureWorkspace(config, admin.id);
+    await writeFile(join(workspaceDir, "fixture.txt"), "Saved fixture state");
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-real-continuation",
+      conversationId: "builder-real-continuation",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const usage = {
+      inputTokens: { total: 10, noCache: 10, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 2, text: 2, reasoning: undefined },
+    };
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [
+        ...Array.from({ length: 24 }, (_, index) => ({
+          stream: simulateReadableStream({
+            initialDelayInMs: null,
+            chunkDelayInMs: null,
+            chunks: [
+              {
+                type: "tool-call" as const,
+                toolCallId: `continuation-call-${index}`,
+                toolName: "Read",
+                input: JSON.stringify({ file_path: "fixture.txt" }),
+              },
+              { type: "finish" as const, finishReason: { unified: "tool-calls" as const, raw: undefined }, usage },
+            ],
+          }),
+        })),
+        {
+          stream: simulateReadableStream({
+            initialDelayInMs: null,
+            chunkDelayInMs: null,
+            chunks: [
+              { type: "text-start", id: "continuation-done" },
+              { type: "text-delta", id: "continuation-done", delta: "Verified after the saved-state continuation." },
+              { type: "text-end", id: "continuation-done" },
+              { type: "finish", finishReason: { unified: "stop" as const, raw: undefined }, usage },
+            ],
+          }),
+        },
+      ],
+    });
+    const app = createApp(db, config, {
+      logger: createTestLogger(),
+      scheduler: makeBuilderScheduler("task-real-continuation", admin.id),
+      runAgent: (params) =>
+        runRealAgent({
+          ...params,
+          agentRuntime: "aisdk",
+          agentRuntimeProvider: {
+            provider: "anthropic",
+            modelId: "claude-sonnet-4-6",
+            model,
+            costTable: DEFAULT_AGENT_RUNTIME_COST_TABLE,
+            preparePrompt: (input) => ({
+              instructions: input.systemPrompt,
+              messages: input.messages ?? [{ role: "user", content: input.prompt }],
+            }),
+          },
+        }),
+    });
+    const cookie = await login(app);
+
+    const response = await app.request("/api/web-chat?conversationId=builder-real-continuation", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Inspect the fixture",
+        automationTaskId: "task-real-continuation",
+        clientSessionId: "real-continuation-session",
+        generation: 1,
+      }),
+    });
+    const stream = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(stream).toContain("Verified after the saved-state continuation.");
+    expect(stream).not.toContain('"type":"data-interruption"');
+  });
+
   it.each(["transient", "lost"])("handles a %s lease result at runtime admission", async (failure) => {
     const admin = await seedAdmin(db);
     await createScheduledTaskConversationRepository(db).upsert({
@@ -2045,7 +2131,7 @@ describe("web chat API", () => {
     }
   });
 
-  it("allows a valid builder turn to exceed the former 20-call budget", async () => {
+  it("allows a valid builder turn to exceed the former 96-call budget", async () => {
     const admin = await seedAdmin(db);
     await createScheduledTaskConversationRepository(db).upsert({
       taskId: "task-builder-budget",
@@ -2054,7 +2140,7 @@ describe("web chat API", () => {
       kind: "builder",
     });
     const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
-      for (let index = 0; index < 21; index += 1) {
+      for (let index = 0; index < 97; index += 1) {
         await params.onProgressEvent({
           kind: "tool_use",
           toolName: "mcp__sketch__ManageScheduledTasks",
@@ -2089,6 +2175,165 @@ describe("web chat API", () => {
     expect(streamText).toContain("Completed after the expanded tool budget.");
     expect(streamText).not.toContain("I paused this turn before it could continue.");
     expect(webChatStreamChunks(streamText)).not.toContainEqual(expect.objectContaining({ type: "data-interruption" }));
+  });
+
+  it("reloads builder state and continues once after a step-budget exhaustion", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-builder-continuation",
+      conversationId: "builder-continuation",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    let invocation = 0;
+    const scheduler = makeBuilderScheduler("task-builder-continuation", admin.id);
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      invocation += 1;
+      await params.onRunStart?.();
+      if (invocation === 1) {
+        for (let index = 0; index < 96; index += 1) {
+          await params.onProgressEvent({
+            kind: "tool_use",
+            toolName: "mcp__sketch__ManageScheduledTasks",
+            input: { action: "get", task_id: "task-builder-continuation", cursor: index },
+          });
+        }
+        return {
+          ...makeAgentResult(""),
+          rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: 96 },
+        };
+      }
+      return makeAgentResult("Completed after reloading the saved automation state.");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      buildMcpServers: vi.fn().mockResolvedValue({}),
+      scheduler,
+    });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/web-chat?conversationId=builder-continuation", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Continue configuring this automation",
+        automationTaskId: "task-builder-continuation",
+        clientSessionId: "builder-continuation-session",
+        generation: 1,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const streamText = await res.text();
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect((scheduler as never as { getTaskById: ReturnType<typeof vi.fn> }).getTaskById).toHaveBeenCalledTimes(2);
+    expect(runAgent.mock.calls[1]?.[0].userMessage).toContain("authoritative automation state");
+    expect(streamText).toContain("Completed after reloading the saved automation state.");
+    expect(webChatStreamChunks(streamText)).not.toContainEqual(expect.objectContaining({ type: "data-interruption" }));
+  });
+
+  it("bounds automatic builder continuation and keeps the final step-limit diagnosis", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-builder-continuation-limit",
+      conversationId: "builder-continuation-limit",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    let invocation = 0;
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      invocation += 1;
+      await params.onRunStart?.();
+      const maxTurns = invocation === 1 ? 96 : 48;
+      return {
+        ...makeAgentResult(""),
+        rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: maxTurns },
+      };
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      buildMcpServers: vi.fn().mockResolvedValue({}),
+      scheduler: makeBuilderScheduler("task-builder-continuation-limit", admin.id),
+    });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/web-chat?conversationId=builder-continuation-limit", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: "Continue configuring this automation",
+        automationTaskId: "task-builder-continuation-limit",
+        clientSessionId: "builder-continuation-limit-session",
+        generation: 1,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const streamText = await res.text();
+    expect(runAgent).toHaveBeenCalledTimes(2);
+    expect(streamText).toContain('"reason":"step_limit"');
+    expect(streamText).toContain("Tell me to continue");
+    expect(runAgent.mock.calls[1]?.[0].abortController?.signal.aborted).toBe(true);
+  });
+
+  it("honors explicit Stop while an automatic builder continuation is running", async () => {
+    const admin = await seedAdmin(db);
+    await createScheduledTaskConversationRepository(db).upsert({
+      taskId: "task-builder-continuation-stop",
+      conversationId: "builder-continuation-stop",
+      transcriptUserId: admin.id,
+      kind: "builder",
+    });
+    const continuationStarted = deferred<void>();
+    const releaseContinuation = deferred<void>();
+    let invocation = 0;
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      invocation += 1;
+      await params.onRunStart?.();
+      if (invocation === 1) {
+        return {
+          ...makeAgentResult(""),
+          rawUsage: { ...makeAgentResult().rawUsage, stopReason: "tool_use", numTurns: 96 },
+        };
+      }
+      continuationStarted.resolve();
+      await releaseContinuation.promise;
+      return makeAgentResult("This continuation should be cancelled.");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      buildMcpServers: vi.fn().mockResolvedValue({}),
+      scheduler: makeBuilderScheduler("task-builder-continuation-stop", admin.id),
+    });
+    const cookie = await login(app);
+    const headers = { Cookie: cookie, "Content-Type": "application/json" };
+    const body = {
+      message: "Continue configuring this automation",
+      automationTaskId: "task-builder-continuation-stop",
+      clientSessionId: "builder-continuation-stop-session",
+      generation: 1,
+    };
+
+    const response = await app.request("/api/web-chat?conversationId=builder-continuation-stop", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    await continuationStarted.promise;
+
+    const stopped = await app.request(
+      "/api/web-chat/conversations/builder-continuation-stop/interruptions?automationTaskId=task-builder-continuation-stop",
+      { method: "POST", headers, body: JSON.stringify(body) },
+    );
+    expect(await stopped.json()).toMatchObject({ interrupted: true });
+    expect(runAgent.mock.calls[1]?.[0].abortController?.signal.reason).toBe("user_stop");
+
+    releaseContinuation.resolve();
+    expect(await response.text()).toContain('"reason":"user_stop"');
+    expect(runAgent).toHaveBeenCalledTimes(2);
   });
 
   it("persists a resumable response when a builder turn returns no final message", async () => {
@@ -3211,7 +3456,10 @@ describe("web chat API", () => {
     });
 
     expect(res.status).toBe(200);
-    await expect(res.text()).resolves.toContain('📖 Read: \\"notes.md\\"');
+    const chunks = webChatStreamChunks(await res.text());
+    expect(chunks.find((chunk) => chunk.type === "data-progress")).toMatchObject({
+      data: { items: [{ label: "Read", detail: "notes.md", toolName: "Read" }] },
+    });
   });
 
   it("collapses disabled web chat tool progress to generic thinking", async () => {
@@ -3793,6 +4041,7 @@ describe("web chat API", () => {
       {
         id: expect.any(String),
         role: "assistant",
+        pending: false,
         createdAt: expect.any(String),
         parts: [
           { type: "text", text: "Created the PDF." },
@@ -3848,6 +4097,7 @@ describe("web chat API", () => {
       {
         id: expect.any(String),
         role: "assistant",
+        pending: false,
         createdAt: expect.any(String),
         parts: [{ type: "text", text: "Conversation-specific reply." }],
       },
@@ -3933,28 +4183,31 @@ describe("web chat API", () => {
       }),
     });
 
-    expect(res.status).toBe(200);
-    await agentStarted.promise;
-    const pendingTranscript = JSON.parse(
-      await readFile(webChatTranscriptPath(dataDir, admin.id, "chat-pending"), "utf-8"),
-    ) as { messages: unknown[] };
-    expect(pendingTranscript.messages).toEqual([
-      {
-        id: "user-msg-pending",
-        role: "user",
-        createdAt: expect.any(String),
-        parts: [{ type: "text", text: "Do this in the background" }],
-      },
-      {
-        id: "assistant-progress-user-msg-pending",
-        role: "assistant",
-        createdAt: expect.any(String),
-        parts: [{ type: "data-progress", id: "progress", data: { lines: ["Thinking…"] } }],
-      },
-    ]);
-
-    finishAgent.resolve();
-    await res.text();
+    try {
+      expect(res.status).toBe(200);
+      await agentStarted.promise;
+      const pendingTranscript = JSON.parse(
+        await readFile(webChatTranscriptPath(dataDir, admin.id, "chat-pending"), "utf-8"),
+      ) as { messages: unknown[] };
+      expect(pendingTranscript.messages).toEqual([
+        {
+          id: "user-msg-pending",
+          role: "user",
+          createdAt: expect.any(String),
+          parts: [{ type: "text", text: "Do this in the background" }],
+        },
+        {
+          id: "assistant-progress-user-msg-pending",
+          role: "assistant",
+          pending: true,
+          createdAt: expect.any(String),
+          parts: [{ type: "data-progress", id: "progress", data: { lines: ["Thinking…"] } }],
+        },
+      ]);
+    } finally {
+      finishAgent.resolve();
+      await res.text();
+    }
     const completedTranscript = JSON.parse(
       await readFile(webChatTranscriptPath(dataDir, admin.id, "chat-pending"), "utf-8"),
     ) as { messages: unknown[] };
@@ -3968,6 +4221,7 @@ describe("web chat API", () => {
       {
         id: expect.any(String),
         role: "assistant",
+        pending: false,
         createdAt: expect.any(String),
         parts: [{ type: "text", text: "Finished in the background." }],
       },
@@ -4117,13 +4371,13 @@ describe("web chat API", () => {
           parts: [
             {
               type: "data-progress",
-              id: "progress",
+              id: "assistant-progress-user-msg-progress:progress-0",
               data: {
-                lines: ["Reading"],
+                lines: ["Reading notes.md"],
                 items: [
                   {
                     kind: "file",
-                    label: "Reading",
+                    label: "Reading notes.md",
                     icon: { type: "tool", name: "Read" },
                     toolName: "Read",
                   },
@@ -4143,7 +4397,14 @@ describe("web chat API", () => {
     await expect(completed.json()).resolves.toMatchObject({
       messages: [
         { id: "user-msg-progress", role: "user", parts: [{ type: "text", text: "Keep me updated" }] },
-        { id: expect.any(String), role: "assistant", parts: [{ type: "text", text: "Finished in the background." }] },
+        {
+          id: expect.any(String),
+          role: "assistant",
+          parts: [
+            { type: "data-progress", id: "assistant-progress-user-msg-progress:progress-0" },
+            { type: "text", text: "Finished in the background." },
+          ],
+        },
       ],
     });
   });
@@ -4420,8 +4681,8 @@ describe("web chat API", () => {
       if (reason === "runtime_error") throw new Error("fixture provider error");
       const result = makeAgentResult();
       if (reason === "step_limit")
-        return { ...result, rawUsage: { ...result.rawUsage, stopReason: "tool_use", numTurns: 24 } };
-      for (let index = 0; index < 49; index += 1) {
+        return { ...result, rawUsage: { ...result.rawUsage, stopReason: "tool_use", numTurns: 96 } };
+      for (let index = 0; index < 385; index += 1) {
         await params.onProgressEvent({
           kind: "tool_use",
           toolName: "Read",
@@ -4530,6 +4791,88 @@ describe("web chat API", () => {
     expect(transcript.messages.at(-1)).toMatchObject({
       role: "assistant",
       parts: [
+        {
+          type: "data-interruption",
+          id: "interruption",
+          data: {
+            detail: "Sketch paused.",
+            label: "What should Sketch do differently?",
+          },
+        },
+      ],
+    });
+  });
+
+  it("retains activity and text while revising stale running invocations on interruption", async () => {
+    const admin = await seedAdmin(db);
+    const transcriptDir = join(dataDir, "web-chat", admin.id);
+    await mkdir(transcriptDir, { recursive: true });
+    await writeFile(
+      join(transcriptDir, "chat-stale-progress.json"),
+      JSON.stringify({
+        version: 1,
+        messages: [
+          {
+            id: "user-msg-stale",
+            role: "user",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            parts: [{ type: "text", text: "Run the automation" }],
+          },
+          {
+            id: "assistant-progress-user-msg-stale",
+            role: "assistant",
+            createdAt: "2026-06-01T00:00:01.000Z",
+            parts: [
+              { type: "text", text: "I am checking the repository." },
+              {
+                type: "data-progress",
+                id: "run:call",
+                data: {
+                  lines: ["Bash"],
+                  items: [
+                    {
+                      id: "run:call",
+                      revision: 4,
+                      status: "running",
+                      startedAt: 100,
+                      kind: "tool",
+                      label: "Bash",
+                      icon: { type: "tool", name: "Bash" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent: vi.fn().mockResolvedValue(makeAgentResult()),
+      buildMcpServers: vi.fn().mockResolvedValue({}),
+    });
+    const cookie = await login(app);
+
+    const stopResponse = await app.request("/api/web-chat/conversations/chat-stale-progress/interruptions", {
+      method: "POST",
+      headers: { Cookie: cookie },
+    });
+
+    expect(stopResponse.status).toBe(200);
+    await expect(stopResponse.json()).resolves.toEqual({ success: true, interrupted: true });
+    const transcript = JSON.parse(await readFile(join(transcriptDir, "chat-stale-progress.json"), "utf-8")) as {
+      messages: Array<{ role: string; parts: Array<{ type: string; id?: string; data?: unknown }> }>;
+    };
+    expect(transcript.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      parts: [
+        { type: "text", text: "I am checking the repository." },
+        {
+          type: "data-progress",
+          id: "run:call",
+          data: { items: [{ id: "run:call", revision: 5, status: "interrupted", endedAt: expect.any(Number) }] },
+        },
         {
           type: "data-interruption",
           id: "interruption",
@@ -4832,5 +5175,104 @@ describe("web chat API", () => {
       error: { code: "VALIDATION_ERROR", message: "Message is required" },
     });
     expect(runAgent).not.toHaveBeenCalled();
+  });
+  it("persists invocation states and technical details across pending and completed history", async () => {
+    await seedAdmin(db);
+    const ready = deferred<void>();
+    const release = deferred<void>();
+    const command = `printf '%s\\n' '${"long command ".repeat(50)}'`;
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      await params.onTextDelta?.("I will check the files first.");
+      await params.onProgressEvent({
+        kind: "tool_use",
+        toolName: "Bash",
+        toolCallId: "a",
+        startedAt: 100,
+        input: { command },
+      });
+      await params.onProgressEvent({
+        kind: "tool_use",
+        toolName: "Bash",
+        toolCallId: "b",
+        startedAt: 101,
+        input: { command: "pwd" },
+      });
+      await params.onToolProgressEnd?.({ toolCallId: "b", status: "failed", endedAt: 200 });
+      ready.resolve();
+      await release.promise;
+      await params.onToolProgressEnd?.({ toolCallId: "a", status: "succeeded", endedAt: 300 });
+      return makeAgentResult("Finished checking.");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), { logger: createTestLogger(), runAgent });
+    const cookie = await login(app);
+    const res = await app.request("/api/web-chat?conversationId=activity-history", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: { id: "activity-user", role: "user", parts: [{ type: "text", text: "Check files" }] },
+        progressRendererMode: "technical",
+      }),
+    });
+    await ready.promise;
+    const pending = await app.request("/api/web-chat/messages?conversationId=activity-history", {
+      headers: { Cookie: cookie },
+    });
+    const pendingData = await pending.json();
+    const progress = pendingData.messages
+      .at(-1)
+      .parts.filter((part: { type: string }) => part.type === "data-progress");
+    expect(progress.map((part: { data: { items: unknown[] } }) => part.data.items[0])).toMatchObject([
+      { id: "assistant-progress-activity-user:a", status: "running", startedAt: 100, detail: command },
+      { id: "assistant-progress-activity-user:b", status: "failed", startedAt: 101, endedAt: 200 },
+    ]);
+    release.resolve();
+    const streamText = await res.text();
+    expect(streamText).toContain('"messageId":"assistant-progress-activity-user"');
+    expect(pendingData.messages.at(-1).id).toBe("assistant-progress-activity-user");
+    expect(streamText).toContain('"status":"succeeded"');
+    const completed = await app.request("/api/web-chat/messages?conversationId=activity-history", {
+      headers: { Cookie: cookie },
+    });
+    const completedMessage = (await completed.json()).messages.at(-1);
+    expect(completedMessage.id).toBe("assistant-progress-activity-user");
+    expect(completedMessage.pending).toBe(false);
+    const finalParts = completedMessage.parts;
+    expect(
+      finalParts
+        .filter((part: { type: string }) => part.type === "data-progress")
+        .map((part: { data: { items: unknown[] } }) => part.data.items[0]),
+    ).toMatchObject([
+      { id: "assistant-progress-activity-user:a", status: "succeeded", detail: command, endedAt: 300 },
+      { id: "assistant-progress-activity-user:b", status: "failed", endedAt: 200 },
+    ]);
+    expect(finalParts[0]).toEqual({ type: "text", text: "I will check the files first." });
+    expect(finalParts.at(-1)).toEqual({ type: "text", text: "Finished checking." });
+  });
+
+  it("settles an unresolved invocation as interrupted when the run fails", async () => {
+    await seedAdmin(db);
+    const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
+      await params.onProgressEvent({
+        kind: "tool_use",
+        toolName: "Read",
+        toolCallId: "unresolved",
+        startedAt: 100,
+        input: { file_path: "notes.md" },
+      });
+      throw new Error("Runtime stopped");
+    });
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), { logger: createTestLogger(), runAgent });
+    const cookie = await login(app);
+    const res = await app.request("/api/web-chat?conversationId=activity-failure", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Check files" }),
+    });
+    await res.text();
+    const history = await app.request("/api/web-chat/messages?conversationId=activity-failure", {
+      headers: { Cookie: cookie },
+    });
+    const parts = (await history.json()).messages.at(-1).parts;
+    expect(parts[0].data.items[0]).toMatchObject({ status: "interrupted" });
   });
 });

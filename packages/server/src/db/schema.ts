@@ -2104,6 +2104,25 @@ export interface FileFieldEmbeddingsTable {
 }
 
 export interface DB {
+  benchmark_setup_links: { token_hash: string; expires_at: string; used_at: string | null };
+  benchmark_enrollments: {
+    id: string;
+    user_id: string | null;
+    account_id: string;
+    config_json: string;
+    active_run_id: string | null;
+    created_at: Generated<string>;
+  };
+  benchmark_runs: {
+    id: string;
+    enrollment_id: string;
+    status: string;
+    document_json: string;
+    worker_id: string | null;
+    cancel_requested: Generated<number>;
+    heartbeat_at: string | null;
+    created_at: string;
+  };
   file_field_embeddings: FileFieldEmbeddingsTable;
   dev_search_traces: DevSearchTracesTable;
   dev_search_trace_results: DevSearchTraceResultsTable;

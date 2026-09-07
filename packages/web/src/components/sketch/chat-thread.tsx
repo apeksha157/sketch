@@ -33,6 +33,7 @@ import {
   TerminalWindowIcon,
   WarningCircleIcon,
   WrenchIcon,
+  XIcon,
 } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { Collapsible as CollapsiblePrimitive } from "radix-ui";
@@ -91,6 +92,16 @@ export interface ChatThreadProgressIcon {
 
 export interface ChatThreadProgressItem {
   id?: string;
+  revision?: number;
+  status?: "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  startedAt?: number;
+  endedAt?: number;
+  mode?: "off" | "friendly" | "technical";
+  integration?: { providerId?: string; appId: string; name: string; icon?: string };
+  detailFormat?: "text" | "command" | "json";
+  detailRedacted?: boolean;
+  detailTruncated?: boolean;
+  detailUnavailable?: boolean;
   kind: string;
   label: string;
   detail?: string;
@@ -172,7 +183,7 @@ export interface ChatThreadProps {
 
 const markdownPlugins = [remarkGfm];
 const MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES = 3;
-const TIMELINE_WINDOW_ANIMATION_MS = 220;
+const TIMELINE_WINDOW_ANIMATION_MS = 320;
 
 type ProgressIconComponent = Icon;
 
@@ -301,16 +312,17 @@ function legacyProgressKind(label: string): string {
 
 function normalizedProgressItem(item: ChatThreadProgressItem): ChatThreadProgressItem | null {
   const label = normalizeProgressText(item.label);
-  const detail = normalizeProgressText(item.detail);
+  const detail = typeof item.detail === "string" && item.detail.trim() ? item.detail : undefined;
   const toolName = normalizeProgressText(item.toolName);
   const kind = normalizeProgressText(item.kind) || "generic";
-  if (!label && !detail) return null;
+  const displayLabel = label || detail;
+  if (!displayLabel) return null;
 
   return {
     ...item,
     id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : undefined,
     kind,
-    label: label || detail,
+    label: displayLabel,
     detail: label && detail ? detail : undefined,
     toolName: toolName || undefined,
     icon: item.icon,
@@ -369,8 +381,30 @@ function progressItemKey(item: ChatThreadProgressItem, index: number): string {
   return item.id ?? `${item.kind}:${item.label}:${item.detail ?? ""}:${item.toolName ?? ""}:${index}`;
 }
 
+function progressItemContentSignature(item: ChatThreadProgressItem, index: number): string {
+  return [
+    progressItemKey(item, index),
+    item.revision ?? "",
+    item.status ?? "",
+    item.startedAt ?? "",
+    item.endedAt ?? "",
+    item.mode ?? "",
+    item.label,
+    item.detail ?? "",
+    item.toolName ?? "",
+    item.detailFormat ?? "",
+    item.detailRedacted ? "redacted" : "",
+    item.detailTruncated ? "truncated" : "",
+    item.detailUnavailable ? "unavailable" : "",
+    item.integration?.providerId ?? "",
+    item.integration?.appId ?? "",
+    item.integration?.name ?? "",
+    item.integration?.icon ?? "",
+  ].join("\u001e");
+}
+
 function progressItemsSignature(items: ChatThreadProgressItem[]): string {
-  return items.map((item, index) => progressItemKey(item, index)).join("|");
+  return items.map((item, index) => progressItemContentSignature(item, index)).join("|");
 }
 
 function timelineEntryKey(entry: ChatThreadTimelineEntry, index: number): string {
@@ -568,7 +602,7 @@ function emptyAnimatedTimelineState(entries: TimelineRenderEntry[]): AnimatedTim
   };
 }
 
-function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
+function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused = false) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
@@ -577,6 +611,7 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
   const latestTargetEntries = useRef(targetEntries);
   const [state, setState] = useState<AnimatedTimelineWindowState>(() => emptyAnimatedTimelineState(targetEntries));
   const stateRef = useRef(state);
+  const renderedSignature = timelineRenderEntriesSignature(state.entries);
   const targetSignature = timelineRenderEntriesSignature(targetEntries);
 
   latestTargetEntries.current = targetEntries;
@@ -595,7 +630,30 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
   useLayoutEffect(() => {
     const targetEntries = latestTargetEntries.current;
     const current = stateRef.current;
-    if (timelineRenderEntriesSignature(current.entries) === targetSignature && !current.animating) return;
+    if (paused) {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+      frameRef.current = null;
+      timeoutRef.current = null;
+      if (
+        timelineRenderEntriesSignature(current.entries) !== targetSignature ||
+        current.animating ||
+        current.offsetY !== 0
+      ) {
+        setState(emptyAnimatedTimelineState(targetEntries));
+      }
+      return;
+    }
+    if (renderedSignature === targetSignature && !current.animating) return;
+
+    if (timeoutRef.current !== null && !prefersReducedTimelineMotion()) {
+      const latestByKey = new Map(targetEntries.map((entry) => [entry.key, entry]));
+      setState((previous) => ({
+        ...previous,
+        entries: previous.entries.map((entry) => latestByKey.get(entry.key) ?? entry),
+      }));
+      return;
+    }
 
     if (frameRef.current !== null) {
       window.cancelAnimationFrame(frameRef.current);
@@ -614,7 +672,7 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
     const overlap = timelineWindowOverlap(current.entries, targetEntries);
     const removedCount = current.entries.length - overlap;
     const appendedEntries = targetEntries.slice(overlap);
-    if (overlap === 0 || removedCount <= 0 || appendedEntries.length === 0) {
+    if (removedCount <= 0 || appendedEntries.length === 0) {
       setState(emptyAnimatedTimelineState(targetEntries));
       return;
     }
@@ -625,7 +683,11 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
     const firstKept = rowRefs.current.get(current.entries[removedCount]?.key ?? "");
     const currentHeight = viewport?.getBoundingClientRect().height ?? 0;
     const removedHeight =
-      firstRemoved && firstKept ? firstKept.getBoundingClientRect().top - firstRemoved.getBoundingClientRect().top : 0;
+      firstRemoved && firstKept
+        ? firstKept.getBoundingClientRect().top - firstRemoved.getBoundingClientRect().top
+        : overlap === 0
+          ? currentHeight
+          : 0;
 
     if (!viewport || !track || currentHeight <= 0 || removedHeight <= 0) {
       setState(emptyAnimatedTimelineState(targetEntries));
@@ -645,20 +707,20 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
       frameRef.current = null;
       const nextTrack = trackRef.current;
       const targetHeight = nextTrack ? Math.max(0, nextTrack.scrollHeight - removedHeight) : currentHeight;
-      setState({
-        entries: combinedEntries,
-        exitingKeys: current.entries.slice(0, removedCount).map((entry) => entry.key),
+      setState((previous) => ({
+        ...previous,
         height: targetHeight,
         offsetY: -removedHeight,
         animating: true,
-      });
+      }));
     });
 
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = null;
-      setState(emptyAnimatedTimelineState(latestTargetEntries.current));
-    }, TIMELINE_WINDOW_ANIMATION_MS);
-  }, [targetSignature]);
+      const latestByKey = new Map(latestTargetEntries.current.map((entry) => [entry.key, entry]));
+      setState(emptyAnimatedTimelineState(targetEntries.map((entry) => latestByKey.get(entry.key) ?? entry)));
+    }, TIMELINE_WINDOW_ANIMATION_MS + 32);
+  }, [paused, targetSignature, renderedSignature]);
 
   const setRowRef = (key: string) => (node: HTMLDivElement | null) => {
     if (node) {
@@ -697,7 +759,16 @@ export function ChatThread({
   autoOpenAutomation,
   conversationId,
 }: ChatThreadProps) {
-  const showBusy = busy && messages.at(-1)?.role !== "assistant";
+  const latestMessage = messages.at(-1);
+  const latestTimeline = latestMessage?.role === "assistant" ? timelineEntriesForMessage(latestMessage) : [];
+  const latestTools = latestTimeline.flatMap((entry) =>
+    entry.type === "progress" ? progressItemsForParts(entry.progressItems, entry.progressLines) : [],
+  );
+  const waitingAfterTools =
+    latestTimeline.at(-1)?.type === "progress" &&
+    latestTools.length > 0 &&
+    latestTools.every((item) => item.mode !== "off" && item.status && item.status !== "running");
+  const showBusy = busy && !error && (latestMessage?.role !== "assistant" || waitingAfterTools);
   const activeQuestionInteractionKey = pendingQuestionInteractionKey(messages);
   const [answeredInteractionKey, setAnsweredInteractionKey] = useState<string | null>(null);
 
@@ -720,7 +791,8 @@ export function ChatThread({
           <MessageRow
             key={message.id}
             message={message}
-            active={busy && index === messages.length - 1}
+            active={busy && !error && index === messages.length - 1}
+            activityLive={busy && !error}
             integrationConnectionStatuses={integrationConnectionStatuses}
             onConnectIntegration={onConnectIntegration}
             onSelectQuestion={onSelectQuestion}
@@ -754,6 +826,7 @@ export function ChatThread({
 function MessageRow({
   message,
   active,
+  activityLive,
   integrationConnectionStatuses,
   onConnectIntegration,
   onSelectQuestion,
@@ -766,6 +839,7 @@ function MessageRow({
 }: {
   message: ChatThreadMessage;
   active: boolean;
+  activityLive: boolean;
   integrationConnectionStatuses: Record<string, ChatThreadIntegrationConnectionStatus>;
   onConnectIntegration?: (connection: ChatThreadIntegrationConnection) => void;
   onSelectQuestion?: (question: ChatThreadQuestion, option: WebChatQuestionOption) => void;
@@ -804,6 +878,7 @@ function MessageRow({
         <TimelineMessage
           message={message}
           active={active}
+          activityLive={activityLive}
           integrationConnectionStatuses={integrationConnectionStatuses}
           onConnectIntegration={onConnectIntegration}
           autoOpenAutomation={autoOpenAutomation}
@@ -1225,6 +1300,7 @@ function AutomationBuilderLoadingState() {
 function TimelineMessage({
   message,
   active,
+  activityLive,
   integrationConnectionStatuses = {},
   onConnectIntegration,
   autoOpenAutomation,
@@ -1232,6 +1308,7 @@ function TimelineMessage({
 }: {
   message: ChatThreadMessage;
   active: boolean;
+  activityLive: boolean;
   integrationConnectionStatuses?: Record<string, ChatThreadIntegrationConnectionStatus>;
   onConnectIntegration?: (connection: ChatThreadIntegrationConnection) => void;
   autoOpenAutomation?: boolean;
@@ -1243,6 +1320,7 @@ function TimelineMessage({
   const activeProgressEntryKey = active ? latestActiveProgressEntryKey(blocks) : undefined;
   const completedSegments = useMemo(() => completedTimelineSegments(entries), [entries]);
   const openingAutomationBuilder = active && isAutomationBuilderOpeningBlock(blocks.at(-1));
+  const runningToolCount = runningProgressItemCount(blocks, activityLive);
 
   if (!active) {
     return (
@@ -1285,6 +1363,11 @@ function TimelineMessage({
 
   return (
     <div className="max-w-[720px]">
+      {runningToolCount > 1 ? (
+        <span data-progress-running-count className="mb-[4px] block pl-[30px] text-[11px] text-muted-foreground/60">
+          {runningToolCount} tools running
+        </span>
+      ) : null}
       {blocks.map((block) =>
         block.type === "text" ? (
           <TimelineEntryRow key={block.key} entry={block.entry.entry} active={false} exiting={false} last />
@@ -1293,7 +1376,12 @@ function TimelineMessage({
         ) : collapseProgress ? (
           <CollapsibleTimelineHistory key={block.key} entries={block.entries} />
         ) : (
-          <ProgressTimelineWindow key={block.key} entries={block.entries} activeEntryKey={activeProgressEntryKey} />
+          <ProgressTimelineWindow
+            key={block.key}
+            entries={block.entries}
+            activeEntryKey={activeProgressEntryKey}
+            activityLive={activityLive}
+          />
         ),
       )}
       {message.files?.length ? (
@@ -1345,6 +1433,14 @@ function timelineHistoryCountLabel(entries: TimelineRenderEntry[]): string {
   return parts.length > 0 ? parts.join(", ") : "Timeline history";
 }
 
+function runningProgressItemCount(blocks: TimelineRenderBlock[], activityLive: boolean): number {
+  if (!activityLive) return 0;
+  return blocks.reduce((count, block) => {
+    if (block.type !== "progress") return count;
+    return count + progressItemsForTimelineEntries(block.entries).filter((item) => item.status === "running").length;
+  }, 0);
+}
+
 function completedTimelineSegments(entries: TimelineRenderEntry[]): {
   activityEntries: TimelineRenderEntry[];
   finalEntry?: TimelineRenderEntry;
@@ -1356,7 +1452,10 @@ function completedTimelineSegments(entries: TimelineRenderEntry[]): {
   return { activityEntries: entries };
 }
 
-function CollapsibleTimelineHistory({ entries }: { entries: TimelineRenderEntry[] }) {
+function CollapsibleTimelineHistory({
+  entries,
+  title = "Activity timeline",
+}: { entries: TimelineRenderEntry[]; title?: string }) {
   const [expanded, setExpanded] = useState(false);
   const countLabel = timelineHistoryCountLabel(entries);
 
@@ -1377,7 +1476,7 @@ function CollapsibleTimelineHistory({ entries }: { entries: TimelineRenderEntry[
             <ClockIcon size={13} weight="duotone" className="shrink-0" aria-hidden />
           </span>
           <span className="min-w-0">
-            <span className="block text-[13px] font-medium leading-[1.5] text-foreground/80">Activity timeline</span>
+            <span className="block text-[13px] font-medium leading-[1.5] text-foreground/80">{title}</span>
             <span className="block text-[12px] leading-[1.4] text-muted-foreground/65">{countLabel}</span>
           </span>
           <CaretDownIcon
@@ -1407,23 +1506,46 @@ function CollapsibleTimelineHistory({ entries }: { entries: TimelineRenderEntry[
   );
 }
 
+function progressItemsForTimelineEntries(entries: TimelineRenderEntry[]): ChatThreadProgressItem[] {
+  return entries.flatMap((entry) =>
+    entry.entry.type === "progress" ? progressItemsForParts(entry.entry.progressItems, entry.entry.progressLines) : [],
+  );
+}
+
 function ProgressTimelineWindow({
   entries,
   activeEntryKey,
+  activityLive,
 }: {
   entries: TimelineRenderEntry[];
   activeEntryKey?: string;
+  activityLive: boolean;
 }) {
-  const targetEntries = useMemo(() => visibleProgressRenderEntries(entries), [entries]);
-  const timelineWindow = useAnimatedTimelineWindow(targetEntries);
+  const [expandedItemKey, setExpandedItemKey] = useState<string | null>(null);
+  const [inspectionOpen, setInspectionOpen] = useState(false);
+  useEffect(() => {
+    if (expandedItemKey || !inspectionOpen) return;
+    const timer = window.setTimeout(() => setInspectionOpen(false), 220);
+    return () => window.clearTimeout(timer);
+  }, [expandedItemKey, inspectionOpen]);
+  const targetEntries = useMemo(
+    () => (inspectionOpen ? entries : visibleProgressRenderEntries(entries)),
+    [entries, inspectionOpen],
+  );
+  const timelineWindow = useAnimatedTimelineWindow(targetEntries, inspectionOpen);
   const exitingKeySet = useMemo(() => new Set(timelineWindow.exitingKeys), [timelineWindow.exitingKeys]);
+  const earlierEntries = inspectionOpen ? [] : entries.slice(0, -MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES);
 
   return (
     <div className="pb-[10px] last:pb-0">
+      {earlierEntries.length > 0 ? (
+        <CollapsibleTimelineHistory entries={earlierEntries} title="Earlier activity" />
+      ) : null}
       <div
         ref={timelineWindow.viewportRef}
+        data-tool-call-window
         aria-live="polite"
-        className="sketch-timeline-window overflow-hidden"
+        className="sketch-timeline-window chat-scrollbar max-h-[260px] overflow-x-hidden overflow-y-auto overscroll-contain"
         style={timelineWindow.viewportStyle}
       >
         <div
@@ -1436,9 +1558,16 @@ function ProgressTimelineWindow({
               key={renderEntry.key}
               rowRef={timelineWindow.setRowRef(renderEntry.key)}
               entry={renderEntry.entry}
+              dataTimelineKey={renderEntry.key}
               active={renderEntry.key === activeEntryKey}
               exiting={exitingKeySet.has(renderEntry.key)}
               last={index === timelineWindow.entries.length - 1}
+              expandedItemKey={expandedItemKey}
+              onItemExpandedChange={(itemKey, expanded) => {
+                if (expanded) setInspectionOpen(true);
+                setExpandedItemKey(expanded ? itemKey : null);
+              }}
+              activityLive={activityLive}
             />
           ))}
         </div>
@@ -1453,17 +1582,37 @@ function TimelineEntryRow({
   exiting,
   last,
   rowRef,
+  expanded = false,
+  onExpandedChange,
+  expandedItemKey,
+  onItemExpandedChange,
+  dataTimelineKey,
+  activityLive = false,
 }: {
   entry: ChatThreadTimelineEntry;
   active: boolean;
   exiting: boolean;
   last: boolean;
   rowRef?: (node: HTMLDivElement | null) => void;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  expandedItemKey?: string | null;
+  onItemExpandedChange?: (itemKey: string, expanded: boolean) => void;
+  dataTimelineKey?: string;
+  activityLive?: boolean;
 }) {
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const resolvedExpanded = onExpandedChange ? expanded : localExpanded;
+  const handleExpandedChange = (next: boolean) => {
+    if (onExpandedChange) onExpandedChange(next);
+    else setLocalExpanded(next);
+  };
+
   return (
     <div
       ref={rowRef}
       data-timeline-entry
+      data-timeline-key={dataTimelineKey}
       className={cn(
         "sketch-progress-change sketch-timeline-entry relative grid min-w-0 grid-cols-[20px_minmax(0,1fr)] gap-x-[10px] pb-[10px] last:pb-0",
         exiting && "sketch-timeline-entry-exiting",
@@ -1481,6 +1630,11 @@ function TimelineEntryRow({
         <ProgressTimelineEntry
           items={progressItemsForParts(entry.progressItems, entry.progressLines)}
           active={active}
+          expanded={resolvedExpanded}
+          onExpandedChange={handleExpandedChange}
+          expandedItemKey={expandedItemKey}
+          onItemExpandedChange={onItemExpandedChange}
+          activityLive={activityLive}
         />
       )}
     </div>
@@ -1500,49 +1654,310 @@ function TextTimelineEntry({ entry }: { entry: Extract<ChatThreadTimelineEntry, 
   );
 }
 
-function ProgressTimelineEntry({ items, active }: { items: ChatThreadProgressItem[]; active: boolean }) {
+function ProgressTimelineEntry({
+  items,
+  active,
+  expanded,
+  onExpandedChange,
+  expandedItemKey,
+  onItemExpandedChange,
+  activityLive = true,
+}: {
+  items: ChatThreadProgressItem[];
+  active: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  expandedItemKey?: string | null;
+  onItemExpandedChange?: (itemKey: string, expanded: boolean) => void;
+  activityLive?: boolean;
+}) {
   const iconItem = items[0];
   if (!iconItem) return null;
 
   return (
     <>
       <span className="relative z-[1] flex size-[20px] shrink-0 items-center justify-center rounded-[6px] bg-muted/60 text-muted-foreground/90">
-        <ProgressItemIcon item={iconItem} active={active} />
+        <ProgressItemIcon item={iconItem} active={active} activityLive={activityLive} />
       </span>
       <div className="min-w-0">
         {items.map((item, index) => (
-          <ProgressItemSummary key={progressItemKey(item, index)} item={item} active={active} />
+          <ProgressItemSummary
+            key={progressItemKey(item, index)}
+            item={item}
+            itemKey={progressItemKey(item, index)}
+            active={active}
+            activityLive={activityLive}
+            expanded={expandedItemKey ? expandedItemKey === progressItemKey(item, index) : expanded}
+            onExpandedChange={(next) => {
+              if (onItemExpandedChange) onItemExpandedChange(progressItemKey(item, index), next);
+              else onExpandedChange?.(next);
+            }}
+          />
         ))}
       </div>
     </>
   );
 }
 
-function ProgressItemSummary({ item, active }: { item: ChatThreadProgressItem; active: boolean }) {
-  const secondary = item.detail;
+function progressItemIsActive(item: ChatThreadProgressItem, rowActive: boolean, activityLive: boolean): boolean {
+  if (item.mode === "off") return false;
+  if (item.status) return item.status === "running" && activityLive;
+  return rowActive;
+}
+
+function progressStatusLabel(status: ChatThreadProgressItem["status"], activityLive: boolean): string | null {
+  switch (status) {
+    case "running":
+      return activityLive ? null : "Running";
+    case "succeeded":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    case "interrupted":
+      return "Interrupted";
+    default:
+      return null;
+  }
+}
+
+function useProgressElapsed(item: ChatThreadProgressItem, running: boolean): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running || typeof item.startedAt !== "number") return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [item.startedAt, running]);
+
+  if (!running || typeof item.startedAt !== "number") return null;
+  const seconds = Math.floor(Math.max(0, now - item.startedAt) / 1000);
+  return seconds >= 10 ? seconds : null;
+}
+
+function formatElapsed(seconds: number): string {
+  return seconds < 1 ? "<1s" : `${Math.floor(seconds)}s`;
+}
+
+function readableToolName(toolName: string): string {
+  const name = toolName.match(/^mcp__.+?__(.+)$/)?.[1] ?? toolName;
+  const words: Record<string, string> = {
+    api: "API",
+    clickup: "ClickUp",
+    github: "GitHub",
+    http: "HTTP",
+    json: "JSON",
+    sql: "SQL",
+    url: "URL",
+  };
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) => words[word.toLowerCase()] ?? word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function progressDetailForDisplay(item: ChatThreadProgressItem): string | null {
+  if (!item.detail) return null;
+  return item.detail;
+}
+
+function ProgressItemSummary({
+  item,
+  itemKey,
+  active,
+  activityLive,
+  expanded = false,
+  onExpandedChange,
+}: {
+  item: ChatThreadProgressItem;
+  itemKey: string;
+  active: boolean;
+  activityLive: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+}) {
+  const summaryRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    const timer = window.setTimeout(() => {
+      const summary = summaryRef.current;
+      if (!summary) return;
+      summary.focus({ preventScroll: true });
+      const viewport = summary.closest<HTMLElement>("[data-tool-call-window], [data-timeline-history]");
+      if (viewport) {
+        viewport.scrollIntoView({ block: "nearest", behavior: "instant" });
+        viewport.scrollTo({
+          top: viewport.scrollTop + summary.getBoundingClientRect().top - viewport.getBoundingClientRect().top,
+          behavior: prefersReducedTimelineMotion() ? "instant" : "smooth",
+        });
+      } else {
+        summary.scrollIntoView({ block: "nearest", behavior: "instant" });
+      }
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [expanded]);
+  const secondary = item.mode === "friendly" ? undefined : item.detail;
+  const itemActive = progressItemIsActive(item, active, activityLive);
+  const elapsed = useProgressElapsed(item, itemActive && item.status === "running");
+  const statusLabel = item.mode === "off" ? null : progressStatusLabel(item.status, activityLive);
+  const detail = progressDetailForDisplay(item);
+  const inspectable =
+    item.mode !== "off" &&
+    Boolean(
+      detail ||
+        item.toolName ||
+        item.status ||
+        item.startedAt ||
+        item.endedAt ||
+        item.detailRedacted ||
+        item.detailTruncated ||
+        item.detailUnavailable,
+    );
+  const technical = item.mode === "technical";
+  const displayLabel = technical && item.toolName === item.label ? readableToolName(item.label) : item.label;
+  const detailNotice = `${item.detailRedacted ? "\n\nSome sensitive values were redacted." : ""}${
+    item.detailTruncated ? "\n\nDetail was truncated at the retention limit." : ""
+  }`;
+  const copyText = detail || null;
 
   return (
-    <div data-progress-item className="flex min-w-0 py-[1px]">
-      <span
+    <div
+      data-progress-item
+      data-progress-item-key={itemKey}
+      data-progress-status={item.status ?? undefined}
+      className="min-w-0 py-[1px]"
+    >
+      <button
+        ref={summaryRef}
+        type="button"
+        disabled={!inspectable}
+        aria-expanded={inspectable ? expanded : undefined}
+        aria-label={inspectable ? `${expanded ? "Hide" : "Show"} details for ${displayLabel}` : undefined}
         data-progress-line
-        className={cn("inline-flex min-w-0 max-w-full items-baseline gap-x-[8px]", active && "sketch-shimmer-progress")}
+        data-progress-details-toggle={inspectable ? "" : undefined}
+        onClick={() => onExpandedChange?.(!expanded)}
+        className={cn(
+          "flex w-full min-w-0 items-baseline gap-x-[8px] rounded-[5px] py-[3px] text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+          inspectable && "cursor-pointer hover:bg-muted/45",
+          itemActive && "sketch-shimmer-progress",
+        )}
       >
-        <span className={cn("shrink-0 text-[13px] font-medium leading-[1.5]", !active && "text-foreground/80")}>
-          {item.label}
+        <span
+          className={cn(
+            "min-w-0 max-w-[55%] shrink-0 truncate text-[13px] font-medium leading-[1.5]",
+            !itemActive && "text-foreground/80",
+          )}
+        >
+          {displayLabel}
         </span>
         {secondary ? (
-          <span className={cn("min-w-0 truncate text-[12px] leading-[1.5]", !active && "text-muted-foreground/65")}>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-[12px] leading-[1.5]",
+              !itemActive && "text-muted-foreground/65",
+            )}
+          >
             {secondary}
           </span>
         ) : null}
-      </span>
+        {statusLabel ? (
+          item.status === "succeeded" || item.status === "failed" ? (
+            <span
+              role="img"
+              aria-label={item.status === "succeeded" ? "Succeeded" : "Failed"}
+              title={item.status === "succeeded" ? "Succeeded" : "Failed"}
+              className={cn(
+                "inline-flex shrink-0 self-center",
+                item.status === "succeeded" ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400",
+              )}
+            >
+              {item.status === "succeeded" ? (
+                <CheckIcon size={14} weight="bold" aria-hidden />
+              ) : (
+                <XIcon size={14} weight="bold" aria-hidden />
+              )}
+            </span>
+          ) : (
+            <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{statusLabel}</span>
+          )
+        ) : null}
+        {elapsed !== null ? (
+          <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{formatElapsed(elapsed)}</span>
+        ) : null}
+        {inspectable ? (
+          <span className="inline-flex size-[20px] shrink-0 items-center justify-center text-muted-foreground/65">
+            <CaretDownIcon
+              size={12}
+              className={cn("transition-transform duration-150", expanded && "rotate-180")}
+              aria-hidden
+            />
+          </span>
+        ) : null}
+      </button>
+      <CollapsiblePrimitive.Root open={expanded && inspectable}>
+        <CollapsiblePrimitive.Content className="sketch-collapsible-timeline-content">
+          <div className="mt-[4px] max-w-full rounded-[6px] border border-border/60 bg-muted/20 p-[7px]">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                {technical && item.toolName ? (
+                  <div
+                    data-progress-qualified-tool
+                    className="mb-[4px] break-words font-medium text-[11px] leading-[1.5] text-muted-foreground/75"
+                  >
+                    {readableToolName(item.toolName)}
+                  </div>
+                ) : null}
+                <pre
+                  data-progress-details
+                  className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px] leading-[1.5] text-foreground/80"
+                >
+                  {detail ?? "Input request details unavailable for this tool call."}
+                </pre>
+                {detailNotice ? (
+                  <div className="mt-[4px] whitespace-pre-wrap text-[11px] leading-[1.5] text-muted-foreground/70">
+                    {detailNotice.trim()}
+                  </div>
+                ) : null}
+              </div>
+              {copyText ? (
+                <CopyIconButton text={copyText} label="Copy input request" copiedLabel="Input request copied" />
+              ) : null}
+            </div>
+          </div>
+        </CollapsiblePrimitive.Content>
+      </CollapsiblePrimitive.Root>
     </div>
   );
 }
 
-function ProgressItemIcon({ item, active }: { item: ChatThreadProgressItem; active: boolean }) {
+function ProgressItemIcon({
+  item,
+  active,
+  activityLive = true,
+}: { item: ChatThreadProgressItem; active: boolean; activityLive?: boolean }) {
+  if (item.integration) {
+    return (
+      <span className="relative flex size-[20px] items-center justify-center">
+        <AppIcon
+          name={item.integration.name}
+          icon={item.integration.icon}
+          className="size-[20px] rounded-[6px]"
+          imageClassName="size-[14px]"
+        />
+        {item.mode !== "off" && ((item.status === "running" && activityLive) || (!item.status && active)) ? (
+          <span
+            aria-hidden
+            className="absolute -right-[2px] -top-[2px] size-[6px] animate-pulse rounded-full bg-brand-accent ring-2 ring-background motion-reduce:animate-none"
+          />
+        ) : null}
+      </span>
+    );
+  }
   const Icon = progressIconForItem(item);
-  const loading = Icon === SpinnerGapIcon && active;
+  const loading = Icon === SpinnerGapIcon && progressItemIsActive(item, active, activityLive);
   return <Icon size={13} weight="duotone" className={cn("shrink-0", loading && "animate-spin")} aria-hidden />;
 }
 

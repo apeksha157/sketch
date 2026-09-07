@@ -24,7 +24,8 @@ import {
   questionBatchSignature,
 } from "@/components/sketch/chat-thread";
 import { DEFAULT_TILES, type TileDef } from "@/components/sketch/tile-grid";
-import { useWebChatReconciliation } from "@/hooks/use-web-chat-reconciliation";
+import { WEB_CHAT_PROGRESS_MODES, useWebChatProgressSettings } from "@/hooks/use-web-chat-progress-settings";
+import { mergeProgressMessageSnapshots, useWebChatReconciliation } from "@/hooks/use-web-chat-reconciliation";
 import {
   type AutomationArtifact,
   type AutomationDraftHandoff,
@@ -34,7 +35,6 @@ import {
   type WebChatQuestionBatch,
   type WebChatQuestionBatchAnswer,
   type WebChatQuestionOption,
-  type WebChatToolProgress,
   type WebChatUploadedAttachment,
   type WorkspaceSummary,
   api,
@@ -264,6 +264,10 @@ function progressString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function progressDetail(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function progressIconFromUnknown(value: unknown): ChatThreadProgressIcon | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
@@ -284,9 +288,46 @@ function progressItemFromUnknown(value: unknown): ChatThreadProgressItem | null 
 
   return {
     id: progressString(candidate.id),
+    revision: typeof candidate.revision === "number" ? candidate.revision : undefined,
+    status:
+      candidate.status === "running" ||
+      candidate.status === "succeeded" ||
+      candidate.status === "failed" ||
+      candidate.status === "cancelled" ||
+      candidate.status === "interrupted"
+        ? candidate.status
+        : undefined,
+    startedAt: typeof candidate.startedAt === "number" ? candidate.startedAt : undefined,
+    endedAt: typeof candidate.endedAt === "number" ? candidate.endedAt : undefined,
+    mode:
+      candidate.mode === "off" || candidate.mode === "friendly" || candidate.mode === "technical"
+        ? candidate.mode
+        : undefined,
+    integration:
+      candidate.integration && typeof candidate.integration === "object"
+        ? (() => {
+            const integration = candidate.integration as Record<string, unknown>;
+            const appId = progressString(integration.appId);
+            const name = progressString(integration.name);
+            if (!appId || !name) return undefined;
+            return {
+              providerId: progressString(integration.providerId),
+              appId,
+              name,
+              icon: progressString(integration.icon),
+            };
+          })()
+        : undefined,
+    detailFormat:
+      candidate.detailFormat === "text" || candidate.detailFormat === "command" || candidate.detailFormat === "json"
+        ? candidate.detailFormat
+        : undefined,
+    detailRedacted: candidate.detailRedacted === true ? true : undefined,
+    detailTruncated: candidate.detailTruncated === true ? true : undefined,
+    detailUnavailable: candidate.detailUnavailable === true ? true : undefined,
     kind: progressString(candidate.kind) ?? "generic",
     label,
-    detail: progressString(candidate.detail),
+    detail: progressDetail(candidate.detail),
     toolName: progressString(candidate.toolName),
     icon: progressIconFromUnknown(candidate.icon),
   };
@@ -542,11 +583,6 @@ export const SMOOTH_TEXT_STREAM_DELAY_MS = 180;
 const SMOOTH_TEXT_MIN_CHARS_PER_SECOND = 42;
 const SMOOTH_TEXT_MAX_CHARS_PER_SECOND = 520;
 const SMOOTH_TEXT_BACKLOG_ACCELERATION = 2;
-const WEB_CHAT_PROGRESS_MODES: Array<{ value: WebChatToolProgress; label: string }> = [
-  { value: "off", label: "Off" },
-  { value: "friendly", label: "Friendly" },
-  { value: "technical", label: "Technical" },
-];
 
 interface SmoothAssistantTextState {
   messageId: string | null;
@@ -1004,8 +1040,9 @@ export function ChatPage() {
   const search = useSearch({ from: chatRoute.id }) as ChatSearch;
   const sentInitialMessage = useRef<string | null>(null);
   const recoveryResponsesRef = useRef(new WeakMap<WebChatMessage[], WebChatLoadedMessagesResponse>());
+  const latestRecoveryResponseRef = useRef<WebChatLoadedMessagesResponse | null>(null);
+  const latestRecoveryConversationRef = useRef<string | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
-  const toolProgressMutationId = useRef(0);
   const queryClient = useQueryClient();
   const hasNewConversationIntent = Boolean(
     search.new || search.message || search.prefill || hasPendingWebChatSubmission(conversationId),
@@ -1017,8 +1054,7 @@ export function ChatPage() {
   );
   const [historyLoadError, setHistoryLoadError] = useState<{ conversationId: string; attempt: number } | null>(null);
   const [historyLoadAttempt, setHistoryLoadAttempt] = useState(0);
-  const [toolProgress, setToolProgress] = useState<WebChatToolProgress>("friendly");
-  const [pendingToolProgress, setPendingToolProgress] = useState<WebChatToolProgress | null>(null);
+  const { toolProgress, pendingToolProgress, changeToolProgress } = useWebChatProgressSettings();
   const [stoppingRun, setStoppingRun] = useState(false);
   const [activeIntegrationConnection, setActiveIntegrationConnection] = useState<ActiveIntegrationConnection | null>(
     null,
@@ -1048,6 +1084,8 @@ export function ChatPage() {
     const messages = response.messages as WebChatMessage[];
     const typedResponse = { ...response, messages };
     recoveryResponsesRef.current.set(messages, typedResponse);
+    latestRecoveryResponseRef.current = typedResponse;
+    latestRecoveryConversationRef.current = targetConversationId;
     return typedResponse;
   }, []);
   const setReconciledMessages = useCallback(
@@ -1055,7 +1093,10 @@ export function ChatPage() {
       chat.setMessages(messages);
       queryClient.setQueryData(
         webChatMessagesQueryKey(conversationId),
-        recoveryResponsesRef.current.get(messages) ?? { messages, updatedAt: null },
+        recoveryResponsesRef.current.get(messages) ??
+          (latestRecoveryConversationRef.current === conversationId && latestRecoveryResponseRef.current
+            ? { ...latestRecoveryResponseRef.current, messages }
+            : { messages, updatedAt: null }),
       );
     },
     [chat.setMessages, conversationId, queryClient],
@@ -1070,6 +1111,7 @@ export function ChatPage() {
     loadMessages: loadMessagesForReconciliation,
     setMessages: setReconciledMessages,
     clearError: chat.clearError,
+    mergeMessages: mergeProgressMessageSnapshots,
   });
   const chatTitle = titleFromChatMessages(chat.messages);
   const hasBackgroundRun = hasPendingAssistantProgress(chat.messages);
@@ -1204,39 +1246,6 @@ export function ChatPage() {
         chat.status,
       ].join(":")
     : "";
-
-  useEffect(() => {
-    let cancelled = false;
-    void api.webChat
-      .progressSettings()
-      .then(({ toolProgress }) => {
-        if (!cancelled) setToolProgress(toolProgress);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleToolProgressChange = (nextToolProgress: WebChatToolProgress) => {
-    if (nextToolProgress === (pendingToolProgress ?? toolProgress)) return;
-    const previousToolProgress = toolProgress;
-    const mutationId = toolProgressMutationId.current + 1;
-    toolProgressMutationId.current = mutationId;
-    setToolProgress(nextToolProgress);
-    setPendingToolProgress(nextToolProgress);
-    void api.webChat
-      .updateProgressSettings(nextToolProgress)
-      .then(({ toolProgress }) => {
-        if (toolProgressMutationId.current === mutationId) setToolProgress(toolProgress);
-      })
-      .catch(() => {
-        if (toolProgressMutationId.current === mutationId) setToolProgress(previousToolProgress);
-      })
-      .finally(() => {
-        if (toolProgressMutationId.current === mutationId) setPendingToolProgress(null);
-      });
-  };
 
   const handleStop = useCallback(() => {
     if (stoppingRun) return;
@@ -1487,7 +1496,7 @@ export function ChatPage() {
             rendererValue={pendingToolProgress ?? toolProgress}
             rendererSaving={pendingToolProgress !== null}
             rendererOptions={WEB_CHAT_PROGRESS_MODES}
-            onRendererChange={handleToolProgressChange}
+            onRendererChange={changeToolProgress}
             onStop={handleStop}
             placeholder="Reply to Sketch..."
             onSubmit={(value, attachments) => {
