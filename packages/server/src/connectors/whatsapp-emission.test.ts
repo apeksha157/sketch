@@ -27,7 +27,7 @@ function rosterSnapshot(): WhatsAppRosterSnapshot {
   };
 }
 
-describe("WhatsApp salience rendering", () => {
+describe("renderWhatsAppTranscript", () => {
   it("attributes transcript lines through roster refs and strips raw identifiers", () => {
     const transcript = renderWhatsAppTranscript(rosterSnapshot(), [
       {
