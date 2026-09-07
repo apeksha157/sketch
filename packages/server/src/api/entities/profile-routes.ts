@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import { z } from "zod";
-import { type FileViewer, fileVisibilityPredicate } from "../../db/repositories/connectors";
+import { fileVisibilityPredicate } from "../../db/repositories/connectors";
 import {
   createEntityRepository,
   entityVisibilityPredicate,
@@ -27,13 +27,10 @@ import {
 } from "../../entities/declare-relationship";
 import { passagesInFile, snippetsInFile } from "../../entities/evidence-snippets";
 import { normalizeEntityMatchName } from "../../entities/name-keys";
-import {
-  type EntityProfileFacts,
-  HIDDEN_ENTITY_SOURCE_TYPES,
-  mapSourceTypeToEntityType,
-} from "../../entities/profile-facts";
+import { HIDDEN_ENTITY_SOURCE_TYPES } from "../../entities/profile-facts";
 import { ProjectBindingError, rankRelationshipSource, restructureProject } from "../../entities/project-bindings";
 import { denyIfNotAdmin, getContentViewer, getFileViewer } from "../auth-helpers";
+import { type ContactPointRow, buildEntityProfileCard, serializeContactPoint } from "./profile-card";
 import type { EntityRoutesDeps } from "./types";
 
 const contactPointKindSchema = z.enum(["email", "phone"]);
@@ -51,23 +48,6 @@ const updateContactPointSchema = z
     isPrimary: z.boolean().optional(),
   })
   .refine((body) => Object.keys(body).length > 0);
-
-type ContactPointRow = Awaited<
-  ReturnType<ReturnType<typeof createEntityRepository>["getContactPointsForEntity"]>
->[number];
-
-function serializeContactPoint(row: ContactPointRow) {
-  return {
-    id: row.id,
-    kind: row.kind,
-    value: row.value,
-    label: row.label,
-    isPrimary: row.is_primary === 1,
-    provenance: row.source === "manual" ? "declared" : "inferred",
-    source: row.source,
-    verifiedAt: row.verified_at,
-  };
-}
 
 function aliasAdminErrorResponse(c: Parameters<typeof denyIfNotAdmin>[0], err: AliasAdminError) {
   const status =
@@ -105,219 +85,6 @@ function reconcileLegacyEmailMetadata(
   } catch {
     return undefined;
   }
-}
-
-function countByType(rows: RelationListEntry[]): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const r of rows) {
-    out[r.relationshipType] = (out[r.relationshipType] ?? 0) + 1;
-  }
-  return out;
-}
-
-/**
- * Loads the structured facts shape the drawer Summary block consumes.
- * Returns null when the entity doesn't exist.
- */
-async function loadEntityFactsForId(
-  db: Kysely<DB>,
-  entityId: string,
-  viewer: FileViewer,
-): Promise<EntityProfileFacts | null> {
-  const repo = createEntityRepository(db);
-  const relRepo = createEntityRelationshipsRepository(db);
-  const entity = await repo.getEntity(entityId, viewer);
-  if (!entity) return null;
-  const [aggregates, relations, proposals] = await Promise.all([
-    repo.getEntityProfileAggregates(entity.id, viewer),
-    relRepo.listRelationsForEntity(entity.id, { limit: 50 }),
-    listPendingNameProposalsByEntity(db, [entity.id]),
-  ]);
-  const parsedMetadata = entity.metadata ? (JSON.parse(entity.metadata) as Record<string, unknown>) : null;
-  const topRelationships = [...relations.outgoing, ...relations.incoming].sort(relationCompare).slice(0, 10);
-  return {
-    entityId: entity.id,
-    name: entity.name,
-    nameStatus: entity.name_status,
-    proposedName: proposals.get(entity.id) ?? null,
-    sourceType: entity.source_type,
-    entityType: mapSourceTypeToEntityType(entity.source_type),
-    metadata: parsedMetadata,
-    mentionCount: aggregates.mentionCount,
-    sourceCounts: aggregates.sourceCounts,
-    firstSeenAt: aggregates.firstSeenAt,
-    lastSeenAt: aggregates.lastSeenAt,
-    domainsForCompany: aggregates.domainsForCompany,
-    crmActivityBrief: aggregates.crmActivityBrief,
-    topRelationships,
-    incomingCounts: countByType(relations.incoming),
-    outgoingCounts: countByType(relations.outgoing),
-  };
-}
-
-interface ActivityStats {
-  fileCount: number;
-  distinctDays: number;
-  topCoAttendees: string[];
-}
-
-/**
- * Aggregate activity stats for the deterministic Summary: how many files
- * mention this entity, how many distinct calendar days that spans, and the
- * top 3 people who co-attend the same files. Two queries, both portable
- * across SQLite/Postgres. File-derived details are filtered through the
- * same viewer predicate as timeline/evidence routes.
- */
-async function loadActivityStats(db: Kysely<DB>, entityId: string, viewer: FileViewer): Promise<ActivityStats> {
-  let fileQuery = db
-    .selectFrom("entity_mentions")
-    .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
-    .select([
-      sql<number>`COUNT(DISTINCT entity_mentions.indexed_file_id)`.as("file_count"),
-      sql<number>`COUNT(DISTINCT substr(COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at), 1, 10))`.as(
-        "distinct_days",
-      ),
-    ])
-    .where("entity_mentions.entity_id", "=", entityId);
-  if (!viewer.isAdmin) {
-    fileQuery = fileQuery.where(fileVisibilityPredicate(viewer));
-  }
-  const fileRow = await fileQuery.executeTakeFirst();
-
-  let coAttendeeQuery = db
-    .selectFrom("entity_mentions as em1")
-    .innerJoin("indexed_files", "indexed_files.id", "em1.indexed_file_id")
-    .innerJoin("entity_mentions as em2", (join) =>
-      join.onRef("em2.indexed_file_id", "=", "em1.indexed_file_id").on(sql`em2.entity_id <> em1.entity_id`),
-    )
-    .innerJoin("entities as e2", "e2.id", "em2.entity_id")
-    .select(["e2.id as id", "e2.name as name", sql<number>`COUNT(DISTINCT em1.indexed_file_id)`.as("files")])
-    .where("em1.entity_id", "=", entityId)
-    .where("e2.source_type", "=", "person")
-    .where(whereLiveEntity("e2"))
-    .groupBy(["e2.id", "e2.name"])
-    .orderBy("files", "desc")
-    .limit(3);
-  if (!viewer.isAdmin) {
-    coAttendeeQuery = coAttendeeQuery.where(fileVisibilityPredicate(viewer));
-  }
-  const coAttendeeRows = await coAttendeeQuery.execute();
-
-  return {
-    fileCount: Number(fileRow?.file_count ?? 0),
-    distinctDays: Number(fileRow?.distinct_days ?? 0),
-    topCoAttendees: coAttendeeRows.map((r) => r.name),
-  };
-}
-
-/**
- * Deterministic prose summary: an identity sentence + an activity sentence.
- * Built entirely from relationships + aggregates — no LLM, no shimmer. The
- * idea is to render facts we already know are true rather than synthesizing
- * narrative from action-item facts.
- */
-function buildSummary(facts: EntityProfileFacts, activity: ActivityStats): { identity: string; activity: string } {
-  const identity = buildIdentitySentence(facts);
-  const activitySentence = buildActivitySentence(facts, activity);
-  return { identity, activity: activitySentence };
-}
-
-function pluralize(n: number, singular: string, plural?: string): string {
-  return `${n} ${n === 1 ? singular : (plural ?? `${singular}s`)}`;
-}
-
-function buildIdentitySentence(facts: EntityProfileFacts): string {
-  const typeWord = formatEntityType(facts.entityType, facts.sourceType);
-  const email = typeof facts.metadata?.email === "string" ? facts.metadata.email : null;
-  const role = typeof facts.metadata?.role === "string" ? facts.metadata.role : null;
-  const outgoing = facts.topRelationships.filter((r) => r.sourceEntityId === facts.entityId);
-  const employers = uniqueNames(outgoing.filter((r) => r.relationshipType === "works_at").map((r) => r.other.name));
-  const clients = uniqueNames(outgoing.filter((r) => r.relationshipType === "engaged_with").map((r) => r.other.name));
-
-  const parts: string[] = [typeWord];
-
-  if (facts.entityType === "person") {
-    if (role) parts.push(role);
-    if (employers.length > 0) parts.push(`works at ${joinList(employers)}`);
-    if (email) parts.push(`(${email})`);
-  } else if (facts.entityType === "company") {
-    const primary = facts.domainsForCompany.find((d) => d.isPrimary)?.domain;
-    const others = facts.domainsForCompany.filter((d) => !d.isPrimary).map((d) => d.domain);
-    if (primary) parts.push(primary);
-    if (others.length > 0) parts.push(`also: ${joinList(others.slice(0, 3))}`);
-  }
-
-  let sentence = parts.join(" · ");
-  if (sentence.length > 0) sentence = `${sentence}.`;
-
-  if (facts.entityType === "person" && clients.length > 0) {
-    sentence = `${sentence} Engaged with ${joinList(clients.slice(0, 4))}.`;
-  }
-
-  return sentence;
-}
-
-function buildActivitySentence(facts: EntityProfileFacts, activity: ActivityStats): string {
-  const pieces: string[] = [];
-  if (activity.fileCount > 0) {
-    const fileTerm = pluralize(activity.fileCount, "file");
-    const mentionsTerm = pluralize(facts.mentionCount, "mention");
-    if (activity.distinctDays > 0) {
-      pieces.push(`Active in ${fileTerm} (${mentionsTerm}) across ${pluralize(activity.distinctDays, "day")}`);
-    } else {
-      pieces.push(`Active in ${fileTerm} (${mentionsTerm})`);
-    }
-  }
-  if (facts.entityType === "person" && activity.topCoAttendees.length > 0) {
-    pieces.push(`most-frequent collaborators: ${joinList(activity.topCoAttendees)}`);
-  }
-  if (pieces.length === 0) return "";
-  return `${pieces.join(". ")}.`;
-}
-
-function formatEntityType(entityType: string, sourceType: string): string {
-  switch (entityType) {
-    case "person":
-      return "Person";
-    case "company":
-      return "Company";
-    case "product":
-      return "Product";
-    case "project":
-      return "Project";
-    case "team":
-      return "Team";
-    case "system":
-      return capitalize(sourceType);
-    default:
-      return capitalize(sourceType);
-  }
-}
-
-function capitalize(value: string): string {
-  if (!value) return value;
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function uniqueNames(names: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const name of names) {
-    const trimmed = name.trim();
-    if (!trimmed) continue;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(trimmed);
-  }
-  return out;
-}
-
-function joinList(items: string[]): string {
-  if (items.length === 0) return "";
-  if (items.length === 1) return items[0];
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
 const CONFIDENCE_ORDER: Record<string, number> = { CONFIRMED: -1, AMBIGUOUS: 0, EXTRACTED: 1, INFERRED: 2 };
@@ -748,62 +515,7 @@ export function createEntityProfileRoutes(db: Kysely<DB>, _deps: EntityRoutesDep
       return c.json({ error: { code: "NOT_FOUND", message: "Entity not found" } }, 404);
     }
 
-    const [sourceRefs, facts, manualShares, contactPoints] = await Promise.all([
-      db.selectFrom("entity_source_refs").selectAll().where("entity_id", "=", entity.id).execute(),
-      loadEntityFactsForId(db, entity.id, viewer),
-      db
-        .selectFrom("entity_share_emails")
-        .select(["email", "granted_at"])
-        .where("entity_id", "=", entity.id)
-        .orderBy("granted_at", "desc")
-        .execute(),
-      repo.getContactPointsForEntity(entity.id),
-    ]);
-    if (!facts) {
-      return c.json({ error: { code: "NOT_FOUND", message: "Entity not found" } }, 404);
-    }
-
-    const parsedAliases = entity.aliases ? (JSON.parse(entity.aliases) as string[]) : [];
-    const activity = await loadActivityStats(db, entity.id, viewer);
-    const summary = buildSummary(facts, activity);
-    const proposals = await listPendingNameProposalsByEntity(db, [entity.id]);
-
-    return c.json({
-      entity: {
-        id: entity.id,
-        name: entity.name,
-        nameStatus: entity.name_status,
-        proposedName: proposals.get(entity.id) ?? null,
-        sourceType: entity.source_type,
-        subtype: entity.subtype,
-        aliases: parsedAliases,
-        contactPoints: contactPoints.map(serializeContactPoint),
-        metadata: facts.metadata,
-        status: entity.status,
-        hotness: entity.hotness,
-        shareWithEveryone: entity.share_with_everyone === 1,
-        manualShares: manualShares.map((s) => ({ email: s.email, grantedAt: s.granted_at })),
-        createdAt: entity.created_at,
-        updatedAt: entity.updated_at,
-        profile: {
-          entityType: facts.entityType,
-          mentionCount: facts.mentionCount,
-          sourceCounts: facts.sourceCounts,
-          firstSeenAt: facts.firstSeenAt,
-          lastSeenAt: facts.lastSeenAt,
-          domainsForCompany: facts.domainsForCompany,
-          crmActivityBrief: facts.crmActivityBrief,
-          summary,
-        },
-      },
-      sourceRefs: sourceRefs.map((r) => ({
-        id: r.id,
-        source: r.source,
-        sourceId: r.source_id,
-        sourceUrl: r.source_url,
-        lastSeenAt: r.last_seen_at,
-      })),
-    });
+    return c.json(await buildEntityProfileCard(db, entity, viewer));
   });
 
   routes.post("/:id/contact-points", async (c) => {
