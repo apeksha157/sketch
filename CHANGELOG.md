@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.6] -- 2026-09-07
+
+- Prevents CI Typecheck heap exhaustion by setting `NODE_OPTIONS=--max-old-space-size=4096` on the CI runner, ensuring the server’s TypeScript checker completes without OOM.
+- Public MCP (`/mcp`) now honours `admin_can_read_all_files`, so admin tokens see the same scope as the web app; every tool call audit row records whether the bypass was active via a nullable `access_bypass` column.
+
 ## [1.7.5] -- 2026-09-06
 
 - Fixes entity-mention fan-out that exceeded the Postgres bind limit (int16 parameter count wraps above 65,535 IDs) by switching to `= ANY($1::text[])` on Postgres and chunked `IN` on SQLite; deduplicates file IDs in `filterAccessibleFileIds` and adds an integration test seeding 70,000 mentions.
