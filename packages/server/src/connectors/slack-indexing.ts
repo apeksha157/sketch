@@ -28,6 +28,7 @@ export function createSlackIndexingConnector(): Connector {
     perUserAuth: false,
     requiresOAuthClientSetup: false,
     syncIsCompleteSnapshot: false,
+    channelProvisioned: true,
 
     async validateCredentials(credentials: ConnectorCredentials): Promise<void> {
       assertSystemCredentials(credentials);

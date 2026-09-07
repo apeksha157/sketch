@@ -428,6 +428,51 @@ describe("Connectors API — authorization", () => {
     });
   });
 
+  describe("channel-provisioned Slack connector", () => {
+    async function insertSlackConfig() {
+      return createConnectorRepository(db).createConfig({
+        connectorType: "slack",
+        authType: "system",
+        credentials: JSON.stringify({ type: "system" }),
+        createdBy: adminId,
+      });
+    }
+
+    it("admin can sync it but cannot disconnect it or rotate its credentials", async () => {
+      const cfg = await insertSlackConfig();
+
+      const listRes = await app.request("/api/connectors", { headers: { Cookie: adminCookie } });
+      const listBody = (await listRes.json()) as { connectors: Array<{ id: string }> };
+      expect(listBody.connectors.find((row) => row.id === cfg.id)).toMatchObject({
+        canManage: true,
+        canSync: true,
+        canChangeScope: true,
+        canDisconnect: false,
+        canUpdateCredentials: false,
+      });
+
+      const del = await app.request(`/api/connectors/${cfg.id}`, {
+        method: "DELETE",
+        headers: { Cookie: adminCookie },
+      });
+      expect(del.status).toBe(403);
+      expect(await createConnectorRepository(db).findConfigById(cfg.id)).toBeTruthy();
+
+      const rotate = await app.request(`/api/connectors/${cfg.id}/rotate-key`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Cookie: adminCookie },
+        body: JSON.stringify({ api_key: "replacement" }),
+      });
+      expect(rotate.status).toBe(403);
+
+      const sync = await app.request(`/api/connectors/${cfg.id}/syncs`, {
+        method: "POST",
+        headers: { Cookie: adminCookie },
+      });
+      expect(sync.status).toBe(201);
+    });
+  });
+
   describe("POST /:id/rotate-key — connector canUpdateCredentials", () => {
     it("admin → 403 on a member's per-user row (no key to rotate to)", async () => {
       const cfg = await insertConfig(db, { connectorType: "fireflies", createdBy: memberId });
