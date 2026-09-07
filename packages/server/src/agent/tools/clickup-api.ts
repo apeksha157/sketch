@@ -35,7 +35,7 @@ export const CLICKUP_MAX_PATH_CHARS = 512;
 export const CLICKUP_MAX_QUERY_BYTES = 8 * 1024;
 export const CLICKUP_MAX_BODY_BYTES = 64 * 1024;
 export const CLICKUP_MAX_RESPONSE_BYTES = 256 * 1024;
-export const CLICKUP_MAX_ATTACHMENT_FILES = 5;
+export const CLICKUP_MAX_ATTACHMENT_FILES = 1;
 export const CLICKUP_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
 export const CLICKUP_MAX_ATTACHMENT_FILENAME_CHARS = 255;
@@ -128,7 +128,7 @@ const schema = {
     .max(CLICKUP_MAX_ATTACHMENT_FILES)
     .optional()
     .describe(
-      "Trusted local files for POST /task/{task_id}/attachment. Use server-provided local paths only; never send URLs, base64, or file bytes.",
+      "One trusted local file for POST /task/{task_id}/attachment. Upload additional files separately to the same task. Use server-provided local paths only; never send URLs, base64, or file bytes.",
     ),
 };
 
@@ -309,6 +309,7 @@ async function materializeClickUpFiles(
   return materialized;
 }
 
+/** ClickUp accepts one file under the bare attachment field; array field names are rejected by the provider. */
 function buildMultipartRequest(
   args: ClickUpApiArgs,
   files: MaterializedClickUpFile[],
@@ -316,7 +317,7 @@ function buildMultipartRequest(
   if (args.body !== undefined) throw new Error("ClickUp attachment requests must not include a JSON body");
   const formData = new FormData();
   for (const file of files) {
-    formData.append("attachment[]", new Blob([new Uint8Array(file.bytes)], { type: file.contentType }), file.filename);
+    formData.append("attachment", new Blob([new Uint8Array(file.bytes)], { type: file.contentType }), file.filename);
   }
   return { url: buildUrl(args), formData };
 }

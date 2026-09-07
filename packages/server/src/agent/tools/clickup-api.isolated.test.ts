@@ -5,8 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CanvasProvider } from "../../integrations/canvas";
 import {
   CLICKUP_MAX_ATTACHMENT_BYTES,
-  CLICKUP_MAX_ATTACHMENT_FILES,
-  CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES,
   CLICKUP_MAX_BODY_BYTES,
   CLICKUP_MAX_PATH_CHARS,
   CLICKUP_MAX_RESPONSE_BYTES,
@@ -170,7 +168,8 @@ describe("ClickUp API tool", () => {
       expect(rawHeaders.has("content-type")).toBe(false);
       const request = new Request(input, init);
       const form = await request.formData();
-      const parts = form.getAll("attachment[]");
+      expect([...form.keys()]).toEqual(["attachment"]);
+      const parts = form.getAll("attachment");
       expect(parts).toHaveLength(1);
       const part = parts[0];
       expect(part).toBeInstanceOf(File);
@@ -199,7 +198,7 @@ describe("ClickUp API tool", () => {
     });
   });
 
-  it("rejects untrusted attachment paths, URLs, symlinks, and oversized batches before credential access", async () => {
+  it("rejects untrusted attachment paths, URLs, symlinks, and multiple files before credential access", async () => {
     const root = await createTemporaryRoot();
     const outsideRoot = await createTemporaryRoot();
     const trustedPath = join(root, "trusted.txt");
@@ -233,16 +232,16 @@ describe("ClickUp API tool", () => {
         {
           method: "POST",
           path: "/task/task-1/attachment",
-          files: Array.from({ length: CLICKUP_MAX_ATTACHMENT_FILES + 1 }, () => ({ path: trustedPath })),
+          files: [{ path: trustedPath }, { path: trustedPath }],
         },
         { ...deps(getCanvasAccessToken), workspaceDir: root },
       ),
-    ).rejects.toThrow(`at most ${CLICKUP_MAX_ATTACHMENT_FILES} local files`);
+    ).rejects.toThrow("at most 1 local file");
     expect(getCanvasAccessToken).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("enforces per-file and aggregate attachment byte limits", async () => {
+  it("enforces the per-file attachment byte limit", async () => {
     const root = await createTemporaryRoot();
     const largeFile = join(root, "large.bin");
     await writeFile(largeFile, Buffer.alloc(CLICKUP_MAX_ATTACHMENT_BYTES + 1));
@@ -254,16 +253,6 @@ describe("ClickUp API tool", () => {
       ),
     ).rejects.toThrow("per-file limit");
 
-    const first = join(root, "first.bin");
-    const second = join(root, "second.bin");
-    await writeFile(first, Buffer.alloc(13 * 1024 * 1024));
-    await writeFile(second, Buffer.alloc(13 * 1024 * 1024));
-    await expect(
-      executeClickUpApi(
-        { method: "POST", path: "/task/task-1/attachment", files: [{ path: first }, { path: second }] },
-        { ...deps(getCanvasAccessToken), workspaceDir: root },
-      ),
-    ).rejects.toThrow(`${CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES}-byte total limit`);
     expect(getCanvasAccessToken).not.toHaveBeenCalled();
   });
 
