@@ -7,6 +7,7 @@ import {
   SEARCH_KINDS,
   getFileContent,
   kindsForSource,
+  normalizeDomainFilter,
   search,
   sourcesForKind,
 } from "../../connectors/search";
@@ -57,6 +58,20 @@ export const searchToolSchema = {
         "message=conversation/WhatsApp/Slack/LinkedIn, email=Outlook/Gmail emails.",
     ),
   source: z.enum(SEARCHABLE_SOURCES).optional().describe("Filter to a specific source. Omit to search all."),
+  fileTypes: z.array(z.string()).optional().describe("Filter to indexed file_type values, ANDed with kind/source."),
+  threadId: z.string().optional().describe("Filter to a provider thread ID from a sketch_get_thread result."),
+  parentRecordId: z
+    .string()
+    .optional()
+    .describe("Filter to the providerId of a CRM record from a search result, e.g. Contacts:4684061000037194128."),
+  participantEmail: z
+    .string()
+    .optional()
+    .describe("Filter to files with an attendee or correspondent fact for this email address."),
+  domain: z
+    .string()
+    .optional()
+    .describe("Filter to files with an attendee or correspondent fact under this email domain."),
   sortBy: z
     .enum(["relevance", "recency"])
     .optional()
@@ -145,6 +160,11 @@ export async function handleSearch(
     entityIdsMode,
     kind,
     source,
+    fileTypes,
+    threadId,
+    parentRecordId,
+    participantEmail,
+    domain,
     sortBy,
     after,
     before,
@@ -156,6 +176,7 @@ export async function handleSearch(
   if (!deps.db) {
     return { content: [{ type: "text", text: "Search not available." }] };
   }
+  const normalizedDomain = normalizeDomainFilter(domain);
 
   const trace = createSearchTraceCapture({
     deps,
@@ -168,6 +189,11 @@ export async function handleSearch(
       entityIdsMode,
       kind,
       source,
+      fileTypes,
+      threadId,
+      parentRecordId,
+      participantEmail,
+      domain: normalizedDomain,
       sortBy,
       after,
       before,
@@ -201,6 +227,16 @@ export async function handleSearch(
     );
   }
 
+  if (participantEmail && normalizedDomain) {
+    return done(
+      "empty",
+      "participantEmail and domain cannot both be provided. " +
+        "Use participantEmail for an exact address or domain for any attendee/correspondent at that domain.",
+      0,
+      "participantEmail combined with domain",
+    );
+  }
+
   /**
    * A kind whose rules never reach the given source compiles to an empty
    * intersection — the query cannot match anything regardless of the query
@@ -223,12 +259,23 @@ export async function handleSearch(
 
   const trimmedQuery = (searchQuery ?? "").trim();
   const callerProvidedEntityIds = !!(entityId || (entityIds && entityIds.length > 0));
-  const hasFilter = !!kind || !!source || callerProvidedEntityIds || !!after || !!before;
+  const hasFilter =
+    !!kind ||
+    !!source ||
+    callerProvidedEntityIds ||
+    !!fileTypes?.length ||
+    !!threadId ||
+    !!parentRecordId ||
+    !!participantEmail ||
+    !!normalizedDomain ||
+    !!after ||
+    !!before;
 
   if (!trimmedQuery && !hasFilter) {
     return done(
       "empty",
-      "Need a query or at least one filter (kind, source, entityIds, after, before).",
+      "Need a query or at least one filter " +
+        "(kind, source, entityIds, fileTypes, threadId, parentRecordId, participantEmail, domain, after, before).",
       0,
       "no query and no filter",
     );
@@ -276,6 +323,11 @@ export async function handleSearch(
     stageReport,
     kindRules: kind ? KIND_TO_RULES[kind] : undefined,
     source,
+    fileTypes,
+    threadId,
+    parentRecordId,
+    participantEmail,
+    domain: normalizedDomain,
     limit: effectiveLimit,
     after,
     before,
@@ -313,6 +365,11 @@ export async function handleSearch(
     if (kind) applied.push(`kind=${kind}`);
     if (source) applied.push(`source=${source}`);
     if (callerProvidedEntityIds) applied.push(`entityIds(${entityIdsMode ?? "and"})`);
+    if (fileTypes?.length) applied.push(`fileTypes=${fileTypes.join(",")}`);
+    if (threadId) applied.push(`threadId=${threadId}`);
+    if (parentRecordId) applied.push(`parentRecordId=${parentRecordId}`);
+    if (participantEmail) applied.push(`participantEmail=${participantEmail}`);
+    if (normalizedDomain) applied.push(`domain=${normalizedDomain}`);
     if (after) applied.push(`after=${after}`);
     if (before) applied.push(`before=${before}`);
     if (applied.length === 0) return "";
@@ -320,6 +377,11 @@ export async function handleSearch(
     if (callerProvidedEntityIds && (entityIdsMode ?? "and") === "and") relax.push(`retry with entityIdsMode: "or"`);
     if (callerProvidedEntityIds) relax.push("drop entityIds (entity linkage on files can be sparse)");
     if (kind || source) relax.push(`drop '${kind && source ? "kind' or 'source" : kind ? "kind" : "source"}'`);
+    if (fileTypes?.length) relax.push("drop fileTypes");
+    if (threadId) relax.push("drop threadId");
+    if (parentRecordId) relax.push("drop parentRecordId");
+    if (participantEmail) relax.push("drop participantEmail");
+    if (normalizedDomain) relax.push("drop domain");
     if (after || before) relax.push("widen the date range");
     const queryAdvice = trimmedQuery
       ? "Try broader query terms, or relax a filter"
@@ -349,6 +411,8 @@ export async function handleSearch(
     rendered.push(`**${r.fileName}** (${sourceLabel}${date ? `, ${date}` : ""})`);
     rendered.push(`  sketchId: ${r.id}`);
     rendered.push(`  providerId: ${r.providerFileId} (source=${r.source})`);
+    if (r.threadId) rendered.push(`  threadId: ${r.threadId}`);
+    if (r.rollupGroupId) rendered.push(`  rollupGroupId: ${r.rollupGroupId}`);
     if (r.providerUrl) rendered.push(`  url: ${r.providerUrl}`);
     if (r.summary) {
       rendered.push(`> ${r.summary.slice(0, 200)}${r.summary.length > 200 ? "..." : ""}`);
