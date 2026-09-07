@@ -1667,6 +1667,7 @@ function sanitizeWebProgressItem(value: unknown): WebProgressItem | null {
 function sanitizeActivityMetadata(value: Record<string, unknown>): Partial<WebProgressItem> {
   const result: Partial<WebProgressItem> = {};
   if (typeof value.id === "string") result.id = value.id;
+  if (typeof value.output === "string") result.output = value.output;
   for (const key of ["revision", "startedAt", "endedAt"] as const) {
     if (typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0) result[key] = value[key];
   }
@@ -1681,7 +1682,13 @@ function sanitizeActivityMetadata(value: Record<string, unknown>): Partial<WebPr
   if (value.mode === "friendly" || value.mode === "technical" || value.mode === "off") result.mode = value.mode;
   if (value.detailFormat === "text" || value.detailFormat === "command" || value.detailFormat === "json")
     result.detailFormat = value.detailFormat;
-  for (const key of ["detailRedacted", "detailTruncated", "detailUnavailable"] as const) {
+  for (const key of [
+    "detailRedacted",
+    "detailTruncated",
+    "detailUnavailable",
+    "outputRedacted",
+    "outputTruncated",
+  ] as const) {
     if (typeof value[key] === "boolean") result[key] = value[key];
   }
   if (
@@ -3432,7 +3439,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             },
             onToolProgressEnd: async (event) => {
               if (progressMode === "off") return;
-              await publishActivity(activity.finish(event.toolCallId, event.status, event.endedAt));
+              await publishActivity(activity.finish(event.toolCallId, event.status, event.endedAt, event.output));
             },
             onToolResult: async (event) => {
               if (!activeBuilderContext) return;

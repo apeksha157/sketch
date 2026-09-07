@@ -46,7 +46,7 @@ function redactUrl(value: string): { value: string; redacted: boolean } {
   result = result.replace(
     /(["']?)([A-Za-z][A-Za-z0-9_-]{1,40})(["']?\s*:\s*["'])([^"']*)(["'])/g,
     (match, opening: string, key: string, separator: string, _secret: string, closing: string) => {
-      if (!SECRET_KEY.test(key)) return match;
+      if (!SECRET_KEY.test(key.replace(/([a-z])([A-Z])/g, "$1_$2"))) return match;
       redacted = true;
       return `${opening}${key}${separator}<redacted>${closing}`;
     },
@@ -85,7 +85,7 @@ function redactAssignments(value: string): { value: string; redacted: boolean } 
   const result = value.replace(
     /(^|[\s;&|])([A-Za-z_][A-Za-z0-9_-]*)=("[^"]*"|'[^']*'|[^\s;&|]*)/g,
     (match, prefix: string, key: string) => {
-      if (!SECRET_KEY.test(key)) return match;
+      if (!SECRET_KEY.test(key.replace(/([a-z])([A-Z])/g, "$1_$2"))) return match;
       redacted = true;
       return `${prefix}${key}=<redacted>`;
     },
@@ -134,7 +134,7 @@ function redactEscapedJson(value: string): { value: string; redacted: boolean } 
   const result = value.replace(
     /(\\?["'])([A-Za-z][A-Za-z0-9_-]{1,40})(\\?["']\s*:\s*\\?["'])([^"'\\]*)(\\?["'])/g,
     (match, opening: string, key: string, separator: string, _secret: string, closing: string) => {
-      if (!SECRET_KEY.test(key)) return match;
+      if (!SECRET_KEY.test(key.replace(/([a-z])([A-Z])/g, "$1_$2"))) return match;
       redacted = true;
       return `${opening}${key}${separator}<redacted>${closing}`;
     },
@@ -231,4 +231,47 @@ export function sanitizeProgressDetail(toolName: string, input: Record<string, u
   }
 
   return { detailFormat: "json", detailUnavailable: Object.keys(input).length > 0 };
+}
+
+/** Redacts and bounds result text before it enters persisted activity snapshots. */
+export function sanitizeProgressOutput(output: unknown): {
+  output?: string;
+  outputRedacted?: boolean;
+  outputTruncated?: boolean;
+} {
+  if (output === undefined) return {};
+  let redacted = false;
+  try {
+    const serialized = JSON.stringify(
+      output instanceof Error ? { message: output.message } : output,
+      (key, value) => {
+        const normalized = key.replace(/([a-z])([A-Z])/g, "$1_$2");
+        if (SECRET_KEY.test(normalized) || /^(?:cookie|set-cookie)$/i.test(key)) {
+          redacted = true;
+          return "<redacted>";
+        }
+        if (typeof value === "string") {
+          const safe = sanitizeCommand(value);
+          redacted ||= safe.redacted;
+          return safe.value;
+        }
+        if (value && typeof value === "object" && ["image", "audio", "resource"].includes(value.type)) {
+          return { type: value.type, content: "Non-text output omitted" };
+        }
+        return value;
+      },
+      2,
+    );
+    const text = typeof output === "string" ? output : serialized;
+    if (text === undefined) return {};
+    const safe = sanitizeCommand(text);
+    const bounded = boundDetail(safe.value);
+    return {
+      output: bounded.detail,
+      ...(redacted || safe.redacted ? { outputRedacted: true } : {}),
+      ...(bounded.detailTruncated ? { outputTruncated: true } : {}),
+    };
+  } catch {
+    return {};
+  }
 }

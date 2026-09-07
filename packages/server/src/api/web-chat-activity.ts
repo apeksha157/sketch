@@ -1,4 +1,5 @@
 import type { WebChatProgressData, WebProgressItem } from "@sketch/shared";
+import { sanitizeProgressOutput } from "../agent/tool-progress-sanitization";
 
 export interface ActivityPart {
   type: "data-progress";
@@ -41,6 +42,9 @@ export class WebChatActivity {
         items: [
           {
             ...item,
+            output: previous.output,
+            outputRedacted: previous.outputRedacted,
+            outputTruncated: previous.outputTruncated,
             id: previous.id,
             status: previous.status,
             startedAt: previous.startedAt,
@@ -70,12 +74,19 @@ export class WebChatActivity {
     toolCallId: string,
     status: Exclude<WebProgressItem["status"], "running" | undefined>,
     endedAt: number,
+    output?: unknown,
   ): ActivityPart[] {
     const id = this.calls.get(toolCallId);
     const part = id ? this.parts.get(id) : undefined;
     const item = part?.data.items?.[0];
     if (!part || !item || item.status !== "running") return [];
-    const next = { ...part, data: { ...part.data, items: [{ ...item, status, endedAt, revision: ++this.revision }] } };
+    const next = {
+      ...part,
+      data: {
+        ...part.data,
+        items: [{ ...item, ...sanitizeProgressOutput(output), status, endedAt, revision: ++this.revision }],
+      },
+    };
     this.parts.set(part.id, next);
     return [next, ...this.prune()];
   }
@@ -91,7 +102,10 @@ export class WebChatActivity {
   private prune(): ActivityPart[] {
     const updates: ActivityPart[] = [];
     let detailBytes = this.snapshot().reduce(
-      (total, part) => total + Buffer.byteLength(part.data.items?.[0]?.detail ?? ""),
+      (total, part) =>
+        total +
+        Buffer.byteLength(part.data.items?.[0]?.detail ?? "") +
+        Buffer.byteLength(part.data.items?.[0]?.output ?? ""),
       0,
     );
     const completed = this.snapshot().filter((part) => part.data.items?.[0]?.status !== "running");
@@ -101,9 +115,15 @@ export class WebChatActivity {
     ]) {
       if (detailBytes <= MAX_ACTIVITY_DETAIL_BYTES) break;
       const item = part.data.items?.[0];
-      if (!item?.detail) continue;
-      detailBytes -= Buffer.byteLength(item.detail);
-      const { detail: _detail, ...summary } = item;
+      if (!item || (!item.detail && item.output === undefined)) continue;
+      detailBytes -= Buffer.byteLength(item.detail ?? "") + Buffer.byteLength(item.output ?? "");
+      const {
+        detail: _detail,
+        output: _output,
+        outputRedacted: _redacted,
+        outputTruncated: _truncated,
+        ...summary
+      } = item;
       const next: ActivityPart = {
         ...part,
         data: { lines: [item.label], items: [{ ...summary, detailUnavailable: true, revision: ++this.revision }] },

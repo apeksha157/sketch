@@ -359,6 +359,7 @@ export interface RunAgentParams {
   onToolProgressEnd?: (event: {
     toolCallId: string;
     status: "succeeded" | "failed";
+    output?: unknown;
     endedAt: number;
   }) => Promise<void>;
   /** Called after queue admission, before runtime setup or tool execution. */
@@ -1129,6 +1130,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
                     await params.onToolProgressEnd?.({
                       toolCallId: event.toolCallId,
                       status: event.error === undefined ? "succeeded" : "failed",
+                      output: event.result ?? event.error,
                       endedAt,
                     });
                   } catch (err) {
@@ -1586,6 +1588,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
             await params.onToolProgressEnd?.({
               toolCallId: event.toolUseId,
               status: event.isError ? "failed" : "succeeded",
+              output: event.output,
               endedAt: event.endedAt,
             });
           } catch (err) {
