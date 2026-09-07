@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
@@ -15,6 +14,7 @@ import {
   stableWhatsAppParticipantJidRef,
 } from "../whatsapp/identity-resolution";
 import { sanitizeWhatsAppDisplayText } from "../whatsapp/privacy";
+import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
 import {
   type AccessPrincipal,
@@ -62,10 +62,6 @@ interface WhatsAppEmissionSourceMeta extends Record<string, unknown> {
   emittedAt: string;
   enrichedMessageCount: number;
   enrichedAt: string;
-}
-
-function stableContentHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
 
 function normalizeEmissionRefreshDays(value: number | undefined): number {
@@ -271,23 +267,14 @@ async function renderSlice(db: Kysely<DB>, context: SliceContext, logger: Logger
   };
 }
 
-function formatTimeRange(slice: ConversationSliceRow): string {
-  const start = new Date(slice.started_at);
-  const end = new Date(slice.ended_at);
-  const startText = Number.isNaN(start.getTime()) ? slice.started_at : start.toISOString();
-  const endText = Number.isNaN(end.getTime()) ? slice.ended_at : end.toISOString();
-  return startText === endText ? startText : `${startText} to ${endText}`;
-}
-
 function sourcePathForSlice(context: SliceContext): string {
-  const params = new URLSearchParams({
+  return buildSliceSourcePath("whatsapp", context.slice.id, {
     conversationId: String(context.conversationId),
     firstMessageId: String(context.slice.first_message_id),
     lastMessageId: String(context.slice.last_message_id),
     startedAt: context.slice.started_at,
     endedAt: context.slice.ended_at,
   });
-  return `whatsapp://slice/${context.slice.id}?${params.toString()}`;
 }
 
 function renderedMessageCount(content: string | null): number {
@@ -337,7 +324,10 @@ async function syncedItemForKeptSlice(
       .execute();
   }
   if (rendered.accessPrincipals.length === 0) {
-    await archiveLinkedSliceFileIfPresent(db, context);
+    await createConversationSlicesRepository(db).archiveSliceFile(
+      context.slice.id,
+      WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
+    );
     logger.warn(
       { sliceId: context.slice.id, conversationId: context.conversationId, groupJid: context.groupJid },
       "Skipped WhatsApp slice indexing because no teammate access scope resolved",
@@ -363,7 +353,12 @@ async function syncedItemForKeptSlice(
       );
       return { item: null, skippedNoScope: false, skipReason: "below_min_messages" };
     }
-    const indexedFileId = context.slice.indexed_file_id ?? (await findSliceFileId(db, context.slice.id));
+    const indexedFileId =
+      context.slice.indexed_file_id ??
+      (await createConversationSlicesRepository(db).findLiveSliceFile(
+        context.slice.id,
+        WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
+      ));
     if (indexedFileId) {
       const existing = await db
         .selectFrom("indexed_files")
@@ -410,7 +405,7 @@ async function syncedItemForKeptSlice(
     item: {
       providerFileId: context.slice.id,
       providerUrl: null,
-      fileName: `WhatsApp: ${titleGroup} - ${formatTimeRange(context.slice)}`,
+      fileName: `WhatsApp: ${titleGroup} - ${formatSliceTimeRange(context.slice)}`,
       fileType: WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
       contentCategory: "document",
       content,
@@ -429,41 +424,6 @@ async function syncedItemForKeptSlice(
       },
     },
   };
-}
-
-/**
- * Requeued slices (migration 155 cleared their indexed_file_id) still own a
- * live file row keyed by provider_file_id = slice id. Without the fallback
- * lookup, a slice whose group no longer resolves any teammate would leave
- * that old file active under stale ACLs forever.
- */
-async function findSliceFileId(db: Kysely<DB>, sliceId: string): Promise<string | null> {
-  const row = await db
-    .selectFrom("indexed_files")
-    .select("id")
-    .where("provider_file_id", "=", sliceId)
-    .where("file_type", "=", WHATSAPP_CONVERSATION_SLICE_FILE_TYPE)
-    .where("is_archived", "=", 0)
-    .executeTakeFirst();
-  return row?.id ?? null;
-}
-
-async function archiveLinkedSliceFileIfPresent(db: Kysely<DB>, context: SliceContext): Promise<void> {
-  const indexedFileId = context.slice.indexed_file_id ?? (await findSliceFileId(db, context.slice.id));
-  if (!indexedFileId) return;
-  await db.transaction().execute(async (trx) => {
-    await trx.deleteFrom("file_access").where("indexed_file_id", "=", indexedFileId).execute();
-    await trx
-      .updateTable("indexed_files")
-      .set({ is_archived: 1, access_scope_id: null })
-      .where("id", "=", indexedFileId)
-      .execute();
-    await trx
-      .updateTable("conversation_slices")
-      .set({ indexed_file_id: null })
-      .where("id", "=", context.slice.id)
-      .execute();
-  });
 }
 
 export async function* emitWhatsAppSyncedItems(options: {

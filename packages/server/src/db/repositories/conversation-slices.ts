@@ -136,6 +136,45 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
       return db.selectFrom("conversation_slices").selectAll().where("id", "=", sliceId).executeTakeFirst();
     },
 
+    async findLiveSliceFile(sliceId: string, fileType: string): Promise<string | null> {
+      const row = await db
+        .selectFrom("indexed_files")
+        .select("id")
+        .where("provider_file_id", "=", sliceId)
+        .where("file_type", "=", fileType)
+        .where("is_archived", "=", 0)
+        .executeTakeFirst();
+      return row?.id ?? null;
+    },
+
+    async archiveSliceFile(sliceId: string, fileType: string): Promise<void> {
+      const slice = await db
+        .selectFrom("conversation_slices")
+        .select("indexed_file_id")
+        .where("id", "=", sliceId)
+        .executeTakeFirst();
+      const fallback = slice?.indexed_file_id
+        ? null
+        : await db
+            .selectFrom("indexed_files")
+            .select("id")
+            .where("provider_file_id", "=", sliceId)
+            .where("file_type", "=", fileType)
+            .where("is_archived", "=", 0)
+            .executeTakeFirst();
+      const indexedFileId = slice?.indexed_file_id ?? fallback?.id ?? null;
+      if (!indexedFileId) return;
+      await db.transaction().execute(async (trx) => {
+        await trx.deleteFrom("file_access").where("indexed_file_id", "=", indexedFileId).execute();
+        await trx
+          .updateTable("indexed_files")
+          .set({ is_archived: 1, access_scope_id: null })
+          .where("id", "=", indexedFileId)
+          .execute();
+        await trx.updateTable("conversation_slices").set({ indexed_file_id: null }).where("id", "=", sliceId).execute();
+      });
+    },
+
     async getOpenSlice(
       conversationId: number,
       providerThreadId: string | null = null,

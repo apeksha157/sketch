@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
@@ -14,6 +13,8 @@ import type { SlackIndexingFacade } from "../slack/indexing-facade";
 import { normalizeSourceTimestampForStorage, parseTimestampMs } from "../timestamps";
 import { configDefault } from "./config-default";
 import { renderSlackChunkMessageText } from "./slack-chunk-adapters";
+import { buildSliceSourcePath, formatSliceTimeRange, stableContentHash } from "./sync-utils";
+import { renderTranscriptLine } from "./transcript";
 import { SLACK_CONVERSATION_SLICE_FILE_TYPE, type SyncedItem } from "./types";
 
 export const SLACK_EMISSION_REFRESH_DAYS = 7;
@@ -53,10 +54,6 @@ interface RenderedSlackSlice {
 }
 
 class SlackSliceMembershipError extends Error {}
-
-function stableContentHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
 
 /**
  * Slack rendering fails closed on membership: a slice's id range interleaves
@@ -299,7 +296,7 @@ async function renderSlackSlice(
     const senderName = displayNames.get(row.sender_jid) ?? row.sender_name;
     const timestamp = row.provider_timestamp ?? row.received_at;
     const text = renderSlackChunkMessageText(row.text, row.attachments);
-    return `[${timestamp}] ${senderName}: ${resolveMentionTokens(text, displayNames)}`;
+    return renderTranscriptLine({ name: senderName, text: resolveMentionTokens(text, displayNames), at: timestamp });
   });
   const transcript = [...(rootLine ? [rootLine, ""] : []), ...transcriptLines].join("\n");
 
@@ -310,36 +307,14 @@ async function renderSlackSlice(
   };
 }
 
-function formatTimeRange(slice: ConversationSliceRow): string {
-  return slice.started_at === slice.ended_at ? slice.started_at : `${slice.started_at} to ${slice.ended_at}`;
-}
-
 function sourcePathForSlice(context: SlackSliceContext): string {
-  const params = new URLSearchParams({
+  return buildSliceSourcePath("slack", context.slice.id, {
     conversationId: String(context.conversationId),
     channelId: context.channelId,
     firstMessageId: String(context.slice.first_message_id),
     lastMessageId: String(context.slice.last_message_id),
     ...(context.slice.provider_thread_id ? { threadTs: context.slice.provider_thread_id } : {}),
   });
-  return `slack://slice/${context.slice.id}?${params.toString()}`;
-}
-
-/**
- * Requeued slices (migration 155 cleared their indexed_file_id) still own a
- * live file row keyed by provider_file_id = slice id. Without the fallback
- * lookup, a slice whose channel no longer resolves any teammate would leave
- * that old file active under stale ACLs forever.
- */
-async function findSliceFileId(db: Kysely<DB>, sliceId: string): Promise<string | null> {
-  const row = await db
-    .selectFrom("indexed_files")
-    .select("id")
-    .where("provider_file_id", "=", sliceId)
-    .where("file_type", "=", SLACK_CONVERSATION_SLICE_FILE_TYPE)
-    .where("is_archived", "=", 0)
-    .executeTakeFirst();
-  return row?.id ?? null;
 }
 
 export interface SlackEmissionAnchor {
@@ -396,24 +371,6 @@ function isFreshEmissionCandidate(context: SlackSliceContext, refreshedAfter: st
     return context.linkedSourceUpdatedAt !== null && endedAt > context.linkedSourceUpdatedAt;
   }
   return endedAt >= refreshedAfter;
-}
-
-async function archiveLinkedSliceFileIfPresent(db: Kysely<DB>, context: SlackSliceContext): Promise<void> {
-  const indexedFileId = context.slice.indexed_file_id ?? (await findSliceFileId(db, context.slice.id));
-  if (!indexedFileId) return;
-  await db.transaction().execute(async (trx) => {
-    await trx.deleteFrom("file_access").where("indexed_file_id", "=", indexedFileId).execute();
-    await trx
-      .updateTable("indexed_files")
-      .set({ is_archived: 1, access_scope_id: null })
-      .where("id", "=", indexedFileId)
-      .execute();
-    await trx
-      .updateTable("conversation_slices")
-      .set({ indexed_file_id: null })
-      .where("id", "=", context.slice.id)
-      .execute();
-  });
 }
 
 /**
@@ -554,7 +511,10 @@ export async function* emitSlackSyncedItems(options: {
 
         const accessPrincipals = accessPrincipalsFromRoster(roster);
         if (accessPrincipals.length === 0) {
-          await archiveLinkedSliceFileIfPresent(options.db, context);
+          await createConversationSlicesRepository(options.db).archiveSliceFile(
+            context.slice.id,
+            SLACK_CONVERSATION_SLICE_FILE_TYPE,
+          );
           options.onSkippedNoScope?.();
           options.logger.warn(
             { sliceId: context.slice.id, channelId: context.channelId },
@@ -593,7 +553,7 @@ export async function* emitSlackSyncedItems(options: {
         yield {
           providerFileId: context.slice.id,
           providerUrl: null,
-          fileName: `Slack: #${context.channelName} - ${formatTimeRange(context.slice)}`,
+          fileName: `Slack: #${context.channelName} - ${formatSliceTimeRange(context.slice)}`,
           fileType: SLACK_CONVERSATION_SLICE_FILE_TYPE,
           contentCategory: "document",
           content: rendered.content,

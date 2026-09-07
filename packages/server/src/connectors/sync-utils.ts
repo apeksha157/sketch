@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import { isPg } from "../db/dialect";
@@ -17,6 +18,22 @@ export const MAX_ERROR_MESSAGE_LENGTH = 500;
  * better-sqlite3 prepare cheap.
  */
 export const IN_CLAUSE_CHUNK_SIZE = 500;
+
+export function stableContentHash(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+export function formatSliceTimeRange(slice: { started_at: string; ended_at: string }): string {
+  const start = new Date(slice.started_at);
+  const end = new Date(slice.ended_at);
+  const startText = Number.isNaN(start.getTime()) ? slice.started_at : start.toISOString();
+  const endText = Number.isNaN(end.getTime()) ? slice.ended_at : end.toISOString();
+  return startText === endText ? startText : `${startText} to ${endText}`;
+}
+
+export function buildSliceSourcePath(scheme: string, sliceId: string, params: Record<string, string>): string {
+  return `${scheme}://slice/${sliceId}?${new URLSearchParams(params).toString()}`;
+}
 
 /**
  * Split an array into fixed-size chunks (the last chunk holds the remainder).
