@@ -7,6 +7,7 @@ import {
   type RelationListEntry,
   createEntityRelationshipsRepository,
 } from "../../db/repositories/entity-relationships";
+import { type EntityTouchStatsRow, createEntityTouchStatsRepository } from "../../db/repositories/entity-touch-stats";
 import type { DB, EntitiesTable } from "../../db/schema";
 import { type EntityProfileFacts, mapSourceTypeToEntityType } from "../../entities/profile-facts";
 
@@ -46,6 +47,7 @@ export interface EntityProfileCard {
       lastSeenAt: string | null;
       domainsForCompany: Array<{ domain: string; confidence: number; isPrimary: boolean }>;
       crmActivityBrief: EntityCrmActivityBrief | null;
+      touchStats: EntityTouchStatsView | null;
       summary: { identity: string; activity: string };
     };
   };
@@ -71,6 +73,42 @@ export function serializeContactPoint(row: ContactPointRow) {
   };
 }
 
+export interface EntityTouchStatsView {
+  lastTouchAt: string | null;
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+  touchCount30d: number;
+  touchCount90d: number;
+  sourceLastTouch: Record<string, string>;
+  computedAt: string;
+}
+
+function serializeTouchStats(row: EntityTouchStatsRow): EntityTouchStatsView {
+  return {
+    lastTouchAt: row.last_touch_at,
+    lastInboundAt: row.last_inbound_at,
+    lastOutboundAt: row.last_outbound_at,
+    touchCount30d: row.touch_count_30d,
+    touchCount90d: row.touch_count_90d,
+    sourceLastTouch: parseSourceLastTouch(row.source_last_touch),
+    computedAt: row.computed_at,
+  };
+}
+
+function parseSourceLastTouch(raw: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
 export async function buildEntityProfileCard(
   db: Kysely<DB>,
   entity: EntityRow,
@@ -78,7 +116,7 @@ export async function buildEntityProfileCard(
   opts: { includeCrmActivityBrief?: boolean; visibleRelationEntityIds?: ReadonlySet<string> } = {},
 ): Promise<EntityProfileCard> {
   const repo = createEntityRepository(db);
-  const [sourceRefs, facts, manualShares, contactPoints] = await Promise.all([
+  const [sourceRefs, facts, manualShares, contactPoints, touchStats] = await Promise.all([
     db.selectFrom("entity_source_refs").selectAll().where("entity_id", "=", entity.id).execute(),
     loadEntityFactsForEntity(db, entity, viewer, {
       includeCrmActivityBrief: opts.includeCrmActivityBrief ?? true,
@@ -91,6 +129,7 @@ export async function buildEntityProfileCard(
       .orderBy("granted_at", "desc")
       .execute(),
     repo.getContactPointsForEntity(entity.id),
+    createEntityTouchStatsRepository(db).getForEntity(entity.id),
   ]);
   const activity = await loadActivityStats(db, entity.id, viewer);
   const summary = buildSummary(facts, activity);
@@ -120,6 +159,7 @@ export async function buildEntityProfileCard(
         lastSeenAt: facts.lastSeenAt,
         domainsForCompany: facts.domainsForCompany,
         crmActivityBrief: facts.crmActivityBrief,
+        touchStats: touchStats ? serializeTouchStats(touchStats) : null,
         summary,
       },
     },

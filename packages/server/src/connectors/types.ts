@@ -360,6 +360,7 @@ export interface ContactPointSeed {
   source: string;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  lastRepliedAt?: string | null;
   makePrimary?: boolean;
   phoneCountry?: PhoneCountryCode | null;
 }
