@@ -168,6 +168,6 @@
     "spaces": 2,
     "replacementSubscriptions": 6,
     "scope": "one exact list per stable native endpoint slot",
-    "requiresSketchMigration": 229
+    "requiresSketchMigration": 233
   }
 }

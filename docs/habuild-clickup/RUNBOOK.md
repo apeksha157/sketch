@@ -48,6 +48,6 @@ Use `--expected-revision WORKFLOW_ID=REVISION` when an operator has re-read a re
 
 ## Rollback boundary
 
-Migration 229 preserves existing callback IDs and delivery history while permitting multiple endpoint slots. SQLite rebuilds the endpoint and delivery tables inside the migration transaction; PostgreSQL replaces the unique constraint. Downgrade refuses while additional slots exist. Once additional subscriptions are provisioned, an older binary is not a safe code-only rollback: clean up all remote subscriptions and restore compatible definitions/storage from the protected backup first.
+Migration 233 preserves existing callback IDs and delivery history while permitting multiple endpoint slots. SQLite rebuilds the endpoint and delivery tables inside the migration transaction; PostgreSQL replaces the unique constraint. Downgrade refuses while additional slots exist. Once additional subscriptions are provisioned, an older binary is not a safe code-only rollback: clean up all remote subscriptions and restore compatible definitions/storage from the protected backup first.
 
 Keep workflows paused on any mismatch, uncertain provider write, revoked account, rate limit, partial attachment result, or unexpected revision. Fix forward with a new expected revision or restore the affected workflow from a compatible protected backup. Do not restore a legacy Canvas ClickUp action while retirement enforcement is active. Code rollback alone does not undo remote subscriptions, PAT revocation, or provider-side writes.
