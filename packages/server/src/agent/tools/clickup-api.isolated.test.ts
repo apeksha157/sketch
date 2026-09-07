@@ -390,6 +390,7 @@ describe("ClickUp API tool", () => {
 
     const result = await handleClickUpApi({ method: "GET", path: "/team" }, deps(getCanvasAccessToken));
     expect(result).toEqual({
+      isError: true,
       content: [
         {
           type: "text",
