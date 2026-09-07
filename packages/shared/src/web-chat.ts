@@ -176,9 +176,6 @@ export interface WebProgressItem {
   kind: WebProgressItemKind;
   label: string;
   icon: WebProgressIcon;
-  output?: string;
-  outputRedacted?: boolean;
-  outputTruncated?: boolean;
   detail?: string;
   toolName?: string;
 }

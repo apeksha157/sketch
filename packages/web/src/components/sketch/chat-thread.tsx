@@ -104,9 +104,6 @@ export interface ChatThreadProgressItem {
   detailUnavailable?: boolean;
   kind: string;
   label: string;
-  output?: string;
-  outputRedacted?: boolean;
-  outputTruncated?: boolean;
   detail?: string;
   toolName?: string;
   icon?: ChatThreadProgressIcon;
@@ -394,9 +391,6 @@ function progressItemContentSignature(item: ChatThreadProgressItem, index: numbe
     item.mode ?? "",
     item.label,
     item.detail ?? "",
-    item.output ?? "",
-    item.outputRedacted ? "redacted-output" : "",
-    item.outputTruncated ? "truncated-output" : "",
     item.toolName ?? "",
     item.detailFormat ?? "",
     item.detailRedacted ? "redacted" : "",
@@ -1765,6 +1759,11 @@ function readableToolName(toolName: string): string {
     .join(" ");
 }
 
+function progressDetailForDisplay(item: ChatThreadProgressItem): string | null {
+  if (!item.detail) return null;
+  return item.detail;
+}
+
 function ProgressItemSummary({
   item,
   itemKey,
@@ -1800,16 +1799,15 @@ function ProgressItemSummary({
     }, 240);
     return () => window.clearTimeout(timer);
   }, [expanded]);
-  const secondary = item.detail;
+  const secondary = item.mode === "friendly" ? undefined : item.detail;
   const itemActive = progressItemIsActive(item, active, activityLive);
   const elapsed = useProgressElapsed(item, itemActive && item.status === "running");
   const statusLabel = item.mode === "off" ? null : progressStatusLabel(item.status, activityLive);
-  const output = item.output;
+  const detail = progressDetailForDisplay(item);
   const inspectable =
     item.mode !== "off" &&
     Boolean(
-      output !== undefined ||
-        item.detail ||
+      detail ||
         item.toolName ||
         item.status ||
         item.startedAt ||
@@ -1820,13 +1818,10 @@ function ProgressItemSummary({
     );
   const technical = item.mode === "technical";
   const displayLabel = technical && item.toolName === item.label ? readableToolName(item.label) : item.label;
-  const outputNotice = [
-    item.outputRedacted ? "Some sensitive values were redacted." : "",
-    item.outputTruncated ? "Output was truncated at the retention limit." : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const copyText = output || null;
+  const detailNotice = `${item.detailRedacted ? "\n\nSome sensitive values were redacted." : ""}${
+    item.detailTruncated ? "\n\nDetail was truncated at the retention limit." : ""
+  }`;
+  const copyText = detail || null;
 
   return (
     <div
@@ -1916,21 +1911,19 @@ function ProgressItemSummary({
                   </div>
                 ) : null}
                 <pre
-                  data-progress-output
+                  data-progress-details
                   className="whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px] leading-[1.5] text-foreground/80"
                 >
-                  {output === undefined
-                    ? item.status === "running" && activityLive
-                      ? "Waiting for tool output…"
-                      : "Output unavailable for this tool call."
-                    : output || "The tool returned no output."}
+                  {detail ?? "Input request details unavailable for this tool call."}
                 </pre>
-                {outputNotice ? (
-                  <div className="mt-[4px] text-[11px] leading-[1.5] text-muted-foreground/70">{outputNotice}</div>
+                {detailNotice ? (
+                  <div className="mt-[4px] whitespace-pre-wrap text-[11px] leading-[1.5] text-muted-foreground/70">
+                    {detailNotice.trim()}
+                  </div>
                 ) : null}
               </div>
               {copyText ? (
-                <CopyIconButton text={copyText} label="Copy tool output" copiedLabel="Tool output copied" />
+                <CopyIconButton text={copyText} label="Copy input request" copiedLabel="Input request copied" />
               ) : null}
             </div>
           </div>
