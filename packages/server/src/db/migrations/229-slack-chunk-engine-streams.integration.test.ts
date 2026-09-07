@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, createTestPgDb } from "../../test-utils";
 import { createMigrator } from "../migrate";
 import type { DB } from "../schema";
-import { up } from "./228-slack-chunk-engine-streams";
+import { up } from "./229-slack-chunk-engine-streams";
 
 const PRE_MIGRATION = "225-indexed-file-raw-contents";
 
@@ -84,7 +84,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>): void {
         ])
         .execute();
 
-      await migrateTo(db, "228-slack-chunk-engine-streams");
+      await migrateTo(db, "229-slack-chunk-engine-streams");
 
       const legacy = await db
         .selectFrom("conversation_slices")

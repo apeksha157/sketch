@@ -254,7 +254,7 @@ describe("runMigrations on Postgres — full sequence", () => {
     expect(names[221]).toBe("226-linkedin-company-review-continuations");
     expect(names[222]).toBe("227-person-enrichment-attempts");
     expect(names[223]).toBe("228-indexed-files-public-visibility-index");
-    expect(names[224]).toBe("228-slack-chunk-engine-streams");
+    expect(names[224]).toBe("229-slack-chunk-engine-streams");
   });
   it("keeps the automation-sharing migration ledger in order", async () => {
     await runMigrations(db, { quiet: true });

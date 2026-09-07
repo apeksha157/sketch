@@ -425,7 +425,7 @@ describe("runMigrations — full sequence", () => {
     expect(names[221]).toBe("226-linkedin-company-review-continuations");
     expect(names[222]).toBe("227-person-enrichment-attempts");
     expect(names[223]).toBe("228-indexed-files-public-visibility-index");
-    expect(names[224]).toBe("228-slack-chunk-engine-streams");
+    expect(names[224]).toBe("229-slack-chunk-engine-streams");
   });
 
   it("adds portable session fencing columns with safe legacy defaults", async () => {
