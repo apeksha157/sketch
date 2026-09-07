@@ -4041,6 +4041,7 @@ describe("web chat API", () => {
       {
         id: expect.any(String),
         role: "assistant",
+        pending: false,
         createdAt: expect.any(String),
         parts: [
           { type: "text", text: "Created the PDF." },
@@ -4096,6 +4097,7 @@ describe("web chat API", () => {
       {
         id: expect.any(String),
         role: "assistant",
+        pending: false,
         createdAt: expect.any(String),
         parts: [{ type: "text", text: "Conversation-specific reply." }],
       },
@@ -4181,28 +4183,31 @@ describe("web chat API", () => {
       }),
     });
 
-    expect(res.status).toBe(200);
-    await agentStarted.promise;
-    const pendingTranscript = JSON.parse(
-      await readFile(webChatTranscriptPath(dataDir, admin.id, "chat-pending"), "utf-8"),
-    ) as { messages: unknown[] };
-    expect(pendingTranscript.messages).toEqual([
-      {
-        id: "user-msg-pending",
-        role: "user",
-        createdAt: expect.any(String),
-        parts: [{ type: "text", text: "Do this in the background" }],
-      },
-      {
-        id: "assistant-progress-user-msg-pending",
-        role: "assistant",
-        createdAt: expect.any(String),
-        parts: [{ type: "data-progress", id: "progress", data: { lines: ["Thinking…"] } }],
-      },
-    ]);
-
-    finishAgent.resolve();
-    await res.text();
+    try {
+      expect(res.status).toBe(200);
+      await agentStarted.promise;
+      const pendingTranscript = JSON.parse(
+        await readFile(webChatTranscriptPath(dataDir, admin.id, "chat-pending"), "utf-8"),
+      ) as { messages: unknown[] };
+      expect(pendingTranscript.messages).toEqual([
+        {
+          id: "user-msg-pending",
+          role: "user",
+          createdAt: expect.any(String),
+          parts: [{ type: "text", text: "Do this in the background" }],
+        },
+        {
+          id: "assistant-progress-user-msg-pending",
+          role: "assistant",
+          pending: true,
+          createdAt: expect.any(String),
+          parts: [{ type: "data-progress", id: "progress", data: { lines: ["Thinking…"] } }],
+        },
+      ]);
+    } finally {
+      finishAgent.resolve();
+      await res.text();
+    }
     const completedTranscript = JSON.parse(
       await readFile(webChatTranscriptPath(dataDir, admin.id, "chat-pending"), "utf-8"),
     ) as { messages: unknown[] };
@@ -4216,6 +4221,7 @@ describe("web chat API", () => {
       {
         id: expect.any(String),
         role: "assistant",
+        pending: false,
         createdAt: expect.any(String),
         parts: [{ type: "text", text: "Finished in the background." }],
       },
