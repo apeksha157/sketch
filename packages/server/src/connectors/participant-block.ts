@@ -28,8 +28,9 @@ import { PERSON_PARTICIPANT_FACT_TYPES } from "../db/repositories/indexed-file-f
 import type { DB } from "../db/schema";
 import { isRoleAccountEmail } from "../entities/affiliations";
 import { normalizeParticipantNameKey } from "../entities/name-keys";
+import { parseSlackRosterSnapshot } from "../slack/identity-resolution";
 import { buildWhatsAppRosterSnapshot, stableWhatsAppParticipantJidRef } from "../whatsapp/identity-resolution";
-import { WHATSAPP_CONVERSATION_SLICE_FILE_TYPE } from "./types";
+import { SLACK_CONVERSATION_SLICE_FILE_TYPE, WHATSAPP_CONVERSATION_SLICE_FILE_TYPE } from "./types";
 
 export interface ParticipantBlockDeps {
   db: Kysely<DB>;
@@ -89,8 +90,8 @@ export async function buildParticipantBlock(
   deps: ParticipantBlockDeps,
   opts: BuildParticipantBlockOptions,
 ): Promise<string> {
-  const whatsAppBlock = await buildWhatsAppSpeakerBlock(deps, opts.fileId);
-  if (whatsAppBlock !== null) return whatsAppBlock;
+  const speakerBlock = await buildConversationSpeakerBlock(deps, opts.fileId);
+  if (speakerBlock !== null) return speakerBlock;
   const domainsRepo = createEntityDomainsRepository(deps.db);
   const attendees = (await deps.db
     .selectFrom("indexed_file_facts")
@@ -141,23 +142,104 @@ export async function buildParticipantBlock(
   return `\n## Meeting participants\n${rendered.map((r) => r.line).join("\n")}\n`;
 }
 
+const SPEAKER_BLOCK_HEADING = "## Conversation participants (spoke in this chunk)";
+const RAW_SLACK_ID_PATTERN = /<@[UW][A-Z0-9]+>|\b[UW][A-Z0-9]{7,}\b/u;
+const SLACK_ROSTER_AFFILIATIONS = new Set(["teammate", "entity", "external"]);
+
 /**
- * WhatsApp chunk files derive their participants from the slice at
- * prompt-build time instead of stored attendee facts: only the people who
- * actually spoke in the chunk, each with whatever identity we hold — curated
- * label (and company), phone, and the linked teammate email. Derived live so
- * the open chunk's block is always current, and kept out of the file body so
- * identifiers never enter embeddings (ruling 2026-08-12). Returns null for
- * non-WhatsApp files so the attendee-fact path runs unchanged.
+ * Mirrors `assertNoRawWhatsAppIdentifiers`: a chunk speaker block renders
+ * resolved names, never the platform's raw member ids.
  */
-async function buildWhatsAppSpeakerBlock(deps: ParticipantBlockDeps, fileId: string): Promise<string | null> {
+export function assertNoRawSlackIdentifiers(value: string): void {
+  if (RAW_SLACK_ID_PATTERN.test(value)) {
+    throw new Error("Rendered Slack speaker block contains a raw Slack user id");
+  }
+}
+
+/**
+ * Chat chunk files derive their participants from the slice at prompt-build
+ * time instead of stored attendee facts — `indexed-file-facts.ts` suppresses
+ * participant facts for both slice types — so only the people who actually
+ * spoke in the chunk appear, each with whatever identity we hold. Derived live
+ * so an open chunk's block is always current, and kept out of the file body so
+ * identifiers never enter embeddings (ruling 2026-08-12). Returns null for
+ * every other file type so the attendee-fact path runs unchanged.
+ */
+export async function buildConversationSpeakerBlock(
+  deps: ParticipantBlockDeps,
+  fileId: string,
+): Promise<string | null> {
   const file = await deps.db
     .selectFrom("indexed_files")
     .select(["file_type"])
     .where("id", "=", fileId)
     .executeTakeFirst();
-  if (file?.file_type !== WHATSAPP_CONVERSATION_SLICE_FILE_TYPE) return null;
+  if (file?.file_type === WHATSAPP_CONVERSATION_SLICE_FILE_TYPE) return buildWhatsAppSpeakerBlock(deps, fileId);
+  if (file?.file_type === SLACK_CONVERSATION_SLICE_FILE_TYPE) return buildSlackSpeakerBlock(deps, fileId);
+  return null;
+}
 
+function parseSliceMessageIds(raw: string | null): number[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const ids = parsed.filter((id): id is number => Number.isInteger(id));
+    return ids.length > 0 ? ids : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Slack speakers come from the roster snapshot the emission pass persisted on
+ * the slice, so no Slack API call is needed at enrichment time. The roster's
+ * only affiliation signal is the participant kind (teammate / entity /
+ * external); a snapshot without one degrades to the display name alone.
+ */
+async function buildSlackSpeakerBlock(deps: ParticipantBlockDeps, fileId: string): Promise<string> {
+  const slice = await deps.db
+    .selectFrom("conversation_slices")
+    .select(["conversation_id", "first_message_id", "last_message_id", "denoised_message_ids", "roster_snapshot"])
+    .where("indexed_file_id", "=", fileId)
+    .executeTakeFirst();
+  if (!slice) return "";
+  const roster = parseSlackRosterSnapshot(slice.roster_snapshot);
+  if (!roster) return "";
+
+  const denoisedIds = parseSliceMessageIds(slice.denoised_message_ids);
+  let senderQuery = deps.db
+    .selectFrom("conversation_messages")
+    .select(["sender_jid"])
+    .where("conversation_id", "=", slice.conversation_id)
+    .where("sender_jid", "is not", null);
+  senderQuery = denoisedIds
+    ? senderQuery.where("id", "in", denoisedIds)
+    : senderQuery.where("id", ">=", slice.first_message_id).where("id", "<=", slice.last_message_id);
+  const speakerIds = new Set((await senderQuery.execute()).map((row) => row.sender_jid).filter(Boolean));
+  if (speakerIds.size === 0) return "";
+
+  const lines = roster.participants
+    .filter((participant) => speakerIds.has(participant.slackUserId))
+    .map((participant) => {
+      const name = participant.displayName.trim();
+      const parts = [SLACK_ROSTER_AFFILIATIONS.has(participant.kind) ? `${name} (${participant.kind})` : name];
+      if (participant.email) parts.push(participant.email);
+      return `- ${parts.join(" · ")}`;
+    })
+    .sort((a, b) => a.localeCompare(b));
+  if (lines.length === 0) return "";
+
+  const block = `\n${SPEAKER_BLOCK_HEADING}\n${lines.join("\n")}\n`;
+  assertNoRawSlackIdentifiers(block);
+  return block;
+}
+
+/**
+ * WhatsApp speakers carry a curated label (and company), phone, and the linked
+ * teammate email, resolved live from the group roster.
+ */
+async function buildWhatsAppSpeakerBlock(deps: ParticipantBlockDeps, fileId: string): Promise<string> {
   const slice = await deps.db
     .selectFrom("conversation_slices")
     .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
@@ -236,5 +318,5 @@ async function buildWhatsAppSpeakerBlock(deps: ParticipantBlockDeps, fileId: str
       return `- ${parts.join(" · ")}`;
     })
     .sort((a, b) => a.localeCompare(b));
-  return `\n## Conversation participants (spoke in this chunk)\n${lines.join("\n")}\n`;
+  return `\n${SPEAKER_BLOCK_HEADING}\n${lines.join("\n")}\n`;
 }
