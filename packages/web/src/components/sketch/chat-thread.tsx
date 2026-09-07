@@ -744,7 +744,16 @@ export function ChatThread({
   autoOpenAutomation,
   conversationId,
 }: ChatThreadProps) {
-  const showBusy = busy && messages.at(-1)?.role !== "assistant";
+  const latestMessage = messages.at(-1);
+  const latestTimeline = latestMessage?.role === "assistant" ? timelineEntriesForMessage(latestMessage) : [];
+  const latestTools = latestTimeline.flatMap((entry) =>
+    entry.type === "progress" ? progressItemsForParts(entry.progressItems, entry.progressLines) : [],
+  );
+  const waitingAfterTools =
+    latestTimeline.at(-1)?.type === "progress" &&
+    latestTools.length > 0 &&
+    latestTools.every((item) => item.mode !== "off" && item.status && item.status !== "running");
+  const showBusy = busy && !error && (latestMessage?.role !== "assistant" || waitingAfterTools);
   const activeQuestionInteractionKey = pendingQuestionInteractionKey(messages);
   const [answeredInteractionKey, setAnsweredInteractionKey] = useState<string | null>(null);
 
@@ -1717,7 +1726,7 @@ function useProgressElapsed(item: ChatThreadProgressItem, running: boolean): num
 }
 
 function formatElapsed(seconds: number): string {
-  return `${seconds}s`;
+  return seconds < 1 ? "<1s" : `${Math.floor(seconds)}s`;
 }
 
 function progressDetailForDisplay(item: ChatThreadProgressItem): string | null {
@@ -1727,7 +1736,7 @@ function progressDetailForDisplay(item: ChatThreadProgressItem): string | null {
 
 function progressDurationSeconds(item: ChatThreadProgressItem): number | null {
   if (typeof item.startedAt !== "number" || typeof item.endedAt !== "number") return null;
-  return Math.floor(Math.max(0, item.endedAt - item.startedAt) / 1000);
+  return Math.max(0, item.endedAt - item.startedAt) / 1000;
 }
 
 function progressInspectionStatus(item: ChatThreadProgressItem, activityLive: boolean): string | null {
@@ -1897,7 +1906,7 @@ function ProgressItemIcon({
         {item.mode !== "off" && ((item.status === "running" && activityLive) || (!item.status && active)) ? (
           <span
             aria-hidden
-            className="absolute -right-[2px] -top-[2px] size-[6px] rounded-full bg-brand-accent ring-2 ring-background"
+            className="absolute -right-[2px] -top-[2px] size-[6px] animate-pulse rounded-full bg-brand-accent ring-2 ring-background motion-reduce:animate-none"
           />
         ) : null}
       </span>

@@ -24,6 +24,7 @@ import {
   questionBatchSignature,
 } from "@/components/sketch/chat-thread";
 import { DEFAULT_TILES, type TileDef } from "@/components/sketch/tile-grid";
+import { WEB_CHAT_PROGRESS_MODES, useWebChatProgressSettings } from "@/hooks/use-web-chat-progress-settings";
 import { mergeProgressMessageSnapshots, useWebChatReconciliation } from "@/hooks/use-web-chat-reconciliation";
 import {
   type AutomationArtifact,
@@ -34,7 +35,6 @@ import {
   type WebChatQuestionBatch,
   type WebChatQuestionBatchAnswer,
   type WebChatQuestionOption,
-  type WebChatToolProgress,
   type WebChatUploadedAttachment,
   type WorkspaceSummary,
   api,
@@ -583,11 +583,6 @@ export const SMOOTH_TEXT_STREAM_DELAY_MS = 180;
 const SMOOTH_TEXT_MIN_CHARS_PER_SECOND = 42;
 const SMOOTH_TEXT_MAX_CHARS_PER_SECOND = 520;
 const SMOOTH_TEXT_BACKLOG_ACCELERATION = 2;
-const WEB_CHAT_PROGRESS_MODES: Array<{ value: WebChatToolProgress; label: string }> = [
-  { value: "off", label: "Off" },
-  { value: "friendly", label: "Friendly" },
-  { value: "technical", label: "Technical" },
-];
 
 interface SmoothAssistantTextState {
   messageId: string | null;
@@ -1048,7 +1043,6 @@ export function ChatPage() {
   const latestRecoveryResponseRef = useRef<WebChatLoadedMessagesResponse | null>(null);
   const latestRecoveryConversationRef = useRef<string | null>(null);
   const threadScrollRef = useRef<HTMLDivElement | null>(null);
-  const toolProgressMutationId = useRef(0);
   const queryClient = useQueryClient();
   const hasNewConversationIntent = Boolean(
     search.new || search.message || search.prefill || hasPendingWebChatSubmission(conversationId),
@@ -1060,8 +1054,7 @@ export function ChatPage() {
   );
   const [historyLoadError, setHistoryLoadError] = useState<{ conversationId: string; attempt: number } | null>(null);
   const [historyLoadAttempt, setHistoryLoadAttempt] = useState(0);
-  const [toolProgress, setToolProgress] = useState<WebChatToolProgress>("friendly");
-  const [pendingToolProgress, setPendingToolProgress] = useState<WebChatToolProgress | null>(null);
+  const { toolProgress, pendingToolProgress, changeToolProgress } = useWebChatProgressSettings();
   const [stoppingRun, setStoppingRun] = useState(false);
   const [activeIntegrationConnection, setActiveIntegrationConnection] = useState<ActiveIntegrationConnection | null>(
     null,
@@ -1253,39 +1246,6 @@ export function ChatPage() {
         chat.status,
       ].join(":")
     : "";
-
-  useEffect(() => {
-    let cancelled = false;
-    void api.webChat
-      .progressSettings()
-      .then(({ toolProgress }) => {
-        if (!cancelled) setToolProgress(toolProgress);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleToolProgressChange = (nextToolProgress: WebChatToolProgress) => {
-    if (nextToolProgress === (pendingToolProgress ?? toolProgress)) return;
-    const previousToolProgress = toolProgress;
-    const mutationId = toolProgressMutationId.current + 1;
-    toolProgressMutationId.current = mutationId;
-    setToolProgress(nextToolProgress);
-    setPendingToolProgress(nextToolProgress);
-    void api.webChat
-      .updateProgressSettings(nextToolProgress)
-      .then(({ toolProgress }) => {
-        if (toolProgressMutationId.current === mutationId) setToolProgress(toolProgress);
-      })
-      .catch(() => {
-        if (toolProgressMutationId.current === mutationId) setToolProgress(previousToolProgress);
-      })
-      .finally(() => {
-        if (toolProgressMutationId.current === mutationId) setPendingToolProgress(null);
-      });
-  };
 
   const handleStop = useCallback(() => {
     if (stoppingRun) return;
@@ -1536,7 +1496,7 @@ export function ChatPage() {
             rendererValue={pendingToolProgress ?? toolProgress}
             rendererSaving={pendingToolProgress !== null}
             rendererOptions={WEB_CHAT_PROGRESS_MODES}
-            onRendererChange={handleToolProgressChange}
+            onRendererChange={changeToolProgress}
             onStop={handleStop}
             placeholder="Reply to Sketch..."
             onSubmit={(value, attachments) => {

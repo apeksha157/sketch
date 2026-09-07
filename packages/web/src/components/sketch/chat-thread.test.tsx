@@ -299,6 +299,29 @@ describe("ChatThread", () => {
     expect(screen.getByText("Duration: 2s")).toBeInTheDocument();
   });
 
+  it("keeps thinking visible between completed tools without reanimating the completed call", () => {
+    const { rerender } = render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "fast-call",
+            role: "assistant",
+            progressItems: [
+              { id: "call", kind: "tool", label: "Read task", status: "succeeded", startedAt: 1000, endedAt: 1009 },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Thinking…")).toHaveClass("sketch-shimmer-text");
+    expect(screen.getByText("Read task").closest("[data-progress-line]")).not.toHaveClass("sketch-shimmer-progress");
+    fireEvent.click(screen.getByRole("button", { name: "Show details for Read task" }));
+    expect(screen.getByText("Duration: <1s")).toBeInTheDocument();
+    rerender(<ChatThread messages={[{ id: "finished", role: "assistant", text: "Finished." }]} />);
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+
   it("summarizes concurrent active calls without completing either one", () => {
     render(
       <ChatThread

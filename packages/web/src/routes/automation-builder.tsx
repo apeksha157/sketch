@@ -13,8 +13,10 @@ import {
   type ChatThreadInterruption,
   type ChatThreadMessage,
   type ChatThreadProgressItem,
+  type ChatThreadTimelineEntry,
   questionBatchSignature,
 } from "@/components/sketch/chat-thread";
+import { WEB_CHAT_PROGRESS_MODES, useWebChatProgressSettings } from "@/hooks/use-web-chat-progress-settings";
 import { mergeProgressMessageSnapshots, useWebChatReconciliation } from "@/hooks/use-web-chat-reconciliation";
 import {
   ApiRequestError,
@@ -1788,15 +1790,34 @@ function isBuilderNavigationProgressText(value: string): boolean {
 }
 
 function progressLinesFromBuilderMessage(message: BuilderWebChatMessage): string[] {
-  const progressPart = message.parts.find((part) => part.type === "data-progress");
-  return (
-    progressPart?.data.lines.filter((line) => line.trim().length > 0 && !isBuilderNavigationProgressText(line)) ?? []
+  return message.parts.flatMap((part) =>
+    part.type === "data-progress"
+      ? part.data.lines.filter((line) => line.trim().length > 0 && !isBuilderNavigationProgressText(line))
+      : [],
   );
 }
 
 function progressItemsFromBuilderMessage(message: BuilderWebChatMessage): ChatThreadProgressItem[] {
-  const progressPart = message.parts.find((part) => part.type === "data-progress");
-  return progressPart?.data.items?.filter((item) => !isBuilderNavigationProgressText(item.label)) ?? [];
+  return message.parts.flatMap((part) =>
+    part.type === "data-progress"
+      ? (part.data.items?.filter((item) => !isBuilderNavigationProgressText(item.label)) ?? [])
+      : [],
+  );
+}
+
+function timelineFromBuilderMessage(message: BuilderWebChatMessage): ChatThreadTimelineEntry[] {
+  return message.parts.flatMap<ChatThreadTimelineEntry>((part, index) => {
+    if (part.type === "text") {
+      return part.text.trim() && !isBuilderNavigationProgressText(part.text)
+        ? [{ type: "text", id: `text-${index}`, text: part.text }]
+        : [];
+    }
+    if (part.type !== "data-progress") return [];
+    const progressItems = part.data.items?.filter((item) => !isBuilderNavigationProgressText(item.label));
+    const progressLines = part.data.lines.filter((line) => line.trim() && !isBuilderNavigationProgressText(line));
+    if (!progressItems?.length && !progressLines.length) return [];
+    return [{ type: "progress", id: part.id, progressItems, progressLines }];
+  });
 }
 
 function filesFromBuilderMessage(message: BuilderWebChatMessage) {
@@ -1857,12 +1878,15 @@ export function builderChatThreadMessages(messages: BuilderWebChatMessage[]): Ch
     const question = message.role === "assistant" ? questionFromBuilderMessage(message) : undefined;
     const questionBatch = message.role === "assistant" ? questionBatchFromBuilderMessage(message) : undefined;
     const createdAt = createdAtFromBuilderMessage(message);
+    const timeline = message.role === "assistant" ? timelineFromBuilderMessage(message) : [];
+    const hasProgress = timeline.some((entry) => entry.type === "progress");
     if (text || files.length > 0 || automations.length > 0 || interruption || question || questionBatch) {
       return [
         {
           id: message.id,
           role: message.role,
           text: text || undefined,
+          ...(hasProgress ? { timeline } : {}),
           createdAt,
           files: files.length > 0 ? files : undefined,
           automations: automations.length > 0 ? automations : undefined,
@@ -1881,8 +1905,7 @@ export function builderChatThreadMessages(messages: BuilderWebChatMessage[]): Ch
             id: message.id,
             role: message.role,
             createdAt,
-            ...(progressLines.length > 0 ? { progressLines } : {}),
-            ...(progressItems.length > 0 ? { progressItems } : {}),
+            timeline,
           },
         ];
       }
@@ -2733,6 +2756,7 @@ function BuilderChatTranscript({
   onBack: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { toolProgress, pendingToolProgress, changeToolProgress } = useWebChatProgressSettings();
   const [lockStatus, setLockStatus] = useState<BuilderChatLockStatus>("loading");
   const [loadedHistoryKey, setLoadedHistoryKey] = useState<string | null>(null);
   const [historyLoadError, setHistoryLoadError] = useState<string | null>(null);
@@ -3036,6 +3060,10 @@ function BuilderChatTranscript({
           disabledPlaceholder={chatBusy ? "" : historyReady ? "Transcript unavailable" : "Loading conversation..."}
           running={chatBusy}
           runningPlaceholder="Sketch is thinking..."
+          rendererValue={pendingToolProgress ?? toolProgress}
+          rendererSaving={pendingToolProgress !== null}
+          rendererOptions={WEB_CHAT_PROGRESS_MODES}
+          onRendererChange={changeToolProgress}
           stopping={stoppingRun}
           onStop={handleStop}
           placeholder="Reply to Sketch..."
