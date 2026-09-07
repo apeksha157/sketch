@@ -20,6 +20,7 @@ import { sql } from "kysely";
 import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
+import { readSourceMeta } from "../db/repositories/connectors";
 import { createEntityRepository } from "../db/repositories/entities";
 import { fileVisibilityRuleSql, visibleFileIdsSql } from "../db/repositories/file-visibility-rule";
 import { createSettingsRepository } from "../db/repositories/settings";
@@ -554,10 +555,11 @@ export interface HybridSearchOptions extends SearchOptions {
    * on this being set.
    */
   stageReport?: StageReporter;
+  expandThreads?: boolean;
 }
 
 export interface HybridSearchResult {
-  resultKind: "file" | "email_thread";
+  resultKind: "file" | "email_thread" | "linkedin_conversation";
   id: string;
   hitFileId: string;
   fileName: string;
@@ -581,6 +583,9 @@ export interface HybridSearchResult {
   rollupGroupId?: string | null;
   threadKey?: string;
   messageCount?: number;
+  inboundCount?: number;
+  outboundCount?: number;
+  lastMessageFrom?: "them" | "us" | null;
   latestSubject?: string;
   lastActivity?: string | null;
   participants?: string[];
@@ -1210,9 +1215,10 @@ export async function hybridSearch(
       "rollup_group_id",
       "source_updated_at",
       "source_created_at",
+      "source_meta",
       "access_scope_id",
     ])
-    .where("id", "in", topFileIds)
+    .where(idInList(db, sql.ref("indexed_files.id"), topFileIds))
     .where("is_archived", "=", 0)
     .where(bodylessCrmActivityPredicateSql());
 
@@ -1361,13 +1367,16 @@ export async function hybridSearch(
   }
 
   // ── 7. Build final results ─────────────────────────────────
-  const collapsed = await collapseEmailSearchResults(
-    db,
-    accessFiltered,
-    scoreMap,
-    opts?.userPrincipals,
-    opts?.slackEntitySyncEnabled ?? true,
-  );
+  const collapseRan = !opts?.expandThreads;
+  const collapsed = collapseRan
+    ? await collapseThreadSearchResults(
+        db,
+        accessFiltered,
+        scoreMap,
+        opts?.userPrincipals,
+        opts?.slackEntitySyncEnabled ?? true,
+      )
+    : accessFiltered.map((file) => fileSearchResult(file, scoreMap.get(file.id)));
 
   const results: HybridSearchResult[] = collapsed.sort((a, b) => b.score - a.score).slice(0, limit);
 
@@ -1389,7 +1398,7 @@ export async function hybridSearch(
         .sort((a, b) => b.score - a.score)
         .map((result, index) => ({
           subject: result.fileName,
-          kind: result.resultKind === "email_thread" ? `thread of ${result.messageCount ?? "?"}` : result.source,
+          kind: result.resultKind !== "file" ? `thread of ${result.messageCount ?? "?"}` : result.source,
           result: index < limit ? ("kept" as const) : ("dropped" as const),
           reason:
             index < limit
@@ -1405,6 +1414,7 @@ export async function hybridSearch(
         accessFiltered,
         collapsed,
         filteredFiles,
+        collapseRan,
       }),
     });
   }
@@ -1697,6 +1707,7 @@ function draftCandidates(input: {
   accessFiltered: SearchMetadataFile[];
   collapsed: HybridSearchResult[];
   filteredFiles: SearchMetadataFile[];
+  collapseRan: boolean;
 }): SearchCandidate[] {
   const allowedIds = new Set(input.accessFiltered.map((file) => file.id));
   const timeSurvivorIds = new Set(input.filteredFiles.map((file) => file.id));
@@ -1704,7 +1715,8 @@ function draftCandidates(input: {
   const survivingHits = new Set(input.collapsed.map((result) => result.hitFileId));
   const threadOf = new Map<string, string>();
   for (const file of input.accessFiltered) {
-    if (file.file_type === "email_message") {
+    if (!input.collapseRan) continue;
+    if (file.file_type === "email_message" || (file.file_type === "linkedin_conversation" && file.thread_id)) {
       threadOf.set(file.id, `${file.connector_config_id}:${file.thread_id ?? file.id}`);
     }
   }
@@ -1762,10 +1774,33 @@ type SearchMetadataFile = {
   rollup_group_id: string | null;
   source_updated_at: string | null;
   source_created_at: string | null;
+  source_meta: string | null;
   access_scope_id: string | null;
 };
 
 type SearchScoreData = { fileId: string; score: number; snippet: string | null; similarity: number | null };
+
+function fileSearchResult(file: SearchMetadataFile, scoreData: SearchScoreData | undefined): HybridSearchResult {
+  return {
+    resultKind: "file",
+    id: file.id,
+    hitFileId: file.id,
+    fileName: file.file_name,
+    source: file.source,
+    contentCategory: file.content_category,
+    summary: file.summary,
+    providerFileId: file.provider_file_id,
+    providerUrl: file.provider_url,
+    sourcePath: file.source_path,
+    sourceUpdatedAt: file.source_updated_at,
+    sourceCreatedAt: file.source_created_at,
+    snippet: scoreData?.snippet ?? null,
+    similarity: scoreData?.similarity ?? null,
+    score: scoreData?.score ?? 0,
+    threadId: file.thread_id,
+    rollupGroupId: file.rollup_group_id,
+  };
+}
 
 type EmailEnvelopeSearchRow = {
   indexed_file_id: string;
@@ -1778,11 +1813,83 @@ type EmailEnvelopeSearchRow = {
   cc_json: string;
 };
 
+type LinkedInSegmentManifest = {
+  messageCount?: number;
+  inboundCount?: number;
+  outboundCount?: number;
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
+};
+
+function readLinkedInSegmentManifest(file: Pick<SearchMetadataFile, "source_meta">): LinkedInSegmentManifest {
+  const meta = readSourceMeta(file);
+  const raw = meta?.segmentManifest;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const manifest = raw as Record<string, unknown>;
+  return {
+    messageCount: typeof manifest.messageCount === "number" ? manifest.messageCount : undefined,
+    inboundCount: typeof manifest.inboundCount === "number" ? manifest.inboundCount : undefined,
+    outboundCount: typeof manifest.outboundCount === "number" ? manifest.outboundCount : undefined,
+    lastInboundAt:
+      typeof manifest.lastInboundAt === "string" || manifest.lastInboundAt === null
+        ? manifest.lastInboundAt
+        : undefined,
+    lastOutboundAt:
+      typeof manifest.lastOutboundAt === "string" || manifest.lastOutboundAt === null
+        ? manifest.lastOutboundAt
+        : undefined,
+  };
+}
+
+function summarizeLinkedInSegments(segments: SearchMetadataFile[]): {
+  messageCount: number;
+  inboundCount: number;
+  outboundCount: number;
+  lastActivity: string | null;
+  lastMessageFrom: "them" | "us" | null;
+} {
+  let messageCount = 0;
+  let inboundCount = 0;
+  let outboundCount = 0;
+  let lastActivity: string | null = null;
+  let lastInboundAt: string | null = null;
+  let lastOutboundAt: string | null = null;
+
+  for (const segment of segments) {
+    const manifest = readLinkedInSegmentManifest(segment);
+    messageCount += manifest.messageCount ?? 0;
+    inboundCount += manifest.inboundCount ?? 0;
+    outboundCount += manifest.outboundCount ?? 0;
+    if (segment.source_updated_at && (!lastActivity || segment.source_updated_at > lastActivity)) {
+      lastActivity = segment.source_updated_at;
+    }
+    if (manifest.lastInboundAt && (!lastInboundAt || manifest.lastInboundAt > lastInboundAt)) {
+      lastInboundAt = manifest.lastInboundAt;
+    }
+    if (manifest.lastOutboundAt && (!lastOutboundAt || manifest.lastOutboundAt > lastOutboundAt)) {
+      lastOutboundAt = manifest.lastOutboundAt;
+    }
+  }
+
+  const lastMessageFrom =
+    lastInboundAt && lastOutboundAt
+      ? lastInboundAt > lastOutboundAt
+        ? "them"
+        : "us"
+      : lastInboundAt
+        ? "them"
+        : lastOutboundAt
+          ? "us"
+          : null;
+
+  return { messageCount, inboundCount, outboundCount, lastActivity, lastMessageFrom };
+}
+
 function emailLabel(addr: EmailAddr): string {
   return addr.name?.trim() || addr.email;
 }
 
-async function collapseEmailSearchResults(
+async function collapseThreadSearchResults(
   db: Kysely<DB>,
   files: SearchMetadataFile[],
   scoreMap: Map<string, SearchScoreData>,
@@ -1790,47 +1897,44 @@ async function collapseEmailSearchResults(
   slackEntitySyncEnabled = true,
 ): Promise<HybridSearchResult[]> {
   const emailFiles = files.filter((file) => file.file_type === "email_message");
+  const linkedinFiles = files.filter((file) => file.file_type === "linkedin_conversation" && file.thread_id);
   const visibleThreadEnvelopes = await loadVisibleThreadEnvelopes(
     db,
     emailFiles,
     userPrincipals,
     slackEntitySyncEnabled,
   );
-  const groups = new Map<string, SearchMetadataFile[]>();
+  const visibleLinkedInSegments = await loadVisibleLinkedInThreadSegments(
+    db,
+    linkedinFiles,
+    userPrincipals,
+    slackEntitySyncEnabled,
+  );
+  const emailGroups = new Map<string, SearchMetadataFile[]>();
+  const linkedinGroups = new Map<string, SearchMetadataFile[]>();
   const output: HybridSearchResult[] = [];
 
   for (const file of files) {
-    if (file.file_type !== "email_message") {
-      const scoreData = scoreMap.get(file.id);
-      output.push({
-        resultKind: "file",
-        id: file.id,
-        hitFileId: file.id,
-        fileName: file.file_name,
-        source: file.source,
-        contentCategory: file.content_category,
-        summary: file.summary,
-        providerFileId: file.provider_file_id,
-        providerUrl: file.provider_url,
-        sourcePath: file.source_path,
-        sourceUpdatedAt: file.source_updated_at,
-        sourceCreatedAt: file.source_created_at,
-        snippet: scoreData?.snippet ?? null,
-        similarity: scoreData?.similarity ?? null,
-        score: scoreData?.score ?? 0,
-        threadId: file.thread_id,
-        rollupGroupId: file.rollup_group_id,
-      });
+    if (file.file_type === "email_message") {
+      const key = `${file.connector_config_id}:${file.thread_id ?? file.id}`;
+      const group = emailGroups.get(key) ?? [];
+      group.push(file);
+      emailGroups.set(key, group);
       continue;
     }
 
-    const key = `${file.connector_config_id}:${file.thread_id ?? file.id}`;
-    const group = groups.get(key) ?? [];
-    group.push(file);
-    groups.set(key, group);
+    if (file.file_type === "linkedin_conversation" && file.thread_id) {
+      const key = `${file.connector_config_id}:${file.thread_id}`;
+      const group = linkedinGroups.get(key) ?? [];
+      group.push(file);
+      linkedinGroups.set(key, group);
+      continue;
+    }
+
+    output.push(fileSearchResult(file, scoreMap.get(file.id)));
   }
 
-  for (const [threadKey, group] of groups) {
+  for (const [threadKey, group] of emailGroups) {
     const best = [...group].sort((a, b) => (scoreMap.get(b.id)?.score ?? 0) - (scoreMap.get(a.id)?.score ?? 0))[0];
     const bestScore = scoreMap.get(best.id);
     const envelopes = visibleThreadEnvelopes.get(threadKey) ?? [];
@@ -1877,6 +1981,39 @@ async function collapseEmailSearchResults(
     });
   }
 
+  for (const [threadKey, group] of linkedinGroups) {
+    const best = [...group].sort((a, b) => (scoreMap.get(b.id)?.score ?? 0) - (scoreMap.get(a.id)?.score ?? 0))[0];
+    const bestScore = scoreMap.get(best.id);
+    const segments = visibleLinkedInSegments.get(threadKey) ?? group;
+    const totals = summarizeLinkedInSegments(segments);
+
+    output.push({
+      resultKind: "linkedin_conversation",
+      id: best.id,
+      hitFileId: best.id,
+      threadKey,
+      messageCount: totals.messageCount,
+      inboundCount: totals.inboundCount,
+      outboundCount: totals.outboundCount,
+      lastMessageFrom: totals.lastMessageFrom,
+      lastActivity: totals.lastActivity,
+      fileName: best.file_name,
+      source: best.source,
+      contentCategory: best.content_category,
+      summary: best.summary,
+      providerFileId: best.provider_file_id,
+      providerUrl: best.provider_url,
+      sourcePath: best.source_path,
+      sourceUpdatedAt: best.source_updated_at,
+      sourceCreatedAt: best.source_created_at,
+      snippet: bestScore?.snippet ?? null,
+      similarity: bestScore?.similarity ?? null,
+      score: bestScore?.score ?? 0,
+      threadId: best.thread_id,
+      rollupGroupId: best.rollup_group_id,
+    });
+  }
+
   return output;
 }
 
@@ -1906,7 +2043,7 @@ async function loadVisibleThreadEnvelopes(
             "email_message_envelopes.cc_json",
           ])
           .where("indexed_files.is_archived", "=", 0)
-          .where("email_message_envelopes.thread_id", "in", threadIds)
+          .where(idInList(db, sql.ref("email_message_envelopes.thread_id"), threadIds))
           .execute()
       : [];
 
@@ -1925,7 +2062,7 @@ async function loadVisibleThreadEnvelopes(
             "to_json",
             "cc_json",
           ])
-          .where("indexed_file_id", "in", singletonFileIds)
+          .where(idInList(db, sql.ref("email_message_envelopes.indexed_file_id"), singletonFileIds))
           .execute()
       : [];
 
@@ -1943,6 +2080,66 @@ async function loadVisibleThreadEnvelopes(
   for (const row of allRows) {
     if (!visibleIds.has(row.indexed_file_id)) continue;
     const key = `${row.connector_config_id}:${row.thread_id ?? row.indexed_file_id}`;
+    const group = rowsByThread.get(key) ?? [];
+    group.push(row);
+    rowsByThread.set(key, group);
+  }
+
+  return rowsByThread;
+}
+
+async function loadVisibleLinkedInThreadSegments(
+  db: Kysely<DB>,
+  linkedinFiles: SearchMetadataFile[],
+  userPrincipals?: AccessPrincipalInput[],
+  slackEntitySyncEnabled = true,
+): Promise<Map<string, SearchMetadataFile[]>> {
+  const rowsByThread = new Map<string, SearchMetadataFile[]>();
+  if (linkedinFiles.length === 0) return rowsByThread;
+
+  const connectorIds = [...new Set(linkedinFiles.map((file) => file.connector_config_id))];
+  const threadIds = [...new Set(linkedinFiles.map((file) => file.thread_id).filter((id): id is string => !!id))];
+  if (connectorIds.length === 0 || threadIds.length === 0) return rowsByThread;
+
+  const candidateKeys = new Set(linkedinFiles.map((file) => `${file.connector_config_id}:${file.thread_id}`));
+  const rows = (
+    await db
+      .selectFrom("indexed_files")
+      .select([
+        "id",
+        "file_name",
+        "source",
+        "content_category",
+        "summary",
+        "connector_config_id",
+        "thread_id",
+        "file_type",
+        "provider_file_id",
+        "provider_url",
+        "source_path",
+        "rollup_group_id",
+        "source_updated_at",
+        "source_created_at",
+        "source_meta",
+        "access_scope_id",
+      ])
+      .where("is_archived", "=", 0)
+      .where("file_type", "=", "linkedin_conversation")
+      .where(idInList(db, sql.ref("indexed_files.connector_config_id"), connectorIds))
+      .where(idInList(db, sql.ref("indexed_files.thread_id"), threadIds))
+      .execute()
+  ).filter((row) => row.thread_id && candidateKeys.has(`${row.connector_config_id}:${row.thread_id}`));
+
+  const visibleIds = await filterAccessibleFileIds(
+    db,
+    rows.map((row) => row.id),
+    userPrincipals,
+    slackEntitySyncEnabled,
+  );
+
+  for (const row of rows) {
+    if (!visibleIds.has(row.id) || !row.thread_id) continue;
+    const key = `${row.connector_config_id}:${row.thread_id}`;
     const group = rowsByThread.get(key) ?? [];
     group.push(row);
     rowsByThread.set(key, group);
@@ -2028,6 +2225,13 @@ function byRecencyDesc(a: HybridSearchResult, b: HybridSearchResult): number {
   return b.id.localeCompare(a.id);
 }
 
+function byRecencyDescForThreads(a: HybridSearchResult, b: HybridSearchResult): number {
+  const at = toMs(a.lastActivity) ?? toMs(a.sourceUpdatedAt) ?? toMs(a.sourceCreatedAt) ?? Number.NEGATIVE_INFINITY;
+  const bt = toMs(b.lastActivity) ?? toMs(b.sourceUpdatedAt) ?? toMs(b.sourceCreatedAt) ?? Number.NEGATIVE_INFINITY;
+  if (at !== bt) return bt - at;
+  return b.id.localeCompare(a.id);
+}
+
 /**
  * Empty-query path: structural filters + RBAC + recency, no FTS / vector.
  *
@@ -2051,6 +2255,7 @@ async function browseLatest(
     after?: string;
     before?: string;
     limit: number;
+    expandThreads?: boolean;
   },
 ): Promise<HybridSearchResult[]> {
   if (opts.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
@@ -2067,8 +2272,12 @@ async function browseLatest(
       "source_updated_at",
       "source_created_at",
       "summary",
+      "connector_config_id",
       "thread_id",
+      "file_type",
       "rollup_group_id",
+      "source_meta",
+      "access_scope_id",
     ])
     .where("is_archived", "=", 0)
     .where(bodylessCrmActivityPredicateSql());
@@ -2121,29 +2330,16 @@ async function browseLatest(
     .orderBy(sql`COALESCE(source_updated_at, source_created_at)`, "desc")
     .orderBy("source_created_at", "desc")
     .orderBy("id", "desc")
-    .limit(opts.limit * 3);
+    .limit(Math.max(opts.limit * 40, 200));
 
   const rows = await q.execute();
 
-  return rows.slice(0, opts.limit).map((f) => ({
-    resultKind: "file" as const,
-    id: f.id,
-    hitFileId: f.id,
-    fileName: f.file_name,
-    providerUrl: f.provider_url,
-    providerFileId: f.provider_file_id,
-    source: f.source,
-    sourcePath: f.source_path,
-    contentCategory: f.content_category,
-    summary: f.summary,
-    sourceUpdatedAt: f.source_updated_at,
-    sourceCreatedAt: f.source_created_at,
-    score: 0,
-    similarity: null,
-    snippet: null,
-    threadId: f.thread_id,
-    rollupGroupId: f.rollup_group_id,
-  }));
+  const scoreMap = new Map<string, SearchScoreData>();
+  const collapsed = opts.expandThreads
+    ? rows.map((file) => fileSearchResult(file, undefined))
+    : await collapseThreadSearchResults(db, rows, scoreMap, opts.userPrincipals, opts.slackEntitySyncEnabled ?? true);
+
+  return collapsed.sort((a, b) => byRecencyDescForThreads(a, b)).slice(0, opts.limit);
 }
 
 /**
@@ -2199,6 +2395,7 @@ export async function search(
     logger?: Logger;
     /** Dev-tools trace hook. Undefined in production. */
     stageReport?: StageReporter;
+    expandThreads?: boolean;
   },
 ): Promise<HybridSearchResult[]> {
   const limit = opts?.limit ?? 10;
@@ -2266,6 +2463,7 @@ export async function search(
       after: opts?.after,
       before: opts?.before,
       limit,
+      expandThreads: opts?.expandThreads,
     });
   }
 
@@ -2446,6 +2644,7 @@ export async function search(
       entityScope,
       entityBoostEntityIds,
       timeFilter: opts?.after || opts?.before ? { after: opts?.after, before: opts?.before } : undefined,
+      expandThreads: opts?.expandThreads,
     },
     { resolvedAccessPredicate },
   );

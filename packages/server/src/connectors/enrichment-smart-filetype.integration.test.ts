@@ -186,6 +186,57 @@ describe("runEnrichment — smart enrichment file type threading", () => {
     expect(file.summary).toBe("Maya asked Liam about ClickUp renewal pricing.");
   });
 
+  it("runs smart enrichment for a short pending LinkedIn conversation segment", async () => {
+    const connectorId = `conn-${randomUUID()}`;
+    const fileId = randomUUID();
+    let extractCalls = 0;
+
+    await seedConnector(db, connectorId, "linkedin_aimfox");
+    await seedIndexedFile(db, {
+      connectorId,
+      fileId,
+      fileName: "LinkedIn Conversation",
+      fileType: "linkedin_conversation",
+      source: "linkedin_aimfox",
+      sourcePath: "LinkedIn/Maya",
+      content: "Maya asked Liam about ClickUp renewal pricing.",
+      embeddingStatus: "pending",
+      summaryStatus: "pending",
+    });
+
+    const generator = {
+      generate: async () => "Maya asked Liam about ClickUp renewal pricing.",
+      generateJSON: async <T>(_prompt: string, opts?: { label?: string }) => {
+        if (opts?.label?.startsWith("extractEntities")) {
+          extractCalls += 1;
+          return {
+            mentions: [{ mention: "ClickUp", type: "product", variations: [], confidence: 0.93 }],
+            relations: [],
+          } as T;
+        }
+        return {} as T;
+      },
+    } as GeminiGenerator;
+
+    await runEnrichment({
+      db,
+      logger: createTestLogger(),
+      embeddingProvider: null,
+      generator,
+      fileIds: [fileId],
+    });
+
+    const file = await db
+      .selectFrom("indexed_files")
+      .select(["summary_status", "summary"])
+      .where("id", "=", fileId)
+      .executeTakeFirstOrThrow();
+
+    expect(extractCalls).toBe(1);
+    expect(file.summary_status).not.toBe("skipped");
+    expect(file.summary).toBe("Maya asked Liam about ClickUp renewal pricing.");
+  });
+
   it("still skips smart enrichment for a short non-WhatsApp document", async () => {
     const connectorId = `conn-${randomUUID()}`;
     const fileId = randomUUID();

@@ -76,6 +76,10 @@ export const searchToolSchema = {
     .enum(["relevance", "recency"])
     .optional()
     .describe("Use 'recency' for 'latest', 'most recent', 'last X' questions. Default is 'relevance'."),
+  expandThreads: z
+    .boolean()
+    .optional()
+    .describe("When true, return individual email and LinkedIn segment rows instead of one collapsed row per thread."),
   after: z.string().optional().describe("Only results updated after this ISO date"),
   before: z.string().optional().describe("Only results updated before this ISO date"),
   limit: z.number().optional().describe("Max results (default 10; default 3 when sortBy=recency)."),
@@ -166,6 +170,7 @@ export async function handleSearch(
     participantEmail,
     domain,
     sortBy,
+    expandThreads,
     after,
     before,
     limit: resultLimit,
@@ -198,6 +203,7 @@ export async function handleSearch(
       after,
       before,
       limit: resultLimit,
+      expandThreads,
     },
     principals: null,
   });
@@ -335,6 +341,7 @@ export async function handleSearch(
     entityIds,
     entityIdsMode,
     sortBy,
+    expandThreads,
     userPrincipals,
     ...(userPrincipals === undefined ? { accessBypassReason: "admin" as const } : {}),
     slackEntitySyncEnabled: deps.slackEntitySyncEnabled,
@@ -414,6 +421,18 @@ export async function handleSearch(
     if (r.threadId) rendered.push(`  threadId: ${r.threadId}`);
     if (r.rollupGroupId) rendered.push(`  rollupGroupId: ${r.rollupGroupId}`);
     if (r.providerUrl) rendered.push(`  url: ${r.providerUrl}`);
+    if (r.resultKind === "linkedin_conversation") {
+      const threadParts: string[] = [];
+      if (r.messageCount !== undefined) threadParts.push(`${r.messageCount} messages`);
+      if (r.inboundCount !== undefined && r.outboundCount !== undefined) {
+        threadParts.push(`${r.inboundCount} in / ${r.outboundCount} out`);
+      }
+      if (r.lastMessageFrom) {
+        const lastActivity = r.lastActivity ? ` (${new Date(r.lastActivity).toISOString().split("T")[0]})` : "";
+        threadParts.push(`last from ${r.lastMessageFrom}${lastActivity}`);
+      }
+      if (threadParts.length > 0) rendered.push(`  thread: ${threadParts.join(", ")}`);
+    }
     if (r.summary) {
       rendered.push(`> ${r.summary.slice(0, 200)}${r.summary.length > 200 ? "..." : ""}`);
     } else if (r.snippet) {

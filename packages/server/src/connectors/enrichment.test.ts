@@ -884,6 +884,115 @@ describe("runEnrichment — chronological pending-files order", () => {
     expect(order).toEqual([oldest, middleEarlier, middleLater, newest]);
   });
 
+  it("fair-shares pending enrichment across sources without underfilling or changing single-source order", async () => {
+    await db
+      .insertInto("connector_configs")
+      .values([
+        {
+          id: "conn-fair-zoho",
+          connector_type: "zoho_crm",
+          auth_type: "oauth",
+          credentials: "{}",
+          created_by: "admin",
+        },
+        {
+          id: "conn-fair-linkedin",
+          connector_type: "linkedin_aimfox",
+          auth_type: "oauth",
+          credentials: "{}",
+          created_by: "admin",
+        },
+      ])
+      .execute();
+
+    const seedQueue = async (
+      prefix: string,
+      source: string,
+      connectorId: string,
+      count: number,
+      datePrefix: string,
+    ) => {
+      await db
+        .insertInto("indexed_files")
+        .values(
+          Array.from({ length: count }, (_, index) => ({
+            id: `${prefix}-${index}`,
+            connector_config_id: connectorId,
+            provider_file_id: `${prefix}-${index}`,
+            file_name: `${prefix}-${index}.txt`,
+            file_type: "text",
+            content_category: "document",
+            source,
+            source_path: source,
+            content: `marker:${prefix}-${index} this fixture body is long enough to be chunked and embedded during queue-order tests.`,
+            source_created_at: `${datePrefix}-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+            source_updated_at: `${datePrefix}-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+            synced_at: new Date().toISOString(),
+          })),
+        )
+        .execute();
+    };
+
+    const processed: string[] = [];
+    const embeddingProvider: EmbeddingProvider = {
+      name: "stub",
+      dimensions: 8,
+      supportsImages: false,
+      async embedTexts(texts: string[]) {
+        for (const text of texts) {
+          const marker = text.match(/marker:([a-z]+-\d+)/)?.[1];
+          if (marker && !processed.includes(marker)) processed.push(marker);
+        }
+        return texts.map(() => new Array(8).fill(0));
+      },
+    };
+
+    await seedQueue("zoho", "zoho_crm", "conn-fair-zoho", 30, "2026-01");
+    await seedQueue("linkedin", "linkedin_aimfox", "conn-fair-linkedin", 3, "2026-02");
+
+    const mixed = await runEnrichment({
+      db,
+      logger: createTestLogger(),
+      embeddingProvider,
+      maxFilesPerRun: 10,
+    });
+    expect(mixed.filesProcessed).toBe(10);
+    expect(processed.filter((id) => id.startsWith("linkedin-")).sort()).toEqual([
+      "linkedin-0",
+      "linkedin-1",
+      "linkedin-2",
+    ]);
+
+    await db.deleteFrom("document_chunks").execute();
+    await db.deleteFrom("indexed_files").where("source", "in", ["zoho_crm", "linkedin_aimfox"]).execute();
+    processed.length = 0;
+
+    await seedQueue("zoho", "zoho_crm", "conn-fair-zoho", 30, "2026-01");
+    await seedQueue("linkedin", "linkedin_aimfox", "conn-fair-linkedin", 2, "2026-02");
+    const underfill = await runEnrichment({
+      db,
+      logger: createTestLogger(),
+      embeddingProvider,
+      maxFilesPerRun: 10,
+    });
+    expect(underfill.filesProcessed).toBe(10);
+    expect(processed.filter((id) => id.startsWith("linkedin-")).sort()).toEqual(["linkedin-0", "linkedin-1"]);
+
+    await db.deleteFrom("document_chunks").execute();
+    await db.deleteFrom("indexed_files").where("source", "in", ["zoho_crm", "linkedin_aimfox"]).execute();
+    processed.length = 0;
+
+    await seedQueue("zoho", "zoho_crm", "conn-fair-zoho", 12, "2026-01");
+    const singleSource = await runEnrichment({
+      db,
+      logger: createTestLogger(),
+      embeddingProvider,
+      maxFilesPerRun: 10,
+    });
+    expect(singleSource.filesProcessed).toBe(10);
+    expect(processed).toEqual(Array.from({ length: 10 }, (_, index) => `zoho-${index}`));
+  });
+
   it("honors scheduled retry backoff but lets explicit reruns bypass it", async () => {
     const embeddingFileId = randomUUID();
     const summaryFileId = randomUUID();

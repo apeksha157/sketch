@@ -11,7 +11,7 @@
  * Images are downloaded temporarily from Google Drive, embedded, then discarded.
  */
 import { randomUUID } from "node:crypto";
-import type { Kysely } from "kysely";
+import type { ExpressionBuilder, Kysely } from "kysely";
 import { sql } from "kysely";
 import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
@@ -33,6 +33,7 @@ import { applyEngagementFloor } from "./engagement-floor";
 import type { StageReport, StageReporter } from "./enrichment-stage-report";
 import { type KnownEntityForPrompt, buildFileScopedKnownEntities } from "./file-scope-context";
 import { type GeminiGenerator, createGeminiGenerator } from "./gemini-generate";
+import { idInList } from "./id-in-list";
 import { buildParticipantBlock } from "./participant-block";
 import { type PersonCandidateScan, buildPersonCandidateBlock, buildPersonCandidateScan } from "./person-candidate-scan";
 import { type FileContext, type SmartEnrichmentUsageRecorder, smartEnrichFile } from "./smart-enrichment";
@@ -128,7 +129,27 @@ function minWordsForSmartEnrichment(fileType: string | null, threadContext: stri
   if (fileType === "calendar_event") return 10;
   if (fileType === "whatsapp_conversation_slice") return 1;
   if (fileType === "slack_conversation_slice") return 1;
+  if (fileType === "linkedin_conversation") return 1;
   return 100;
+}
+
+function pendingEnrichmentPredicate(now: string) {
+  return (eb: ExpressionBuilder<DB, "indexed_files">) =>
+    eb.or([
+      eb("embedding_status", "=", "pending"),
+      eb.and([
+        eb("embedding_status", "=", "failed"),
+        eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
+        eb.or([eb("embedding_next_retry_at", "is", null), eb("embedding_next_retry_at", "<=", now)]),
+      ]),
+      eb.and([eb("embedding_status", "=", "done"), eb("summary_status", "=", "pending")]),
+      eb.and([
+        eb("embedding_status", "=", "done"),
+        eb("summary_status", "=", "failed"),
+        eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
+        eb.or([eb("summary_next_retry_at", "is", null), eb("summary_next_retry_at", "<=", now)]),
+      ]),
+    ]);
 }
 
 function contentVersionOf(file: {
@@ -553,61 +574,78 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
   const hasGenerator = () => !!deps.generator || !!deps.geminiApiKey;
   const touchedEmailThreads = new Map<string, { connectorConfigId: string; threadId: string }>();
 
-  // Find files needing enrichment
-  let query = db
-    .selectFrom("indexed_files")
-    .select([
-      "id",
-      "file_name",
-      "file_type",
-      "content_category",
-      "content_hash",
-      "source",
-      "source_path",
-      "mime_type",
-      "provider_file_id",
-      "thread_id",
-      "connector_config_id",
-      "source_created_at",
-      "source_updated_at",
-      "embedding_status",
-      "summary_status",
-      "embedding_attempts",
-      "embedding_next_retry_at",
-      "summary_attempts",
-      "summary_next_retry_at",
-      "synced_at",
-    ])
-    .where("is_archived", "=", 0);
+  const selectPendingFiles = () =>
+    db
+      .selectFrom("indexed_files")
+      .select([
+        "id",
+        "file_name",
+        "file_type",
+        "content_category",
+        "content_hash",
+        "source",
+        "source_path",
+        "mime_type",
+        "provider_file_id",
+        "thread_id",
+        "connector_config_id",
+        "source_created_at",
+        "source_updated_at",
+        "embedding_status",
+        "summary_status",
+        "embedding_attempts",
+        "embedding_next_retry_at",
+        "summary_attempts",
+        "summary_next_retry_at",
+        "synced_at",
+      ])
+      .where("is_archived", "=", 0);
+
+  let pendingFiles: Awaited<ReturnType<ReturnType<typeof selectPendingFiles>["execute"]>>;
 
   if (deps.fileIds && deps.fileIds.length > 0) {
-    query = query.where("id", "in", deps.fileIds);
+    pendingFiles = await selectPendingFiles()
+      .where(idInList(db, sql.ref("indexed_files.id"), deps.fileIds))
+      .orderBy("source_created_at", "asc")
+      .orderBy("id", "asc")
+      .limit(maxFilesPerRun)
+      .execute();
   } else {
     const now = new Date().toISOString();
-    query = query.where((eb) =>
-      eb.or([
-        eb("embedding_status", "=", "pending"),
-        eb.and([
-          eb("embedding_status", "=", "failed"),
-          eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
-          eb.or([eb("embedding_next_retry_at", "is", null), eb("embedding_next_retry_at", "<=", now)]),
-        ]),
-        eb.and([eb("embedding_status", "=", "done"), eb("summary_status", "=", "pending")]),
-        eb.and([
-          eb("embedding_status", "=", "done"),
-          eb("summary_status", "=", "failed"),
-          eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
-          eb.or([eb("summary_next_retry_at", "is", null), eb("summary_next_retry_at", "<=", now)]),
-        ]),
-      ]),
-    );
-  }
+    const predicate = pendingEnrichmentPredicate(now);
+    const sources = await db
+      .selectFrom("indexed_files")
+      .select("source")
+      .distinct()
+      .where("is_archived", "=", 0)
+      .where(predicate)
+      .orderBy("source", "asc")
+      .execute();
 
-  const pendingFiles = await query
-    .orderBy("source_created_at", "asc")
-    .orderBy("id", "asc")
-    .limit(maxFilesPerRun)
-    .execute();
+    const filesBySource = await Promise.all(
+      sources.map((row) =>
+        selectPendingFiles()
+          .where(predicate)
+          .where("source", "=", row.source)
+          .orderBy("source_created_at", "asc")
+          .orderBy("id", "asc")
+          .limit(maxFilesPerRun)
+          .execute(),
+      ),
+    );
+    pendingFiles = [];
+    for (let index = 0; pendingFiles.length < maxFilesPerRun; index += 1) {
+      let added = false;
+      for (const files of filesBySource) {
+        const file = files[index];
+        if (!file) continue;
+        pendingFiles.push(file);
+        added = true;
+        if (pendingFiles.length >= maxFilesPerRun) break;
+      }
+      if (!added) break;
+    }
+  }
 
   if (pendingFiles.length === 0) {
     logger.debug("No files pending enrichment");

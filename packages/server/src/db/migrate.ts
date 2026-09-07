@@ -234,6 +234,7 @@ import * as m231 from "./migrations/231-benchmarks";
 import * as m232 from "./migrations/232-benchmark-owner-history";
 import * as m233 from "./migrations/233-crm-field-history";
 import * as m234 from "./migrations/234-entity-touch-stats";
+import * as m235 from "./migrations/235-requeue-linkedin-conversation-summaries";
 import type { DB } from "./schema";
 
 /**
@@ -477,6 +478,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "232-benchmark-owner-history": m232,
           "233-crm-field-history": m233,
           "234-entity-touch-stats": m234,
+          "235-requeue-linkedin-conversation-summaries": m235,
         };
       },
     },
