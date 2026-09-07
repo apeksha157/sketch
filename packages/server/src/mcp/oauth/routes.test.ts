@@ -188,6 +188,7 @@ describe("MCP OAuth routes", () => {
     expect(listTools.status).toBe(200);
     const body = (await listTools.json()) as { result: { tools: Array<{ name: string }> } };
     expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([
+      "sketch_get_entity",
       "sketch_get_entity_context",
       "sketch_get_file_content",
       "sketch_search",

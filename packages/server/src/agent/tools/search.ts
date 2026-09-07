@@ -1,5 +1,4 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
-import { sql } from "kysely";
 import { z } from "zod/v4";
 import { resolveContentPrincipals } from "../../access/principals";
 import {
@@ -13,8 +12,8 @@ import {
 } from "../../connectors/search";
 import type { DevSearchTraceOrigin, DevSearchTraceStatus } from "../../db/repositories/dev-search-traces";
 import { createEntityRepository } from "../../db/repositories/entities";
-import { fileVisibilityRuleSql } from "../../db/repositories/file-visibility-rule";
 import { createRawContentRepository } from "../../db/repositories/raw-contents";
+import { contentPrincipalDeps, filterEntityRowsForPublic } from "./entity-visibility";
 import { createSearchTraceCapture } from "./search-trace";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
@@ -83,9 +82,12 @@ export const searchEntitiesToolSchema = {
     ),
 };
 
-export const getEntityContextToolDescription = `Get cross-source context for an entity — all recent mentions across meetings, tasks, docs, and other indexed content. Returns a formatted timeline showing where and when this entity was referenced.
-
-Use this after SearchEntities to dive deeper into a specific entity. The response is a human-readable summary, not raw data.`;
+export const getEntityContextToolDescription = [
+  "Legacy human-readable entity timeline.",
+  "Prefer sketch_get_entity for structured JSON with identity, relations, file IDs, pagination, " +
+    "company/person rollups, and optional inline timeline content.",
+  "Use this only when a brief formatted summary is better than raw data.",
+].join("\n\n");
 
 export const getEntityContextToolSchema = {
   entityId: z.string().describe("The entity ID from SearchEntities results."),
@@ -125,53 +127,6 @@ export type SearchArgs = z.infer<z.ZodObject<typeof searchToolSchema>>;
 export type SearchEntitiesArgs = z.infer<z.ZodObject<typeof searchEntitiesToolSchema>>;
 export type GetEntityContextArgs = z.infer<z.ZodObject<typeof getEntityContextToolSchema>>;
 export type GetFileContentArgs = z.infer<z.ZodObject<typeof getFileContentToolSchema>>;
-
-function contentPrincipalDeps(deps: SketchMcpDeps) {
-  return { ...deps, adminBypass: { enabled: deps.adminReadAllEnabled === true } };
-}
-
-/**
- * Keep public entity metadata only when at least one mentioning file is visible. For an
- * entity the caller cannot see, the correlated EXISTS scans that entity's mentions before
- * returning false, including the visibility rule's nested entity-share EXISTS. This residual
- * is O(mentions) in the database and occurs only for the negative case.
- */
-async function filterEntityRowsForPublic<
-  T extends { id: string; source_type: string; subtype: string | null; aliases: string | null },
->(deps: SketchMcpDeps, rows: T[]): Promise<T[]> {
-  if (!deps.publicMcp?.filterEntityMetadata || !deps.db || rows.length === 0) return rows;
-
-  const userPrincipals = await resolveContentPrincipals(contentPrincipalDeps(deps));
-  if (userPrincipals === undefined) return rows;
-  if (userPrincipals.length === 0) return [];
-
-  const visibleEntities = await deps.db
-    .selectFrom("entities")
-    .select("entities.id")
-    .where(
-      "entities.id",
-      "in",
-      rows.map((row) => row.id),
-    )
-    .where(
-      sql<boolean>`EXISTS (
-        SELECT 1
-        FROM entity_mentions em
-        INNER JOIN indexed_files f ON f.id = em.indexed_file_id
-        WHERE em.entity_id = entities.id
-          AND ${fileVisibilityRuleSql({
-            principals: userPrincipals,
-            slackEntitySyncEnabled: deps.slackEntitySyncEnabled ?? true,
-            archived: "exclude",
-            alias: "f",
-          })}
-      )`,
-    )
-    .execute();
-  const visibleEntityIds = new Set(visibleEntities.map((entity) => entity.id));
-
-  return rows.filter((row) => visibleEntityIds.has(row.id));
-}
 
 function parseAliases(value: string | null): string[] {
   return value ? (JSON.parse(value) as string[]) : [];

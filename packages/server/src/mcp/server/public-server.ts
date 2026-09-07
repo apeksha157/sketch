@@ -4,6 +4,7 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { z } from "zod/v4";
 import { handleSearchDeliveryTargets } from "../../agent/tools/delivery-targets";
+import { getEntityToolDescription, getEntityToolSchema, handleGetEntity } from "../../agent/tools/get-entity";
 import { handleSendMessageToTarget } from "../../agent/tools/messaging";
 import {
   getEntityContextToolDescription,
@@ -205,6 +206,7 @@ export async function createPublicSketchMcpServer(params: {
     handleSearch(args, deps, "public_mcp"),
   );
   register("sketch_search_entities", searchEntitiesToolDescription, searchEntitiesToolSchema, handleSearchEntities);
+  register("sketch_get_entity", getEntityToolDescription, getEntityToolSchema, handleGetEntity);
   register(
     "sketch_get_entity_context",
     getEntityContextToolDescription,
