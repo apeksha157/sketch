@@ -10,7 +10,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "../db/schema";
 import { getSharedPgDb } from "../test-utils";
 import { buildParticipantBlock } from "./participant-block";
-import { seedSlackSliceFile } from "./participant-block-slack-fixture";
+import { seedSlackInterleavedStreamFiles, seedSlackSliceFile } from "./participant-block-slack-fixture";
 
 const testLogger = pino({ enabled: false });
 const CONNECTOR_ID = "cfg-pb-pg";
@@ -96,5 +96,27 @@ describe("Slack speaker block on Postgres", () => {
 
     expect(block).toContain("- Quiet Member (external)");
     expect(block).not.toContain("U0QUIET001");
+  });
+
+  it("folds the id-range fallback by stream so channel and thread slices stay separate", async () => {
+    const channelFileId = randomUUID();
+    const threadFileId = randomUUID();
+    await seedFile(db, channelFileId);
+    await seedFile(db, threadFileId);
+    await seedSlackInterleavedStreamFiles(db, { channelFileId, threadFileId });
+
+    const channelBlock = await buildParticipantBlock(
+      { db, logger: testLogger },
+      { fileId: channelFileId, fileContent: "" },
+    );
+    const threadBlock = await buildParticipantBlock(
+      { db, logger: testLogger },
+      { fileId: threadFileId, fileContent: "" },
+    );
+
+    expect(channelBlock).toContain("- Cara Channel (teammate) · cara@example.com");
+    expect(channelBlock).not.toContain("Theo Thread");
+    expect(threadBlock).toContain("- Theo Thread (external)");
+    expect(threadBlock).not.toContain("Cara Channel");
   });
 });

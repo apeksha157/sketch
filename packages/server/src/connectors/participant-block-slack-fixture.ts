@@ -71,3 +71,104 @@ export async function seedSlackSliceFile(
     })
     .execute();
 }
+
+export const SLACK_INTERLEAVED_ROSTER = JSON.stringify({
+  channelId: "C0PBMIX",
+  channelName: "pb-mix",
+  participants: [
+    { slackUserId: "U0CHANNEL1", displayName: "Cara Channel", kind: "teammate", email: "cara@example.com" },
+    { slackUserId: "U0THREAD01", displayName: "Theo Thread", kind: "external", email: null },
+  ],
+});
+
+const INTERLEAVED_THREAD_TS = "1700000000.000100";
+
+/**
+ * Seeds one conversation whose channel and thread rows interleave inside a
+ * single id span, plus a channel slice and a thread slice that both fall back
+ * to the id range (no `denoised_message_ids`). Without stream folding each
+ * slice would list the other stream's speakers.
+ */
+export async function seedSlackInterleavedStreamFiles(
+  db: Kysely<DB>,
+  options: { channelFileId: string; threadFileId: string },
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .updateTable("indexed_files")
+    .set({ file_type: SLACK_CONVERSATION_SLICE_FILE_TYPE })
+    .where("id", "in", [options.channelFileId, options.threadFileId])
+    .execute();
+  const conversation = await db
+    .insertInto("conversations")
+    .values({
+      platform: "slack",
+      kind: "channel",
+      provider_conversation_id: `C0PBMIX-${options.channelFileId}`,
+      display_name: "pb-mix",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+
+  const plan = [
+    { slackUserId: "U0CHANNEL1", isThreadReply: false },
+    { slackUserId: "U0THREAD01", isThreadReply: true },
+    { slackUserId: "U0CHANNEL1", isThreadReply: false },
+    { slackUserId: "U0THREAD01", isThreadReply: true },
+  ];
+  const ids: number[] = [];
+  for (const [index, row] of plan.entries()) {
+    const inserted = await db
+      .insertInto("conversation_messages")
+      .values({
+        conversation_id: conversation.id,
+        provider_message_id: `pb-mix-${options.channelFileId}-${index}`,
+        sender_jid: row.slackUserId,
+        sender_name: row.slackUserId,
+        text: `message ${index}`,
+        received_at: now,
+        effective_at: now,
+        is_thread_reply: row.isThreadReply ? 1 : 0,
+        provider_thread_id: row.isThreadReply ? INTERLEAVED_THREAD_TS : null,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    ids.push(inserted.id);
+  }
+
+  await db
+    .insertInto("conversation_slices")
+    .values([
+      {
+        id: `slice-pb-mix-channel-${options.channelFileId}`,
+        conversation_id: conversation.id,
+        provider_thread_id: null,
+        first_message_id: ids[0] as number,
+        last_message_id: ids[3] as number,
+        started_at: now,
+        ended_at: now,
+        message_count: 2,
+        denoised_message_ids: null,
+        flush_reason: "llm_boundary",
+        roster_snapshot: SLACK_INTERLEAVED_ROSTER,
+        salience_verdict: "kept",
+        indexed_file_id: options.channelFileId,
+      },
+      {
+        id: `slice-pb-mix-thread-${options.threadFileId}`,
+        conversation_id: conversation.id,
+        provider_thread_id: INTERLEAVED_THREAD_TS,
+        first_message_id: ids[1] as number,
+        last_message_id: ids[3] as number,
+        started_at: now,
+        ended_at: now,
+        message_count: 2,
+        denoised_message_ids: null,
+        flush_reason: "gap",
+        roster_snapshot: SLACK_INTERLEAVED_ROSTER,
+        salience_verdict: "kept",
+        indexed_file_id: options.threadFileId,
+      },
+    ])
+    .execute();
+}

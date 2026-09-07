@@ -23,7 +23,7 @@ import { createIndexedFileFactRepository } from "../db/repositories/indexed-file
 import type { DB } from "../db/schema";
 import { createTestDb } from "../test-utils";
 import { assertNoRawSlackIdentifiers, buildParticipantBlock, parseActionItemOwners } from "./participant-block";
-import { seedSlackSliceFile } from "./participant-block-slack-fixture";
+import { seedSlackInterleavedStreamFiles, seedSlackSliceFile } from "./participant-block-slack-fixture";
 
 const testLogger = pino({ enabled: false });
 
@@ -381,6 +381,28 @@ describe("buildSlackSpeakerBlock via buildParticipantBlock", () => {
     await seedSlackSliceFile(db, { fileId, connectorConfigId: CONNECTOR_ID, rosterSnapshot: "[]" });
 
     expect(await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" })).toBe("");
+  });
+
+  it("folds the id-range fallback by stream so channel and thread slices stay separate", async () => {
+    const channelFileId = randomUUID();
+    const threadFileId = randomUUID();
+    await seedFile(db, channelFileId);
+    await seedFile(db, threadFileId);
+    await seedSlackInterleavedStreamFiles(db, { channelFileId, threadFileId });
+
+    const channelBlock = await buildParticipantBlock(
+      { db, logger: testLogger },
+      { fileId: channelFileId, fileContent: "" },
+    );
+    const threadBlock = await buildParticipantBlock(
+      { db, logger: testLogger },
+      { fileId: threadFileId, fileContent: "" },
+    );
+
+    expect(channelBlock).toContain("- Cara Channel (teammate) · cara@example.com");
+    expect(channelBlock).not.toContain("Theo Thread");
+    expect(threadBlock).toContain("- Theo Thread (external)");
+    expect(threadBlock).not.toContain("Cara Channel");
   });
 
   it("refuses a leaked roster id but accepts capitalised company-style names", () => {

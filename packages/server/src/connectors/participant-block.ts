@@ -210,11 +210,24 @@ function parseSliceMessageIds(raw: string | null): number[] | null {
  * the slice, so no Slack API call is needed at enrichment time. The roster's
  * only affiliation signal is the participant kind (teammate / entity /
  * external); a snapshot without one degrades to the display name alone.
+ *
+ * The id-range fallback (used when `denoised_message_ids` is missing or
+ * unparseable) folds by stream the way `slack-chunk-adapters.streamQuery` does.
+ * Channel and thread rows share one id sequence, so an unfolded range would let
+ * a channel slice list thread repliers and a thread slice list every channel
+ * speaker in the span.
  */
 async function buildSlackSpeakerBlock(deps: ParticipantBlockDeps, fileId: string): Promise<string> {
   const slice = await deps.db
     .selectFrom("conversation_slices")
-    .select(["conversation_id", "first_message_id", "last_message_id", "denoised_message_ids", "roster_snapshot"])
+    .select([
+      "conversation_id",
+      "provider_thread_id",
+      "first_message_id",
+      "last_message_id",
+      "denoised_message_ids",
+      "roster_snapshot",
+    ])
     .where("indexed_file_id", "=", fileId)
     .executeTakeFirst();
   if (!slice) return "";
@@ -227,9 +240,15 @@ async function buildSlackSpeakerBlock(deps: ParticipantBlockDeps, fileId: string
     .select(["sender_jid"])
     .where("conversation_id", "=", slice.conversation_id)
     .where("sender_jid", "is not", null);
-  senderQuery = denoisedIds
-    ? senderQuery.where("id", "in", denoisedIds)
-    : senderQuery.where("id", ">=", slice.first_message_id).where("id", "<=", slice.last_message_id);
+  if (denoisedIds) {
+    senderQuery = senderQuery.where("id", "in", denoisedIds);
+  } else {
+    senderQuery =
+      slice.provider_thread_id === null
+        ? senderQuery.where("is_thread_reply", "=", 0)
+        : senderQuery.where("is_thread_reply", "=", 1).where("provider_thread_id", "=", slice.provider_thread_id);
+    senderQuery = senderQuery.where("id", ">=", slice.first_message_id).where("id", "<=", slice.last_message_id);
+  }
   const speakerIds = new Set((await senderQuery.execute()).map((row) => row.sender_jid).filter(Boolean));
   if (speakerIds.size === 0) return "";
 
