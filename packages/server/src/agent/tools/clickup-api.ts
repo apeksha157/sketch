@@ -1,4 +1,8 @@
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import { basename, isAbsolute, relative, sep } from "node:path";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { clickupWebhookEventSchema } from "@sketch/shared";
 import { z } from "zod/v4";
 import { encrypt } from "../../auth/encryption";
 import { releaseLock } from "../../automation/lock-service";
@@ -31,7 +35,17 @@ export const CLICKUP_MAX_PATH_CHARS = 512;
 export const CLICKUP_MAX_QUERY_BYTES = 8 * 1024;
 export const CLICKUP_MAX_BODY_BYTES = 64 * 1024;
 export const CLICKUP_MAX_RESPONSE_BYTES = 256 * 1024;
+export const CLICKUP_MAX_ATTACHMENT_FILES = 5;
+export const CLICKUP_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
+export const CLICKUP_MAX_ATTACHMENT_FILENAME_CHARS = 255;
 export { ClickUpApiRateLimitError } from "../../integrations/clickup-request-budget";
+
+export type ClickUpLocalFile = {
+  path: string;
+  filename?: string;
+  contentType?: string;
+};
 
 export type ClickUpApiArgs = {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -40,6 +54,7 @@ export type ClickUpApiArgs = {
   body?: unknown;
   accountId?: string;
   webhookEndpointId?: string;
+  files?: ClickUpLocalFile[];
 };
 
 type CanvasAccessTokenProvider = (params: CanvasAccessTokenRequest) => Promise<CanvasAccessToken>;
@@ -51,6 +66,13 @@ export class ClickUpApiHttpError extends Error {
   ) {
     super(`ClickUp API request failed with HTTP ${status}${code ? ` (${code})` : ""}.`);
     this.name = "ClickUpApiHttpError";
+  }
+}
+
+export class ClickUpUploadUncertainError extends Error {
+  constructor(message = "ClickUp attachment upload outcome is uncertain; reconcile the task before retrying.") {
+    super(message);
+    this.name = "ClickUpUploadUncertainError";
   }
 }
 
@@ -93,7 +115,28 @@ const schema = {
     .describe(
       "Native Sketch endpoint ID returned by ManageScheduledTasks. Required for webhook writes and optional for explicit GET reconciliation. Captures signing secrets server-side; requires the owner, a paused automation, and exact accountId.",
     ),
+  files: z
+    .array(
+      z
+        .object({
+          path: z.string().trim().min(1).max(4096),
+          filename: z.string().trim().min(1).max(CLICKUP_MAX_ATTACHMENT_FILENAME_CHARS).optional(),
+          contentType: z.string().trim().min(1).max(128).optional(),
+        })
+        .strict(),
+    )
+    .max(CLICKUP_MAX_ATTACHMENT_FILES)
+    .optional()
+    .describe(
+      "Trusted local files for POST /task/{task_id}/attachment. Use server-provided local paths only; never send URLs, base64, or file bytes.",
+    ),
 };
+
+const clickUpApiArgsSchema = z.object(schema);
+
+export function parseClickUpApiArgs(value: unknown): ClickUpApiArgs {
+  return clickUpApiArgsSchema.parse(value);
+}
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -129,12 +172,20 @@ function validatePath(path: string): void {
   }
 }
 
-function buildRequest(args: ClickUpApiArgs): { url: string; body?: string } {
+function buildUrl(args: ClickUpApiArgs): string {
   validatePath(args.path);
   const url = new URL(`${CLICKUP_API_URL}${args.path}`);
   for (const [key, value] of Object.entries(args.query ?? {})) url.searchParams.set(key, value);
   if (byteLength(url.search) > CLICKUP_MAX_QUERY_BYTES) {
     throw new Error(`ClickUp API query exceeds the ${CLICKUP_MAX_QUERY_BYTES}-byte limit.`);
+  }
+  return url.toString();
+}
+
+function buildRequest(args: ClickUpApiArgs): { url: string; body?: string } {
+  const url = buildUrl(args);
+  if (args.files && args.files.length > 0) {
+    throw new Error("ClickUp local files are only supported by POST /task/{task_id}/attachment.");
   }
 
   if (args.body === undefined) return { url: url.toString() };
@@ -150,6 +201,124 @@ function buildRequest(args: ClickUpApiArgs): { url: string; body?: string } {
     throw new Error(`ClickUp API request body exceeds the ${CLICKUP_MAX_BODY_BYTES}-byte limit.`);
   }
   return { url: url.toString(), body };
+}
+
+function isTaskAttachmentRequest(args: ClickUpApiArgs): boolean {
+  return args.method === "POST" && /^\/task\/[A-Za-z0-9][A-Za-z0-9._~-]*\/attachment$/u.test(args.path);
+}
+
+function trustedRootContains(root: string, candidate: string): boolean {
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath.length > 0 &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  );
+}
+
+function safeAttachmentFilename(value: string | undefined, sourcePath: string): string {
+  const candidate = [...(value?.trim() || basename(sourcePath))]
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return character === "\\" || character === "/" || codePoint <= 0x1f || codePoint === 0x7f ? "_" : character;
+    })
+    .join("");
+  if (!candidate || candidate === "." || candidate === "..") throw new Error("ClickUp attachment filename is invalid");
+  if (candidate.length > CLICKUP_MAX_ATTACHMENT_FILENAME_CHARS) {
+    throw new Error(`ClickUp attachment filename exceeds ${CLICKUP_MAX_ATTACHMENT_FILENAME_CHARS} characters`);
+  }
+  return candidate;
+}
+
+function safeAttachmentContentType(value: string | undefined): string {
+  const contentType = value?.trim() || "application/octet-stream";
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9!#$%&'*+.^_`|~-]*\/[A-Za-z0-9][A-Za-z0-9!#$%&'*+.^_`|~-]*(?:;[^\r\n]{0,64})?$/u.test(
+      contentType,
+    )
+  ) {
+    throw new Error("ClickUp attachment content type is invalid");
+  }
+  return contentType;
+}
+
+type MaterializedClickUpFile = { bytes: Buffer; filename: string; contentType: string };
+
+async function materializeClickUpFiles(
+  args: ClickUpApiArgs,
+  deps: SketchMcpDeps,
+  signal?: AbortSignal,
+): Promise<MaterializedClickUpFile[]> {
+  const files = args.files ?? [];
+  if (files.length === 0) return [];
+  if (files.length > CLICKUP_MAX_ATTACHMENT_FILES) {
+    throw new Error(`ClickUp attachments support at most ${CLICKUP_MAX_ATTACHMENT_FILES} local files`);
+  }
+  if (!isTaskAttachmentRequest(args)) {
+    throw new Error("ClickUp local files are only supported by POST /task/{task_id}/attachment.");
+  }
+  if (!deps.workspaceDir) throw new Error("ClickUp attachment file roots are not configured");
+  const roots = [await realpath(deps.workspaceDir)];
+  if (deps.trustedLocalFileRoot) roots.push(await realpath(deps.trustedLocalFileRoot));
+  let totalBytes = 0;
+  const materialized: MaterializedClickUpFile[] = [];
+  for (const file of files) {
+    if (signal?.aborted) throw new Error("ClickUp attachment upload was cancelled before reading local files");
+    if (!isAbsolute(file.path) || file.path.includes("\0") || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(file.path)) {
+      throw new Error("ClickUp attachment path must be an absolute trusted local path");
+    }
+    const link = await lstat(file.path).catch(() => null);
+    if (!link || !link.isFile() || link.isSymbolicLink()) {
+      throw new Error("ClickUp attachment must be a regular, non-symlink local file");
+    }
+    const resolved = await realpath(file.path).catch(() => null);
+    if (!resolved || !roots.some((root) => trustedRootContains(root, resolved))) {
+      throw new Error("ClickUp attachment file is outside the trusted automation file roots");
+    }
+    if (link.size > CLICKUP_MAX_ATTACHMENT_BYTES) {
+      throw new Error(`ClickUp attachment exceeds the ${CLICKUP_MAX_ATTACHMENT_BYTES}-byte per-file limit`);
+    }
+    const handle = await open(file.path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => null);
+    if (!handle) throw new Error("ClickUp attachment could not be opened safely");
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.dev !== link.dev || opened.ino !== link.ino) {
+        throw new Error("ClickUp attachment changed while it was being opened");
+      }
+      if (opened.size > CLICKUP_MAX_ATTACHMENT_BYTES) {
+        throw new Error(`ClickUp attachment exceeds the ${CLICKUP_MAX_ATTACHMENT_BYTES}-byte per-file limit`);
+      }
+      const bytes = await handle.readFile({ signal });
+      if (bytes.byteLength > CLICKUP_MAX_ATTACHMENT_BYTES) {
+        throw new Error(`ClickUp attachment exceeds the ${CLICKUP_MAX_ATTACHMENT_BYTES}-byte per-file limit`);
+      }
+      totalBytes += bytes.byteLength;
+      if (totalBytes > CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES) {
+        throw new Error(`ClickUp attachments exceed the ${CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES}-byte total limit`);
+      }
+      materialized.push({
+        bytes,
+        filename: safeAttachmentFilename(file.filename, file.path),
+        contentType: safeAttachmentContentType(file.contentType),
+      });
+    } finally {
+      await handle.close();
+    }
+  }
+  return materialized;
+}
+
+function buildMultipartRequest(
+  args: ClickUpApiArgs,
+  files: MaterializedClickUpFile[],
+): { url: string; formData: FormData } {
+  if (args.body !== undefined) throw new Error("ClickUp attachment requests must not include a JSON body");
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("attachment[]", new Blob([new Uint8Array(file.bytes)], { type: file.contentType }), file.filename);
+  }
+  return { url: buildUrl(args), formData };
 }
 
 async function readBoundedResponse(response: Response): Promise<string> {
@@ -204,9 +373,11 @@ async function getTokenProvider(deps: SketchMcpDeps): Promise<CanvasAccessTokenP
 async function requestClickUpApi(
   args: ClickUpApiArgs,
   deps: SketchMcpDeps,
-  request: { url: string; body?: string },
+  request: { url: string; body?: string; formData?: FormData },
   onSend: () => void,
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  signal?.throwIfAborted();
   const getCanvasAccessToken = await getTokenProvider(deps);
   if (!getCanvasAccessToken) throw new Error("ClickUp authorization is not configured for this Sketch run.");
 
@@ -224,20 +395,32 @@ async function requestClickUpApi(
     assertClickUpRequestAllowed(token.accessToken);
 
     let response: Response;
+    let sent = false;
     try {
       onSend();
+      sent = true;
+      const timeoutSignal = AbortSignal.timeout(CLICKUP_API_TIMEOUT_MS);
       response = await fetch(request.url, {
         method: args.method,
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${token.accessToken}`,
-          ...(request.body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(request.body === undefined && request.formData === undefined
+            ? {}
+            : request.formData === undefined
+              ? { "Content-Type": "application/json" }
+              : {}),
         },
-        ...(request.body === undefined ? {} : { body: request.body }),
+        ...(request.body === undefined && request.formData === undefined
+          ? {}
+          : { body: request.formData ?? request.body }),
         redirect: "error",
-        signal: AbortSignal.timeout(CLICKUP_API_TIMEOUT_MS),
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
       });
     } catch (error) {
+      if (sent && args.files && args.files.length > 0) {
+        throw new ClickUpUploadUncertainError();
+      }
       throw new Error(`ClickUp API request failed: ${safeErrorMessage(error, token.accessToken)}`);
     }
 
@@ -281,6 +464,11 @@ const remoteWebhookIdentitySchema = z
     id: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
     endpoint: z.string().url(),
     team_id: z.union([z.string(), z.number()]),
+    status: z.string().trim().min(1).max(64).optional(),
+    health: z
+      .object({ status: z.string().trim().min(1).max(64).optional(), fail_count: z.number().nonnegative().optional() })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -292,21 +480,40 @@ const remoteWebhookSchema = remoteWebhookIdentitySchema.extend({
     .refine((value) => Buffer.byteLength(value, "utf8") <= 4096),
 });
 
-function clickUpSubscription(data: Record<string, unknown>): NonNullable<WebhookSourceBinding["subscription"]> {
-  const event = z.string().regex(/^(?:[A-Za-z][A-Za-z0-9]{0,99}|\*)$/);
-  const parsed = z.union([event, z.array(event).min(1).max(100)]).safeParse(data.events);
+export function clickUpSubscription(data: Record<string, unknown>): NonNullable<WebhookSourceBinding["subscription"]> {
+  const parsed = z
+    .union([clickupWebhookEventSchema, clickupWebhookEventSchema.array().min(1).max(100)])
+    .safeParse(data.events);
   if (!parsed.success) throw new WebhookBindingError("Use a bounded, explicit set of ClickUp webhook events.");
   const events = [...new Set(typeof parsed.data === "string" ? [parsed.data] : parsed.data)].sort();
-  if (events.includes("*")) {
-    throw new WebhookBindingError("List explicit webhook events so the subscription can be verified during recovery.");
-  }
-  const field = ["task_id", "list_id", "folder_id", "space_id"].find((key) => data[key] != null);
+  const fields = ["task_id", "list_id", "folder_id", "space_id"] as const;
+  const presentFields = fields.filter((key) => data[key] != null);
+  const field = presentFields[0];
   if (!field) return { events, scope: null };
-  const value = data[field];
-  if ((typeof value !== "string" && typeof value !== "number") || !/^[A-Za-z0-9_-]{1,256}$/.test(String(value))) {
-    throw new WebhookBindingError("The ClickUp webhook location must be an exact task, list, folder, or space ID.");
+  for (const candidate of presentFields) {
+    const value = data[candidate];
+    if ((typeof value !== "string" && typeof value !== "number") || !/^[A-Za-z0-9_-]{1,256}$/u.test(String(value))) {
+      throw new WebhookBindingError("The ClickUp webhook location must be an exact task, list, folder, or space ID.");
+    }
   }
+  const value = data[field];
   return { events, scope: { field, id: String(value) } };
+}
+
+function clickUpRemoteHealth(data: Record<string, unknown>): "active" | "failing" | "suspended" | "unknown" {
+  const statusValues = [
+    data.status,
+    data.health && typeof data.health === "object" && !Array.isArray(data.health)
+      ? (data.health as Record<string, unknown>).status
+      : undefined,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim().toLowerCase());
+  if (statusValues.length === 0) return "unknown";
+  if (statusValues.every((value) => value === "active")) return "active";
+  if (statusValues.some((value) => value === "suspended")) return "suspended";
+  if (statusValues.some((value) => value === "failing")) return "failing";
+  return "unknown";
 }
 
 function redactWebhookSecrets(data: unknown): unknown {
@@ -397,6 +604,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
   let binding: WebhookSourceBinding = stored ?? {
     integration: "clickup",
     accountId: args.accountId,
+    ...(collection?.[1] ? { workspaceId: collection[1] } : {}),
     collectionPath: args.path,
     callbackUrl,
     resourceId: null,
@@ -404,6 +612,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
   if (
     binding.integration !== "clickup" ||
     binding.accountId !== args.accountId ||
+    (collection && binding.workspaceId !== undefined && binding.workspaceId !== collection[1]) ||
     (collection && binding.collectionPath !== args.path) ||
     (resource && binding.resourceId !== resource[1])
   ) {
@@ -430,7 +639,11 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       }
       subscription.scope = stored.subscription.scope;
     }
-    binding = { ...binding, subscription };
+    binding = {
+      ...binding,
+      ...(collection?.[1] ? { workspaceId: collection[1] } : {}),
+      subscription,
+    };
   }
   const acquired = await acquireAgentLease(db, task.id, ctx);
   if (acquired.kind !== "held")
@@ -460,7 +673,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       : new WebhookBindingError("The webhook binding could not be reserved. No provider request was sent.");
   }
   const reserved = endpoint;
-  const save = async (remote: { id: string; secret?: string } | null, ready = true) => {
+  const save = async (remote: { id: string; secret?: string } | null) => {
     try {
       return await updateWebhookBinding({
         db,
@@ -474,7 +687,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
             ? encrypt(remote.secret, encryptionKey)
             : previous.signing_secret_encrypted
           : null,
-        status: remote ? (ready && remote.secret ? "active_signed" : "pending") : "revoked",
+        status: remote ? "pending" : "revoked",
       });
     } catch (error) {
       throw error instanceof WebhookBindingError
@@ -490,7 +703,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       if (args.method === "POST") {
         await save(null);
       } else {
-        await updateWebhookBinding({
+        const restored = await updateWebhookBinding({
           db,
           endpoint: reserved,
           userId,
@@ -500,6 +713,14 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
           encryptedSecret: previous.signing_secret_encrypted,
           status: previous.status === "active_signed" || previous.status === "revoked" ? previous.status : "pending",
         });
+        if (previous.status === "active_signed") {
+          await db
+            .updateTable("webhook_deliveries")
+            .set({ endpoint_generation: restored.generation })
+            .where("endpoint_id", "=", restored.id)
+            .where("endpoint_generation", "=", previous.generation)
+            .execute();
+        }
       }
     },
     finish: async (data: unknown) => {
@@ -532,7 +753,7 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       }
       const remote = remoteWebhookSchema.safeParse(identity.data);
       if (!remote.success) {
-        await save({ id: identity.data.id }, false);
+        await save({ id: identity.data.id });
         throw new WebhookBindingError(
           "The matching webhook has no usable signing secret. Its remote ID is saved for cleanup; keep the automation paused and reconcile or delete it.",
         );
@@ -541,14 +762,20 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
       try {
         ready =
           !!binding.subscription &&
-          JSON.stringify(clickUpSubscription(remote.data)) === JSON.stringify(binding.subscription);
+          JSON.stringify(clickUpSubscription(remote.data)) === JSON.stringify(binding.subscription) &&
+          clickUpRemoteHealth(remote.data) === "active";
       } catch (error) {
         if (!(error instanceof WebhookBindingError)) throw error;
       }
-      const saved = await save(remote.data, ready);
+      const saved = await save(remote.data);
       if (!ready) {
+        const health = clickUpRemoteHealth(remote.data);
         throw new WebhookBindingError(
-          "The webhook events or location are invalid or differ from the requested subscription. It remains paused; inspect the saved remote ID before correcting or deleting it.",
+          health === "unknown"
+            ? "The matching ClickUp webhook did not include a usable active health status. Its remote ID is saved, but the automation remains paused until the exact binding is reconciled."
+            : health !== "active"
+              ? `The matching ClickUp webhook is ${health}; it remains paused until the exact remote binding is healthy.`
+              : "The webhook events or location are invalid or differ from the requested subscription. It remains paused; inspect the saved remote ID before correcting or deleting it.",
         );
       }
       return {
@@ -559,23 +786,39 @@ async function prepareWebhookCapture(args: ClickUpApiArgs, deps: SketchMcpDeps) 
           accountId: binding.accountId,
           resourceId: remote.data.id,
           status: saved.status,
+          verification: "awaiting_signed_receipt",
         },
       };
     },
   };
 }
 
-export async function executeClickUpApi(args: ClickUpApiArgs, deps: SketchMcpDeps): Promise<unknown> {
-  const request = buildRequest(args);
+export async function executeClickUpApi(
+  args: ClickUpApiArgs,
+  deps: SketchMcpDeps,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  signal?.throwIfAborted();
+  if (isTaskAttachmentRequest(args) && (!args.files || args.files.length === 0)) {
+    throw new Error("ClickUp task attachment requests require trusted local files");
+  }
+  const materializedFiles = await materializeClickUpFiles(args, deps, signal);
+  const request = materializedFiles.length > 0 ? buildMultipartRequest(args, materializedFiles) : buildRequest(args);
   const webhook = isWebhookManagementPath(args.path);
   if (args.webhookEndpointId && !webhook)
     throw new WebhookBindingError("webhookEndpointId is only for native webhook binding requests.");
   const capture = webhook ? await prepareWebhookCapture(args, deps) : null;
   let sent = false;
   try {
-    const data = await requestClickUpApi(args, deps, request, () => {
-      sent = true;
-    });
+    const data = await requestClickUpApi(
+      args,
+      deps,
+      request,
+      () => {
+        sent = true;
+      },
+      signal,
+    );
     return capture ? await capture.finish(data) : webhook ? redactWebhookSecrets(data) : data;
   } catch (error) {
     if (capture && args.method === "DELETE" && error instanceof ClickUpApiHttpError && error.status === 404) {
@@ -597,9 +840,13 @@ export async function executeClickUpApi(args: ClickUpApiArgs, deps: SketchMcpDep
   }
 }
 
-export async function handleClickUpApi(args: ClickUpApiArgs, deps: SketchMcpDeps): Promise<ToolResult> {
+export async function handleClickUpApi(
+  args: ClickUpApiArgs,
+  deps: SketchMcpDeps,
+  signal?: AbortSignal,
+): Promise<ToolResult> {
   try {
-    const result = await executeClickUpApi(args, deps);
+    const result = await executeClickUpApi(args, deps, signal);
     const serialized = JSON.stringify(result) ?? "null";
     if (byteLength(serialized) > CLICKUP_MAX_RESPONSE_BYTES) {
       return {
@@ -620,6 +867,6 @@ export function createClickUpApiTool(deps: SketchMcpDeps) {
     "clickup_api",
     "Execute a bounded ClickUp API v2 request through Sketch. Canvas owns ClickUp authorization and credential selection; this tool never exposes credentials or request headers.",
     schema,
-    async (args): Promise<ToolResult> => handleClickUpApi(args, deps),
+    async (args: ClickUpApiArgs): Promise<ToolResult> => handleClickUpApi(args, deps),
   );
 }

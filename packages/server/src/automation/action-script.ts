@@ -1,8 +1,11 @@
 import type { AutomationSketchToolName } from "@sketch/shared";
 
-const sketchToolReferencePattern = /\bctx\.tools\.(search|searchEntities|getEntityContext|findTeammate)\b/g;
+const sketchToolReferencePattern =
+  /\bctx\.tools\.(search|searchEntities|getEntityContext|findTeammate|clickup|clickup_api)\b/g;
 const invalidSketchToolNamespacePattern = /\bctx\.(?:sketch|sketchTools)\b/;
 const integrationActionReferencePattern = /\bctx\.integrations\.executeAction\b/;
+const canvasClickUpActionReferencePattern =
+  /\bcomponentKey\s*:\s*["'`]\s*click\s*[-_]?\s*up(?:\s*[-_][^"'`\s]*)?["'`]/im;
 const rawCanvasCliReferencePattern =
   /(?:\b(?:ctx|process)\.env\.(?:CANVAS_CLI|INTEGRATION_CLI)\b|\$\{?(?:CANVAS_CLI|INTEGRATION_CLI)\}?)/;
 
@@ -16,6 +19,10 @@ export function referencesAutomationIntegrationAction(script: string): boolean {
 
 export function referencesRawCanvasCli(script: string): boolean {
   return rawCanvasCliReferencePattern.test(script);
+}
+
+export function referencesCanvasClickUpAction(script: string): boolean {
+  return canvasClickUpActionReferencePattern.test(script);
 }
 
 export function referencedAutomationSketchTools(script: string): AutomationSketchToolName[] {

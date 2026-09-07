@@ -1,0 +1,79 @@
+{
+  "artifactVersion": 1,
+  "name": "habuild-clickup-cutover",
+  "purpose": "Reviewable preflight inventory for the Sketch-managed ClickUp replacement work",
+  "source": {
+    "observedAt": "2026-09-07",
+    "sketchCommit": "0e87347927b3bef1071ffab6aeab41eecef5f97d",
+    "habuildSourceCommit": "27d87e96269d5d91e10ee570e5b9fe14fad52807",
+    "canvasPullRequest": 818,
+    "canvasPullRequestHead": "aea6393e4acb86bcc8dfa4c920adb3049e0bd31c"
+  },
+  "safety": {
+    "mode": "preflight-only",
+    "dryRunDefault": true,
+    "expectedRevisionRequiredForKnownWorkflows": true,
+    "protectedBackupRequiredBeforeAnyApply": true,
+    "productionMutationPerformed": false,
+    "replacementDefinitions": "operator-supplied"
+  },
+  "workflowInventory": [
+    {
+      "id": "6d02fee8-0f89-4e57-9a38-36cce2b4e8c4",
+      "expectedRevision": 18,
+      "expectedStatus": "active",
+      "sourceTrigger": "native Slack",
+      "replacement": "managed ClickUp action script",
+      "requiredVerification": ["task", "custom fields", "missing-member fallback", "attachments", "no duplicate task"]
+    },
+    {
+      "id": "54c1a727-960e-4ff7-9ad3-addc4a1a8763",
+      "expectedRevision": 1,
+      "expectedStatus": "active",
+      "sourceTrigger": "Canvas task-created",
+      "replacement": "scoped native ClickUp webhook",
+      "requiredVerification": ["prepare subtasks", "apply subtasks", "payload mapping", "duplicate protection"]
+    },
+    {
+      "id": "24d58c62-212d-4fc9-b965-dce0e3b6c425",
+      "expectedRevision": 0,
+      "expectedStatus": "active",
+      "sourceTrigger": "pending Canvas setup",
+      "replacement": "paused native ClickUp task-created binding",
+      "requiredVerification": ["wait and fetch", "enrich subtasks", "no invented Canvas node IDs"]
+    },
+    {
+      "id": "13098123-a67f-4fd4-873d-1663e8002d2c",
+      "expectedRevision": 2,
+      "expectedStatus": "active",
+      "sourceTrigger": "Canvas task-updated",
+      "replacement": "native ClickUp event binding",
+      "requiredVerification": ["record action input mapping", "internal-only capability", "feedback-loop protection"]
+    }
+  ],
+  "scheduledAgentIds": [
+    "90a1874f-4dfe-4770-81b0-602c4aa6f1a5",
+    "7d9dd44f-8b5a-4aa5-88b2-39099f980423",
+    "d19a3768-8138-412f-a339-30b9f5e13e9a",
+    "22916f96-a5a4-457e-b128-bc0389329d0c",
+    "e2b7e2d9-9631-4fb5-935f-266971ce2124",
+    "bf57e8a0-2069-4924-aad2-1d1ab0059d55",
+    "9096fff8-b690-4000-bd86-4f684a83dadb",
+    "0e2f9f98-31a8-4913-93b0-85d74c15815b"
+  ],
+  "inventorySummary": {
+    "clickupReferencingRecords": 43,
+    "activeRecords": 12,
+    "pausedRecords": 13,
+    "completedRecords": 18,
+    "canvasOAuthEligibleAccounts": 41,
+    "separateApiKeyFilesAccounts": 5
+  },
+  "deferredInputs": [
+    "The remaining active ClickUp workflow IDs and all paused workflow IDs",
+    "Current definitions, exact list and hierarchy IDs, field mappings, schedules, timezones, owners, and stable step IDs",
+    "Remote ClickUp subscription IDs, callback scopes, account IDs, and signed delivery watermarks",
+    "Protected PostgreSQL and filesystem backup locations with restore verification",
+    "The approved replacement definitions and expected revisions for each additional workflow"
+  ]
+}

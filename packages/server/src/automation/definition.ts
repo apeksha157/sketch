@@ -32,6 +32,7 @@ import { resolveWorkflowDelivery } from "../workflows/delivery";
 import {
   hasInvalidAutomationSketchToolNamespace,
   referencesAutomationIntegrationAction,
+  referencesCanvasClickUpAction,
   referencesRawCanvasCli,
   undeclaredAutomationSketchTools,
 } from "./action-script";
@@ -603,6 +604,64 @@ function addIssue(issues: BuilderValidationIssue[], code: string, message: strin
   issues.push(issue);
 }
 
+function isClickUpValue(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "-");
+  return ["clickup", "click-up", "click_up"].some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`) || normalized.startsWith(`${prefix}_`),
+  );
+}
+
+function validateClickUpWebhookPlan(
+  request: AutomationBuilderSaveRequest,
+  trigger: WorkflowStep | undefined,
+  issues: BuilderValidationIssue[],
+): void {
+  const plan = trigger?.triggerConfig?.clickupWebhookPlan;
+  if (!plan) return;
+  if (trigger?.triggerConfig?.type !== "webhook") {
+    addIssue(
+      issues,
+      "CLICKUP_WEBHOOK_PLAN_TRIGGER_REQUIRED",
+      "A managed ClickUp webhook plan requires the native Sketch webhook trigger",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan`,
+    );
+    return;
+  }
+  if (request.status === "active" && !plan.accountId) {
+    addIssue(
+      issues,
+      "CLICKUP_ACCOUNT_REQUIRED",
+      "An active ClickUp webhook automation must pin its opaque Canvas account ID",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.accountId`,
+    );
+  }
+  if (new Set(plan.events).size !== plan.events.length) {
+    addIssue(
+      issues,
+      "CLICKUP_WEBHOOK_EVENTS_DUPLICATE",
+      "ClickUp webhook events must be unique",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.events`,
+    );
+  }
+  if (plan.scope?.field === "list_id" && plan.scope.id.trim().length === 0) {
+    addIssue(
+      issues,
+      "CLICKUP_WEBHOOK_SCOPE_REQUIRED",
+      "ClickUp list scope must use an exact non-empty list ID",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.scope.id`,
+    );
+  }
+  if (plan.scope === null && !plan.workspaceWide) {
+    addIssue(
+      issues,
+      "CLICKUP_WORKSPACE_SCOPE_NOT_EXPLICIT",
+      "Workspace-wide ClickUp webhook scope must be explicitly requested",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig.clickupWebhookPlan.workspaceWide`,
+    );
+  }
+}
+
 export function validateAutomationBuilderSaveRequest(params: {
   request: AutomationBuilderSaveRequest;
   brokerCapable: boolean;
@@ -661,6 +720,14 @@ export function validateAutomationBuilderSaveRequest(params: {
         );
       }
       if (content?.contentType === "script") {
+        if (referencesCanvasClickUpAction(content.content)) {
+          addIssue(
+            issues,
+            "CANVAS_CLICKUP_ACTION_UNSUPPORTED",
+            `Action step "${step.label}" cannot call ClickUp through Canvas; use the managed ctx.tools.clickup capability`,
+            `stepContent.${step.id}`,
+          );
+        }
         if (step.actionCapabilities?.usesIntegrationActions === true && referencesRawCanvasCli(content.content)) {
           addIssue(
             issues,
@@ -684,6 +751,25 @@ export function validateAutomationBuilderSaveRequest(params: {
             issues,
             "SKETCH_TOOL_NAMESPACE_INVALID",
             `Action step "${step.label}" must call Sketch tools through ctx.tools, not ctx.sketch or ctx.sketchTools`,
+            `stepContent.${step.id}`,
+          );
+        }
+        const usesManagedClickUp = (step.actionCapabilities?.sketchTools ?? []).some(
+          (tool) => tool === "clickup" || tool === "clickup_api",
+        );
+        if (usesManagedClickUp && step.actionCapabilities?.usesIntegrationActions === true) {
+          addIssue(
+            issues,
+            "CLICKUP_CAPABILITY_MIXED_WITH_CANVAS",
+            `Action step "${step.label}" must use the managed ClickUp capability without Canvas integration actions`,
+            `steps.${step.id}.actionCapabilities.usesIntegrationActions`,
+          );
+        }
+        if (usesManagedClickUp && /\bbase64\b|data:[^,\s]+,/i.test(content.content)) {
+          addIssue(
+            issues,
+            "CLICKUP_ATTACHMENT_ENCODING_UNSUPPORTED",
+            `Action step "${step.label}" must pass trusted local file paths to managed ClickUp uploads; do not encode file bytes in the script`,
             `stepContent.${step.id}`,
           );
         }
@@ -761,11 +847,22 @@ export function validateAutomationBuilderSaveRequest(params: {
     issues,
   );
 
-  validateTriggerSchedule(
-    request,
-    request.steps.find((step) => step.type === "trigger"),
-    issues,
-  );
+  const trigger = request.steps.find((step) => step.type === "trigger");
+  const triggerConfig = trigger?.triggerConfig;
+  if (
+    triggerConfig?.type === "canvas" &&
+    (isClickUpValue(triggerConfig.app) || isClickUpValue(triggerConfig.componentKey))
+  ) {
+    addIssue(
+      issues,
+      "CANVAS_CLICKUP_TRIGGER_UNSUPPORTED",
+      "Canvas-managed ClickUp triggers are retired; use a managed ClickUp webhook plan or a schedule",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig`,
+    );
+  }
+  validateClickUpWebhookPlan(request, trigger, issues);
+
+  validateTriggerSchedule(request, trigger, issues);
   validateScheduleValue(request, issues, params.validateScheduleFuture ?? true);
 
   if (issues.length > 0) throw new AutomationValidationError(issues);

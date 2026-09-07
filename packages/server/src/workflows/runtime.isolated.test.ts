@@ -1160,7 +1160,7 @@ describe("executeAutomation action steps", () => {
         {
           stepId: "act1",
           content: `
-            await ctx.integrations.executeAction({ componentKey: "clickup-find-tasks", configuredProps: {} });
+            await ctx.integrations.executeAction({ componentKey: "google-sheets-find-rows", configuredProps: {} });
             return Boolean(ctx.env.GH_TOKEN);
           `,
         },
@@ -1454,7 +1454,7 @@ describe("executeAutomation action steps", () => {
           stepId: "act1",
           content: `
             return ctx.integrations.executeAction({
-              componentKey: "clickup-create-task-with-attachment",
+              componentKey: "google-sheets-create-row-with-attachment",
               configuredProps: { name: "Bug report" },
               localFiles: [{ path: input.filePath, configuredProp: "file_content_base64" }]
             });
@@ -1470,7 +1470,7 @@ describe("executeAutomation action steps", () => {
     expect(executeAction).toHaveBeenCalledWith(
       {
         userEmail: "roopak@canvasx.ai",
-        componentKey: "clickup-create-task-with-attachment",
+        componentKey: "google-sheets-create-row-with-attachment",
         configuredProps: {
           name: "Bug report",
           file_content_base64: Buffer.from("jpeg-bytes").toString("base64"),
@@ -1478,6 +1478,46 @@ describe("executeAutomation action steps", () => {
       },
       expect.any(AbortSignal),
     );
+  });
+
+  it("rejects ClickUp Canvas actions before loading credentials or a provider", async () => {
+    const loadIntegrationProvider = vi.fn();
+    const listAgentEnvForRuntime = vi.fn();
+    const params = makeParams({
+      task: makeActionTask(
+        [
+          {
+            id: "act1",
+            type: "action",
+            label: "Retired ClickUp action",
+            icon: "code",
+            position: { x: 0, y: 100 },
+            actionCapabilities: { sketchTools: [], usesIntegrationActions: true },
+          },
+        ],
+        { output_mode: "silent" },
+      ),
+      stepContentRepo: makeStepContent([
+        {
+          stepId: "act1",
+          content:
+            'return ctx.integrations.executeAction({ componentKey: "click up-create-task", configuredProps: {} });',
+        },
+      ]),
+      loadIntegrationProvider,
+      listAgentEnvForRuntime,
+    });
+
+    const result = await executeAutomation(params as never);
+
+    expect(result.status).toBe("failed");
+    expect(result.stepOutputs).toEqual({});
+    expect(params._runsRepo.update).toHaveBeenCalledWith(
+      "run-1",
+      expect.objectContaining({ errorMessage: expect.stringContaining("cannot call ClickUp through Canvas") }),
+    );
+    expect(loadIntegrationProvider).not.toHaveBeenCalled();
+    expect(listAgentEnvForRuntime).not.toHaveBeenCalled();
   });
 
   it("stops runaway integration-action loops before they can fan out indefinitely", async () => {
@@ -1525,7 +1565,7 @@ describe("executeAutomation action steps", () => {
           stepId: "act1",
           content: `
             return ctx.integrations.executeAction({
-              componentKey: "clickup-create-task-with-attachment",
+              componentKey: "google-sheets-create-row-with-attachment",
               configuredProps: {},
               localFiles: [{ path: input.filePath, configuredProp: "file_content_base64" }]
             });

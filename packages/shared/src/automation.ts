@@ -16,6 +16,7 @@ export type CanvasWebhookEndpoint = z.infer<typeof canvasWebhookEndpointSchema>;
 export const webhookSourceBindingSchema = z.object({
   integration: z.string().min(1).max(256),
   accountId: z.string().min(1).max(256),
+  workspaceId: z.string().min(1).max(256).optional(),
   collectionPath: z.string().min(1).max(512),
   callbackUrl: z.string().url().max(2048),
   resourceId: z.string().min(1).max(256).nullable(),
@@ -25,8 +26,58 @@ export const webhookSourceBindingSchema = z.object({
       scope: z.object({ field: z.string().min(1).max(64), id: z.string().min(1).max(256) }).nullable(),
     })
     .optional(),
+  humanSummary: z.string().trim().min(1).max(500).optional(),
 });
 export type WebhookSourceBinding = z.infer<typeof webhookSourceBindingSchema>;
+
+export const clickupWebhookEventSchema = z.union([
+  z.literal("*"),
+  z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z][A-Za-z0-9]{0,99}$/),
+]);
+
+export type ClickupWebhookEvent = z.infer<typeof clickupWebhookEventSchema>;
+
+export const clickupWebhookScopeSchema = z
+  .object({
+    field: z.enum(["task_id", "list_id", "folder_id", "space_id"]),
+    id: z.string().trim().min(1).max(256),
+    name: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
+
+export type ClickupWebhookScope = z.infer<typeof clickupWebhookScopeSchema>;
+
+export const clickupWebhookPlanSchema = z
+  .object({
+    accountId: z.string().trim().min(1).max(256).optional(),
+    workspaceId: z.string().trim().min(1).max(256),
+    events: z.array(clickupWebhookEventSchema).min(1).max(100),
+    scope: clickupWebhookScopeSchema.nullable(),
+    workspaceWide: z.boolean().default(false),
+    summary: z.string().trim().min(1).max(500),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.scope === null && !value.workspaceWide) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workspaceWide"],
+        message: "A workspace-wide ClickUp webhook must be explicitly requested",
+      });
+    }
+    if (value.scope !== null && value.workspaceWide) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workspaceWide"],
+        message: "A scoped ClickUp webhook cannot also be workspace-wide",
+      });
+    }
+  });
+
+export type ClickupWebhookPlan = z.infer<typeof clickupWebhookPlanSchema>;
 
 export const webhookDeliveryReceiptSchema = z.object({
   endpointId: z.string(),
@@ -54,6 +105,7 @@ export const workflowTriggerConfigSchema = z
     webhookContentType: z.literal("application/json").optional(),
     webhookAuthentication: z.enum(["none", "hmac_sha256"]).optional(),
     webhookBinding: webhookSourceBindingSchema.optional(),
+    clickupWebhookPlan: clickupWebhookPlanSchema.optional(),
     webhookLastDelivery: webhookDeliveryReceiptSchema.optional(),
     webhookStatus: z.enum(["active", "revoked", "unavailable"]).optional(),
     canvasEndpoint: canvasWebhookEndpointSchema.optional(),
@@ -76,7 +128,14 @@ export const workflowTriggerConfigSchema = z
 
 export type WorkflowTriggerConfig = z.infer<typeof workflowTriggerConfigSchema>;
 
-export const automationSketchToolNameSchema = z.enum(["search", "searchEntities", "getEntityContext", "findTeammate"]);
+export const automationSketchToolNameSchema = z.enum([
+  "search",
+  "searchEntities",
+  "getEntityContext",
+  "findTeammate",
+  "clickup",
+  "clickup_api",
+]);
 
 export type AutomationSketchToolName = z.infer<typeof automationSketchToolNameSchema>;
 

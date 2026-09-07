@@ -146,6 +146,7 @@ export interface SketchMcpDeps {
   questionInteractionCapabilities?: QuestionInteractionCapabilities;
   responseSurface?: "web" | "slack" | "whatsapp";
   workspaceDir: string;
+  trustedLocalFileRoot?: string;
   db?: Kysely<DB>;
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
   availableManagedIntegrations?: ReadonlySet<ManagedIntegrationAppId>;

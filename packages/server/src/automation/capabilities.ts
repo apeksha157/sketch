@@ -1,6 +1,7 @@
 import { type AutomationSketchToolName, automationSketchToolNameSchema } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import { z } from "zod/v4";
+import { type ClickUpApiArgs, executeClickUpApi, parseClickUpApiArgs } from "../agent/tools/clickup-api";
 import { type SearchUsersArgs, handleSearchUsers, searchUsersToolSchema } from "../agent/tools/messaging";
 import {
   type GetEntityContextArgs,
@@ -65,6 +66,9 @@ export interface AutomationCapabilityContext {
   userRepo: SearchableUserRepo;
   logger: Logger;
   signal: AbortSignal;
+  trustedLocalFileRoot?: string;
+  loadIntegrationProvider?: SketchMcpDeps["loadIntegrationProvider"];
+  getCanvasAccessToken?: SketchMcpDeps["getCanvasAccessToken"];
   recordCall?: (event: AutomationCapabilityCallEvent) => void | Promise<void>;
   onFailure?: (capability: AutomationSketchToolName, error: unknown) => void;
 }
@@ -101,6 +105,8 @@ export interface AutomationSketchTools {
   searchEntities?: (args: SearchEntitiesArgs) => Promise<AutomationSearchEntity[]>;
   getEntityContext?: (args: GetEntityContextArgs) => Promise<string>;
   findTeammate?: (args: SearchUsersArgs) => Promise<AutomationFindTeammateResult>;
+  clickup?: (args: ClickUpApiArgs) => Promise<unknown>;
+  clickup_api?: (args: ClickUpApiArgs) => Promise<unknown>;
 }
 
 export interface AutomationCapabilityRegistry {
@@ -214,10 +220,14 @@ function createSketchDeps(context: AutomationCapabilityContext): SketchMcpDeps {
   return {
     uploadCollector: new UploadCollector(),
     workspaceDir: context.workspaceDir,
+    trustedLocalFileRoot: context.trustedLocalFileRoot,
     db: context.db,
     userRepo: context.userRepo,
     currentUserId: context.creatorId,
     currentUserEmail: context.creatorEmail,
+    loadIntegrationProvider: context.loadIntegrationProvider,
+    getCanvasAccessToken: context.getCanvasAccessToken,
+    availableManagedIntegrations: new Set(["clickup"]),
     publicMcp: { filterEntityMetadata: true },
     logger: context.logger,
   };
@@ -316,6 +326,18 @@ export function createAutomationCapabilityRegistry(): AutomationCapabilityRegist
               })),
             };
           });
+      }
+      if (allowed.has("clickup") || allowed.has("clickup_api")) {
+        const clickup = (value: ClickUpApiArgs) =>
+          invoke(context, "clickup", async () => {
+            const parsed = parseClickUpApiArgs(value);
+            if (!parsed.accountId) {
+              throw new Error("Managed ClickUp automation actions require the exact admitted opaque accountId");
+            }
+            return executeClickUpApi(parsed, deps, context.signal);
+          });
+        if (allowed.has("clickup")) tools.clickup = clickup;
+        if (allowed.has("clickup_api")) tools.clickup_api = clickup;
       }
 
       return Object.freeze(tools);

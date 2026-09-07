@@ -26,7 +26,9 @@ export class WebhookBindingError extends Error {
 
 export class WebhookNotReadyError extends WebhookBindingError {
   constructor() {
-    super("Complete or reconcile the signed webhook through its provider API before activating this automation.");
+    super(
+      "Complete or reconcile the signed webhook and verify a receipt for the current binding before activating this automation.",
+    );
     this.name = "WebhookNotReadyError";
   }
 }
@@ -78,6 +80,19 @@ export async function assertWebhookEndpointReady(
     })
   ) {
     throw new WebhookNotReadyError();
+  }
+  const binding = readWebhookSourceBinding(endpoint);
+  if (binding?.integration === "clickup") {
+    const receipt = await db
+      .selectFrom("webhook_deliveries")
+      .select("id")
+      .where("endpoint_id", "=", endpoint.id)
+      .where("endpoint_generation", "=", endpoint.generation)
+      .limit(1)
+      .executeTakeFirst();
+    if (!receipt) {
+      throw new WebhookNotReadyError();
+    }
   }
 }
 

@@ -36,7 +36,11 @@ import { runAgentRuntimeCore } from "../agent/runtime/core";
 import { createAgentRuntimeWorkspaceToolScopePolicy } from "../agent/runtime/path-guard";
 import { createAgentRuntimeProvider } from "../agent/runtime/provider";
 import { createAgentRuntimeWorkspaceTools } from "../agent/runtime/workspace-tools";
-import { hasInvalidAutomationSketchToolNamespace, undeclaredAutomationSketchTools } from "../automation/action-script";
+import {
+  hasInvalidAutomationSketchToolNamespace,
+  referencesCanvasClickUpAction,
+  undeclaredAutomationSketchTools,
+} from "../automation/action-script";
 import {
   type AutomationCapabilityCallEvent,
   type AutomationCapabilityRegistry,
@@ -55,6 +59,7 @@ import type { StepContentRow, createAutomationStepContentRepository } from "../d
 import type { createInboxMessagesRepository } from "../db/repositories/inbox-messages";
 import type { ScheduledTaskRow } from "../db/repositories/scheduled-tasks";
 import type { DB } from "../db/schema";
+import { canvasBlockedIntegrationMessage, isCanvasBlockedComponentKey } from "../integrations/cli/policy";
 import type { IntegrationProvider } from "../integrations/types";
 import { cleanupIntegrationAccess, startIntegrationAccess } from "../integrations/wrapper";
 import type { Logger } from "../logger";
@@ -743,6 +748,7 @@ async function executeWorkflowStep(params: {
       logger: runtimeParams.logger,
       config: runtimeParams.config,
       workspaceDir,
+      trustedLocalFileRoot: runtimeParams.trustedLocalFileRoot,
       creator,
       creatorEmail,
       runAgent: runtimeParams.runAgent,
@@ -1036,6 +1042,11 @@ const MAX_INTEGRATION_ACTION_CALLS_PER_STEP = 25;
 
 async function executeActionStep(params: ActionStepParams): Promise<unknown> {
   const { script, step, input, runId, logger, creatorId, creatorEmail, workspaceDir, loadIntegrationProvider } = params;
+  if (referencesCanvasClickUpAction(script)) {
+    throw new Error(
+      "ClickUp actions are retired in Canvas. Use the managed ctx.tools.clickup capability with trusted local file paths.",
+    );
+  }
   const usesIntegrationActions = workflowStepUsesIntegrationActions(step);
   const sketchTools = step.actionCapabilities?.sketchTools ?? [];
   const cliIntegrationIds = step.actionCapabilities?.cliIntegrations ?? [];
@@ -1113,6 +1124,8 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
                 userRepo: params.userRepo,
                 logger,
                 signal: controller.signal,
+                trustedLocalFileRoot: params.trustedLocalFileRoot,
+                loadIntegrationProvider,
                 recordCall: params.recordAutomationCapabilityCall,
                 onFailure: (capability, error) => {
                   if (capabilityFailure) return;
@@ -1126,6 +1139,9 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
       executeIntegrationAction: async (request) => {
         if (!usesIntegrationActions || !integrationProvider?.executeAction || !creatorEmail) {
           throw new Error("The configured integration provider cannot execute server-owned actions");
+        }
+        if (isCanvasBlockedComponentKey(request.componentKey)) {
+          throw new Error(canvasBlockedIntegrationMessage(request.componentKey));
         }
         if (integrationActionCalls >= MAX_INTEGRATION_ACTION_CALLS_PER_STEP) {
           throw new Error(
@@ -1351,6 +1367,7 @@ interface AgentStepParams {
   logger: Logger;
   config: ExecuteAutomationParams["config"];
   workspaceDir: string;
+  trustedLocalFileRoot?: string;
   creator: Awaited<ReturnType<NonNullable<RunAgentParams["userRepo"]>["findById"]>> | undefined;
   creatorEmail: string | null;
   runAgent?: typeof runAgent;
@@ -1772,6 +1789,7 @@ async function executeSketchAgentStep(
       workspaceKey: resolveWorkspaceKey(task),
       userMessage,
       workspaceDir,
+      trustedLocalFileRoot: params.trustedLocalFileRoot,
       claudeConfigDir: params.config.CLAUDE_CONFIG_DIR,
       userName: creator?.name ?? "Automation",
       userEmail: creatorEmail,

@@ -13,7 +13,9 @@ describe("MANAGED_CLICKUP_SKILL", () => {
   it("teaches the managed direct API webhook lifecycle", () => {
     expect(MANAGED_CLICKUP_SKILL).toContain("managed-integration: clickup");
     expect(MANAGED_CLICKUP_SKILL).toContain("Canvas-minted, server-held OAuth credential");
-    expect(MANAGED_CLICKUP_SKILL).toContain("clickup_api(method, path, query?, body?, accountId?, webhookEndpointId?)");
+    expect(MANAGED_CLICKUP_SKILL).toContain(
+      "clickup_api(method, path, query?, body?, accountId?, webhookEndpointId?, files?)",
+    );
     expect(MANAGED_CLICKUP_SKILL).toContain("taskId");
     expect(MANAGED_CLICKUP_SKILL).toContain("accountId");
     expect(MANAGED_CLICKUP_SKILL).toContain("team_id");

@@ -1,10 +1,17 @@
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CanvasProvider } from "../../integrations/canvas";
 import {
+  CLICKUP_MAX_ATTACHMENT_BYTES,
+  CLICKUP_MAX_ATTACHMENT_FILES,
+  CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES,
   CLICKUP_MAX_BODY_BYTES,
   CLICKUP_MAX_PATH_CHARS,
   CLICKUP_MAX_RESPONSE_BYTES,
   ClickUpApiRateLimitError,
+  ClickUpUploadUncertainError,
   executeClickUpApi,
   handleClickUpApi,
 } from "./clickup-api";
@@ -13,8 +20,17 @@ import type { SketchMcpDeps } from "./types";
 const deps = (getCanvasAccessToken: NonNullable<SketchMcpDeps["getCanvasAccessToken"]>): SketchMcpDeps =>
   ({ getCanvasAccessToken }) as SketchMcpDeps;
 
-afterEach(() => {
+const temporaryRoots: string[] = [];
+
+async function createTemporaryRoot(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "sketch-clickup-api-"));
+  temporaryRoots.push(root);
+  return root;
+}
+
+afterEach(async () => {
   vi.restoreAllMocks();
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("ClickUp API tool", () => {
@@ -131,6 +147,141 @@ describe("ClickUp API tool", () => {
         body: JSON.stringify({ name: "Fix the bug", priority: { priority: "high" } }),
       }),
     );
+  });
+
+  it("serializes trusted local files as native ClickUp multipart attachments", async () => {
+    const root = await createTemporaryRoot();
+    const filePath = join(root, "report.txt");
+    await writeFile(filePath, "attachment bytes");
+    const getCanvasAccessToken = vi.fn().mockResolvedValue({ accessToken: "multipart-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const rawHeaders = new Headers(init?.headers);
+      expect(rawHeaders.has("content-type")).toBe(false);
+      const request = new Request(input, init);
+      const form = await request.formData();
+      const parts = form.getAll("attachment[]");
+      expect(parts).toHaveLength(1);
+      const part = parts[0];
+      expect(part).toBeInstanceOf(File);
+      expect((part as File).name).toBe("reported-name.txt");
+      expect((part as File).type).toBe("text/plain");
+      await expect((part as File).text()).resolves.toBe("attachment bytes");
+      return new Response(JSON.stringify({ id: "attachment-1" }), { status: 200 });
+    });
+
+    await expect(
+      executeClickUpApi(
+        {
+          method: "POST",
+          path: "/task/task-1/attachment",
+          accountId: "account-1",
+          files: [{ path: filePath, filename: "reported-name.txt", contentType: "text/plain" }],
+        },
+        { ...deps(getCanvasAccessToken), workspaceDir: root },
+      ),
+    ).resolves.toEqual({ id: "attachment-1" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(getCanvasAccessToken).toHaveBeenCalledWith({
+      integration: "clickup",
+      accountId: "account-1",
+      forceRefresh: false,
+    });
+  });
+
+  it("rejects untrusted attachment paths, URLs, symlinks, and oversized batches before credential access", async () => {
+    const root = await createTemporaryRoot();
+    const outsideRoot = await createTemporaryRoot();
+    const trustedPath = join(root, "trusted.txt");
+    const outsidePath = join(outsideRoot, "outside.txt");
+    const symlinkPath = join(root, "linked.txt");
+    await writeFile(trustedPath, "trusted");
+    await writeFile(outsidePath, "outside");
+    await symlink(trustedPath, symlinkPath);
+    const getCanvasAccessToken = vi.fn().mockResolvedValue({ accessToken: "untrusted-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const attachment = (path: string) => ({
+      method: "POST" as const,
+      path: "/task/task-1/attachment",
+      files: [{ path }],
+    });
+
+    await expect(
+      executeClickUpApi(attachment(outsidePath), { ...deps(getCanvasAccessToken), workspaceDir: root }),
+    ).rejects.toThrow("outside the trusted automation file roots");
+    await expect(
+      executeClickUpApi(attachment("https://example.test/file"), { ...deps(getCanvasAccessToken), workspaceDir: root }),
+    ).rejects.toThrow("absolute trusted local path");
+    await expect(
+      executeClickUpApi(attachment("relative.txt"), { ...deps(getCanvasAccessToken), workspaceDir: root }),
+    ).rejects.toThrow("absolute trusted local path");
+    await expect(
+      executeClickUpApi(attachment(symlinkPath), { ...deps(getCanvasAccessToken), workspaceDir: root }),
+    ).rejects.toThrow("regular, non-symlink");
+    await expect(
+      executeClickUpApi(
+        {
+          method: "POST",
+          path: "/task/task-1/attachment",
+          files: Array.from({ length: CLICKUP_MAX_ATTACHMENT_FILES + 1 }, () => ({ path: trustedPath })),
+        },
+        { ...deps(getCanvasAccessToken), workspaceDir: root },
+      ),
+    ).rejects.toThrow(`at most ${CLICKUP_MAX_ATTACHMENT_FILES} local files`);
+    expect(getCanvasAccessToken).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces per-file and aggregate attachment byte limits", async () => {
+    const root = await createTemporaryRoot();
+    const largeFile = join(root, "large.bin");
+    await writeFile(largeFile, Buffer.alloc(CLICKUP_MAX_ATTACHMENT_BYTES + 1));
+    const getCanvasAccessToken = vi.fn().mockResolvedValue({ accessToken: "size-token" });
+    await expect(
+      executeClickUpApi(
+        { method: "POST", path: "/task/task-1/attachment", files: [{ path: largeFile }] },
+        { ...deps(getCanvasAccessToken), workspaceDir: root },
+      ),
+    ).rejects.toThrow("per-file limit");
+
+    const first = join(root, "first.bin");
+    const second = join(root, "second.bin");
+    await writeFile(first, Buffer.alloc(13 * 1024 * 1024));
+    await writeFile(second, Buffer.alloc(13 * 1024 * 1024));
+    await expect(
+      executeClickUpApi(
+        { method: "POST", path: "/task/task-1/attachment", files: [{ path: first }, { path: second }] },
+        { ...deps(getCanvasAccessToken), workspaceDir: root },
+      ),
+    ).rejects.toThrow(`${CLICKUP_MAX_ATTACHMENT_TOTAL_BYTES}-byte total limit`);
+    expect(getCanvasAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("honors cancellation before reading and preserves uncertainty after a sent upload", async () => {
+    const root = await createTemporaryRoot();
+    const filePath = join(root, "cancel.txt");
+    await writeFile(filePath, "cancel me");
+    const getCanvasAccessToken = vi.fn().mockResolvedValue({ accessToken: "cancel-token" });
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(
+      executeClickUpApi(
+        { method: "POST", path: "/task/task-1/attachment", files: [{ path: filePath }] },
+        { ...deps(getCanvasAccessToken), workspaceDir: root },
+        controller.signal,
+      ),
+    ).rejects.toThrow(/aborted|cancelled/i);
+    expect(getCanvasAccessToken).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const uncertainFetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("socket closed"));
+    const uploadError = await executeClickUpApi(
+      { method: "POST", path: "/task/task-1/attachment", files: [{ path: filePath }] },
+      { ...deps(getCanvasAccessToken), workspaceDir: root },
+    ).catch((error: unknown) => error);
+    expect(uploadError).toBeInstanceOf(ClickUpUploadUncertainError);
+    expect((uploadError as Error).message).not.toContain("cancel-token");
+    expect(uncertainFetch).toHaveBeenCalledOnce();
   });
 
   it("force-refreshes and retries exactly once after HTTP 401", async () => {

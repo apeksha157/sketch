@@ -366,6 +366,8 @@ export interface RunAgentParams {
   onTextDelta?: (delta: string) => Promise<void>;
   onSessionId?: (sessionId: string) => Promise<void>;
   attachments?: Attachment[];
+  /** Trusted staged files from a scheduler trigger; never interpreted as user-provided URLs or bytes. */
+  trustedLocalFileRoot?: string;
   /**
    * Per-message aggregate cap (bytes) on image attachments embedded inline as
    * base64. Injected from config.MAX_ATTACHMENT_TOTAL_MB in bootstrap; when
@@ -1399,6 +1401,7 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
     questionInteractionCapabilities: params.questionInteractionCapabilities,
     auxCostCollector,
     workspaceDir: absWorkspace,
+    trustedLocalFileRoot: params.trustedLocalFileRoot,
     db: params.db,
     getSlack: params.getSlack,
     loadIntegrationProvider: params.loadIntegrationProvider,

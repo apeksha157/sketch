@@ -113,7 +113,7 @@ describe("automation trigger validation", () => {
     );
   });
 
-  it("continues to allow provider-specific Canvas triggers", () => {
+  it("rejects provider-specific Canvas ClickUp triggers", () => {
     const request = requestForAction({ sketchTools: ["searchEntities"], usesIntegrationActions: false });
     request.status = "active";
     request.scheduleType = "external";
@@ -125,6 +125,35 @@ describe("automation trigger validation", () => {
         app: "clickup",
         eventDescription: "new issue created",
         componentKey: "clickup.issue.created",
+      },
+    };
+
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).toThrowError(
+      expect.objectContaining({
+        issues: expect.arrayContaining([expect.objectContaining({ code: "CANVAS_CLICKUP_TRIGGER_UNSUPPORTED" })]),
+      }),
+    );
+  });
+
+  it("accepts a flexible native ClickUp webhook plan with an exact scope", () => {
+    const request = requestForAction({ sketchTools: ["searchEntities"], usesIntegrationActions: false });
+    request.status = "paused";
+    request.scheduleType = "external";
+    request.scheduleValue = "webhook";
+    request.steps[0] = {
+      ...request.steps[0],
+      triggerConfig: {
+        type: "webhook",
+        webhookMethod: "POST",
+        webhookContentType: "application/json",
+        webhookAuthentication: "hmac_sha256",
+        clickupWebhookPlan: {
+          workspaceId: "workspace-1",
+          events: ["futureTaskEvent"],
+          scope: { field: "list_id", id: "list-1", name: "Bug reports" },
+          workspaceWide: false,
+          summary: "Task events for the Bug reports list",
+        },
       },
     };
 
@@ -255,12 +284,36 @@ describe("automation action capability validation", () => {
     );
   });
 
-  it("allows Canvas integration actions through the runtime wrapper", () => {
+  it("rejects Canvas ClickUp integration actions", () => {
     const request = requestForAction({ sketchTools: [], usesIntegrationActions: true });
     request.stepContent.action.content =
       'return ctx.integrations.executeAction({ componentKey: "clickup-find-tasks", configuredProps: {} });';
 
-    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: true })).not.toThrow();
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: true })).toThrowError(
+      expect.objectContaining({
+        issues: expect.arrayContaining([expect.objectContaining({ code: "CANVAS_CLICKUP_ACTION_UNSUPPORTED" })]),
+      }),
+    );
+  });
+
+  it("allows an API-first managed ClickUp action without a Canvas broker", () => {
+    const request = requestForAction({ sketchTools: ["clickup"], usesIntegrationActions: false });
+    request.stepContent.action.content =
+      'return ctx.tools.clickup({ method: "GET", path: "/team/team-1/time_entries", accountId: "opaque-account" });';
+
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
+  });
+
+  it("rejects encoded ClickUp attachment bytes in a managed action script", () => {
+    const request = requestForAction({ sketchTools: ["clickup"], usesIntegrationActions: false });
+    request.stepContent.action.content =
+      'return ctx.tools.clickup({ method: "POST", path: "/task/task-1/attachment", accountId: "opaque-account", body: { base64: "bytes" } });';
+
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).toThrowError(
+      expect.objectContaining({
+        issues: expect.arrayContaining([expect.objectContaining({ code: "CLICKUP_ATTACHMENT_ENCODING_UNSUPPORTED" })]),
+      }),
+    );
   });
 
   it("deduplicates identical validation issues from repeated persisted step ids", () => {

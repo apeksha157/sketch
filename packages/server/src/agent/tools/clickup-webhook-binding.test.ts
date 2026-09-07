@@ -95,6 +95,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
       path: method === "POST" || method === "GET" ? "/team/123/webhook" : "/webhook/hook-1",
       accountId: "canvas-account-1",
       webhookEndpointId: endpointId,
+      files: undefined,
       ...(method === "POST" || method === "PUT"
         ? { body: { endpoint: callbackUrl, events: ["taskStatusUpdated"], list_id: 456 } }
         : {}),
@@ -118,6 +119,31 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     db.selectFrom("webhook_endpoints").selectAll().where("id", "=", endpointId).executeTakeFirstOrThrow();
   const success = () => new Response(JSON.stringify({ webhook: remote() }), { status: 200 });
 
+  async function admitSignedReceipt(
+    options: { historyId?: string; enqueue?: (deliveryId: string) => Promise<boolean> } = {},
+  ) {
+    const enqueue = options.enqueue ?? vi.fn().mockResolvedValue(true);
+    const app = new Hono().route(
+      "/api/webhooks",
+      automationWebhookRoutes({ db, encryptionKey: KEY, scheduler: { enqueueWebhookDelivery: enqueue } }),
+    );
+    const body = JSON.stringify({
+      event: "taskStatusUpdated",
+      webhook_id: "hook-1",
+      task_id: "task-abc",
+      history_items: [{ id: options.historyId ?? "receipt-1" }],
+    });
+    const response = await app.request(`/api/webhooks/v1/${endpointId}`, {
+      method: "POST",
+      body,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Signature": createHmac("sha256", SIGNING_SECRET).update(body).digest("hex"),
+      },
+    });
+    return { app, response, receipt: await response.json(), enqueue };
+  }
+
   async function register() {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => success());
     return executeClickUpApi(request(), deps);
@@ -135,14 +161,21 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
       return success();
     });
     const result = await createClickUpApiTool(deps).handler(
-      { query: undefined, body: undefined, accountId: undefined, webhookEndpointId: undefined, ...request() },
+      {
+        query: undefined,
+        body: undefined,
+        accountId: undefined,
+        webhookEndpointId: undefined,
+        ...request(),
+        files: undefined,
+      },
       {},
     );
     expect(JSON.stringify(result)).not.toContain(SIGNING_SECRET);
     expect(JSON.stringify(result)).not.toContain(OAUTH_TOKEN);
-    expect(JSON.stringify(result)).toContain("active_signed");
+    expect(JSON.stringify(result)).toContain("awaiting_signed_receipt");
     const saved = await storedEndpoint();
-    expect(saved.status).toBe("active_signed");
+    expect(saved.status).toBe("pending");
     expect(saved.signing_secret_encrypted).toMatch(/^enc:/);
     expect(decrypt(saved.signing_secret_encrypted ?? "", KEY)).toBe(SIGNING_SECRET);
     expect(deps.getCanvasAccessToken).toHaveBeenCalledWith({
@@ -158,27 +191,17 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
         headers: expect.objectContaining({ Authorization: `Bearer ${OAUTH_TOKEN}` }),
       }),
     );
-    await scheduler.resumeTask(taskId);
     const enqueue = vi.fn().mockResolvedValue(true);
-    const app = new Hono().route(
-      "/api/webhooks",
-      automationWebhookRoutes({ db, encryptionKey: KEY, scheduler: { enqueueWebhookDelivery: enqueue } }),
-    );
-    const body = JSON.stringify({
-      event: "taskStatusUpdated",
-      webhook_id: "hook-1",
-      task_id: "task-abc",
-      history_items: [{ id: "history-1" }],
-    });
-    const headers = {
-      "Content-Type": "application/json",
-      "X-Signature": createHmac("sha256", SIGNING_SECRET).update(body).digest("hex"),
-    };
-    const first = await app.request(`/api/webhooks/v1/${endpointId}`, { method: "POST", body, headers });
-    expect(first.status).toBe(202);
-    const receipt = await first.json();
-    expect(receipt.duplicate).toBe(false);
-    expect(enqueue).toHaveBeenCalledWith(receipt.deliveryId);
+    const verification = await admitSignedReceipt({ historyId: "receipt-1", enqueue });
+    expect(verification.response.status).toBe(202);
+    expect(verification.receipt.paused).toBe(true);
+    expect(verification.enqueue).not.toHaveBeenCalled();
+    expect((await storedEndpoint()).status).toBe("active_signed");
+    await scheduler.resumeTask(taskId);
+    const first = await admitSignedReceipt({ historyId: "history-1", enqueue });
+    expect(first.receipt.duplicate).toBe(false);
+    expect(enqueue).toHaveBeenCalledWith(first.receipt.deliveryId);
+    const receipt = first.receipt;
     const definition = await getAutomationDefinition({ db, taskId });
     expect(definition?.steps.find((step) => step.type === "trigger")?.triggerConfig).toMatchObject({
       webhookBinding: { accountId: "canvas-account-1", resourceId: "hook-1" },
@@ -186,9 +209,9 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     });
     expect(JSON.stringify(definition)).not.toContain(SIGNING_SECRET);
     expect(JSON.stringify(definition)).not.toContain(saved.signing_secret_encrypted);
-    const duplicate = await app.request(`/api/webhooks/v1/${endpointId}`, { method: "POST", body, headers });
-    expect((await duplicate.json()).duplicate).toBe(true);
-    expect(await db.selectFrom("webhook_deliveries").selectAll().execute()).toHaveLength(1);
+    const duplicate = await admitSignedReceipt({ historyId: "history-1", enqueue });
+    expect(duplicate.receipt.duplicate).toBe(true);
+    expect(await db.selectFrom("webhook_deliveries").selectAll().execute()).toHaveLength(2);
     await expect(executeClickUpApi(request(), deps)).rejects.toThrow(/paused/);
   });
 
@@ -246,7 +269,9 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     expect((await storedEndpoint()).source_binding).not.toBeNull();
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ webhooks: [remote()] })));
     const restored = await executeClickUpApi(request("GET"), deps);
-    expect(restored).toMatchObject({ webhookBinding: { resourceId: "hook-1", status: "active_signed" } });
+    expect(restored).toMatchObject({ webhookBinding: { resourceId: "hook-1", status: "pending" } });
+    await admitSignedReceipt();
+    expect(await storedEndpoint()).toMatchObject({ status: "active_signed" });
     expect(JSON.stringify(restored)).not.toContain(SIGNING_SECRET);
     await expect(assertWebhookEndpointReady(db, taskId, KEY)).resolves.toBeUndefined();
   });
@@ -373,6 +398,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
 
   it("only treats a ClickUp DELETE 404 as proof of absence, not a Canvas mint 404", async () => {
     await register();
+    await admitSignedReceipt();
     const getCanvasAccessToken = vi.fn().mockRejectedValue(Object.assign(new Error("mint failed"), { status: 404 }));
     await expect(executeClickUpApi(request("DELETE"), { ...deps, getCanvasAccessToken })).rejects.toThrow(
       "mint failed",
@@ -418,6 +444,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
 
   it("restores the usable binding after a definite rejected update", async () => {
     await register();
+    await admitSignedReceipt();
     const before = await storedEndpoint();
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("bad request", { status: 400 }));
     await expect(
@@ -492,8 +519,10 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     await expect(executeClickUpApi(request(), deps)).rejects.toThrow(/do not repeat POST/);
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ webhooks: [remote()] })));
     await expect(executeClickUpApi(request("GET"), deps)).resolves.toMatchObject({
-      webhookBinding: { status: "active_signed" },
+      webhookBinding: { status: "pending" },
     });
+    await admitSignedReceipt();
+    expect(await storedEndpoint()).toMatchObject({ status: "active_signed" });
   });
 
   it("permits a corrected create only after a definite provider rejection", async () => {
@@ -505,7 +534,7 @@ describe("skill-led ClickUp webhook binding through existing tools", () => {
     expect((await storedEndpoint()).status).toBe("revoked");
     fetchMock.mockResolvedValueOnce(success());
     await expect(executeClickUpApi(request(), deps)).resolves.toMatchObject({
-      webhookBinding: { status: "active_signed" },
+      webhookBinding: { status: "pending" },
     });
   });
 });
