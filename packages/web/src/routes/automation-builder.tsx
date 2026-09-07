@@ -15,7 +15,7 @@ import {
   type ChatThreadProgressItem,
   questionBatchSignature,
 } from "@/components/sketch/chat-thread";
-import { useWebChatReconciliation } from "@/hooks/use-web-chat-reconciliation";
+import { mergeProgressMessageSnapshots, useWebChatReconciliation } from "@/hooks/use-web-chat-reconciliation";
 import {
   ApiRequestError,
   type AutomationArtifact,
@@ -2876,6 +2876,7 @@ function BuilderChatTranscript({
     loadMessages: loadMessagesForReconciliation,
     setMessages: chat.setMessages,
     clearError: chat.clearError,
+    mergeMessages: mergeProgressMessageSnapshots,
   });
 
   useEffect(() => {

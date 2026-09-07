@@ -91,6 +91,16 @@ export interface ChatThreadProgressIcon {
 
 export interface ChatThreadProgressItem {
   id?: string;
+  revision?: number;
+  status?: "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  startedAt?: number;
+  endedAt?: number;
+  mode?: "off" | "friendly" | "technical";
+  integration?: { providerId?: string; appId: string; name: string; icon?: string };
+  detailFormat?: "text" | "command" | "json";
+  detailRedacted?: boolean;
+  detailTruncated?: boolean;
+  detailUnavailable?: boolean;
   kind: string;
   label: string;
   detail?: string;
@@ -301,16 +311,17 @@ function legacyProgressKind(label: string): string {
 
 function normalizedProgressItem(item: ChatThreadProgressItem): ChatThreadProgressItem | null {
   const label = normalizeProgressText(item.label);
-  const detail = normalizeProgressText(item.detail);
+  const detail = typeof item.detail === "string" && item.detail.trim() ? item.detail : undefined;
   const toolName = normalizeProgressText(item.toolName);
   const kind = normalizeProgressText(item.kind) || "generic";
-  if (!label && !detail) return null;
+  const displayLabel = label || detail;
+  if (!displayLabel) return null;
 
   return {
     ...item,
     id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : undefined,
     kind,
-    label: label || detail,
+    label: displayLabel,
     detail: label && detail ? detail : undefined,
     toolName: toolName || undefined,
     icon: item.icon,
@@ -369,8 +380,30 @@ function progressItemKey(item: ChatThreadProgressItem, index: number): string {
   return item.id ?? `${item.kind}:${item.label}:${item.detail ?? ""}:${item.toolName ?? ""}:${index}`;
 }
 
+function progressItemContentSignature(item: ChatThreadProgressItem, index: number): string {
+  return [
+    progressItemKey(item, index),
+    item.revision ?? "",
+    item.status ?? "",
+    item.startedAt ?? "",
+    item.endedAt ?? "",
+    item.mode ?? "",
+    item.label,
+    item.detail ?? "",
+    item.toolName ?? "",
+    item.detailFormat ?? "",
+    item.detailRedacted ? "redacted" : "",
+    item.detailTruncated ? "truncated" : "",
+    item.detailUnavailable ? "unavailable" : "",
+    item.integration?.providerId ?? "",
+    item.integration?.appId ?? "",
+    item.integration?.name ?? "",
+    item.integration?.icon ?? "",
+  ].join("\u001e");
+}
+
 function progressItemsSignature(items: ChatThreadProgressItem[]): string {
-  return items.map((item, index) => progressItemKey(item, index)).join("|");
+  return items.map((item, index) => progressItemContentSignature(item, index)).join("|");
 }
 
 function timelineEntryKey(entry: ChatThreadTimelineEntry, index: number): string {
@@ -568,7 +601,7 @@ function emptyAnimatedTimelineState(entries: TimelineRenderEntry[]): AnimatedTim
   };
 }
 
-function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
+function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[], paused = false) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
@@ -595,6 +628,20 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
   useLayoutEffect(() => {
     const targetEntries = latestTargetEntries.current;
     const current = stateRef.current;
+    if (paused) {
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current);
+      frameRef.current = null;
+      timeoutRef.current = null;
+      if (
+        timelineRenderEntriesSignature(current.entries) !== targetSignature ||
+        current.animating ||
+        current.offsetY !== 0
+      ) {
+        setState(emptyAnimatedTimelineState(targetEntries));
+      }
+      return;
+    }
     if (timelineRenderEntriesSignature(current.entries) === targetSignature && !current.animating) return;
 
     if (frameRef.current !== null) {
@@ -658,7 +705,7 @@ function useAnimatedTimelineWindow(targetEntries: TimelineRenderEntry[]) {
       timeoutRef.current = null;
       setState(emptyAnimatedTimelineState(latestTargetEntries.current));
     }, TIMELINE_WINDOW_ANIMATION_MS);
-  }, [targetSignature]);
+  }, [paused, targetSignature]);
 
   const setRowRef = (key: string) => (node: HTMLDivElement | null) => {
     if (node) {
@@ -720,7 +767,8 @@ export function ChatThread({
           <MessageRow
             key={message.id}
             message={message}
-            active={busy && index === messages.length - 1}
+            active={busy && !error && index === messages.length - 1}
+            activityLive={busy && !error}
             integrationConnectionStatuses={integrationConnectionStatuses}
             onConnectIntegration={onConnectIntegration}
             onSelectQuestion={onSelectQuestion}
@@ -754,6 +802,7 @@ export function ChatThread({
 function MessageRow({
   message,
   active,
+  activityLive,
   integrationConnectionStatuses,
   onConnectIntegration,
   onSelectQuestion,
@@ -766,6 +815,7 @@ function MessageRow({
 }: {
   message: ChatThreadMessage;
   active: boolean;
+  activityLive: boolean;
   integrationConnectionStatuses: Record<string, ChatThreadIntegrationConnectionStatus>;
   onConnectIntegration?: (connection: ChatThreadIntegrationConnection) => void;
   onSelectQuestion?: (question: ChatThreadQuestion, option: WebChatQuestionOption) => void;
@@ -804,6 +854,7 @@ function MessageRow({
         <TimelineMessage
           message={message}
           active={active}
+          activityLive={activityLive}
           integrationConnectionStatuses={integrationConnectionStatuses}
           onConnectIntegration={onConnectIntegration}
           autoOpenAutomation={autoOpenAutomation}
@@ -1225,6 +1276,7 @@ function AutomationBuilderLoadingState() {
 function TimelineMessage({
   message,
   active,
+  activityLive,
   integrationConnectionStatuses = {},
   onConnectIntegration,
   autoOpenAutomation,
@@ -1232,6 +1284,7 @@ function TimelineMessage({
 }: {
   message: ChatThreadMessage;
   active: boolean;
+  activityLive: boolean;
   integrationConnectionStatuses?: Record<string, ChatThreadIntegrationConnectionStatus>;
   onConnectIntegration?: (connection: ChatThreadIntegrationConnection) => void;
   autoOpenAutomation?: boolean;
@@ -1243,6 +1296,7 @@ function TimelineMessage({
   const activeProgressEntryKey = active ? latestActiveProgressEntryKey(blocks) : undefined;
   const completedSegments = useMemo(() => completedTimelineSegments(entries), [entries]);
   const openingAutomationBuilder = active && isAutomationBuilderOpeningBlock(blocks.at(-1));
+  const runningToolCount = runningProgressItemCount(blocks, activityLive);
 
   if (!active) {
     return (
@@ -1285,6 +1339,11 @@ function TimelineMessage({
 
   return (
     <div className="max-w-[720px]">
+      {runningToolCount > 1 ? (
+        <span data-progress-running-count className="mb-[4px] block pl-[30px] text-[11px] text-muted-foreground/60">
+          {runningToolCount} tools running
+        </span>
+      ) : null}
       {blocks.map((block) =>
         block.type === "text" ? (
           <TimelineEntryRow key={block.key} entry={block.entry.entry} active={false} exiting={false} last />
@@ -1293,7 +1352,12 @@ function TimelineMessage({
         ) : collapseProgress ? (
           <CollapsibleTimelineHistory key={block.key} entries={block.entries} />
         ) : (
-          <ProgressTimelineWindow key={block.key} entries={block.entries} activeEntryKey={activeProgressEntryKey} />
+          <ProgressTimelineWindow
+            key={block.key}
+            entries={block.entries}
+            activeEntryKey={activeProgressEntryKey}
+            activityLive={activityLive}
+          />
         ),
       )}
       {message.files?.length ? (
@@ -1345,6 +1409,14 @@ function timelineHistoryCountLabel(entries: TimelineRenderEntry[]): string {
   return parts.length > 0 ? parts.join(", ") : "Timeline history";
 }
 
+function runningProgressItemCount(blocks: TimelineRenderBlock[], activityLive: boolean): number {
+  if (!activityLive) return 0;
+  return blocks.reduce((count, block) => {
+    if (block.type !== "progress") return count;
+    return count + progressItemsForTimelineEntries(block.entries).filter((item) => item.status === "running").length;
+  }, 0);
+}
+
 function completedTimelineSegments(entries: TimelineRenderEntry[]): {
   activityEntries: TimelineRenderEntry[];
   finalEntry?: TimelineRenderEntry;
@@ -1356,7 +1428,10 @@ function completedTimelineSegments(entries: TimelineRenderEntry[]): {
   return { activityEntries: entries };
 }
 
-function CollapsibleTimelineHistory({ entries }: { entries: TimelineRenderEntry[] }) {
+function CollapsibleTimelineHistory({
+  entries,
+  title = "Activity timeline",
+}: { entries: TimelineRenderEntry[]; title?: string }) {
   const [expanded, setExpanded] = useState(false);
   const countLabel = timelineHistoryCountLabel(entries);
 
@@ -1377,7 +1452,7 @@ function CollapsibleTimelineHistory({ entries }: { entries: TimelineRenderEntry[
             <ClockIcon size={13} weight="duotone" className="shrink-0" aria-hidden />
           </span>
           <span className="min-w-0">
-            <span className="block text-[13px] font-medium leading-[1.5] text-foreground/80">Activity timeline</span>
+            <span className="block text-[13px] font-medium leading-[1.5] text-foreground/80">{title}</span>
             <span className="block text-[12px] leading-[1.4] text-muted-foreground/65">{countLabel}</span>
           </span>
           <CaretDownIcon
@@ -1407,23 +1482,53 @@ function CollapsibleTimelineHistory({ entries }: { entries: TimelineRenderEntry[
   );
 }
 
+function progressItemsForTimelineEntries(entries: TimelineRenderEntry[]): ChatThreadProgressItem[] {
+  return entries.flatMap((entry) =>
+    entry.entry.type === "progress" ? progressItemsForParts(entry.entry.progressItems, entry.entry.progressLines) : [],
+  );
+}
+
 function ProgressTimelineWindow({
   entries,
   activeEntryKey,
+  activityLive,
 }: {
   entries: TimelineRenderEntry[];
   activeEntryKey?: string;
+  activityLive: boolean;
 }) {
-  const targetEntries = useMemo(() => visibleProgressRenderEntries(entries), [entries]);
-  const timelineWindow = useAnimatedTimelineWindow(targetEntries);
+  const [expandedItemKey, setExpandedItemKey] = useState<string | null>(null);
+  const targetEntries = useMemo(
+    () => (expandedItemKey ? entries : visibleProgressRenderEntries(entries)),
+    [entries, expandedItemKey],
+  );
+  const timelineWindow = useAnimatedTimelineWindow(targetEntries, Boolean(expandedItemKey));
   const exitingKeySet = useMemo(() => new Set(timelineWindow.exitingKeys), [timelineWindow.exitingKeys]);
+  const earlierEntries = expandedItemKey ? [] : entries.slice(0, -MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES);
+
+  useLayoutEffect(() => {
+    if (!expandedItemKey) return;
+    const viewport = timelineWindow.viewportRef.current;
+    if (!viewport) return;
+    const target = Array.from(viewport.querySelectorAll<HTMLElement>("[data-progress-item-key]")).find(
+      (element) => element.dataset.progressItemKey === expandedItemKey,
+    );
+    if (!target) return;
+    const viewportRect = viewport.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    if (targetRect.top < viewportRect.top) viewport.scrollTop -= viewportRect.top - targetRect.top;
+    else if (targetRect.bottom > viewportRect.bottom) viewport.scrollTop += targetRect.bottom - viewportRect.bottom;
+  }, [expandedItemKey, timelineWindow.viewportRef]);
 
   return (
     <div className="pb-[10px] last:pb-0">
+      {earlierEntries.length > 0 ? (
+        <CollapsibleTimelineHistory entries={earlierEntries} title="Earlier activity" />
+      ) : null}
       <div
         ref={timelineWindow.viewportRef}
         aria-live="polite"
-        className="sketch-timeline-window overflow-hidden"
+        className={cn("sketch-timeline-window overflow-hidden", expandedItemKey && "max-h-[260px] overflow-y-auto")}
         style={timelineWindow.viewportStyle}
       >
         <div
@@ -1436,9 +1541,13 @@ function ProgressTimelineWindow({
               key={renderEntry.key}
               rowRef={timelineWindow.setRowRef(renderEntry.key)}
               entry={renderEntry.entry}
+              dataTimelineKey={renderEntry.key}
               active={renderEntry.key === activeEntryKey}
               exiting={exitingKeySet.has(renderEntry.key)}
               last={index === timelineWindow.entries.length - 1}
+              expandedItemKey={expandedItemKey}
+              onItemExpandedChange={(itemKey, expanded) => setExpandedItemKey(expanded ? itemKey : null)}
+              activityLive={activityLive}
             />
           ))}
         </div>
@@ -1453,17 +1562,37 @@ function TimelineEntryRow({
   exiting,
   last,
   rowRef,
+  expanded = false,
+  onExpandedChange,
+  expandedItemKey,
+  onItemExpandedChange,
+  dataTimelineKey,
+  activityLive = false,
 }: {
   entry: ChatThreadTimelineEntry;
   active: boolean;
   exiting: boolean;
   last: boolean;
   rowRef?: (node: HTMLDivElement | null) => void;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  expandedItemKey?: string | null;
+  onItemExpandedChange?: (itemKey: string, expanded: boolean) => void;
+  dataTimelineKey?: string;
+  activityLive?: boolean;
 }) {
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const resolvedExpanded = onExpandedChange ? expanded : localExpanded;
+  const handleExpandedChange = (next: boolean) => {
+    if (onExpandedChange) onExpandedChange(next);
+    else setLocalExpanded(next);
+  };
+
   return (
     <div
       ref={rowRef}
       data-timeline-entry
+      data-timeline-key={dataTimelineKey}
       className={cn(
         "sketch-progress-change sketch-timeline-entry relative grid min-w-0 grid-cols-[20px_minmax(0,1fr)] gap-x-[10px] pb-[10px] last:pb-0",
         exiting && "sketch-timeline-entry-exiting",
@@ -1481,6 +1610,11 @@ function TimelineEntryRow({
         <ProgressTimelineEntry
           items={progressItemsForParts(entry.progressItems, entry.progressLines)}
           active={active}
+          expanded={resolvedExpanded}
+          onExpandedChange={handleExpandedChange}
+          expandedItemKey={expandedItemKey}
+          onItemExpandedChange={onItemExpandedChange}
+          activityLive={activityLive}
         />
       )}
     </div>
@@ -1500,49 +1634,277 @@ function TextTimelineEntry({ entry }: { entry: Extract<ChatThreadTimelineEntry, 
   );
 }
 
-function ProgressTimelineEntry({ items, active }: { items: ChatThreadProgressItem[]; active: boolean }) {
+function ProgressTimelineEntry({
+  items,
+  active,
+  expanded,
+  onExpandedChange,
+  expandedItemKey,
+  onItemExpandedChange,
+  activityLive = true,
+}: {
+  items: ChatThreadProgressItem[];
+  active: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+  expandedItemKey?: string | null;
+  onItemExpandedChange?: (itemKey: string, expanded: boolean) => void;
+  activityLive?: boolean;
+}) {
   const iconItem = items[0];
   if (!iconItem) return null;
 
   return (
     <>
       <span className="relative z-[1] flex size-[20px] shrink-0 items-center justify-center rounded-[6px] bg-muted/60 text-muted-foreground/90">
-        <ProgressItemIcon item={iconItem} active={active} />
+        <ProgressItemIcon item={iconItem} active={active} activityLive={activityLive} />
       </span>
       <div className="min-w-0">
         {items.map((item, index) => (
-          <ProgressItemSummary key={progressItemKey(item, index)} item={item} active={active} />
+          <ProgressItemSummary
+            key={progressItemKey(item, index)}
+            item={item}
+            itemKey={progressItemKey(item, index)}
+            active={active}
+            activityLive={activityLive}
+            expanded={expandedItemKey ? expandedItemKey === progressItemKey(item, index) : expanded}
+            onExpandedChange={(next) => {
+              if (onItemExpandedChange) onItemExpandedChange(progressItemKey(item, index), next);
+              else onExpandedChange?.(next);
+            }}
+          />
         ))}
       </div>
     </>
   );
 }
 
-function ProgressItemSummary({ item, active }: { item: ChatThreadProgressItem; active: boolean }) {
+function progressItemIsActive(item: ChatThreadProgressItem, rowActive: boolean, activityLive: boolean): boolean {
+  if (item.mode === "off") return false;
+  if (item.status) return item.status === "running" && activityLive;
+  return rowActive;
+}
+
+function progressStatusLabel(status: ChatThreadProgressItem["status"], activityLive: boolean): string | null {
+  switch (status) {
+    case "running":
+      return activityLive ? null : "Running";
+    case "succeeded":
+      return "Done";
+    case "failed":
+      return "Failed";
+    case "cancelled":
+      return "Cancelled";
+    case "interrupted":
+      return "Interrupted";
+    default:
+      return null;
+  }
+}
+
+function useProgressElapsed(item: ChatThreadProgressItem, running: boolean): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running || typeof item.startedAt !== "number") return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [item.startedAt, running]);
+
+  if (!running || typeof item.startedAt !== "number") return null;
+  const seconds = Math.floor(Math.max(0, now - item.startedAt) / 1000);
+  return seconds >= 10 ? seconds : null;
+}
+
+function formatElapsed(seconds: number): string {
+  return `${seconds}s`;
+}
+
+function progressDetailForDisplay(item: ChatThreadProgressItem): string | null {
+  if (!item.detail) return null;
+  return item.detail;
+}
+
+function progressDurationSeconds(item: ChatThreadProgressItem): number | null {
+  if (typeof item.startedAt !== "number" || typeof item.endedAt !== "number") return null;
+  return Math.floor(Math.max(0, item.endedAt - item.startedAt) / 1000);
+}
+
+function progressInspectionStatus(item: ChatThreadProgressItem, activityLive: boolean): string | null {
+  if (item.mode === "off") return null;
+  if (item.status === "running") return activityLive ? "Running" : "Running (last known state)";
+  return progressStatusLabel(item.status, activityLive);
+}
+
+function ProgressItemSummary({
+  item,
+  itemKey,
+  active,
+  activityLive,
+  expanded = false,
+  onExpandedChange,
+}: {
+  item: ChatThreadProgressItem;
+  itemKey: string;
+  active: boolean;
+  activityLive: boolean;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
+}) {
   const secondary = item.detail;
+  const itemActive = progressItemIsActive(item, active, activityLive);
+  const elapsed = useProgressElapsed(item, itemActive && item.status === "running");
+  const statusLabel = item.mode === "off" ? null : progressStatusLabel(item.status, activityLive);
+  const detail = progressDetailForDisplay(item);
+  const inspectable =
+    item.mode !== "off" &&
+    Boolean(
+      detail ||
+        item.toolName ||
+        item.status ||
+        item.startedAt ||
+        item.endedAt ||
+        item.detailRedacted ||
+        item.detailTruncated ||
+        item.detailUnavailable,
+    );
+  const technical = item.mode === "technical";
+  const completedDuration = progressDurationSeconds(item);
+  const inspectionStatus = progressInspectionStatus(item, activityLive);
+  const detailNotice = `${item.detailRedacted ? "\n\nSome sensitive values were redacted." : ""}${
+    item.detailTruncated ? "\n\nDetail was truncated at the retention limit." : ""
+  }`;
+  const copyText = technical && detail ? detail : null;
 
   return (
-    <div data-progress-item className="flex min-w-0 py-[1px]">
+    <div
+      data-progress-item
+      data-progress-item-key={itemKey}
+      data-progress-status={item.status ?? undefined}
+      className="min-w-0 py-[1px]"
+    >
       <span
         data-progress-line
-        className={cn("inline-flex min-w-0 max-w-full items-baseline gap-x-[8px]", active && "sketch-shimmer-progress")}
+        className={cn("flex w-full min-w-0 items-baseline gap-x-[8px]", itemActive && "sketch-shimmer-progress")}
       >
-        <span className={cn("shrink-0 text-[13px] font-medium leading-[1.5]", !active && "text-foreground/80")}>
+        <span
+          className={cn(
+            "min-w-0 max-w-[55%] shrink-0 truncate text-[13px] font-medium leading-[1.5]",
+            !itemActive && "text-foreground/80",
+          )}
+        >
           {item.label}
         </span>
         {secondary ? (
-          <span className={cn("min-w-0 truncate text-[12px] leading-[1.5]", !active && "text-muted-foreground/65")}>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-[12px] leading-[1.5]",
+              !itemActive && "text-muted-foreground/65",
+            )}
+          >
             {secondary}
           </span>
         ) : null}
+        {statusLabel ? (
+          <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{statusLabel}</span>
+        ) : null}
+        {elapsed !== null ? (
+          <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{formatElapsed(elapsed)}</span>
+        ) : null}
+        {inspectable ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={expanded ? `Hide details for ${item.label}` : `Show details for ${item.label}`}
+            title={expanded ? "Hide details" : "Show details"}
+            data-progress-details-toggle
+            onClick={() => onExpandedChange?.(!expanded)}
+            className="inline-flex size-[20px] shrink-0 items-center justify-center rounded-[5px] text-muted-foreground/65 transition-colors hover:bg-muted/65 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
+          >
+            <CaretDownIcon
+              size={12}
+              className={cn("transition-transform duration-150", expanded && "rotate-180")}
+              aria-hidden
+            />
+          </button>
+        ) : null}
       </span>
+      {expanded && inspectable ? (
+        <div className="mt-[4px] max-w-full rounded-[6px] border border-border/60 bg-muted/20 p-[7px]">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              {technical && item.toolName ? (
+                <div
+                  data-progress-qualified-tool
+                  className="mb-[4px] break-words font-mono text-[11px] leading-[1.5] text-muted-foreground/75"
+                >
+                  {item.toolName}
+                </div>
+              ) : null}
+              {technical ? (
+                <pre
+                  data-progress-details
+                  className="chat-scrollbar max-h-[180px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.5] text-foreground/80"
+                >
+                  {detail ?? "Technical detail unavailable"}
+                </pre>
+              ) : detail ? (
+                <pre
+                  data-progress-details
+                  className="chat-scrollbar max-h-[180px] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.5] text-foreground/80"
+                >
+                  {detail}
+                </pre>
+              ) : null}
+              <div
+                data-progress-state-detail
+                className="mt-[4px] space-y-[1px] text-[11px] leading-[1.5] text-muted-foreground/70"
+              >
+                {inspectionStatus ? <div>Status: {inspectionStatus}</div> : null}
+                {elapsed !== null ? <div>Elapsed: {formatElapsed(elapsed)}</div> : null}
+                {completedDuration !== null ? <div>Duration: {formatElapsed(completedDuration)}</div> : null}
+              </div>
+              {detailNotice ? (
+                <div className="mt-[4px] whitespace-pre-wrap text-[11px] leading-[1.5] text-muted-foreground/70">
+                  {detailNotice.trim()}
+                </div>
+              ) : null}
+            </div>
+            {copyText ? (
+              <CopyIconButton text={copyText} label="Copy technical detail" copiedLabel="Technical detail copied" />
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function ProgressItemIcon({ item, active }: { item: ChatThreadProgressItem; active: boolean }) {
+function ProgressItemIcon({
+  item,
+  active,
+  activityLive = true,
+}: { item: ChatThreadProgressItem; active: boolean; activityLive?: boolean }) {
+  if (item.integration) {
+    return (
+      <span className="relative flex size-[20px] items-center justify-center">
+        <AppIcon
+          name={item.integration.name}
+          icon={item.integration.icon}
+          className="size-[20px] rounded-[6px]"
+          imageClassName="size-[14px]"
+        />
+        {item.mode !== "off" && ((item.status === "running" && activityLive) || (!item.status && active)) ? (
+          <span
+            aria-hidden
+            className="absolute -right-[2px] -top-[2px] size-[6px] rounded-full bg-brand-accent ring-2 ring-background"
+          />
+        ) : null}
+      </span>
+    );
+  }
   const Icon = progressIconForItem(item);
-  const loading = Icon === SpinnerGapIcon && active;
+  const loading = Icon === SpinnerGapIcon && progressItemIsActive(item, active, activityLive);
   return <Icon size={13} weight="duotone" className={cn("shrink-0", loading && "animate-spin")} aria-hidden />;
 }
 

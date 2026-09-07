@@ -49,12 +49,16 @@ export interface WorkflowLightStepRuntimeParams {
 export interface AgentRuntimeToolStart {
   name: string;
   input: Record<string, unknown>;
+  /** Optional for compatibility with lifecycle fixtures captured before IDs were exposed. */
+  toolCallId?: string;
 }
 
 /** Tool lifecycle data captured after a tool handler settles. */
 export interface AgentRuntimeToolEnd {
   name: string;
   input: Record<string, unknown>;
+  /** Optional for compatibility with lifecycle fixtures captured before IDs were exposed. */
+  toolCallId?: string;
   result: unknown;
   durationMs: number;
   error?: { message: string; name?: string };

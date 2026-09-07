@@ -130,6 +130,8 @@ export interface ToolUseProgressEvent {
   kind: "tool_use";
   toolName: string;
   input: Record<string, unknown>;
+  toolCallId?: string;
+  startedAt?: number;
 }
 
 function isSkillToolName(toolName: string): boolean {
@@ -354,6 +356,11 @@ export interface RunAgentParams {
   questionInteractionCapabilities?: QuestionInteractionCapabilities;
   onProgressEvent: (event: ProgressEvent) => Promise<void>;
   onToolResult?: (event: ToolResultEvent) => Promise<void>;
+  onToolProgressEnd?: (event: {
+    toolCallId: string;
+    status: "succeeded" | "failed";
+    endedAt: number;
+  }) => Promise<void>;
   /** Called after queue admission, before runtime setup or tool execution. */
   onRunStart?: () => Promise<void>;
   onTextDelta?: (delta: string) => Promise<void>;
@@ -684,7 +691,13 @@ export function applySdkStreamMessageMapping(
           state.toolCalls.push(tc);
           state.pendingToolCalls.push(tc);
 
-          const event: ToolUseProgressEvent = { kind: "tool_use", toolName: name, input };
+          const event: ToolUseProgressEvent = {
+            kind: "tool_use",
+            toolName: name,
+            input,
+            ...(toolUseId ? { toolCallId: toolUseId } : {}),
+            startedAt: now,
+          };
           state.integrationProgressEvents.push(event);
           state.progressEvents.push(event);
           effects.progressEvents.push(event);
@@ -1013,6 +1026,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
         : undefined);
 
     const toolCalls: ToolCallRecord[] = [];
+    const toolCallsById = new Map<string, ToolCallRecord>();
     const progressEvents: ProgressEvent[] = [];
     let trailingText = "";
     let notifiedSessionId = "";
@@ -1084,10 +1098,13 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
                 endedAt: 0,
               };
               toolCalls.push(toolCall);
+              if (event.toolCallId) toolCallsById.set(event.toolCallId, toolCall);
               const progressEvent: ToolUseProgressEvent = {
                 kind: "tool_use",
                 toolName: event.name,
                 input: event.input,
+                ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+                startedAt,
               };
               progressEvents.push(progressEvent);
               try {
@@ -1098,19 +1115,34 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
             },
             onToolEnd: async (event) => {
               customToolEffects.onToolEnd(event);
-              await params.onToolResult?.({
-                toolName: event.name,
-                input: event.input,
-                output: event.result ?? event.error,
-                isError: event.error !== undefined,
-              });
-              for (let index = toolCalls.length - 1; index >= 0; index -= 1) {
-                const toolCall = toolCalls[index];
-                if (toolCall.toolName !== event.name || toolCall.endedAt !== 0) continue;
-                toolCall.endedAt = Date.now();
+              const endedAt = Date.now();
+              try {
+                await params.onToolResult?.({
+                  toolName: event.name,
+                  input: event.input,
+                  output: event.result ?? event.error,
+                  isError: event.error !== undefined,
+                });
+              } finally {
+                if (event.toolCallId) {
+                  try {
+                    await params.onToolProgressEnd?.({
+                      toolCallId: event.toolCallId,
+                      status: event.error === undefined ? "succeeded" : "failed",
+                      endedAt,
+                    });
+                  } catch (err) {
+                    logger.warn({ err, toolCallId: event.toolCallId }, "Failed to deliver tool progress end event");
+                  }
+                }
+              }
+              const toolCall = event.toolCallId
+                ? toolCallsById.get(event.toolCallId)
+                : [...toolCalls].reverse().find((candidate) => candidate.toolName === event.name);
+              if (toolCall && toolCall.endedAt === 0) {
+                toolCall.endedAt = endedAt;
                 toolCall.success = event.error === undefined;
                 if (event.error) toolCall.errorMessage = event.error.message;
-                break;
               }
             },
           },
@@ -1542,12 +1574,24 @@ async function runAgentWithClaudeSdk(params: RunAgentParams, adminReadAllEnabled
       }
 
       for (const event of effects.toolEnds) {
-        await params.onToolResult?.({
-          toolName: event.toolName,
-          input: event.input,
-          output: event.output,
-          isError: event.isError,
-        });
+        try {
+          await params.onToolResult?.({
+            toolName: event.toolName,
+            input: event.input,
+            output: event.output,
+            isError: event.isError,
+          });
+        } finally {
+          try {
+            await params.onToolProgressEnd?.({
+              toolCallId: event.toolUseId,
+              status: event.isError ? "failed" : "succeeded",
+              endedAt: event.endedAt,
+            });
+          } catch (err) {
+            logger.warn({ err, toolCallId: event.toolUseId }, "Failed to deliver tool progress end event");
+          }
+        }
       }
 
       const completedCreateAutomationSkill =

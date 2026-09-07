@@ -41,6 +41,7 @@ import { type BufferedMessage, buildSketchContext } from "../agent/prompt";
 import type { McpServerConfig, ProgressEvent, RunAgentParams, RunAgentResult, ToolResultEvent } from "../agent/runner";
 import { archiveRuntimeSessions } from "../agent/sessions";
 import { createProgressRenderer, createWebProgressData } from "../agent/tool-progress";
+import type { ToolProgressIntegrationContext } from "../agent/tool-progress-integration";
 import { handleManageScheduledTasks } from "../agent/tools/scheduled-tasks";
 import { AutomationArtifactCollector } from "../agent/tools/types";
 import { ensureWorkspace } from "../agent/workspace";
@@ -86,6 +87,8 @@ import type { SlackBot } from "../slack/bot";
 import { transcribeAudioFile } from "../transcription/service";
 import type { WhatsAppTemplateRequest } from "../whatsapp/templates";
 import { maintainBuilderRunLease } from "./builder-run-lease";
+import { type ActivityPart, WebChatActivity } from "./web-chat-activity";
+import { createActivityCatalog } from "./web-chat-activity-catalog";
 
 type UserRepo = ReturnType<typeof createUserRepository>;
 type SettingsRepo = ReturnType<typeof createSettingsRepository>;
@@ -1657,7 +1660,44 @@ function sanitizeWebProgressItem(value: unknown): WebProgressItem | null {
     icon: sanitizedIcon,
     ...(detail !== undefined ? { detail } : {}),
     ...(toolName !== undefined ? { toolName } : {}),
+    ...sanitizeActivityMetadata(value),
   };
+}
+
+function sanitizeActivityMetadata(value: Record<string, unknown>): Partial<WebProgressItem> {
+  const result: Partial<WebProgressItem> = {};
+  if (typeof value.id === "string") result.id = value.id;
+  for (const key of ["revision", "startedAt", "endedAt"] as const) {
+    if (typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0) result[key] = value[key];
+  }
+  if (
+    value.status === "running" ||
+    value.status === "succeeded" ||
+    value.status === "failed" ||
+    value.status === "cancelled" ||
+    value.status === "interrupted"
+  )
+    result.status = value.status;
+  if (value.mode === "friendly" || value.mode === "technical" || value.mode === "off") result.mode = value.mode;
+  if (value.detailFormat === "text" || value.detailFormat === "command" || value.detailFormat === "json")
+    result.detailFormat = value.detailFormat;
+  for (const key of ["detailRedacted", "detailTruncated", "detailUnavailable"] as const) {
+    if (typeof value[key] === "boolean") result[key] = value[key];
+  }
+  if (
+    isRecord(value.integration) &&
+    typeof value.integration.appId === "string" &&
+    typeof value.integration.name === "string"
+  ) {
+    const { appId, name, providerId, icon } = value.integration;
+    result.integration = {
+      appId,
+      name,
+      ...(typeof providerId === "string" ? { providerId } : {}),
+      ...(typeof icon === "string" && /^https?:\/\//i.test(icon) ? { icon } : {}),
+    };
+  }
+  return result;
 }
 
 function sanitizeIntegrationConnectionData(value: unknown): WebChatIntegrationConnectionData | null {
@@ -1902,7 +1942,7 @@ function isPendingProgressTranscriptMessage(message: WebChatTranscriptMessage): 
   return (
     message.role === "assistant" &&
     message.parts.length > 0 &&
-    message.parts.every((part) => part.type === "data-progress")
+    (message.id.startsWith("assistant-progress-") || message.parts.every((part) => part.type === "data-progress"))
   );
 }
 
@@ -2051,6 +2091,7 @@ async function updateWebChatProgressMessage(
   conversationId: string,
   progressMessageId: string,
   progress: WebChatProgressData,
+  activity?: WebChatStoredPart[],
 ): Promise<void> {
   await withWebChatTranscriptLock(userId, conversationId, async () => {
     const existing = await readWebChatTranscript(config, workspaceDir, userId, logger, conversationId);
@@ -2060,7 +2101,12 @@ async function updateWebChatProgressMessage(
       userId,
       conversationId,
       existing.map((message) =>
-        message.id === progressMessageId ? createProgressTranscriptMessage(progressMessageId, progress) : message,
+        message.id === progressMessageId
+          ? {
+              ...createProgressTranscriptMessage(progressMessageId, progress),
+              ...(activity?.length ? { parts: activity } : {}),
+            }
+          : message,
       ),
     );
   });
@@ -2074,22 +2120,32 @@ async function completeWebChatProgressMessage(
   conversationId: string,
   progressMessageId: string,
   assistantMessage: WebChatTranscriptMessage | null,
+  activity?: WebChatStoredPart[],
 ): Promise<void> {
   await withWebChatTranscriptLock(userId, conversationId, async () => {
     const existing = await readWebChatTranscript(config, workspaceDir, userId, logger, conversationId);
     const progressIndex = existing.findIndex((message) => message.id === progressMessageId);
+    const retainedActivity =
+      activity ??
+      existing[progressIndex]?.parts.filter(
+        (part) => part.type === "data-progress" && part.data.items?.some((item) => item.id),
+      ) ??
+      [];
+    const completedMessage = assistantMessage
+      ? { ...assistantMessage, parts: [...retainedActivity, ...assistantMessage.parts] }
+      : null;
     if (progressIndex === -1) {
       await writeWebChatTranscript(
         config,
         userId,
         conversationId,
-        assistantMessage ? [...existing, assistantMessage] : existing,
+        completedMessage ? [...existing, completedMessage] : existing,
       );
       return;
     }
 
-    const next = assistantMessage
-      ? existing.map((message, index) => (index === progressIndex ? assistantMessage : message))
+    const next = completedMessage
+      ? existing.map((message, index) => (index === progressIndex ? completedMessage : message))
       : existing.filter((_, index) => index !== progressIndex);
     await writeWebChatTranscript(config, userId, conversationId, next);
   });
@@ -2108,7 +2164,28 @@ async function interruptLatestPendingWebChatProgress(
     if (!latest || !isPendingProgressTranscriptMessage(latest)) return false;
 
     const next = [...existing];
-    next[next.length - 1] = createInterruptedAssistantTranscriptMessage("");
+    const interrupted = createInterruptedAssistantTranscriptMessage("");
+    interrupted.parts.unshift(
+      ...latest.parts
+        .filter(
+          (part) => part.type === "text" || (part.type === "data-progress" && part.data.items?.some((item) => item.id)),
+        )
+        .map((part) => {
+          if (part.type !== "data-progress") return part;
+          return {
+            ...part,
+            data: {
+              ...part.data,
+              items: part.data.items?.map((item) =>
+                item.status === "running"
+                  ? { ...item, status: "interrupted" as const, endedAt: Date.now(), revision: (item.revision ?? 0) + 1 }
+                  : item,
+              ),
+            },
+          };
+        }),
+    );
+    next[next.length - 1] = interrupted;
     await writeWebChatTranscript(config, userId, conversationId, next);
     return true;
   });
@@ -2913,6 +2990,95 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
       abortController.abort(source);
     };
     const execute = async (write: WebChatUiWriter) => {
+      const activity = new WebChatActivity(progressMessageId);
+      const loadActivityCatalog = createActivityCatalog(deps.loadIntegrationProvider);
+      let integrationContext: ToolProgressIntegrationContext | undefined;
+      let activityClosed = false;
+      let catalogStarted = false;
+      const enrichmentEvents = new Map<string, ProgressEvent>();
+      const activityOrder: Array<{ type: "progress"; id: string } | { type: "text"; text: string }> = [];
+      const activityIds = new Set<string>();
+      let retainedTextBytes = 0;
+      const activitySnapshot = (): WebChatStoredPart[] => {
+        const parts = new Map(activity.snapshot().map((part) => [part.id, part]));
+        return activityOrder.flatMap((entry): WebChatStoredPart[] => {
+          if (entry.type === "text") return [entry];
+          const part = parts.get(entry.id);
+          return part ? [part] : [];
+        });
+      };
+      const completeActivityMessage = async (message: WebChatTranscriptMessage | null) => {
+        const snapshot = activity.snapshot().length ? activitySnapshot() : [];
+        const finalText = message?.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n");
+        let trailingText = "";
+        for (let index = snapshot.length - 1; index >= 0; index -= 1) {
+          const part = snapshot[index];
+          if (part.type !== "text") break;
+          trailingText = trailingText ? `${part.text}\n\n${trailingText}` : part.text;
+          if (trailingText === finalText) {
+            snapshot.splice(index);
+            break;
+          }
+        }
+        await completeWebChatProgressMessage(
+          deps.config,
+          workspaceDir,
+          currentUser.id,
+          deps.logger,
+          conversationId,
+          progressMessageId,
+          message,
+          snapshot,
+        );
+      };
+      const publishActivity = async (parts: ActivityPart[]) => {
+        if (parts.length === 0) return;
+        for (const part of parts) {
+          if (part.data.items?.length === 0 && part.data.lines.length === 0) {
+            const index = activityOrder.findIndex((entry) => entry.type === "progress" && entry.id === part.id);
+            if (index >= 0) activityOrder.splice(index, 1);
+            activityIds.delete(part.id);
+          } else if (!activityIds.has(part.id)) {
+            activityIds.add(part.id);
+            activityOrder.push({ type: "progress", id: part.id });
+          }
+          write(part);
+        }
+        await updateWebChatProgressMessage(
+          deps.config,
+          workspaceDir,
+          currentUser.id,
+          deps.logger,
+          conversationId,
+          progressMessageId,
+          parts.at(-1)?.data ?? { lines: [] },
+          activitySnapshot(),
+        );
+      };
+      const enrichActivity = () => {
+        if (catalogStarted) return;
+        catalogStarted = true;
+        void loadActivityCatalog()
+          .then(async (context) => {
+            if (!context || activityClosed) return;
+            integrationContext = context;
+            const updates = [...enrichmentEvents].flatMap(([id, event]) => {
+              const data = createWebProgressData(event, progressSettings, progressMode, [], context);
+              return data ? activity.enrich(id, data) : [];
+            });
+            enrichmentEvents.clear();
+            await publishActivity(updates);
+          })
+          .catch((error: unknown) =>
+            deps.logger.warn(
+              { errorType: error instanceof Error ? error.name : "unknown" },
+              "Failed to enrich activity icons",
+            ),
+          );
+      };
       write({ type: "start", messageMetadata: { createdAt: new Date().toISOString() } });
       write({ type: "start-step" });
       let textPartId: string | null = null;
@@ -3044,6 +3210,11 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
 
       const closeTextPart = () => {
         if (!textPartId) return;
+        const textBytes = Buffer.byteLength(currentTextPart);
+        if (progressMode !== "off" && currentTextPart && retainedTextBytes + textBytes <= 64 * 1024) {
+          activityOrder.push({ type: "text", text: currentTextPart });
+          retainedTextBytes += textBytes;
+        }
         write({ type: "text-end", id: textPartId });
         textPartId = null;
         currentTextPart = "";
@@ -3114,15 +3285,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               write({ type: "data-automation", id, data: artifact });
               return { id, data: artifact };
             });
-            await completeWebChatProgressMessage(
-              deps.config,
-              workspaceDir,
-              currentUser.id,
-              deps.logger,
-              conversationId,
-              progressMessageId,
-              createAssistantTranscriptMessage(handoffText, [], automationParts),
-            );
+            await completeActivityMessage(createAssistantTranscriptMessage(handoffText, [], automationParts));
             return;
           }
         }
@@ -3131,15 +3294,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           const responseText =
             "That automation is no longer available. Please tell me its current name and I’ll look it up again. No changes were made.";
           writeFinalText(responseText);
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAssistantTranscriptMessage(responseText, []),
-          );
+          await completeActivityMessage(createAssistantTranscriptMessage(responseText, []));
           return;
         }
 
@@ -3158,15 +3313,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               write({ type: "data-question", id: questionPart.id, data: question });
             }
           }
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAssistantTranscriptMessage(responseText, [], [], [], questionPart),
-          );
+          await completeActivityMessage(createAssistantTranscriptMessage(responseText, [], [], [], questionPart));
           return;
         }
 
@@ -3175,15 +3322,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           const handoffText = "I’ll open the automation builder so we can finish configuring it there.";
           writeFinalText(handoffText);
           write({ type: "data-automation-handoff", id: handoff.id, data: handoff.data });
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAutomationDraftAssistantTranscriptMessage(handoffText, handoff),
-          );
+          await completeActivityMessage(createAutomationDraftAssistantTranscriptMessage(handoffText, handoff));
           return;
         }
 
@@ -3251,13 +3390,34 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               }
               progressRenderer.renderEvent(event);
               const lines = progressRenderer.getLines();
-              const progressData = createWebProgressData(event, progressSettings, progressMode, lines);
+              const progressData = createWebProgressData(
+                event,
+                progressSettings,
+                progressMode,
+                lines,
+                integrationContext,
+              );
               if (progressMode === "off" && wroteOffProgress) return;
               if (progressData) {
                 if (progressMode === "off") wroteOffProgress = true;
                 closeTextPart();
+                if (progressMode !== "off" && event.kind === "tool_use" && event.toolCallId) {
+                  await publishActivity(activity.start(event.toolCallId, event.startedAt ?? Date.now(), progressData));
+                  if (
+                    !integrationContext &&
+                    progressData.items?.some((item) => item.kind === "integration" || item.kind === "canvas")
+                  ) {
+                    if (enrichmentEvents.size < 128) enrichmentEvents.set(event.toolCallId, event);
+                    enrichActivity();
+                  }
+                  return;
+                }
                 const progressPartId = `progress-${progressPartIndex}`;
                 progressPartIndex += 1;
+                if (progressMode !== "off") {
+                  await publishActivity(activity.record(progressPartId, progressData));
+                  return;
+                }
                 write({ type: "data-progress", id: progressPartId, data: progressData });
                 await updateWebChatProgressMessage(
                   deps.config,
@@ -3269,6 +3429,10 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
                   progressData,
                 );
               }
+            },
+            onToolProgressEnd: async (event) => {
+              if (progressMode === "off") return;
+              await publishActivity(activity.finish(event.toolCallId, event.status, event.endedAt));
             },
             onToolResult: async (event) => {
               if (!activeBuilderContext) return;
@@ -3371,6 +3535,15 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           clearTimeout(builderBudgetTimer);
         }
 
+        activityClosed = true;
+        enrichmentEvents.clear();
+        await publishActivity(
+          activity.finishPending(
+            abortController.signal.reason === "user_stop" ? "cancelled" : "interrupted",
+            Date.now(),
+          ),
+        );
+
         if (automationBuilderContext && (abortController.signal.aborted || result.rawUsage.stopReason === "aborted")) {
           if (!abortController.signal.aborted) abortBuilderRun("agent_aborted");
           throw new Error("Automation builder run aborted");
@@ -3426,15 +3599,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           closeTextPart();
           writeFinalText(handoffText);
           write({ type: "data-automation-handoff", id: handoff.id, data: handoff.data });
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAutomationDraftAssistantTranscriptMessage(handoffText, handoff),
-          );
+          await completeActivityMessage(createAutomationDraftAssistantTranscriptMessage(handoffText, handoff));
           return;
         }
         const builderSourceText = builderHistory.map((historyMessage) => historyMessage.text).join("\n");
@@ -3513,13 +3678,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             write({ type: "data-question", id: questionPart.id, data: question });
           }
         }
-        await completeWebChatProgressMessage(
-          deps.config,
-          workspaceDir,
-          currentUser.id,
-          deps.logger,
-          conversationId,
-          progressMessageId,
+        await completeActivityMessage(
           createAssistantTranscriptMessage(
             responseText,
             fileParts,
@@ -3529,6 +3688,19 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           ),
         );
       } catch (err) {
+        activityClosed = true;
+        enrichmentEvents.clear();
+        await publishActivity(
+          activity.finishPending(
+            abortController.signal.reason === "user_stop" ? "cancelled" : "interrupted",
+            Date.now(),
+          ),
+        ).catch((error: unknown) =>
+          deps.logger.warn(
+            { errorType: error instanceof Error ? error.name : "unknown" },
+            "Failed to persist terminal activity",
+          ),
+        );
         if (automationBuilderContext && !abortController.signal.aborted) {
           deps.logger.warn(
             { errorType: err instanceof Error ? err.name : "unknown", conversationId },
@@ -3572,32 +3744,18 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             closeTextPart();
           }
           write({ type: "data-interruption", id: "interruption", data: interruption });
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createInterruptedAssistantTranscriptMessage(interruptedText, interruption),
-          );
+          await completeActivityMessage(createInterruptedAssistantTranscriptMessage(interruptedText, interruption));
           return;
         }
         const message = errorMessage(err);
         writeBufferedTextDeltas();
         closeTextPart();
         deps.logger.warn({ err }, "Web chat run failed");
-        await completeWebChatProgressMessage(
-          deps.config,
-          workspaceDir,
-          currentUser.id,
-          deps.logger,
-          conversationId,
-          progressMessageId,
-          createAssistantTranscriptMessage(message, []),
-        );
+        await completeActivityMessage(createAssistantTranscriptMessage(message, []));
         write({ type: "error", errorText: message });
       } finally {
+        activityClosed = true;
+        enrichmentEvents.clear();
         leaseMaintenance?.stop();
         clearTimeout(builderBudgetTimer);
         write({ type: "finish-step" });

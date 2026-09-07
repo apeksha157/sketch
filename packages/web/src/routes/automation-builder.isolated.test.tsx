@@ -2099,6 +2099,55 @@ describe("AutomationBuilderPage", () => {
     });
   });
 
+  it("keeps builder progress identity, lifecycle, and technical detail fields", () => {
+    const detail = "curl https://example.test\n  --header 'x-safe: value'";
+    const items = builderChatThreadMessages([
+      {
+        id: "builder-progress",
+        role: "assistant",
+        parts: [
+          {
+            type: "data-progress",
+            id: "progress",
+            data: {
+              lines: [],
+              items: [
+                {
+                  id: "builder-call-1",
+                  revision: 7,
+                  status: "failed",
+                  startedAt: 2_000,
+                  endedAt: 3_000,
+                  mode: "technical",
+                  kind: "integration",
+                  label: "Calling Web",
+                  toolName: "mcp__web__request",
+                  detail,
+                  detailFormat: "command",
+                  detailTruncated: true,
+                  integration: { appId: "web", name: "Web", icon: "/web.svg" },
+                  icon: { type: "generic" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(items[0]?.progressItems?.[0]).toMatchObject({
+      id: "builder-call-1",
+      revision: 7,
+      status: "failed",
+      startedAt: 2_000,
+      endedAt: 3_000,
+      mode: "technical",
+      detail,
+      detailTruncated: true,
+      integration: { appId: "web", name: "Web", icon: "/web.svg" },
+    });
+  });
+
   it("uses custom responses as outgoing answer text and normalizes legacy setup continuations", () => {
     const question: WebChatQuestion = {
       id: "goal",

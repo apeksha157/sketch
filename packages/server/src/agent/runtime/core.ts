@@ -273,6 +273,7 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
       await params.events?.onToolStart?.({
         name: event.toolCall.toolName,
         input: objectInput(event.toolCall.input),
+        toolCallId: event.toolCall.toolCallId,
       });
     },
     onToolExecutionEnd: async (event) => {
@@ -281,6 +282,7 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
       await params.events?.onToolEnd?.({
         name: event.toolCall.toolName,
         input: objectInput(event.toolCall.input),
+        toolCallId: event.toolCall.toolCallId,
         result: toolOutput.type === "tool-result" ? toolOutput.output : undefined,
         durationMs: event.toolExecutionMs,
         ...(toolError === undefined
