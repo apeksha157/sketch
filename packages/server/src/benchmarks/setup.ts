@@ -65,8 +65,7 @@ export function benchmarkSetupRoutes(deps: {
     if (!user?.email) throw new BenchmarkBlockedError("Sign in to Sketch with an email identity before enrolling.");
     return user;
   }
-  async function connections(userId: string, token: string) {
-    const user = await context(userId, token);
+  async function connections(user: Awaited<ReturnType<typeof context>>) {
     const provider = await deps.provider();
     const accounts = provider
       ? (await provider.listConnections(user.email ?? "")).filter(
@@ -77,14 +76,15 @@ export function benchmarkSetupRoutes(deps: {
             connection.isOwnedByViewer !== false,
         )
       : [];
-    return { user, provider, accounts };
+    return { provider, accounts };
   }
   routes.post("/context", async (c) => {
     const { token } = z
       .object({ token: tokenSchema })
       .strict()
       .parse(await c.req.json());
-    const { user, accounts } = await connections(c.get("sub"), token);
+    const user = await context(c.get("sub"), token);
+    const { accounts } = await connections(user).catch(() => ({ accounts: [] }));
     return c.json({
       owner: { name: user.name, email: user.email },
       connections: accounts.map((account) => ({ id: account.id, name: account.accountName ?? account.appName })),
@@ -96,7 +96,10 @@ export function benchmarkSetupRoutes(deps: {
       .object({ token: tokenSchema, accountId: z.string().min(1).max(256) })
       .strict()
       .parse(await c.req.json());
-    const { user, provider, accounts } = await connections(c.get("sub"), token);
+    const user = await context(c.get("sub"), token);
+    const { provider, accounts } = await connections(user).catch(() => {
+      throw new BenchmarkBlockedError("ClickUp is unavailable. Try again when the integration connection is restored.");
+    });
     if (!provider || !accounts.some((account) => account.id === accountId))
       throw new BenchmarkBlockedError("Select your own active ClickUp connection.");
     return c.json({
@@ -113,8 +116,16 @@ export function benchmarkSetupRoutes(deps: {
       .object({ token: tokenSchema, enrollment: enrollmentSchema.extend({ sharedWithBenchmarkTeam: z.literal(true) }) })
       .strict()
       .parse(await c.req.json());
-    const { user, provider, accounts } = await connections(c.get("sub"), token);
+    const user = await context(c.get("sub"), token);
+    let accountName = "Sketch workspace";
     if (enrollment.integration === "clickup") {
+      const { provider, accounts } = await connections(user).catch(() => {
+        throw new BenchmarkBlockedError(
+          "ClickUp is unavailable. Try again when the integration connection is restored.",
+        );
+      });
+      accountName =
+        accounts.find((account) => account.id === enrollment.accountId)?.accountName ?? "ClickUp test account";
       if (!provider || !accounts.some((account) => account.id === enrollment.accountId))
         throw new BenchmarkBlockedError("Select your own active ClickUp connection.");
       await createClickUpProbe(provider, user.email ?? "", enrollment.accountId, AbortSignal.timeout(60_000)).validate(
@@ -134,10 +145,7 @@ export function benchmarkSetupRoutes(deps: {
         throw new BenchmarkBlockedError("The setup link was already used or expired.");
       await createBenchmarkRepository(trx).enroll({
         ...enrollment,
-        accountName:
-          enrollment.integration === "none"
-            ? "Sketch workspace"
-            : (accounts.find((account) => account.id === enrollment.accountId)?.accountName ?? "ClickUp test account"),
+        accountName,
         id: randomUUID(),
         userId: user.id,
         email: user.email ?? "",

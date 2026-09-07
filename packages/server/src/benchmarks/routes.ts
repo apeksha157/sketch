@@ -218,7 +218,9 @@ export function benchmarkRoutes(
     const run = await repository.get(c.req.param("id"), enrollment.id);
     if (!run) return c.json({ error: "Batch not found." }, 404);
     const workerId = await repository.claimCleanup(run.id, enrollment.id);
-    runner.start(run, enrollment, workerId, true);
+    const claimedRun = await repository.get(run.id, enrollment.id);
+    if (!claimedRun) throw new Error("The claimed cleanup batch is unavailable.");
+    runner.start(claimedRun, enrollment, workerId, true);
     return c.json({ runId: run.id }, 202);
   });
   return routes;

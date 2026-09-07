@@ -107,7 +107,13 @@ export function createBenchmarkRepository(db: Kysely<DB>) {
           .select("user_id")
           .where("id", "=", enrollmentId)
           .executeTakeFirstOrThrow();
-        await trx.updateTable("users").set({ name: sql`name` }).where("id", "=", profile.user_id).execute();
+        if (!profile.user_id) throw new Error("The enrolled user was removed.");
+        const owner = await trx
+          .updateTable("users")
+          .set({ name: sql`name` })
+          .where("id", "=", profile.user_id)
+          .executeTakeFirst();
+        if (!Number(owner.numUpdatedRows)) throw new Error("The enrolled user was removed.");
         if (
           await trx
             .selectFrom("benchmark_enrollments")
@@ -244,7 +250,13 @@ export function createBenchmarkRepository(db: Kysely<DB>) {
           .select("user_id")
           .where("id", "=", enrollmentId)
           .executeTakeFirstOrThrow();
-        await trx.updateTable("users").set({ name: sql`name` }).where("id", "=", profile.user_id).execute();
+        if (!profile.user_id) throw new Error("The enrolled user was removed.");
+        const owner = await trx
+          .updateTable("users")
+          .set({ name: sql`name` })
+          .where("id", "=", profile.user_id)
+          .executeTakeFirst();
+        if (!Number(owner.numUpdatedRows)) throw new Error("The enrolled user was removed.");
         if (
           await trx
             .selectFrom("benchmark_enrollments")

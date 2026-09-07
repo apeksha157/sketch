@@ -2107,7 +2107,7 @@ export interface DB {
   benchmark_setup_links: { token_hash: string; expires_at: string; used_at: string | null };
   benchmark_enrollments: {
     id: string;
-    user_id: string;
+    user_id: string | null;
     account_id: string;
     config_json: string;
     active_run_id: string | null;

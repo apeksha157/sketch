@@ -1,21 +1,20 @@
 import { type Kysely, sql } from "kysely";
 
-export async function up(db: Kysely<unknown>): Promise<void> {
+export async function createBenchmarkHistoryTables<Database>(
+  db: Kysely<Database>,
+  retainDeletedOwners = false,
+): Promise<void> {
   await db.schema
     .createTable("benchmark_enrollments")
     .addColumn("id", "text", (c) => c.primaryKey())
-    .addColumn("user_id", "text", (c) => c.notNull().references("users.id"))
+    .addColumn("user_id", "text", (c) =>
+      retainDeletedOwners ? c.references("users.id").onDelete("set null") : c.notNull().references("users.id"),
+    )
     .addColumn("account_id", "text", (c) => c.notNull())
     .addColumn("config_json", "text", (c) => c.notNull())
     .addColumn("active_run_id", "text")
     .addColumn("created_at", "text", (c) => c.notNull().defaultTo(sql`CURRENT_TIMESTAMP`))
     .addUniqueConstraint("benchmark_enrollment_owner_account", ["user_id", "account_id"])
-    .execute();
-  await db.schema
-    .createTable("benchmark_setup_links")
-    .addColumn("token_hash", "text", (c) => c.primaryKey())
-    .addColumn("expires_at", "text", (c) => c.notNull())
-    .addColumn("used_at", "text")
     .execute();
   await db.schema
     .createTable("benchmark_runs")
@@ -32,6 +31,16 @@ export async function up(db: Kysely<unknown>): Promise<void> {
     .createIndex("benchmark_runs_enrollment_created")
     .on("benchmark_runs")
     .columns(["enrollment_id", "created_at"])
+    .execute();
+}
+
+export async function up(db: Kysely<unknown>): Promise<void> {
+  await createBenchmarkHistoryTables(db);
+  await db.schema
+    .createTable("benchmark_setup_links")
+    .addColumn("token_hash", "text", (c) => c.primaryKey())
+    .addColumn("expires_at", "text", (c) => c.notNull())
+    .addColumn("used_at", "text")
     .execute();
 }
 

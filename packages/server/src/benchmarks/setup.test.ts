@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Kysely } from "kysely";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { createTestConfig, createTestDb } from "../test-utils";
@@ -18,13 +18,13 @@ describe("shared-team benchmark enrollment", () => {
   afterEach(async () => {
     await db.destroy();
   });
-  function app(subject?: string) {
+  function app(subject?: string, provider: Parameters<typeof benchmarkSetupRoutes>[0]["provider"] = async () => null) {
     const app = new Hono();
     app.use("*", async (c, next) => {
       if (subject) c.set("sub", subject);
       await next();
     });
-    app.route("/setup", benchmarkSetupRoutes({ db, config, provider: async () => null }));
+    app.route("/setup", benchmarkSetupRoutes({ db, config, provider }));
     return app;
   }
   function post(server: Hono, path: string, value: unknown) {
@@ -64,6 +64,25 @@ describe("shared-team benchmark enrollment", () => {
     expect(profile?.email).toBe("owner@example.com");
     expect(profile?.sharedWithBenchmarkTeam).toBe(true);
     expect((await post(server, "enrollment", { token, enrollment })).status).toBe(400);
+  });
+  it("allows core setup during a provider outage without weakening token validation", async () => {
+    const provider = vi.fn().mockRejectedValue(new Error("Provider outage"));
+    const server = app(userId, provider);
+    const token = await grant();
+    const response = await post(server, "context", { token });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ connections: [] });
+    provider.mockClear();
+    expect((await post(server, "enrollment", { token, enrollment })).status).toBe(200);
+    expect(provider).not.toHaveBeenCalled();
+    expect((await post(server, "context", { token })).status).toBe(400);
+    expect(provider).not.toHaveBeenCalled();
+    const clickup = await post(server, "enrollment", {
+      token: await grant(),
+      enrollment: { ...enrollment, integration: "clickup", accountId: "clickup" },
+    });
+    expect(clickup.status).toBe(400);
+    expect(await clickup.text()).toContain("ClickUp is unavailable");
   });
   it("rejects expired and forged setup tokens", async () => {
     const token = await grant();

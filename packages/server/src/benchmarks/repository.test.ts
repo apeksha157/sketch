@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as ownerHistoryMigration from "../db/migrations/232-benchmark-owner-history";
 import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { createTestDb } from "../test-utils";
@@ -64,6 +65,40 @@ describe("durable benchmark ownership", () => {
   afterEach(async () => {
     await db.destroy();
   });
+  it("preserves existing enrollment and run documents during the owner-history migration", async () => {
+    await sql`PRAGMA foreign_keys = ON`.execute(db);
+    const run = draft(enrollment.id);
+    await repo.insert(run);
+    await db.transaction().execute((trx) => ownerHistoryMigration.down<DB>(trx));
+    await db.transaction().execute((trx) => ownerHistoryMigration.up<DB>(trx));
+    expect(await repo.enrollmentById(enrollment.id)).toEqual(enrollment);
+    expect(await repo.get(run.id, enrollment.id)).toEqual(run);
+  });
+  it("deletes an enrolled owner while preserving inactive benchmark history", async () => {
+    await sql`PRAGMA foreign_keys = ON`.execute(db);
+    const run = draft(enrollment.id);
+    await repo.insert(run);
+    await createUserRepository(db).remove(enrollment.userId);
+    expect(await createUserRepository(db).findById(enrollment.userId)).toBeUndefined();
+    expect(await repo.get(run.id, enrollment.id)).toMatchObject({ id: run.id });
+    expect(
+      await db.selectFrom("benchmark_enrollments").select("user_id").where("id", "=", enrollment.id).executeTakeFirst(),
+    ).toEqual({ user_id: null });
+    await expect(repo.claim(run.id, enrollment.id)).rejects.toThrow("removed");
+  });
+  it("removes an enrolled owner before the first batch", async () => {
+    await sql`PRAGMA foreign_keys = ON`.execute(db);
+    await createUserRepository(db).remove(enrollment.userId);
+    expect(await createUserRepository(db).findById(enrollment.userId)).toBeUndefined();
+  });
+  it("blocks deletion before changing the owner while a batch needs cleanup", async () => {
+    const run = draft(enrollment.id);
+    await repo.insert(run);
+    await repo.claim(run.id, enrollment.id);
+    await expect(createUserRepository(db).remove(enrollment.userId)).rejects.toThrow("cleanup");
+    expect(await createUserRepository(db).findById(enrollment.userId)).toMatchObject({ email: enrollment.email });
+    expect((await repo.get(run.id, enrollment.id))?.status).toBe("running");
+  });
   it("rejects replay and a second active batch without dropping the account lock", async () => {
     const first = draft(enrollment.id);
     const second = draft(enrollment.id);
@@ -120,6 +155,14 @@ describe("durable benchmark ownership", () => {
     expect(saved?.cases[0]?.resources[0]?.state).toBe("deleted");
     expect(saved?.cases[0]?.assertions[0]?.evidence).toContain("operator attestation");
     expect(saved?.cases[0]?.cleanup).toBe("needs_attention");
+    const cleanupWorker = await repo.claimCleanup(run.id, enrollment.id);
+    const claimed = await repo.get(run.id, enrollment.id);
+    if (!claimed) throw new Error("Missing claimed run");
+    await repo.save(claimed, cleanupWorker);
+    expect((await repo.get(run.id, enrollment.id))?.cases[0]?.assertions[0]?.evidence).toContain(
+      "operator attestation",
+    );
+    expect((await repo.get(run.id, enrollment.id))?.cases[0]?.resources[0]?.state).toBe("deleted");
   });
   it("blocks cleanup of an old batch while a new batch owns the account", async () => {
     const old = draft(enrollment.id);
