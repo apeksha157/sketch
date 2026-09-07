@@ -1536,20 +1536,6 @@ function ProgressTimelineWindow({
   const exitingKeySet = useMemo(() => new Set(timelineWindow.exitingKeys), [timelineWindow.exitingKeys]);
   const earlierEntries = inspectionOpen ? [] : entries.slice(0, -MAX_VISIBLE_TIMELINE_PROGRESS_ENTRIES);
 
-  useLayoutEffect(() => {
-    if (!expandedItemKey) return;
-    const viewport = timelineWindow.viewportRef.current;
-    if (!viewport) return;
-    const target = Array.from(viewport.querySelectorAll<HTMLElement>("[data-progress-item-key]")).find(
-      (element) => element.dataset.progressItemKey === expandedItemKey,
-    );
-    if (!target) return;
-    const viewportRect = viewport.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    if (targetRect.top < viewportRect.top) viewport.scrollTop -= viewportRect.top - targetRect.top;
-    else if (targetRect.bottom > viewportRect.bottom) viewport.scrollTop += targetRect.bottom - viewportRect.bottom;
-  }, [expandedItemKey, timelineWindow.viewportRef]);
-
   return (
     <div className="pb-[10px] last:pb-0">
       {earlierEntries.length > 0 ? (
@@ -1557,6 +1543,7 @@ function ProgressTimelineWindow({
       ) : null}
       <div
         ref={timelineWindow.viewportRef}
+        data-tool-call-window
         aria-live="polite"
         className="sketch-timeline-window chat-scrollbar max-h-[260px] overflow-x-hidden overflow-y-auto overscroll-contain"
         style={timelineWindow.viewportStyle}
@@ -1803,6 +1790,26 @@ function ProgressItemSummary({
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
 }) {
+  const summaryRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    const timer = window.setTimeout(() => {
+      const summary = summaryRef.current;
+      if (!summary) return;
+      summary.focus({ preventScroll: true });
+      const viewport = summary.closest<HTMLElement>("[data-tool-call-window], [data-timeline-history]");
+      if (viewport) {
+        viewport.scrollIntoView({ block: "nearest", behavior: "instant" });
+        viewport.scrollTo({
+          top: viewport.scrollTop + summary.getBoundingClientRect().top - viewport.getBoundingClientRect().top,
+          behavior: prefersReducedTimelineMotion() ? "instant" : "smooth",
+        });
+      } else {
+        summary.scrollIntoView({ block: "nearest", behavior: "instant" });
+      }
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [expanded]);
   const secondary = item.detail;
   const itemActive = progressItemIsActive(item, active, activityLive);
   const elapsed = useProgressElapsed(item, itemActive && item.status === "running");
@@ -1836,9 +1843,20 @@ function ProgressItemSummary({
       data-progress-status={item.status ?? undefined}
       className="min-w-0 py-[1px]"
     >
-      <span
+      <button
+        ref={summaryRef}
+        type="button"
+        disabled={!inspectable}
+        aria-expanded={inspectable ? expanded : undefined}
+        aria-label={inspectable ? `${expanded ? "Hide" : "Show"} details for ${displayLabel}` : undefined}
         data-progress-line
-        className={cn("flex w-full min-w-0 items-baseline gap-x-[8px]", itemActive && "sketch-shimmer-progress")}
+        data-progress-details-toggle={inspectable ? "" : undefined}
+        onClick={() => onExpandedChange?.(!expanded)}
+        className={cn(
+          "flex w-full min-w-0 items-baseline gap-x-[8px] rounded-[5px] py-[3px] text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+          inspectable && "cursor-pointer hover:bg-muted/45",
+          itemActive && "sketch-shimmer-progress",
+        )}
       >
         <span
           className={cn(
@@ -1883,23 +1901,15 @@ function ProgressItemSummary({
           <span className="shrink-0 text-[11px] leading-[1.5] text-muted-foreground/55">{formatElapsed(elapsed)}</span>
         ) : null}
         {inspectable ? (
-          <button
-            type="button"
-            aria-expanded={expanded}
-            aria-label={expanded ? `Hide details for ${displayLabel}` : `Show details for ${displayLabel}`}
-            title={expanded ? "Hide details" : "Show details"}
-            data-progress-details-toggle
-            onClick={() => onExpandedChange?.(!expanded)}
-            className="inline-flex size-[20px] shrink-0 items-center justify-center rounded-[5px] text-muted-foreground/65 transition-colors hover:bg-muted/65 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45"
-          >
+          <span className="inline-flex size-[20px] shrink-0 items-center justify-center text-muted-foreground/65">
             <CaretDownIcon
               size={12}
               className={cn("transition-transform duration-150", expanded && "rotate-180")}
               aria-hidden
             />
-          </button>
+          </span>
         ) : null}
-      </span>
+      </button>
       <CollapsiblePrimitive.Root open={expanded && inspectable}>
         <CollapsiblePrimitive.Content className="sketch-collapsible-timeline-content">
           <div className="mt-[4px] max-w-full rounded-[6px] border border-border/60 bg-muted/20 p-[7px]">
