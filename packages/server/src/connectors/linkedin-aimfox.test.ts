@@ -172,6 +172,43 @@ describe("LinkedIn conversation segmentation", () => {
     expect(replayed[0].manifest).toEqual(legacySealed);
     expect(identities(replayed)).toEqual(identities(initial));
   });
+
+  it("computes LinkedIn segment direction from sender id rather than display name", () => {
+    const ordered = orderLinkedinMessages("urn:conversation:direction", [
+      {
+        urn: "urn:message:1",
+        body: "First reply",
+        sender: { id: "lead-1", full_name: "Member User" },
+        created_at: 1_779_911_700_000,
+      },
+      {
+        urn: "urn:message:2",
+        body: "Owner follow-up",
+        sender: { id: "acct-1", full_name: "Member User" },
+        created_at: 1_779_911_800_000,
+      },
+      {
+        urn: "urn:message:3",
+        body: "Second reply",
+        sender: { id: "lead-1", full_name: "Member User" },
+        created_at: 1_779_911_900_000,
+      },
+    ]);
+
+    const segments = buildLinkedinSegments(
+      ordered,
+      [],
+      { maxMessages: 50, maxTokens: 10_000, gapMs: 4 * HOUR_MS },
+      "acct-1",
+    );
+
+    expect(segments[0]?.manifest).toMatchObject({
+      inboundCount: 2,
+      outboundCount: 1,
+      lastInboundAt: "2026-05-27T19:58:20.000Z",
+      lastOutboundAt: "2026-05-27T19:56:40.000Z",
+    });
+  });
 });
 
 describe("createLinkedinAimfoxConnector", () => {

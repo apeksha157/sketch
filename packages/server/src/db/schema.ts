@@ -1374,8 +1374,20 @@ export interface EntityContactPointsTable {
   created_by_user_id: string | null;
   verified_at: string | null;
   last_contacted_at: string | null;
+  last_replied_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
+}
+
+export interface EntityTouchStatsTable {
+  entity_id: string;
+  last_touch_at: string | null;
+  last_inbound_at: string | null;
+  last_outbound_at: string | null;
+  touch_count_30d: Generated<number>;
+  touch_count_90d: Generated<number>;
+  source_last_touch: Generated<string>;
+  computed_at: string;
 }
 
 export interface UserEntityLinksTable {
@@ -2243,6 +2255,7 @@ export interface DB {
   entity_share_emails: EntityShareEmailsTable;
   entity_source_refs: EntitySourceRefsTable;
   entity_contact_points: EntityContactPointsTable;
+  entity_touch_stats: EntityTouchStatsTable;
   user_entity_links: UserEntityLinksTable;
   user_entity_link_sweep_runs: UserEntityLinkSweepRunsTable;
   weekly_mint_candidates: WeeklyMintCandidatesTable;

@@ -16,7 +16,7 @@ import { type ProvenanceTier, strongestProvenanceTier } from "../../entities/pro
 import { resolveLiveEntity, resolveLiveEntityId, resolveSourceRefToLiveEntityId } from "../../entities/redirect";
 import { normalizePhoneLike } from "../../identity-normalization";
 import { yieldToEventLoop } from "../../lib/event-loop";
-import { parseTimestampMs } from "../../timestamps";
+import { maxIso, parseTimestampMs } from "../../timestamps";
 import { isPg } from "../dialect";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../schema";
 import { type FileViewer, fileVisibilityPredicate } from "./connectors";
@@ -109,6 +109,18 @@ type MentionActivityRow = {
   source_created_at: string | null;
 };
 
+const HOTNESS_FLOOR = 1e-30;
+
+type TouchStatsMentionRow = MentionActivityRow & {
+  indexed_file_id: string;
+  source: string;
+};
+
+type LinkedinManifestTouchStats = {
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+};
+
 function mentionActivityMs(row: MentionActivityRow): number | null {
   return (
     parseTimestampMs(row.source_updated_at) ??
@@ -153,6 +165,37 @@ function canonicalHotnessActivityPredicate() {
     AND ${nullableCanonicalTimestampPredicate(sourceCreatedAt)}
     AND ${canonicalTimestampPredicate(mentionedAt)}
   )`;
+}
+
+/**
+ * `entities.hotness` is a `real` column: values below float4's smallest
+ * normal (~1e-38) make Postgres reject the write, and the decay term reaches
+ * that after ~870 quiet days. Anything that small is zero for ranking anyway.
+ */
+function clampHotness(value: number): number {
+  return value < HOTNESS_FLOOR ? 0 : value;
+}
+
+function readLinkedinManifest(sourceMeta: string | null): LinkedinManifestTouchStats | null {
+  if (!sourceMeta) return null;
+  try {
+    const root = JSON.parse(sourceMeta) as {
+      linkedinAimfox?: {
+        segmentManifest?: {
+          lastInboundAt?: unknown;
+          lastOutboundAt?: unknown;
+        };
+      };
+    };
+    const manifest = root.linkedinAimfox?.segmentManifest;
+    if (!manifest) return null;
+    return {
+      lastInboundAt: typeof manifest.lastInboundAt === "string" ? manifest.lastInboundAt : null,
+      lastOutboundAt: typeof manifest.lastOutboundAt === "string" ? manifest.lastOutboundAt : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -289,6 +332,7 @@ export interface UpsertContactPointData {
   createdByUserId?: string | null;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  lastRepliedAt?: string | null;
   makePrimary?: boolean;
 }
 
@@ -1131,6 +1175,7 @@ export function createEntityRepository(db: Kysely<DB>) {
             created_by_user_id: data.createdByUserId ?? null,
             verified_at: data.verifiedAt ?? null,
             last_contacted_at: data.lastContactedAt ?? null,
+            last_replied_at: data.lastRepliedAt ?? null,
             created_at: now,
             updated_at: now,
           })
@@ -1153,6 +1198,12 @@ export function createEntityRepository(db: Kysely<DB>) {
                 WHEN excluded.last_contacted_at IS NULL THEN entity_contact_points.last_contacted_at
                 WHEN excluded.last_contacted_at > entity_contact_points.last_contacted_at THEN excluded.last_contacted_at
                 ELSE entity_contact_points.last_contacted_at
+              END`,
+              last_replied_at: sql`CASE
+                WHEN entity_contact_points.last_replied_at IS NULL THEN excluded.last_replied_at
+                WHEN excluded.last_replied_at IS NULL THEN entity_contact_points.last_replied_at
+                WHEN excluded.last_replied_at > entity_contact_points.last_replied_at THEN excluded.last_replied_at
+                ELSE entity_contact_points.last_replied_at
               END`,
               updated_at: now,
             }),
@@ -1687,7 +1738,8 @@ export function createEntityRepository(db: Kysely<DB>) {
     },
 
     async updateHotness(entityId: string) {
-      const thirtyDaysAgoMs = Date.now() - HOTNESS_WINDOW_DAYS * DAY_MS;
+      const nowMs = Date.now();
+      const thirtyDaysAgoMs = nowMs - HOTNESS_WINDOW_DAYS * DAY_MS;
       const thirtyDaysAgo = new Date(thirtyDaysAgoMs).toISOString();
       const canonicalActivity = await db
         .selectFrom("entity_mentions")
@@ -1717,14 +1769,88 @@ export function createEntityRepository(db: Kysely<DB>) {
         if (activityMs >= thirtyDaysAgoMs) count++;
         if (latestActivityMs === null || activityMs > latestActivityMs) latestActivityMs = activityMs;
       }
-      const daysSince = latestActivityMs === null ? HOTNESS_WINDOW_DAYS : (Date.now() - latestActivityMs) / DAY_MS;
+      const daysSince = latestActivityMs === null ? HOTNESS_WINDOW_DAYS : (nowMs - latestActivityMs) / DAY_MS;
 
-      const hotness = (1 / (1 + Math.exp(-Math.log1p(count)))) * Math.exp(-0.1 * daysSince);
+      const hotness = clampHotness((1 / (1 + Math.exp(-Math.log1p(count)))) * Math.exp(-0.1 * daysSince));
+      const touchRows = await db
+        .selectFrom("entity_mentions")
+        .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+        .where("entity_id", "=", entityId)
+        .select([
+          "entity_mentions.mentioned_at",
+          "indexed_files.id as indexed_file_id",
+          "indexed_files.source",
+          "indexed_files.source_updated_at",
+          "indexed_files.source_created_at",
+        ])
+        .execute();
+      const linkedinRows = await db
+        .selectFrom("entity_mentions")
+        .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+        .where("entity_id", "=", entityId)
+        .where("indexed_files.file_type", "=", "linkedin_conversation")
+        .select(["indexed_files.id as indexed_file_id", "indexed_files.source_meta"])
+        .execute();
+
+      const ninetyDaysAgoMs = nowMs - 90 * DAY_MS;
+      let lastTouchAt: string | null = null;
+      let lastInboundAt: string | null = null;
+      let lastOutboundAt: string | null = null;
+      let touchCount30d = 0;
+      let touchCount90d = 0;
+      const sourceLastTouch = new Map<string, string>();
+      const files = new Map<string, TouchStatsMentionRow>();
+      for (const row of touchRows) {
+        if (!files.has(row.indexed_file_id)) files.set(row.indexed_file_id, row);
+      }
+      for (const file of files.values()) {
+        const activityMs = mentionActivityMs(file);
+        if (activityMs !== null) {
+          const activityAt = new Date(activityMs).toISOString();
+          lastTouchAt = maxIso(lastTouchAt, activityAt);
+          sourceLastTouch.set(file.source, maxIso(sourceLastTouch.get(file.source) ?? null, activityAt) ?? activityAt);
+          if (activityMs >= thirtyDaysAgoMs) touchCount30d++;
+          if (activityMs >= ninetyDaysAgoMs) touchCount90d++;
+        }
+      }
+      const linkedinFiles = new Map<string, string | null>();
+      for (const row of linkedinRows) linkedinFiles.set(row.indexed_file_id, row.source_meta);
+      for (const sourceMeta of linkedinFiles.values()) {
+        const manifest = readLinkedinManifest(sourceMeta);
+        if (!manifest) continue;
+        lastInboundAt = maxIso(lastInboundAt, manifest.lastInboundAt);
+        lastOutboundAt = maxIso(lastOutboundAt, manifest.lastOutboundAt);
+      }
+      const computedAt = new Date(nowMs).toISOString();
 
       await db
         .updateTable("entities")
         .set({ hotness, updated_at: new Date().toISOString() })
         .where("id", "=", entityId)
+        .execute();
+      await db
+        .insertInto("entity_touch_stats")
+        .values({
+          entity_id: entityId,
+          last_touch_at: lastTouchAt,
+          last_inbound_at: lastInboundAt,
+          last_outbound_at: lastOutboundAt,
+          touch_count_30d: touchCount30d,
+          touch_count_90d: touchCount90d,
+          source_last_touch: JSON.stringify(Object.fromEntries([...sourceLastTouch.entries()].sort())),
+          computed_at: computedAt,
+        })
+        .onConflict((oc) =>
+          oc.column("entity_id").doUpdateSet({
+            last_touch_at: lastTouchAt,
+            last_inbound_at: lastInboundAt,
+            last_outbound_at: lastOutboundAt,
+            touch_count_30d: touchCount30d,
+            touch_count_90d: touchCount90d,
+            source_last_touch: JSON.stringify(Object.fromEntries([...sourceLastTouch.entries()].sort())),
+            computed_at: computedAt,
+          }),
+        )
         .execute();
     },
 
@@ -1749,6 +1875,14 @@ export function createEntityRepository(db: Kysely<DB>) {
         cursor = nextCursor;
         await yieldToEventLoop();
       }
+      await db
+        .deleteFrom("entity_touch_stats")
+        .where(
+          "entity_id",
+          "not in",
+          db.selectFrom("entities").select("id").where("status", "!=", "archived").where(whereLiveEntity()),
+        )
+        .execute();
       return total;
     },
 
