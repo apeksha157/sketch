@@ -5206,15 +5206,17 @@ function TriggerFields({ draft, taskId }: { draft: DraftAutomation; taskId: stri
       : config.type;
   return (
     <>
-      <Field label="Trigger type">
-        <Input value={triggerLabel} className={builderReadOnlyInputClass} readOnly aria-readonly="true" />
-      </Field>
+      {config.type !== "webhook" ? (
+        <Field label="Trigger type">
+          <Input value={triggerLabel} className={builderReadOnlyInputClass} readOnly aria-readonly="true" />
+        </Field>
+      ) : null}
       {config.type === "slack_channel_message" ? (
         <Field label="Slack channel">
           <Input value={config.channelId ?? ""} className={builderReadOnlyInputClass} readOnly aria-readonly="true" />
         </Field>
       ) : null}
-      {config.type === "webhook" ? <NativeWebhookFields config={config} /> : null}
+      {config.type === "webhook" ? <NativeWebhookFields config={config} paused={draft.status === "paused"} /> : null}
       {canvasConfig ? (
         <CanvasWebhookFields
           endpoint={canvasConfig.canvasEndpoint}
@@ -5244,161 +5246,181 @@ function TriggerFields({ draft, taskId }: { draft: DraftAutomation; taskId: stri
   );
 }
 
-function NativeWebhookFields({ config }: { config: WorkflowTriggerConfig }) {
-  const metadata = config;
-  const hasEndpoint = Boolean(metadata.webhookUrl);
-  const endpoints = metadata.webhookEndpoints ?? [];
+function NativeWebhookFields({ config, paused }: { config: WorkflowTriggerConfig; paused: boolean }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const endpoints = config.webhookEndpoints ?? [];
   const intended = endpoints.filter(
     (endpoint) => endpoint.slot === "default" || endpoint.status !== "revoked" || endpoint.binding,
   );
+  const bindings = intended.map((endpoint) => endpoint.binding).filter((binding) => binding !== undefined);
+  if (bindings.length === 0 && config.webhookBinding) bindings.push(config.webhookBinding);
+  const clickup = bindings.length > 0 && bindings.every((binding) => binding.integration === "clickup");
   const signed =
-    metadata.webhookAuthentication === "hmac_sha256" ||
+    config.webhookAuthentication === "hmac_sha256" ||
     intended.some((endpoint) => endpoint.authentication === "hmac_sha256");
-  const ready =
-    hasEndpoint &&
-    metadata.webhookStatus === "active" &&
-    intended.every(
-      (endpoint) =>
-        endpoint.status === "active" && (intended.length === 1 || endpoint.authentication === "hmac_sha256"),
-    );
-  const statusDetails = {
-    label: ready ? "Active" : metadata.webhookStatus === "revoked" ? "Revoked" : "Setup pending",
-    guidance: ready
-      ? signed
-        ? "Provider signatures are verified separately for each subscription. A validated subscription can run while awaiting its first delivery."
-        : "Send POST requests with JSON to the canonical URL above; no authentication is required."
-      : hasEndpoint
-        ? "Complete or reconcile every intended subscription before activating this automation."
-        : "Sketch is still setting up this trigger. Refresh this automation before sending requests.",
-    isError: metadata.webhookStatus === "revoked",
-    toneClass: ready
-      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-      : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  const endpointReady = (endpoint: (typeof endpoints)[number]) =>
+    endpoint.status === "active" && (intended.length === 1 || endpoint.authentication === "hmac_sha256");
+  const readyCount = intended.filter(endpointReady).length;
+  const ready = Boolean(config.webhookUrl) && config.webhookStatus === "active" && intended.every(endpointReady);
+  const disconnected = config.webhookStatus === "revoked";
+  const scopeNames: Record<string, [string, string]> = {
+    list_id: ["list", "lists"],
+    space_id: ["Space", "Spaces"],
+    folder_id: ["folder", "folders"],
+    task_id: ["task", "tasks"],
   };
+  const scopes = new Map<string, Set<string>>();
+  for (const binding of bindings) {
+    if (!binding.subscription) continue;
+    const scope = binding.subscription.scope;
+    const field = scope?.field ?? "workspace";
+    const ids = scopes.get(field) ?? new Set<string>();
+    ids.add(scope?.id ?? binding.workspaceId ?? binding.collectionPath);
+    scopes.set(field, ids);
+  }
+  const scopeSummary = [...scopes].map(([field, ids]) => {
+    const names = field === "workspace" ? ["Workspace", "Workspaces"] : (scopeNames[field] ?? ["source", "sources"]);
+    return `${ids.size} ${names[ids.size === 1 ? 0 : 1]}${field === "workspace" ? " (all locations)" : ""}`;
+  });
+  const eventNames = [...new Set(bindings.flatMap((binding) => binding.subscription?.events ?? []))].map((event) =>
+    event === "*"
+      ? "All events"
+      : event
+          .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+          .toLowerCase()
+          .replace(/^./, (character) => character.toUpperCase()),
+  );
+  const eventSummary = eventNames.length > 2 ? [`${eventNames.length} types of activity`] : eventNames;
+  const summary = [...scopeSummary, ...eventSummary].join(" · ");
+  const guidance = disconnected
+    ? "This trigger is disconnected. Ask Sketch in the automation chat to reconnect it."
+    : !ready
+      ? intended.length > 1
+        ? `${readyCount} of ${intended.length} sources are connected. Ask Sketch in the automation chat to finish setup.`
+        : "Setup is not complete. Ask Sketch in the automation chat to finish connecting this trigger."
+      : paused
+        ? "The trigger is ready. Resume the automation when you want it to run."
+        : clickup
+          ? "Matching ClickUp activity will start this automation automatically."
+          : "Incoming events will start this automation automatically.";
   const handleCopy = async () => {
-    if (!metadata.webhookUrl) return;
+    if (!config.webhookUrl) return;
     try {
-      await navigator.clipboard.writeText(metadata.webhookUrl);
-      toast.success("Sketch webhook URL copied");
+      await navigator.clipboard.writeText(config.webhookUrl);
+      toast.success("Webhook URL copied");
     } catch {
-      toast.error("Unable to copy Sketch webhook URL");
+      toast.error("Unable to copy webhook URL");
     }
   };
+  const callbackField = (
+    <Field label="Webhook URL">
+      <div className="flex gap-2">
+        <Input
+          value={config.webhookUrl ?? "Available after setup"}
+          className={cn(builderReadOnlyInputClass, "min-w-0 flex-1")}
+          readOnly
+          aria-readonly="true"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          className={cn(canvasIconButtonClass, "border border-border/70 bg-card/90")}
+          aria-label="Copy webhook URL"
+          disabled={!config.webhookUrl}
+          onClick={() => void handleCopy()}
+        >
+          <CopySimpleIcon size={15} />
+        </Button>
+      </div>
+    </Field>
+  );
 
   return (
-    <div
-      data-testid="native-webhook-details"
-      className="space-y-3 rounded-[8px] border border-brand-accent/25 bg-brand-accent/5 p-3"
-    >
+    <div data-testid="native-webhook-details" className="space-y-4 rounded-lg border border-border/70 bg-card p-4">
       <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
-          <p className="text-[12px] font-medium text-foreground">Webhook trigger</p>
-          <p className="text-[11px] leading-4 text-muted-foreground">
-            Send JSON events to this endpoint to start the automation.
-          </p>
+        <div className="min-w-0 space-y-1">
+          <p className="text-sm font-medium text-foreground">{clickup ? "ClickUp events" : "Incoming events"}</p>
+          {summary ? <p className="text-xs leading-5 text-muted-foreground">{summary}</p> : null}
         </div>
         <Badge
           className={cn(
-            "shrink-0 rounded-[5px] border px-1.5 py-0.5 text-[10px] font-semibold",
-            statusDetails.toneClass,
+            "shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium",
+            ready
+              ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              : "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300",
           )}
         >
-          {statusDetails.label}
+          {ready ? "Ready" : disconnected ? "Disconnected" : "Needs setup"}
         </Badge>
       </div>
-      <div
-        data-testid="native-webhook-guidance"
-        role={statusDetails.isError ? "alert" : "status"}
-        className={cn(
-          "rounded-[6px] border px-2.5 py-2 text-[11px] leading-4",
-          statusDetails.isError
-            ? "border-destructive/25 bg-destructive/10 text-destructive"
-            : "border-border/70 bg-background/55 text-muted-foreground",
-        )}
-      >
-        <p>{statusDetails.guidance}</p>
-      </div>
-      {endpoints.length > 0 ? (
-        <div aria-label="Webhook subscriptions" className="space-y-2">
-          {endpoints.map((endpoint) => (
-            <div key={endpoint.endpointId} className="rounded border border-border/70 p-2 text-[11px]">
-              <p className="font-medium">{endpoint.slot}</p>
-              <p>
-                {endpoint.binding?.subscription?.scope
-                  ? `${endpoint.binding.subscription.scope.field}: ${endpoint.binding.subscription.scope.id}`
-                  : endpoint.binding
-                    ? "Workspace-wide"
-                    : "No provider binding"}
-              </p>
-              <p>{endpoint.binding?.subscription?.events.join(", ")}</p>
-              <p>
-                {endpoint.status === "active"
-                  ? "Registration ready"
-                  : endpoint.status === "revoked"
-                    ? "Retired"
-                    : "Registration pending"}
-                {endpoint.authentication === "hmac_sha256" && endpoint.status === "active"
-                  ? endpoint.lastDelivery
-                    ? " · Signed delivery observed"
-                    : " · Awaiting first delivery"
-                  : ""}
-              </p>
-              <p className="break-all text-muted-foreground">{endpoint.url}</p>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      <Field label="Canonical URL">
-        <div className="flex gap-2">
-          <Input
-            value={metadata.webhookUrl ?? "Webhook endpoint is not available yet"}
-            className={cn(builderReadOnlyInputClass, "min-w-0 flex-1")}
-            readOnly
-            aria-readonly="true"
+      <output data-testid="native-webhook-guidance" className="block text-xs leading-5 text-muted-foreground">
+        {guidance}
+      </output>
+      {!signed && bindings.length === 0 && config.webhookUrl ? callbackField : null}
+      <div className="border-t border-border/60 pt-2">
+        <button
+          type="button"
+          aria-expanded={showDetails}
+          onClick={() => setShowDetails((value) => !value)}
+          className="flex w-full items-center gap-1.5 rounded py-1.5 text-left text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <CaretRightIcon
+            size={13}
+            aria-hidden="true"
+            className={cn("transition-transform", showDetails && "rotate-90")}
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className={cn(canvasIconButtonClass, "border border-border/70 bg-card/90")}
-            aria-label="Copy canonical Sketch webhook URL"
-            disabled={!metadata.webhookUrl}
-            onClick={() => void handleCopy()}
-          >
-            <CopySimpleIcon size={15} />
-          </Button>
-        </div>
-      </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Method">
-          <Input
-            value={metadata.webhookMethod ?? "POST"}
-            className={builderReadOnlyInputClass}
-            readOnly
-            aria-readonly="true"
-          />
-        </Field>
-        <Field label="Content type">
-          <Input
-            value={metadata.webhookContentType ?? "application/json"}
-            className={builderReadOnlyInputClass}
-            readOnly
-            aria-readonly="true"
-          />
-        </Field>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Authentication mode">
-          <Input
-            value={signed ? "HMAC-SHA256 provider signature" : "None required"}
-            className={builderReadOnlyInputClass}
-            readOnly
-            aria-readonly="true"
-          />
-        </Field>
-        <Field label="Payload shape">
-          <Input value="Any JSON value" className={builderReadOnlyInputClass} readOnly aria-readonly="true" />
-        </Field>
+          Connection details
+        </button>
+        {showDetails ? (
+          <div className="space-y-4 pt-3">
+            {endpoints.length > 0 ? (
+              <div aria-label="Webhook subscriptions" className="divide-y divide-border/60">
+                {endpoints.map((endpoint) => (
+                  <div key={endpoint.endpointId} className="space-y-1 py-3 text-xs first:pt-0">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium">
+                        {endpoint.binding?.subscription?.scope
+                          ? `${scopeNames[endpoint.binding.subscription.scope.field]?.[0] ?? "Source"}: ${endpoint.binding.subscription.scope.id}`
+                          : endpoint.binding?.subscription
+                            ? "Entire Workspace"
+                            : endpoint.status === "active"
+                              ? "Incoming webhook"
+                              : "Unconfigured source"}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {endpoint.status === "active"
+                          ? "Connected"
+                          : endpoint.status === "revoked"
+                            ? "Retired"
+                            : "Needs setup"}
+                      </span>
+                    </div>
+                    <p className="text-muted-foreground">{endpoint.binding?.subscription?.events.join(", ")}</p>
+                    <p className="text-muted-foreground">Slot: {endpoint.slot}</p>
+                    {endpoint.authentication === "hmac_sha256" && endpoint.status === "active" ? (
+                      <p className="text-muted-foreground">
+                        {endpoint.lastDelivery ? "Signed event received" : "No events received yet"}
+                      </p>
+                    ) : null}
+                    <p className="break-all font-mono text-[11px] text-muted-foreground">{endpoint.url}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {signed || bindings.length > 0 || !config.webhookUrl ? callbackField : null}
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
+              <dt className="text-muted-foreground">Request</dt>
+              <dd>
+                {config.webhookMethod ?? "POST"} · {config.webhookContentType ?? "application/json"}
+              </dd>
+              <dt className="text-muted-foreground">Authentication</dt>
+              <dd>{signed ? "HMAC-SHA256 provider signature" : "None required"}</dd>
+              <dt className="text-muted-foreground">Payload</dt>
+              <dd>Any JSON value</dd>
+            </dl>
+          </div>
+        ) : null}
       </div>
     </div>
   );
