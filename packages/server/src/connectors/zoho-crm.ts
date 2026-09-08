@@ -734,11 +734,15 @@ function relatedSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSo
 }
 
 function tagSourceMeta(value: unknown): string | undefined {
-  if (!Array.isArray(value)) return sourceMetaString(value);
-  const names = value
+  const names = tagNamesSourceMeta(value);
+  return names.length > 0 ? names.join(", ") : sourceMetaString(value);
+}
+
+function tagNamesSourceMeta(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
     .map((item) => lookupName(item) ?? sourceMetaString(item))
     .filter((item): item is string => Boolean(item));
-  return names.length > 0 ? names.join(", ") : undefined;
 }
 
 function zohoCrmSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSourceMeta {
@@ -778,6 +782,8 @@ function zohoCrmSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSo
     addMetaString(meta, "website", record.Website);
     addMetaString(meta, "companySize", record.Employees ?? record.Company_Size ?? record.No_of_Employees);
     addMetaString(meta, "lastActivityTime", record.Last_Activity_Time);
+    const tags = tagNamesSourceMeta(record.Tag);
+    if (tags.length > 0) meta.tags = tags;
     const tag = tagSourceMeta(record.Tag);
     if (tag) meta.tag = tag;
   }

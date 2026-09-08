@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import type { Logger } from "pino";
 import { type ZohoCrmSourceMeta, createConnectorRepository, readZohoCrmMeta } from "../db/repositories/connectors";
 import { type CrmFieldHistoryAppendRow, createCrmFieldHistoryRepository } from "../db/repositories/crm-field-history";
+import { createCrmRecordFieldsRepository } from "../db/repositories/crm-record-fields";
 import { createRawContentRepository } from "../db/repositories/raw-contents";
 import type { DB } from "../db/schema";
 import { normalizeSourceTimestampForStorage } from "../timestamps";
@@ -202,6 +203,7 @@ export async function processSyncedItem({
         .execute();
       if (rawContentPersisted) {
         await appendZohoFieldHistory(trx, existing.id, item.providerFileId, sourceUpdatedAt ?? null, zohoFieldChanges);
+        if (item.sourceMeta !== undefined) await syncCrmRecordFields(trx, existing.id, item.sourceMeta);
       }
     });
     await repo.linkConnectorFile(connectorConfigId, existing.id);
@@ -248,6 +250,7 @@ export async function processSyncedItem({
     await txRepo.linkConnectorFile(connectorConfigId, upsertResult.id);
     await syncItemAccess(txRepo, connectorConfigId, upsertResult.id, item);
     await appendZohoFieldHistory(trx, upsertResult.id, item.providerFileId, sourceUpdatedAt ?? null, zohoFieldChanges);
+    await syncCrmRecordFields(trx, upsertResult.id, item.sourceMeta);
     return upsertResult;
   });
 
@@ -304,6 +307,14 @@ async function appendZohoFieldHistory(
   await createCrmFieldHistoryRepository(db).append(rows);
 }
 
+async function syncCrmRecordFields(
+  db: SyncItemDb,
+  indexedFileId: string,
+  sourceMeta: Record<string, unknown> | undefined,
+): Promise<void> {
+  await createCrmRecordFieldsRepository(db).replaceForFile(indexedFileId, readZohoCrmMeta(sourceMeta));
+}
+
 /** Returns true when there was nothing to persist or the upsert succeeded. */
 async function persistRawContent(
   db: Kysely<DB>,
@@ -334,11 +345,14 @@ async function removeDetailMarker(
   if (!("detail" in sourceMeta)) return;
   const { detail: _detail, ...rest } = sourceMeta;
   try {
-    await db
-      .updateTable("indexed_files")
-      .set({ source_meta: Object.keys(rest).length > 0 ? JSON.stringify(rest) : null })
-      .where("id", "=", indexedFileId)
-      .execute();
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("indexed_files")
+        .set({ source_meta: Object.keys(rest).length > 0 ? JSON.stringify(rest) : null })
+        .where("id", "=", indexedFileId)
+        .execute();
+      await syncCrmRecordFields(trx, indexedFileId, rest);
+    });
   } catch (err) {
     logger?.error({ err, indexedFileId }, "Detail marker compensation failed; raw content missing until backfill");
   }

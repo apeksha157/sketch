@@ -408,6 +408,7 @@ describe("Zoho CRM connector", () => {
       website: "https://acme.test",
       companySize: "250",
       tag: "Tier 1, Strategic",
+      tags: ["Tier 1", "Strategic"],
       lastActivityTime: "2026-02-01T00:00:00+05:30",
     });
     expect(task?.sourceMeta?.zohoCrm).not.toHaveProperty("amount");
