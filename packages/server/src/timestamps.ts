@@ -12,3 +12,10 @@ export function normalizeSourceTimestampForStorage(value: string | null | undefi
   const parsed = parseTimestampMs(value);
   return parsed === null ? null : new Date(parsed).toISOString();
 }
+
+/** Later of two ISO timestamps; null-safe. ISO strings compare lexically. */
+export function maxIso(left: string | null, right: string | null): string | null {
+  if (!left) return right;
+  if (!right) return left;
+  return right > left ? right : left;
+}

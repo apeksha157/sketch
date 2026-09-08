@@ -41,6 +41,7 @@ import { type BufferedMessage, buildSketchContext } from "../agent/prompt";
 import type { McpServerConfig, ProgressEvent, RunAgentParams, RunAgentResult, ToolResultEvent } from "../agent/runner";
 import { archiveRuntimeSessions } from "../agent/sessions";
 import { createProgressRenderer, createWebProgressData } from "../agent/tool-progress";
+import type { ToolProgressIntegrationContext } from "../agent/tool-progress-integration";
 import { handleManageScheduledTasks } from "../agent/tools/scheduled-tasks";
 import { AutomationArtifactCollector } from "../agent/tools/types";
 import { ensureWorkspace } from "../agent/workspace";
@@ -50,6 +51,7 @@ import {
   type AutomationTaskConversationLockSummary,
   createAutomationTaskConversationService,
 } from "../automation/task-conversations";
+import { benchmarkReadEvidence } from "../benchmarks/tool-evidence";
 import { TOOL_PROGRESS_OPTIONS, type ToolProgressCommand } from "../commands";
 import type { Config } from "../config";
 import { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -86,6 +88,8 @@ import type { SlackBot } from "../slack/bot";
 import { transcribeAudioFile } from "../transcription/service";
 import type { WhatsAppTemplateRequest } from "../whatsapp/templates";
 import { maintainBuilderRunLease } from "./builder-run-lease";
+import { type ActivityPart, WebChatActivity } from "./web-chat-activity";
+import { createActivityCatalog } from "./web-chat-activity-catalog";
 
 type UserRepo = ReturnType<typeof createUserRepository>;
 type SettingsRepo = ReturnType<typeof createSettingsRepository>;
@@ -204,6 +208,7 @@ export interface WebChatTranscriptMessage {
   id: string;
   role: "user" | "assistant";
   createdAt?: string;
+  pending?: boolean;
   parts: WebChatStoredPart[];
 }
 
@@ -256,7 +261,8 @@ type AutomationBuilderContext = {
 } | null;
 
 type WebChatUiChunk =
-  | { type: "start"; messageMetadata?: { createdAt: string } }
+  | { type: "data-benchmark-read"; data: { taskIds: string[] } }
+  | { type: "start"; messageId: string; messageMetadata?: { createdAt: string } }
   | { type: "start-step" }
   | { type: "data-progress"; id: string; data: WebChatProgressData }
   | { type: "data-file"; id: string; data: WebChatFile }
@@ -1036,10 +1042,71 @@ function webChatCurrentMessage(
 
 const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGES = 12;
 const MAX_AUTOMATION_BUILDER_HISTORY_MESSAGE_LENGTH = 1200;
-const AUTOMATION_BUILDER_MAX_TURNS = 24;
-const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 48;
+const AUTOMATION_BUILDER_MAX_TURNS = 96;
+const AUTOMATION_BUILDER_CONTINUATION_TURNS = 48;
+const AUTOMATION_BUILDER_MAX_TOTAL_TURNS = AUTOMATION_BUILDER_MAX_TURNS + AUTOMATION_BUILDER_CONTINUATION_TURNS;
+const AUTOMATION_BUILDER_MAX_AUTO_CONTINUATIONS = 1;
+const AUTOMATION_BUILDER_MAX_TOOL_CALLS = 384;
 const AUTOMATION_BUILDER_MAX_REPEATED_TOOL_CALLS = 3;
 const AUTOMATION_BUILDER_MAX_PERSISTED_TEXT_BYTES = 24 * 1024;
+const AUTOMATION_BUILDER_CONTINUATION_PROMPT =
+  "Continue this builder turn from the authoritative automation state now loaded above. Inspect the current revision and saved tool outcomes before acting, reuse completed writes, and finish the user's request if the state is ready. Do not repeat a successful side effect or exploratory request whose outcome is already known.";
+
+function builderResultReachedStepLimit(result: RunAgentResult, maxTurns: number): boolean {
+  return (
+    !result.pendingInteraction &&
+    !result.pendingQuestion &&
+    (result.rawUsage.errorSubtype === "error_max_turns" ||
+      (result.rawUsage.stopReason === "tool_use" && result.rawUsage.numTurns >= maxTurns))
+  );
+}
+
+function mergeBuilderRunResults(previous: RunAgentResult | undefined, next: RunAgentResult): RunAgentResult {
+  if (!previous) return next;
+
+  return {
+    ...next,
+    messageSent: previous.messageSent || next.messageSent,
+    costUsd: previous.costUsd + next.costUsd,
+    auxCostUsd: previous.auxCostUsd + next.auxCostUsd,
+    pendingUploads: [...new Set([...previous.pendingUploads, ...next.pendingUploads])],
+    ...(previous.pendingIntegrationConnections || next.pendingIntegrationConnections
+      ? {
+          pendingIntegrationConnections: [
+            ...(previous.pendingIntegrationConnections ?? []),
+            ...(next.pendingIntegrationConnections ?? []),
+          ],
+        }
+      : {}),
+    ...(next.pendingInteraction || previous.pendingInteraction
+      ? { pendingInteraction: next.pendingInteraction ?? previous.pendingInteraction }
+      : {}),
+    ...(next.pendingQuestion || previous.pendingQuestion
+      ? { pendingQuestion: next.pendingQuestion ?? previous.pendingQuestion }
+      : {}),
+    trace: {
+      ...next.trace,
+      progressEvents: [...previous.trace.progressEvents, ...next.trace.progressEvents],
+      finalText: next.trace.finalText?.trim() ? next.trace.finalText : previous.trace.finalText,
+      automationArtifacts: [...previous.trace.automationArtifacts, ...next.trace.automationArtifacts],
+    },
+    rawUsage: {
+      ...next.rawUsage,
+      inputTokens: previous.rawUsage.inputTokens + next.rawUsage.inputTokens,
+      outputTokens: previous.rawUsage.outputTokens + next.rawUsage.outputTokens,
+      cacheReadTokens: previous.rawUsage.cacheReadTokens + next.rawUsage.cacheReadTokens,
+      cacheCreationTokens: previous.rawUsage.cacheCreationTokens + next.rawUsage.cacheCreationTokens,
+      webSearchRequests: previous.rawUsage.webSearchRequests + next.rawUsage.webSearchRequests,
+      webFetchRequests: previous.rawUsage.webFetchRequests + next.rawUsage.webFetchRequests,
+      durationApiMs: previous.rawUsage.durationApiMs + next.rawUsage.durationApiMs,
+      numTurns: previous.rawUsage.numTurns + next.rawUsage.numTurns,
+      isResumedSession: previous.rawUsage.isResumedSession || next.rawUsage.isResumedSession,
+      toolCalls: [...previous.rawUsage.toolCalls, ...next.rawUsage.toolCalls],
+      auxLlmCalls: [...previous.rawUsage.auxLlmCalls, ...next.rawUsage.auxLlmCalls],
+      sdkCostUsd: previous.rawUsage.sdkCostUsd + next.rawUsage.sdkCostUsd,
+    },
+  };
+}
 
 function isAutomationBuilderPlanOnlyMessage(message: string): boolean {
   return /\b(?:plan only|just plan|planning only|do not (?:make )?(?:any )?changes|don't (?:make )?(?:any )?changes|without (?:making|applying) changes|no changes)\b/i.test(
@@ -1596,7 +1663,44 @@ function sanitizeWebProgressItem(value: unknown): WebProgressItem | null {
     icon: sanitizedIcon,
     ...(detail !== undefined ? { detail } : {}),
     ...(toolName !== undefined ? { toolName } : {}),
+    ...sanitizeActivityMetadata(value),
   };
+}
+
+function sanitizeActivityMetadata(value: Record<string, unknown>): Partial<WebProgressItem> {
+  const result: Partial<WebProgressItem> = {};
+  if (typeof value.id === "string") result.id = value.id;
+  for (const key of ["revision", "startedAt", "endedAt"] as const) {
+    if (typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0) result[key] = value[key];
+  }
+  if (
+    value.status === "running" ||
+    value.status === "succeeded" ||
+    value.status === "failed" ||
+    value.status === "cancelled" ||
+    value.status === "interrupted"
+  )
+    result.status = value.status;
+  if (value.mode === "friendly" || value.mode === "technical" || value.mode === "off") result.mode = value.mode;
+  if (value.detailFormat === "text" || value.detailFormat === "command" || value.detailFormat === "json")
+    result.detailFormat = value.detailFormat;
+  for (const key of ["detailRedacted", "detailTruncated", "detailUnavailable"] as const) {
+    if (typeof value[key] === "boolean") result[key] = value[key];
+  }
+  if (
+    isRecord(value.integration) &&
+    typeof value.integration.appId === "string" &&
+    typeof value.integration.name === "string"
+  ) {
+    const { appId, name, providerId, icon } = value.integration;
+    result.integration = {
+      appId,
+      name,
+      ...(typeof providerId === "string" ? { providerId } : {}),
+      ...(typeof icon === "string" && /^https?:\/\//i.test(icon) ? { icon } : {}),
+    };
+  }
+  return result;
 }
 
 function sanitizeIntegrationConnectionData(value: unknown): WebChatIntegrationConnectionData | null {
@@ -1697,7 +1801,13 @@ function sanitizeTranscriptMessage(message: unknown): WebChatTranscriptMessage |
         })
       : parts;
   if (sanitizedParts.length === 0) return null;
-  return { id: message.id, role: message.role, ...(createdAt ? { createdAt } : {}), parts: sanitizedParts };
+  return {
+    id: message.id,
+    role: message.role,
+    ...(createdAt ? { createdAt } : {}),
+    ...(typeof message.pending === "boolean" ? { pending: message.pending } : {}),
+    parts: sanitizedParts,
+  };
 }
 
 export async function readWebChatTranscript(
@@ -1833,15 +1943,17 @@ function createProgressTranscriptMessage(
     id,
     role: "assistant",
     createdAt: new Date().toISOString(),
+    pending: true,
     parts: [{ type: "data-progress", id: "progress", data: progress }],
   };
 }
 
 function isPendingProgressTranscriptMessage(message: WebChatTranscriptMessage): boolean {
+  if (message.pending !== undefined) return message.role === "assistant" && message.pending;
   return (
     message.role === "assistant" &&
     message.parts.length > 0 &&
-    message.parts.every((part) => part.type === "data-progress")
+    (message.id.startsWith("assistant-progress-") || message.parts.every((part) => part.type === "data-progress"))
   );
 }
 
@@ -1990,6 +2102,7 @@ async function updateWebChatProgressMessage(
   conversationId: string,
   progressMessageId: string,
   progress: WebChatProgressData,
+  activity?: WebChatStoredPart[],
 ): Promise<void> {
   await withWebChatTranscriptLock(userId, conversationId, async () => {
     const existing = await readWebChatTranscript(config, workspaceDir, userId, logger, conversationId);
@@ -1999,7 +2112,12 @@ async function updateWebChatProgressMessage(
       userId,
       conversationId,
       existing.map((message) =>
-        message.id === progressMessageId ? createProgressTranscriptMessage(progressMessageId, progress) : message,
+        message.id === progressMessageId
+          ? {
+              ...createProgressTranscriptMessage(progressMessageId, progress),
+              ...(activity?.length ? { parts: activity } : {}),
+            }
+          : message,
       ),
     );
   });
@@ -2013,22 +2131,37 @@ async function completeWebChatProgressMessage(
   conversationId: string,
   progressMessageId: string,
   assistantMessage: WebChatTranscriptMessage | null,
+  activity?: WebChatStoredPart[],
 ): Promise<void> {
   await withWebChatTranscriptLock(userId, conversationId, async () => {
     const existing = await readWebChatTranscript(config, workspaceDir, userId, logger, conversationId);
     const progressIndex = existing.findIndex((message) => message.id === progressMessageId);
+    const retainedActivity =
+      activity ??
+      existing[progressIndex]?.parts.filter(
+        (part) => part.type === "data-progress" && part.data.items?.some((item) => item.id),
+      ) ??
+      [];
+    const completedMessage = assistantMessage
+      ? {
+          ...assistantMessage,
+          id: progressMessageId,
+          pending: false,
+          parts: [...retainedActivity, ...assistantMessage.parts],
+        }
+      : null;
     if (progressIndex === -1) {
       await writeWebChatTranscript(
         config,
         userId,
         conversationId,
-        assistantMessage ? [...existing, assistantMessage] : existing,
+        completedMessage ? [...existing, completedMessage] : existing,
       );
       return;
     }
 
-    const next = assistantMessage
-      ? existing.map((message, index) => (index === progressIndex ? assistantMessage : message))
+    const next = completedMessage
+      ? existing.map((message, index) => (index === progressIndex ? completedMessage : message))
       : existing.filter((_, index) => index !== progressIndex);
     await writeWebChatTranscript(config, userId, conversationId, next);
   });
@@ -2047,7 +2180,28 @@ async function interruptLatestPendingWebChatProgress(
     if (!latest || !isPendingProgressTranscriptMessage(latest)) return false;
 
     const next = [...existing];
-    next[next.length - 1] = createInterruptedAssistantTranscriptMessage("");
+    const interrupted = { ...createInterruptedAssistantTranscriptMessage(""), id: latest.id, pending: false };
+    interrupted.parts.unshift(
+      ...latest.parts
+        .filter(
+          (part) => part.type === "text" || (part.type === "data-progress" && part.data.items?.some((item) => item.id)),
+        )
+        .map((part) => {
+          if (part.type !== "data-progress") return part;
+          return {
+            ...part,
+            data: {
+              ...part.data,
+              items: part.data.items?.map((item) =>
+                item.status === "running"
+                  ? { ...item, status: "interrupted" as const, endedAt: Date.now(), revision: (item.revision ?? 0) + 1 }
+                  : item,
+              ),
+            },
+          };
+        }),
+    );
+    next[next.length - 1] = interrupted;
     await writeWebChatTranscript(config, userId, conversationId, next);
     return true;
   });
@@ -2852,7 +3006,96 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
       abortController.abort(source);
     };
     const execute = async (write: WebChatUiWriter) => {
-      write({ type: "start", messageMetadata: { createdAt: new Date().toISOString() } });
+      const activity = new WebChatActivity(progressMessageId);
+      const loadActivityCatalog = createActivityCatalog(deps.loadIntegrationProvider);
+      let integrationContext: ToolProgressIntegrationContext | undefined;
+      let activityClosed = false;
+      let catalogStarted = false;
+      const enrichmentEvents = new Map<string, ProgressEvent>();
+      const activityOrder: Array<{ type: "progress"; id: string } | { type: "text"; text: string }> = [];
+      const activityIds = new Set<string>();
+      let retainedTextBytes = 0;
+      const activitySnapshot = (): WebChatStoredPart[] => {
+        const parts = new Map(activity.snapshot().map((part) => [part.id, part]));
+        return activityOrder.flatMap((entry): WebChatStoredPart[] => {
+          if (entry.type === "text") return [entry];
+          const part = parts.get(entry.id);
+          return part ? [part] : [];
+        });
+      };
+      const completeActivityMessage = async (message: WebChatTranscriptMessage | null) => {
+        const snapshot = activity.snapshot().length ? activitySnapshot() : [];
+        const finalText = message?.parts
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("\n");
+        let trailingText = "";
+        for (let index = snapshot.length - 1; index >= 0; index -= 1) {
+          const part = snapshot[index];
+          if (part.type !== "text") break;
+          trailingText = trailingText ? `${part.text}\n\n${trailingText}` : part.text;
+          if (trailingText === finalText) {
+            snapshot.splice(index);
+            break;
+          }
+        }
+        await completeWebChatProgressMessage(
+          deps.config,
+          workspaceDir,
+          currentUser.id,
+          deps.logger,
+          conversationId,
+          progressMessageId,
+          message,
+          snapshot,
+        );
+      };
+      const publishActivity = async (parts: ActivityPart[]) => {
+        if (parts.length === 0) return;
+        for (const part of parts) {
+          if (part.data.items?.length === 0 && part.data.lines.length === 0) {
+            const index = activityOrder.findIndex((entry) => entry.type === "progress" && entry.id === part.id);
+            if (index >= 0) activityOrder.splice(index, 1);
+            activityIds.delete(part.id);
+          } else if (!activityIds.has(part.id)) {
+            activityIds.add(part.id);
+            activityOrder.push({ type: "progress", id: part.id });
+          }
+          write(part);
+        }
+        await updateWebChatProgressMessage(
+          deps.config,
+          workspaceDir,
+          currentUser.id,
+          deps.logger,
+          conversationId,
+          progressMessageId,
+          parts.at(-1)?.data ?? { lines: [] },
+          activitySnapshot(),
+        );
+      };
+      const enrichActivity = () => {
+        if (catalogStarted) return;
+        catalogStarted = true;
+        void loadActivityCatalog()
+          .then(async (context) => {
+            if (!context || activityClosed) return;
+            integrationContext = context;
+            const updates = [...enrichmentEvents].flatMap(([id, event]) => {
+              const data = createWebProgressData(event, progressSettings, progressMode, [], context);
+              return data ? activity.enrich(id, data) : [];
+            });
+            enrichmentEvents.clear();
+            await publishActivity(updates);
+          })
+          .catch((error: unknown) =>
+            deps.logger.warn(
+              { errorType: error instanceof Error ? error.name : "unknown" },
+              "Failed to enrich activity icons",
+            ),
+          );
+      };
+      write({ type: "start", messageId: progressMessageId, messageMetadata: { createdAt: new Date().toISOString() } });
       write({ type: "start-step" });
       let textPartId: string | null = null;
       let textPartIndex = 0;
@@ -2864,6 +3107,14 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
       let sawAutomationTool = false;
       let bufferedTextAfterAutomationTool = "";
       let builderToolCalls = 0;
+      let activeBuilderContext = automationBuilderContext;
+      let activeTaskContext = taskContext;
+      let activeBuilderHistory = builderHistory;
+      let activeUserMessage = userMessage;
+      let builderSegmentMaxTurns = AUTOMATION_BUILDER_MAX_TURNS;
+      let builderTurnsUsed = 0;
+      let builderContinuationCount = 0;
+      let builderStepLimitReached = false;
       const leaseMaintenance =
         automationBuilderContext && builderLease && builderLock?.expiresAt
           ? maintainBuilderRunLease({
@@ -2890,6 +3141,78 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
                 ),
             })
           : undefined;
+      const reloadBuilderContextForContinuation = async () => {
+        if (!automationBuilderContext || !builderLease) return;
+        const refreshedContext = await resolveAutomationBuilderContext({
+          deps,
+          currentUserId: currentUser.id,
+          role: c.get("role"),
+          automationTaskId: automationBuilderContext.task.id,
+          builderConversationId: conversationId,
+          logger: deps.logger,
+        });
+        if (!refreshedContext) {
+          abortBuilderRun("runtime_error");
+          throw new Error("Automation builder state could not be reloaded");
+        }
+
+        const access = await resolveAutomationBuilderConversationAccess({
+          deps,
+          taskId: refreshedContext.task.id,
+          conversationId,
+          transcriptUserId: currentUser.id,
+          lease: builderLease,
+          logger: deps.logger,
+        });
+        if (access.kind !== "active") {
+          abortBuilderRun(access.kind === "stale" || access.kind === "locked" ? "lease_lost" : "runtime_error");
+          throw new Error("Automation builder lease could not be confirmed");
+        }
+
+        builderLock = access.lock;
+        activeBuilderContext = refreshedContext;
+        activeTaskContext = automationBuilderTaskContext({
+          context: refreshedContext,
+          currentUser,
+          role: c.get("role"),
+          conversationId,
+          lease: builderLease,
+          planOnly: builderPlanOnly,
+        });
+        activeBuilderHistory = await automationBuilderHistoryForPrompt({
+          context: refreshedContext,
+          builderConversationId: conversationId,
+          config: deps.config,
+          workspaceDir,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          logger: deps.logger,
+        });
+        activeUserMessage = buildSketchContext({
+          messages: activeBuilderHistory,
+          currentUserName: currentUser.name,
+          currentMessage: webChatCurrentMessage(
+            AUTOMATION_BUILDER_CONTINUATION_PROMPT,
+            refreshedContext,
+            builderPlanOnly,
+          ),
+          currentUserEmail: currentUser.email,
+          currentUserPhone: currentUser.whatsapp_number,
+          workspaceDir,
+          orgDir: deps.config.CLAUDE_CONFIG_DIR,
+          timezone: currentUser.timezone,
+          isSharedContext: false,
+        });
+        deps.logger.info(
+          {
+            taskId: refreshedContext.task.id,
+            conversationId,
+            revision: refreshedContext.task.revision,
+            continuation: builderContinuationCount + 1,
+          },
+          "Reloaded automation builder state before continuation",
+        );
+      };
       let builderSessionId: string | undefined;
       let lastBuilderFailure: ToolResultEvent | undefined;
       let repeatedBuilderFailures = 0;
@@ -2903,6 +3226,11 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
 
       const closeTextPart = () => {
         if (!textPartId) return;
+        const textBytes = Buffer.byteLength(currentTextPart);
+        if (progressMode !== "off" && currentTextPart && retainedTextBytes + textBytes <= 64 * 1024) {
+          activityOrder.push({ type: "text", text: currentTextPart });
+          retainedTextBytes += textBytes;
+        }
         write({ type: "text-end", id: textPartId });
         textPartId = null;
         currentTextPart = "";
@@ -2973,15 +3301,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               write({ type: "data-automation", id, data: artifact });
               return { id, data: artifact };
             });
-            await completeWebChatProgressMessage(
-              deps.config,
-              workspaceDir,
-              currentUser.id,
-              deps.logger,
-              conversationId,
-              progressMessageId,
-              createAssistantTranscriptMessage(handoffText, [], automationParts),
-            );
+            await completeActivityMessage(createAssistantTranscriptMessage(handoffText, [], automationParts));
             return;
           }
         }
@@ -2990,15 +3310,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           const responseText =
             "That automation is no longer available. Please tell me its current name and I’ll look it up again. No changes were made.";
           writeFinalText(responseText);
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAssistantTranscriptMessage(responseText, []),
-          );
+          await completeActivityMessage(createAssistantTranscriptMessage(responseText, []));
           return;
         }
 
@@ -3017,15 +3329,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               write({ type: "data-question", id: questionPart.id, data: question });
             }
           }
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAssistantTranscriptMessage(responseText, [], [], [], questionPart),
-          );
+          await completeActivityMessage(createAssistantTranscriptMessage(responseText, [], [], [], questionPart));
           return;
         }
 
@@ -3034,15 +3338,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           const handoffText = "I’ll open the automation builder so we can finish configuring it there.";
           writeFinalText(handoffText);
           write({ type: "data-automation-handoff", id: handoff.id, data: handoff.data });
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAutomationDraftAssistantTranscriptMessage(handoffText, handoff),
-          );
+          await completeActivityMessage(createAutomationDraftAssistantTranscriptMessage(handoffText, handoff));
           return;
         }
 
@@ -3052,13 +3348,15 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           : webChatRunKey(currentUser.id, conversationId);
         const runAgent = async () => {
           const runtimeContextType =
-            taskContext && taskContext.contextType !== "dm" ? ("channel_mention" as const) : ("dm" as const);
+            activeTaskContext && activeTaskContext.contextType !== "dm"
+              ? ("channel_mention" as const)
+              : ("dm" as const);
           const agentEnv = deps.listAgentEnvForRuntime
             ? await deps.listAgentEnvForRuntime({
                 currentUserId: currentUser.id,
                 contextType: runtimeContextType,
                 allowOrgSharedEnv: true,
-                ...(taskContext ? { taskContext } : {}),
+                ...(activeTaskContext ? { taskContext: activeTaskContext } : {}),
               })
             : undefined;
           return deps.runAgent({
@@ -3066,7 +3364,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             workspaceKey: currentUser.id,
             threadTs: conversationId,
             isAdminReadAllEnabled,
-            userMessage,
+            userMessage: activeUserMessage,
             workspaceDir,
             claudeConfigDir: deps.config.CLAUDE_CONFIG_DIR,
             userName: currentUser.name,
@@ -3077,22 +3375,24 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             userPhone: currentUser.whatsapp_number,
             logger: deps.logger,
             getSlack: deps.getSlack,
-            platform: deliveryPlatform,
+            platform: activeTaskContext?.platform ?? deliveryPlatform,
             responseSurface: "web",
             contextType: runtimeContextType,
-            automationBuilderChat: Boolean(automationBuilderContext),
+            automationBuilderChat: Boolean(activeBuilderContext),
             onRunStart: async () => {
-              if (!automationBuilderContext) return;
-              builderExecutionStartedAt = Date.now();
-              builderBudgetTimer = setTimeout(
-                () => abortBuilderRun("elapsed_time_limit"),
-                deps.config.AUTOMATION_BUILDER_MAX_ELAPSED_MS,
-              );
+              if (!activeBuilderContext) return;
+              if (builderExecutionStartedAt === undefined) {
+                builderExecutionStartedAt = Date.now();
+                builderBudgetTimer = setTimeout(
+                  () => abortBuilderRun("elapsed_time_limit"),
+                  deps.config.AUTOMATION_BUILDER_MAX_ELAPSED_MS,
+                );
+              }
               await leaseMaintenance?.refresh();
               abortController.signal.throwIfAborted();
             },
             onProgressEvent: async (event) => {
-              if (automationBuilderContext && event.kind === "tool_use") {
+              if (activeBuilderContext && event.kind === "tool_use") {
                 builderToolCalls += 1;
                 if (builderToolCalls > AUTOMATION_BUILDER_MAX_TOOL_CALLS) {
                   abortBuilderRun("tool_call_limit");
@@ -3106,13 +3406,34 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               }
               progressRenderer.renderEvent(event);
               const lines = progressRenderer.getLines();
-              const progressData = createWebProgressData(event, progressSettings, progressMode, lines);
+              const progressData = createWebProgressData(
+                event,
+                progressSettings,
+                progressMode,
+                lines,
+                integrationContext,
+              );
               if (progressMode === "off" && wroteOffProgress) return;
               if (progressData) {
                 if (progressMode === "off") wroteOffProgress = true;
                 closeTextPart();
+                if (progressMode !== "off" && event.kind === "tool_use" && event.toolCallId) {
+                  await publishActivity(activity.start(event.toolCallId, event.startedAt ?? Date.now(), progressData));
+                  if (
+                    !integrationContext &&
+                    progressData.items?.some((item) => item.kind === "integration" || item.kind === "canvas")
+                  ) {
+                    if (enrichmentEvents.size < 128) enrichmentEvents.set(event.toolCallId, event);
+                    enrichActivity();
+                  }
+                  return;
+                }
                 const progressPartId = `progress-${progressPartIndex}`;
                 progressPartIndex += 1;
+                if (progressMode !== "off") {
+                  await publishActivity(activity.record(progressPartId, progressData));
+                  return;
+                }
                 write({ type: "data-progress", id: progressPartId, data: progressData });
                 await updateWebChatProgressMessage(
                   deps.config,
@@ -3125,8 +3446,16 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
                 );
               }
             },
+            onToolProgressEnd: async (event) => {
+              if (progressMode === "off") return;
+              await publishActivity(activity.finish(event.toolCallId, event.status, event.endedAt));
+            },
             onToolResult: async (event) => {
-              if (!automationBuilderContext) return;
+              if (deps.config.BENCHMARKS_ENABLED && conversationId.startsWith("benchmark-")) {
+                const evidence = benchmarkReadEvidence(event);
+                if (evidence) write({ type: "data-benchmark-read", data: evidence });
+              }
+              if (!activeBuilderContext) return;
               if (!event.isError) {
                 lastBuilderFailure = undefined;
                 repeatedBuilderFailures = 0;
@@ -3153,7 +3482,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             persistSession: true,
             ...(automationBuilderContext
               ? {
-                  maxTurns: AUTOMATION_BUILDER_MAX_TURNS,
+                  maxTurns: builderSegmentMaxTurns,
                   maxPersistedTextBytes: AUTOMATION_BUILDER_MAX_PERSISTED_TEXT_BYTES,
                 }
               : {}),
@@ -3174,34 +3503,73 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             sendDm: deps.sendDm,
             sendTargetMessage: deps.sendTargetMessage,
             ...(attachments.length > 0 ? { attachments } : {}),
-            ...(taskContext ? { taskContext } : {}),
-            ...(taskContext?.currentAutomation ? { currentAutomation: taskContext.currentAutomation } : {}),
+            ...(activeTaskContext ? { taskContext: activeTaskContext } : {}),
+            ...(activeTaskContext?.currentAutomation ? { currentAutomation: activeTaskContext.currentAutomation } : {}),
           });
         };
         let result: RunAgentResult;
         try {
-          result = await withWebChatAgentRunLock(runKey, () =>
-            activeBuilderTaskId
-              ? runAgent()
-              : withActiveWebChatRun(currentUser.id, conversationId, abortController, runAgent),
-          );
+          result = await withWebChatAgentRunLock(runKey, async () => {
+            let aggregateResult: RunAgentResult | undefined;
+            while (true) {
+              const segmentResult = activeBuilderTaskId
+                ? await runAgent()
+                : await withActiveWebChatRun(currentUser.id, conversationId, abortController, runAgent);
+              const reachedStepLimit = Boolean(
+                activeBuilderTaskId && builderResultReachedStepLimit(segmentResult, builderSegmentMaxTurns),
+              );
+              if (activeBuilderTaskId) {
+                builderTurnsUsed += Math.max(
+                  segmentResult.rawUsage.numTurns,
+                  reachedStepLimit ? builderSegmentMaxTurns : 0,
+                );
+              }
+              aggregateResult = mergeBuilderRunResults(aggregateResult, segmentResult);
+              if (!reachedStepLimit) return aggregateResult;
+              if (abortController.signal.aborted) return aggregateResult;
+
+              const turnsRemaining = AUTOMATION_BUILDER_MAX_TOTAL_TURNS - builderTurnsUsed;
+              if (builderContinuationCount >= AUTOMATION_BUILDER_MAX_AUTO_CONTINUATIONS || turnsRemaining <= 0) {
+                builderStepLimitReached = true;
+                return aggregateResult;
+              }
+
+              builderContinuationCount += 1;
+              builderSegmentMaxTurns = Math.min(AUTOMATION_BUILDER_MAX_TURNS, turnsRemaining);
+              deps.logger.info(
+                {
+                  taskId: activeBuilderTaskId,
+                  conversationId,
+                  continuation: builderContinuationCount,
+                  turnsUsed: builderTurnsUsed,
+                  turnsRemaining,
+                  toolCalls: builderToolCalls,
+                },
+                "Continuing automation builder after step budget",
+              );
+              await reloadBuilderContextForContinuation();
+            }
+          });
         } finally {
           leaseMaintenance?.stop();
           clearTimeout(builderBudgetTimer);
         }
+
+        activityClosed = true;
+        enrichmentEvents.clear();
+        await publishActivity(
+          activity.finishPending(
+            abortController.signal.reason === "user_stop" ? "cancelled" : "interrupted",
+            Date.now(),
+          ),
+        );
 
         if (automationBuilderContext && (abortController.signal.aborted || result.rawUsage.stopReason === "aborted")) {
           if (!abortController.signal.aborted) abortBuilderRun("agent_aborted");
           throw new Error("Automation builder run aborted");
         }
 
-        if (
-          automationBuilderContext &&
-          !result.pendingInteraction &&
-          !result.pendingQuestion &&
-          (result.rawUsage.errorSubtype === "error_max_turns" ||
-            (result.rawUsage.stopReason === "tool_use" && result.rawUsage.numTurns >= AUTOMATION_BUILDER_MAX_TURNS))
-        ) {
+        if (automationBuilderContext && builderStepLimitReached) {
           abortBuilderRun("step_limit");
           throw new Error("Automation builder step limit reached");
         }
@@ -3251,15 +3619,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           closeTextPart();
           writeFinalText(handoffText);
           write({ type: "data-automation-handoff", id: handoff.id, data: handoff.data });
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createAutomationDraftAssistantTranscriptMessage(handoffText, handoff),
-          );
+          await completeActivityMessage(createAutomationDraftAssistantTranscriptMessage(handoffText, handoff));
           return;
         }
         const builderSourceText = builderHistory.map((historyMessage) => historyMessage.text).join("\n");
@@ -3338,13 +3698,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             write({ type: "data-question", id: questionPart.id, data: question });
           }
         }
-        await completeWebChatProgressMessage(
-          deps.config,
-          workspaceDir,
-          currentUser.id,
-          deps.logger,
-          conversationId,
-          progressMessageId,
+        await completeActivityMessage(
           createAssistantTranscriptMessage(
             responseText,
             fileParts,
@@ -3354,6 +3708,19 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           ),
         );
       } catch (err) {
+        activityClosed = true;
+        enrichmentEvents.clear();
+        await publishActivity(
+          activity.finishPending(
+            abortController.signal.reason === "user_stop" ? "cancelled" : "interrupted",
+            Date.now(),
+          ),
+        ).catch((error: unknown) =>
+          deps.logger.warn(
+            { errorType: error instanceof Error ? error.name : "unknown" },
+            "Failed to persist terminal activity",
+          ),
+        );
         if (automationBuilderContext && !abortController.signal.aborted) {
           deps.logger.warn(
             { errorType: err instanceof Error ? err.name : "unknown", conversationId },
@@ -3397,32 +3764,18 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             closeTextPart();
           }
           write({ type: "data-interruption", id: "interruption", data: interruption });
-          await completeWebChatProgressMessage(
-            deps.config,
-            workspaceDir,
-            currentUser.id,
-            deps.logger,
-            conversationId,
-            progressMessageId,
-            createInterruptedAssistantTranscriptMessage(interruptedText, interruption),
-          );
+          await completeActivityMessage(createInterruptedAssistantTranscriptMessage(interruptedText, interruption));
           return;
         }
         const message = errorMessage(err);
         writeBufferedTextDeltas();
         closeTextPart();
         deps.logger.warn({ err }, "Web chat run failed");
-        await completeWebChatProgressMessage(
-          deps.config,
-          workspaceDir,
-          currentUser.id,
-          deps.logger,
-          conversationId,
-          progressMessageId,
-          createAssistantTranscriptMessage(message, []),
-        );
+        await completeActivityMessage(createAssistantTranscriptMessage(message, []));
         write({ type: "error", errorText: message });
       } finally {
+        activityClosed = true;
+        enrichmentEvents.clear();
         leaseMaintenance?.stop();
         clearTimeout(builderBudgetTimer);
         write({ type: "finish-step" });

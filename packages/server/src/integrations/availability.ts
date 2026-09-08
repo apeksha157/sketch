@@ -6,7 +6,6 @@ import { CanvasProviderRequestError } from "./canvas";
 import { assertClickUpRequestAllowed, recordClickUpRateLimit } from "./clickup-request-budget";
 import type { CanvasAccessToken, IntegrationProvider } from "./types";
 
-const AVAILABILITY_TIMEOUT_MS = 3_000;
 const CLICKUP_VALIDATION_TIMEOUT_MS = 2_000;
 const CLICKUP_VALIDATION_MAX_RESPONSE_BYTES = 32 * 1024;
 const CLICKUP_API_URL = "https://api.clickup.com/api/v2";
@@ -14,34 +13,12 @@ const CLICKUP_VALIDATION_CONCURRENCY = 4;
 
 type ClickUpValidationFailure = "transient" | "revoked_or_missing" | "uncertain_workspace";
 
-class ManagedIntegrationAvailabilityTimeoutError extends Error {
-  constructor() {
-    super("Managed integration availability lookup timed out");
-    this.name = "ManagedIntegrationAvailabilityTimeoutError";
-  }
-}
-
 type ClickUpValidationResult = { ok: true } | { ok: false; reason: ClickUpValidationFailure };
 const clickUpId = z.union([z.string().min(1), z.number().int().positive()]);
 const validationCache = new WeakMap<
   IntegrationProvider,
   Map<string, { result: Promise<ClickUpValidationResult>; expiresAt: number }>
 >();
-
-async function withTimeout<T>(promise: Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new ManagedIntegrationAvailabilityTimeoutError()), AVAILABILITY_TIMEOUT_MS);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 async function readBoundedBody(response: Response): Promise<string> {
   if (!response.body) return "";
@@ -142,14 +119,12 @@ async function validateClickUpConnection(params: {
 
   let token: CanvasAccessToken;
   try {
-    token = await withTimeout(
-      params.provider.getCanvasAccessToken({
-        integration: "clickup",
-        accountId: params.connection.id,
-        workspaceContext: { workspaceId: params.provider.providerId ?? "", userId: params.userId },
-        userEmail: params.userEmail,
-      }),
-    );
+    token = await params.provider.getCanvasAccessToken({
+      integration: "clickup",
+      accountId: params.connection.id,
+      workspaceContext: { workspaceId: params.provider.providerId ?? "", userId: params.userId },
+      userEmail: params.userEmail,
+    });
   } catch (error) {
     return { ok: false, reason: classifyError(error) };
   }
@@ -227,12 +202,12 @@ export async function listAvailableManagedIntegrations(params: {
 }): Promise<Set<ManagedIntegrationAppId>> {
   const available = new Set<ManagedIntegrationAppId>();
   try {
-    await withTimeout(resolveAvailableManagedIntegrations({ ...params, available }));
-  } catch (error) {
+    await resolveAvailableManagedIntegrations({ ...params, available });
+  } catch {
     params.logger?.warn(
       {
         event: "managed_integration_availability_failed",
-        reason: error instanceof ManagedIntegrationAvailabilityTimeoutError ? "timeout" : "provider_error",
+        reason: "provider_error",
       },
       "Managed integration availability lookup failed closed",
     );

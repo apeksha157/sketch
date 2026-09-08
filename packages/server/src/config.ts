@@ -26,8 +26,8 @@ export const configSchema = z.object({
     .number()
     .int()
     .min(60_000)
-    .max(10 * 60_000)
-    .default(10 * 60_000),
+    .max(60 * 60_000)
+    .default(30 * 60_000),
 
   // Files
   MAX_FILE_SIZE_MB: z.coerce.number().default(20),
@@ -179,13 +179,14 @@ export const configSchema = z.object({
   WHATSAPP_HISTORY_LOOKBACK_DAYS: z.coerce.number().int().min(1).default(30),
   WHATSAPP_CHUNK_WINDOW_MESSAGES: z.coerce.number().int().min(1).default(250),
   WHATSAPP_CHUNK_WINDOW_TOKENS: z.coerce.number().int().min(1).default(7500),
-  WHATSAPP_CHUNK_MIN_MESSAGES: z.coerce.number().int().min(1).default(10),
+  WHATSAPP_CHUNK_MIN_MESSAGES: z.coerce.number().int().min(1).default(5),
   WHATSAPP_CHUNK_TARGET_MESSAGES: z.coerce.number().int().min(1).default(40),
   WHATSAPP_CHUNK_MAX_MESSAGES: z.coerce.number().int().min(1).default(80),
   WHATSAPP_CHUNK_MAX_TOKENS: z.coerce.number().int().min(1).default(1500),
   WHATSAPP_CHUNK_TICK_MINUTES: z.coerce.number().int().min(1).default(30),
   WHATSAPP_CHUNK_IDLE_CLOSE_HOURS: z.coerce.number().int().min(1).default(96),
   WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES: z.coerce.number().int().min(1).default(15),
+  WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: z.coerce.number().int().min(1).default(120),
   WHATSAPP_CHUNK_MODEL: z.preprocess(
     (value) => (typeof value === "string" && value.trim() === "" ? null : value),
     z.string().trim().nullable().default(null),
@@ -197,10 +198,33 @@ export const configSchema = z.object({
   ),
   WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP: z.coerce.number().int().min(1).default(30),
   WHATSAPP_CHUNK_GROUP_WORKER_POOL: z.coerce.number().int().min(1).default(4),
-  WHATSAPP_SLICE_GAP_MINUTES: z.coerce.number().int().min(1).default(25),
-  WHATSAPP_SLICE_MAX_AGE_MINUTES: z.coerce.number().int().min(1).default(120),
-  WHATSAPP_SLICE_MAX_MESSAGES: z.coerce.number().int().min(1).default(50),
-  WHATSAPP_SALIENCE_BATCH_LIMIT: z.coerce.number().int().min(1).default(50),
+  WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN: z.coerce.number().int().min(1).default(4),
+  SLACK_CHUNK_WINDOW_MESSAGES: z.coerce.number().int().min(1).default(250),
+  SLACK_CHUNK_WINDOW_TOKENS: z.coerce.number().int().min(1).default(7500),
+  SLACK_CHUNK_MIN_MESSAGES: z.coerce.number().int().min(1).default(5),
+  SLACK_CHUNK_TARGET_MESSAGES: z.coerce.number().int().min(1).default(40),
+  SLACK_CHUNK_MAX_MESSAGES: z.coerce.number().int().min(1).default(80),
+  SLACK_CHUNK_MAX_TOKENS: z.coerce.number().int().min(1).default(1500),
+  SLACK_THREAD_MIN_MESSAGES: z.coerce.number().int().min(1).default(1),
+  SLACK_CHUNK_TICK_MINUTES: z.coerce.number().int().min(1).default(30),
+  SLACK_CHUNK_IDLE_CLOSE_HOURS: z.coerce.number().int().min(1).default(96),
+  SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES: z.coerce.number().int().min(1).default(20),
+  SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: z.coerce.number().int().min(1).default(120),
+  SLACK_CHUNK_MODEL: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? null : value),
+    z.string().trim().nullable().default(null),
+  ),
+  SLACK_CHUNK_REASONING_EFFORT: z.enum(["low", "medium", "high"]).default("high"),
+  SLACK_CHUNK_BURST_THRESHOLD_MESSAGES: z.preprocess(
+    (value) => (value === "" ? null : value),
+    z.coerce.number().int().min(1).nullable().default(null),
+  ),
+  SLACK_CHUNK_TOPIC_REGISTRY_CAP: z.coerce.number().int().min(1).default(30),
+  SLACK_CHUNK_MAX_WINDOWS_PER_RUN: z.coerce.number().int().min(1).default(8),
+  SLACK_CHUNK_CHANNEL_WORKER_POOL: z.coerce.number().int().min(1).default(4),
+  SLACK_DISCOVERY_PAGE_ROWS: z.coerce.number().int().min(1).default(5000),
+  SLACK_DISCOVERY_MAX_PAGES: z.coerce.number().int().min(1).default(20),
+  SLACK_EMISSION_LEGACY_PER_RUN: z.coerce.number().int().min(1).max(2000).default(200),
   WHATSAPP_EMISSION_REFRESH_DAYS: z.coerce.number().int().min(1).default(7),
   WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES: z.coerce.number().int().min(1).default(500),
   WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS: z.coerce.number().int().min(1).default(20_000),
@@ -216,6 +240,10 @@ export const configSchema = z.object({
   // Security
   ENCRYPTION_KEY: z.string().optional(),
   SYSTEM_SECRET: z.string().optional(),
+  BENCHMARKS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 
   // Bootstrap (managed seed)
   BOOTSTRAP_ADMIN_EMAIL: z.preprocess((v) => (v === "" ? undefined : v), z.string().email().optional()),

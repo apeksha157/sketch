@@ -68,3 +68,10 @@ describe("proposeCompanyNameFromDomain — registrable second-level label", () =
     expect(proposeCompanyNameFromDomain("internal")).toBe("Internal");
   });
 });
+
+describe("mail.ru", () => {
+  it("is a personal provider, so it never mints a company", () => {
+    expect(isPersonalOrSharedDomain("mail.ru")).toBe(true);
+    expect(isPersonalOrSharedDomain("MAIL.RU")).toBe(true);
+  });
+});

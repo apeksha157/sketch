@@ -212,11 +212,7 @@ function runConnectorSyncSuite(label: string, getDb: () => Promise<Kysely<DB>>) 
         effectiveAt: "2025-01-01T09:06:00.000Z",
       });
 
-      await runConnectorSync(db, connectorConfig.id, createTestLogger(), {
-        WHATSAPP_SLICE_GAP_MINUTES: 5,
-        WHATSAPP_SLICE_MAX_AGE_MINUTES: 120,
-        WHATSAPP_SLICE_MAX_MESSAGES: 50,
-      });
+      await runConnectorSync(db, connectorConfig.id, createTestLogger(), {});
 
       const configuredSlices = await listSlicesForConversation(db, configuredSeeded.conversationId);
       expect(configuredSeeded.group).toMatchObject({
@@ -361,6 +357,40 @@ function runChunkerSuite(label: string, getDb: () => Promise<Kysely<DB>>) {
       expect(drainCalls.length).toBeGreaterThanOrEqual(3);
       expect(drainResult.messagesProcessed).toBe(5);
       expect(drainCursor.last_message_id).toBe(drainIds[4]);
+    });
+
+    it("continues with admitted history after closing an idle live tail", async () => {
+      const seeded = await seedEnabledGroup(db, { chunkIdleCloseHours: 96, chunkBurstThresholdMessages: 1 });
+      const liveId = await insertMessage(db, seeded.conversationId, {
+        providerMessageId: "idle-live",
+        effectiveAt: "2026-07-07T09:00:00.000Z",
+      });
+      await runChunker(db, seeded.group, { now: new Date("2026-07-07T09:30:00.000Z") });
+      const historyId = await insertMessage(db, seeded.conversationId, {
+        providerMessageId: "idle-history",
+        effectiveAt: "2026-07-12T09:00:00.000Z",
+        source: "history",
+      });
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ chunk_last_llm_attempt_at: "2026-07-12T09:59:00.000Z" })
+        .where("jid", "=", seeded.group.jid)
+        .execute();
+      const freshGroup = await createWhatsAppGroupRepository(db).getIndexingConfig(seeded.group.jid);
+      if (!freshGroup) throw new Error("expected idle WhatsApp group config");
+
+      const result = await runChunker(db, freshGroup, { now: new Date("2026-07-12T10:00:00.000Z") });
+      const slices = await listSlicesForConversation(db, seeded.conversationId);
+
+      expect(historyId).toBeGreaterThan(liveId);
+      expect(result.messagesProcessed).toBe(1);
+      expect(slices).toHaveLength(2);
+      expect(slices[0]).toMatchObject({ status: "closed", salience_verdict: "kept" });
+      expect(slices[1]).toMatchObject({
+        first_message_id: historyId,
+        last_message_id: historyId,
+        status: "open",
+      });
     });
 
     it("closes an idle live tail before the empty-pending return", async () => {

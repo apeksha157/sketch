@@ -57,6 +57,22 @@ export async function emitFactsForSyncedItem({
         raw: seed,
       });
     }
+    for (const seed of item.entitySeeds) {
+      if (seed.sourceId !== item.providerFileId) continue;
+      const parent = { source: seed.source, sourceId: seed.sourceId, contextSnippet: item.sourcePath ?? undefined };
+      await factRepo.upsertFact({
+        ...factContext,
+        indexedFileId,
+        contentHash: item.contentHash,
+        source: connectorType,
+        factType: "parent_entity",
+        relation: "mentioned",
+        subjectSource: seed.source,
+        subjectSourceId: seed.sourceId,
+        contextSnippet: item.sourcePath,
+        raw: { providerFileId: item.providerFileId, parent, selfRecord: true },
+      });
+    }
   }
 
   if (item.personSeeds && item.personSeeds.length > 0) {

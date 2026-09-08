@@ -14,6 +14,7 @@ import type { Kysely } from "kysely";
 import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEntityRepository } from "../db/repositories/entities";
+import { upsertLlmTaskFact } from "../db/repositories/indexed-file-facts";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
 import type { EmbeddingProvider } from "./embeddings/types";
@@ -67,6 +68,23 @@ async function seedFile(
     })
     .onConflict((oc) => oc.doNothing())
     .execute();
+}
+
+async function seedLlmTaskFact(db: Kysely<DB>, fileId: string): Promise<void> {
+  await upsertLlmTaskFact(db, {
+    indexedFileId: fileId,
+    connectorConfigId: "conn-1",
+    source: "google_drive",
+    candidateId: `candidate-${fileId}`,
+    candidate: {
+      title: "Preserve the rollout task",
+      owner: { name: "Alice" },
+      hasOwnerVerbObject: true,
+    },
+    corroborationKey: `preserve-rollout-task-${fileId}`,
+    evidence: { fileIds: [fileId], entityIds: [] },
+    promptVersion: "test-v1",
+  });
 }
 
 async function seedImageFile(db: Kysely<DB>, fileId: string, sourceUpdatedAt: string): Promise<void> {
@@ -952,6 +970,17 @@ describe("runEnrichment — chronological pending-files order", () => {
   it("embedding retries preserve completed summary state", async () => {
     const fileId = randomUUID();
     await seedFile(db, fileId, "retry body ".repeat(120));
+    await seedLlmTaskFact(db, fileId);
+    await db
+      .insertInto("document_chunks")
+      .values({
+        id: randomUUID(),
+        indexed_file_id: fileId,
+        chunk_index: 0,
+        content: "stale chunk",
+        token_count: 2,
+      })
+      .execute();
     await db
       .updateTable("indexed_files")
       .set({
@@ -965,6 +994,9 @@ describe("runEnrichment — chronological pending-files order", () => {
       .where("id", "=", fileId)
       .execute();
 
+    const generate = vi.fn(async () => "should not run");
+    const generateJSON = vi.fn(async <T>() => ({ mentions: [], relations: [] }) as T);
+
     const result = await runEnrichment({
       db,
       logger: createTestLogger(),
@@ -976,6 +1008,7 @@ describe("runEnrichment — chronological pending-files order", () => {
           return texts.map(() => new Array(8).fill(0));
         },
       },
+      generator: { generate, generateJSON } as GeminiGenerator,
     });
 
     const row = await db
@@ -983,11 +1016,43 @@ describe("runEnrichment — chronological pending-files order", () => {
       .select(["embedding_status", "summary_status", "summary_attempts", "summary_next_retry_at"])
       .where("id", "=", fileId)
       .executeTakeFirstOrThrow();
+    const chunks = await db
+      .selectFrom("document_chunks")
+      .select("content")
+      .where("indexed_file_id", "=", fileId)
+      .execute();
+    const fact = await db
+      .selectFrom("indexed_file_facts")
+      .select("deleted_at")
+      .where("indexed_file_id", "=", fileId)
+      .where("fact_type", "=", "llm_task")
+      .executeTakeFirstOrThrow();
 
     expect(result.filesProcessed).toBe(1);
+    expect(generate).not.toHaveBeenCalled();
+    expect(generateJSON).not.toHaveBeenCalled();
+    expect(chunks.map((chunk) => chunk.content).join(" ")).toContain("retry body");
+    expect(chunks.map((chunk) => chunk.content)).not.toContain("stale chunk");
     expect(row.embedding_status).toBe("done");
     expect(row.summary_status).toBe("done");
     expect(row.summary_attempts).toBe(0);
     expect(row.summary_next_retry_at).toBeNull();
+    expect(fact.deleted_at).toBeNull();
+  });
+
+  it("full enrichment still reconciles stale llm_task facts", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId, "full refresh body ".repeat(120));
+    await seedLlmTaskFact(db, fileId);
+
+    await runEnrichment({ db, logger: createTestLogger(), embeddingProvider: null, fileIds: [fileId] });
+
+    const fact = await db
+      .selectFrom("indexed_file_facts")
+      .select("deleted_at")
+      .where("indexed_file_id", "=", fileId)
+      .where("fact_type", "=", "llm_task")
+      .executeTakeFirstOrThrow();
+    expect(fact.deleted_at).not.toBeNull();
   });
 });

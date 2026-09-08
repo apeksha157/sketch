@@ -1140,7 +1140,9 @@ async function enrichTextDocument(
     assertFreshUpdate(summaryResult, file.id);
   }
 
-  await emitAndMaterializeDocumentFactsFromStoredFile(file, deps, generator);
+  if (!summaryAlreadyResolved) {
+    await emitAndMaterializeDocumentFactsFromStoredFile(file, deps, generator);
+  }
   await ensureFileFresh(db, file.id, fileVersion);
 
   // 5. Embed chunks (best-effort — entity linking still succeeds if embedding fails)

@@ -4,18 +4,20 @@ import { createConnectorRepository } from "../db/repositories/connectors";
 import { createEntityRepository } from "../db/repositories/entities";
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
+import { fileVisibilityRuleSql } from "../db/repositories/file-visibility-rule";
 import type { DB } from "../db/schema";
 import {
   attachLinkedinCompanyContinuation,
   attachLinkedinCompanySlug,
 } from "../entities/linkedin-company-continuation";
-import { confirmReview } from "../entities/resolve";
+import { confirmReview, rejectReview } from "../entities/resolve";
 import { createTestDb, createTestLogger } from "../test-utils";
 import { AimfoxClient, type AimfoxConversation, type AimfoxLead } from "./aimfox-client";
 import { buildLinkedinSegments, createLinkedinAimfoxConnector, orderLinkedinMessages } from "./linkedin-aimfox";
 import { buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { resetRpmPacerForTests } from "./rpm-pacer";
 import { runConnectorSync } from "./sync";
+import { toEmailPrincipals } from "./types";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -169,6 +171,43 @@ describe("LinkedIn conversation segmentation", () => {
 
     expect(replayed[0].manifest).toEqual(legacySealed);
     expect(identities(replayed)).toEqual(identities(initial));
+  });
+
+  it("computes LinkedIn segment direction from sender id rather than display name", () => {
+    const ordered = orderLinkedinMessages("urn:conversation:direction", [
+      {
+        urn: "urn:message:1",
+        body: "First reply",
+        sender: { id: "lead-1", full_name: "Member User" },
+        created_at: 1_779_911_700_000,
+      },
+      {
+        urn: "urn:message:2",
+        body: "Owner follow-up",
+        sender: { id: "acct-1", full_name: "Member User" },
+        created_at: 1_779_911_800_000,
+      },
+      {
+        urn: "urn:message:3",
+        body: "Second reply",
+        sender: { id: "lead-1", full_name: "Member User" },
+        created_at: 1_779_911_900_000,
+      },
+    ]);
+
+    const segments = buildLinkedinSegments(
+      ordered,
+      [],
+      { maxMessages: 50, maxTokens: 10_000, gapMs: 4 * HOUR_MS },
+      "acct-1",
+    );
+
+    expect(segments[0]?.manifest).toMatchObject({
+      inboundCount: 2,
+      outboundCount: 1,
+      lastInboundAt: "2026-05-27T19:58:20.000Z",
+      lastOutboundAt: "2026-05-27T19:56:40.000Z",
+    });
   });
 });
 
@@ -1117,6 +1156,13 @@ describe("LinkedIn Aimfox conversation ingest", () => {
       fileType: "linkedin_profile",
       contentCategory: "structured",
       rollupGroupId: "linkedin:acct-1:profile:lead-thread",
+      parentEntities: [
+        {
+          source: "aimfox",
+          sourceId: "lead-thread",
+          contextSnippet: "LinkedIn profile of Alice Smith",
+        },
+      ],
       accessPrincipals: [{ type: "email", value: "member@example.com" }],
     });
     expect(items[0].contactPoints?.find((point) => point.kind === "linkedin")).toMatchObject({
@@ -1145,6 +1191,105 @@ describe("LinkedIn Aimfox conversation ingest", () => {
     );
     expect(items[1].contactPoints).toBeUndefined();
   });
+
+  it("yields unrestricted profile and message files in workspace visibility mode", async () => {
+    mockLeadSync(
+      [
+        leadFixture({
+          id: "lead-workspace",
+          fullName: "Workspace Lead",
+          publicIdentifier: "workspace-lead",
+        }),
+      ],
+      {
+        conversations: [
+          conversationFixture({
+            leadId: "lead-workspace",
+            conversationUrn: "urn:conversation:workspace",
+          }),
+        ],
+      },
+    );
+
+    const items = await collectSyncItems(db, { visibility: "workspace" });
+
+    expect(items).toHaveLength(2);
+    expect(items.map((item) => item.accessPrincipals)).toEqual([[], []]);
+  });
+
+  it("workspace-mode sync clears a stale LinkedIn file grant on a re-listed file", async () => {
+    mockLeadSync([leadFixture({ id: "lead-stale", fullName: "Stale Lead", publicIdentifier: "stale-lead" })]);
+    const config = await createLinkedinTestConfig(db, { visibility: "workspace" });
+
+    await runLinkedinTestSync(db, config.id);
+    const fileIds = await db
+      .selectFrom("indexed_files")
+      .select("id")
+      .where("connector_config_id", "=", config.id)
+      .execute();
+    await db
+      .insertInto("file_access")
+      .values(
+        fileIds.map((file) => ({
+          indexed_file_id: file.id,
+          principal_type: "email" as const,
+          principal_value: "member@example.com",
+        })),
+      )
+      .execute();
+
+    await runLinkedinTestSync(db, config.id);
+
+    expect(await db.selectFrom("file_access").selectAll().execute()).toEqual([]);
+  });
+
+  it("lets a non-owner public-MCP principal see LinkedIn files only in workspace mode", async () => {
+    mockLeadSync([leadFixture({ id: "lead-public", fullName: "Public Lead", publicIdentifier: "public-lead" })]);
+    const config = await createLinkedinTestConfig(db);
+
+    await runLinkedinTestSync(db, config.id);
+    expect(await visibleLinkedinProviderFileIds(db, "other@example.com")).toEqual([]);
+    expect(await visibleLinkedinProviderFileIds(db, "member@example.com")).toEqual([
+      "linkedin:acct-1:profile:lead-public",
+      "linkedin:acct-1:urn:conversation:1:segment-0",
+    ]);
+
+    await createConnectorRepository(db).updateConfig(config.id, {
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], maxRpm: 100_000, visibility: "workspace" }),
+    });
+    await runLinkedinTestSync(db, config.id);
+
+    expect(await visibleLinkedinProviderFileIds(db, "other@example.com")).toEqual([
+      "linkedin:acct-1:profile:lead-public",
+      "linkedin:acct-1:urn:conversation:1:segment-0",
+    ]);
+  });
+
+  it.each(["owner", "workspace"] as const)(
+    "confirming LinkedIn review evidence leaves %s-mode grants unchanged",
+    async (visibility) => {
+      const { fileId, review, expectedGrants } = await seedLinkedinEvidenceReview(db, visibility, "confirm");
+
+      await confirmReview({ db, userId: "linkedin-test-user", logger: createTestLogger() }, review.row.id, {
+        candidateGeneratedAt: review.row.candidate_generated_at as string,
+      });
+
+      expect(await grantRowsForFile(db, fileId)).toEqual(expectedGrants);
+    },
+  );
+
+  it.each(["owner", "workspace"] as const)(
+    "rejecting LinkedIn review evidence leaves %s-mode grants unchanged",
+    async (visibility) => {
+      const { fileId, review, expectedGrants } = await seedLinkedinEvidenceReview(db, visibility, "reject");
+
+      await rejectReview({ db, userId: "linkedin-test-user", logger: createTestLogger() }, review.row.id, {
+        candidateGeneratedAt: review.row.candidate_generated_at as string,
+      });
+
+      expect(await grantRowsForFile(db, fileId)).toEqual(expectedGrants);
+    },
+  );
 
   it("retains and labels automated campaign messages", async () => {
     mockLeadSync(
@@ -1265,6 +1410,48 @@ describe("LinkedIn Aimfox conversation ingest", () => {
       "linkedin:acct-1:urn:conversation:talk:segment-0",
     ]);
     expect(await personCount(db)).toBe(2);
+  });
+
+  it("warns when every listed LinkedIn thread is unanswered and nothing persists", async () => {
+    mockLeadSync(
+      [
+        leadFixture({ id: "lead-quiet-1", fullName: "Quiet One", publicIdentifier: "quiet-one" }),
+        leadFixture({ id: "lead-quiet-2", fullName: "Quiet Two", publicIdentifier: "quiet-two" }),
+      ],
+      {
+        messages: {
+          "urn:conversation:1": [
+            messageFixture({ id: "out-1", senderId: "acct-1", senderName: "Member User", body: "Hi one" }),
+          ],
+          "urn:conversation:2": [
+            messageFixture({ id: "out-2", senderId: "acct-1", senderName: "Member User", body: "Hi two" }),
+          ],
+        },
+      },
+    );
+    const config = await createLinkedinTestConfig(db);
+    const { logger, warn } = createSpyingLogger();
+
+    await runConnectorSync(db, config.id, logger);
+
+    const persistedNothing = warn.mock.calls.find(
+      (call) => call[1] === "LinkedIn sync walked 2 threads and persisted nothing",
+    );
+    expect(persistedNothing?.[0]).toMatchObject({ threadsListed: 2, threadsSkippedNoReply: 2 });
+  });
+
+  it("does not warn on an unchanged LinkedIn overlap re-run", async () => {
+    mockLeadSync([
+      leadFixture({ id: "lead-unchanged", fullName: "Unchanged Lead", publicIdentifier: "unchanged-lead" }),
+    ]);
+    const config = await createLinkedinTestConfig(db);
+    const { logger, warn } = createSpyingLogger();
+
+    await runConnectorSync(db, config.id, logger);
+    warn.mockClear();
+    await runConnectorSync(db, config.id, logger);
+
+    expect(warn.mock.calls.some((call) => String(call[1]).includes("persisted nothing"))).toBe(false);
   });
 
   it("keeps persisted file grants isolated to each connector owner", async () => {
@@ -1564,13 +1751,17 @@ function messageFixture(input: {
   };
 }
 
-async function collectSyncItems(db: Kysely<DB>) {
+async function collectSyncItems(db: Kysely<DB>, opts?: { visibility?: "owner" | "workspace" }) {
   const connector = createLinkedinAimfoxConnector();
   const items = [];
   for await (const item of connector.sync({
     db,
     credentials: { type: "api_key", api_key: "key" },
-    scopeConfig: { accountIds: ["acct-1"], maxRpm: 100_000 },
+    scopeConfig: {
+      accountIds: ["acct-1"],
+      maxRpm: 100_000,
+      ...(opts?.visibility ? { visibility: opts.visibility } : {}),
+    },
     cursor: null,
     logger: createTestLogger(),
     ownerEmail: "member@example.com",
@@ -1580,7 +1771,10 @@ async function collectSyncItems(db: Kysely<DB>) {
   return items;
 }
 
-async function drainSync(db: Kysely<DB>, opts?: { backfillBudget?: number; accountIds?: string[] }) {
+async function drainSync(
+  db: Kysely<DB>,
+  opts?: { backfillBudget?: number; accountIds?: string[]; visibility?: "owner" | "workspace" },
+) {
   const config = await createLinkedinTestConfig(db, opts);
   const result = await runLinkedinTestSync(db, config.id);
   return {
@@ -1605,7 +1799,10 @@ async function ensureLinkedinTestUser(db: Kysely<DB>): Promise<void> {
     .execute();
 }
 
-async function createLinkedinTestConfig(db: Kysely<DB>, opts?: { accountIds?: string[]; backfillBudget?: number }) {
+async function createLinkedinTestConfig(
+  db: Kysely<DB>,
+  opts?: { accountIds?: string[]; backfillBudget?: number; visibility?: "owner" | "workspace" },
+) {
   await ensureLinkedinTestUser(db);
   return createConnectorRepository(db).createConfig({
     connectorType: "linkedin_aimfox",
@@ -1615,6 +1812,7 @@ async function createLinkedinTestConfig(db: Kysely<DB>, opts?: { accountIds?: st
       accountIds: opts?.accountIds ?? ["acct-1"],
       maxRpm: 100_000,
       ...(opts?.backfillBudget ? { backfillBudget: opts.backfillBudget } : {}),
+      ...(opts?.visibility ? { visibility: opts.visibility } : {}),
     }),
     createdBy: "linkedin-test-user",
   });
@@ -1624,6 +1822,17 @@ async function runLinkedinTestSync(db: Kysely<DB>, configId: string) {
   return runConnectorSync(db, configId, createTestLogger());
 }
 
+function createSpyingLogger() {
+  const logger = {
+    child: () => logger,
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+  } as unknown as ReturnType<typeof createTestLogger>;
+  return { logger, warn: logger.warn as unknown as ReturnType<typeof vi.fn> };
+}
+
 async function storedAccountCursor(db: Kysely<DB>, configId: string) {
   const row = await db
     .selectFrom("connector_configs")
@@ -1631,6 +1840,95 @@ async function storedAccountCursor(db: Kysely<DB>, configId: string) {
     .where("id", "=", configId)
     .executeTakeFirstOrThrow();
   return JSON.parse(row.sync_cursor ?? "{}").accounts?.["acct-1"] ?? null;
+}
+
+async function seedLinkedinEvidenceReview(db: Kysely<DB>, visibility: "owner" | "workspace", suffix: string) {
+  const config = await createLinkedinTestConfig(db, { visibility });
+  const fileId = `linkedin-review-${visibility}-${suffix}`;
+  const now = new Date().toISOString();
+  await db
+    .insertInto("indexed_files")
+    .values({
+      id: fileId,
+      connector_config_id: config.id,
+      provider_file_id: `linkedin:acct-1:profile:${suffix}-${visibility}`,
+      file_name: `LinkedIn profile - ${suffix}`,
+      file_type: "linkedin_profile",
+      content_category: "structured",
+      content: "{}",
+      content_hash: `hash-${fileId}`,
+      source: "linkedin_aimfox",
+      source_updated_at: now,
+      synced_at: now,
+    })
+    .execute();
+
+  const expectedGrants =
+    visibility === "owner" ? [{ principal_type: "email" as const, principal_value: "member@example.com" }] : [];
+  if (expectedGrants.length > 0) {
+    await db
+      .insertInto("file_access")
+      .values({ indexed_file_id: fileId, ...expectedGrants[0] })
+      .execute();
+  }
+
+  const entityRepo = createEntityRepository(db);
+  const target = await entityRepo.upsertPersonEntity({
+    name: "Reviewed Target",
+    email: "reviewed-target@example.com",
+    subtype: "external",
+    source: "seed",
+    sourceId: `reviewed-target-${visibility}-${suffix}`,
+  });
+  const reviewRepo = createEntityReviewRepo(db);
+  const review = await reviewRepo.upsertQueueRow({
+    proposedName: "Reviewed Target Alias",
+    normalizedName: "reviewed target alias",
+    entityType: "person",
+    source: "linkedin_aimfox",
+    sourceId: `review-${visibility}-${suffix}`,
+    sourceScoped: true,
+    proposedEmail: "reviewed-target@example.com",
+    candidateEntityId: target.id,
+    candidateScore: 1,
+    candidateReason: "exact",
+    triggeredByUserId: "linkedin-test-user",
+    evidenceIndexedFileIds: [fileId],
+  });
+  await reviewRepo.upsertEvidence({
+    reviewId: review.row.id,
+    indexedFileId: fileId,
+    source: "linkedin_aimfox",
+    note: "LinkedIn evidence",
+  });
+  return { fileId, review, expectedGrants };
+}
+
+async function grantRowsForFile(db: Kysely<DB>, fileId: string) {
+  return db
+    .selectFrom("file_access")
+    .select(["principal_type", "principal_value"])
+    .where("indexed_file_id", "=", fileId)
+    .orderBy("principal_type")
+    .orderBy("principal_value")
+    .execute();
+}
+
+async function visibleLinkedinProviderFileIds(db: Kysely<DB>, email: string): Promise<string[]> {
+  const rows = await db
+    .selectFrom("indexed_files")
+    .select("provider_file_id")
+    .where("source", "=", "linkedin_aimfox")
+    .where(
+      fileVisibilityRuleSql({
+        principals: toEmailPrincipals([email]),
+        slackEntitySyncEnabled: true,
+        archived: "exclude",
+      }),
+    )
+    .orderBy("provider_file_id")
+    .execute();
+  return rows.map((row) => row.provider_file_id);
 }
 
 function leadDetailUrls(fetchSpy: ReturnType<typeof mockLeadSync>, from = 0): string[] {

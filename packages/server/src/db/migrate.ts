@@ -227,6 +227,13 @@ import * as m224 from "./migrations/224-resolver-runs";
 import * as m225 from "./migrations/225-indexed-file-raw-contents";
 import * as m226 from "./migrations/226-linkedin-company-review-continuations";
 import * as m227 from "./migrations/227-person-enrichment-attempts";
+import * as m228 from "./migrations/228-indexed-files-public-visibility-index";
+import * as m229 from "./migrations/229-external-mcp-tool-calls-access-bypass";
+import * as m230 from "./migrations/230-slack-chunk-engine-streams";
+import * as m231 from "./migrations/231-benchmarks";
+import * as m232 from "./migrations/232-benchmark-owner-history";
+import * as m233 from "./migrations/233-crm-field-history";
+import * as m234 from "./migrations/234-entity-touch-stats";
 import type { DB } from "./schema";
 
 /**
@@ -463,6 +470,13 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "225-indexed-file-raw-contents": m225,
           "226-linkedin-company-review-continuations": m226,
           "227-person-enrichment-attempts": m227,
+          "228-indexed-files-public-visibility-index": m228,
+          "229-external-mcp-tool-calls-access-bypass": m229,
+          "230-slack-chunk-engine-streams": m230,
+          "231-benchmarks": m231,
+          "232-benchmark-owner-history": m232,
+          "233-crm-field-history": m233,
+          "234-entity-touch-stats": m234,
         };
       },
     },

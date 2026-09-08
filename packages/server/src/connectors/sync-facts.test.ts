@@ -87,6 +87,65 @@ describe("emitFactsForSyncedItem", () => {
     expect(JSON.parse(fact.raw ?? "{}").contactPoint.value).toBe("simran@example.com");
   });
 
+  it("emits one parent entity self fact for structural seeds whose source id is the provider file id", async () => {
+    const factRepo = createIndexedFileFactRepository(db);
+
+    await emitFactsForSyncedItem({
+      factRepo,
+      connector: testConnector,
+      connectorType: "zoho_crm",
+      factContext: {
+        connectorConfigId: "connector-1",
+        createdByUserId: "user-1",
+        lastSeenSyncRunId: "run-1",
+      },
+      indexedFileId: "file-1",
+      item: {
+        ...baseItem,
+        providerFileId: "Accounts:a1",
+        sourcePath: "Zoho / Accounts / Acme",
+        entitySeeds: [
+          {
+            name: "Acme",
+            sourceType: "company",
+            source: "zoho_crm",
+            sourceId: "Accounts:a1",
+          },
+          {
+            name: "Jane Buyer",
+            sourceType: "person",
+            source: "zoho_crm",
+            sourceId: "Contacts:c1",
+          },
+        ],
+      },
+    });
+
+    const parentFacts = await db
+      .selectFrom("indexed_file_facts")
+      .selectAll()
+      .where("fact_type", "=", "parent_entity")
+      .execute();
+    expect(parentFacts).toHaveLength(1);
+    expect(parentFacts[0]).toMatchObject({
+      indexed_file_id: "file-1",
+      source: "zoho_crm",
+      relation: "mentioned",
+      subject_source: "zoho_crm",
+      subject_source_id: "Accounts:a1",
+      context_snippet: "Zoho / Accounts / Acme",
+    });
+    expect(JSON.parse(parentFacts[0].raw ?? "{}")).toEqual({
+      providerFileId: "Accounts:a1",
+      parent: {
+        source: "zoho_crm",
+        sourceId: "Accounts:a1",
+        contextSnippet: "Zoho / Accounts / Acme",
+      },
+      selfRecord: true,
+    });
+  });
+
   it("emits email correspondents without attendee or author facts when opted in", async () => {
     const factRepo = createIndexedFileFactRepository(db);
 

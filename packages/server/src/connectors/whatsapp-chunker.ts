@@ -5,7 +5,6 @@ import { parseSketchCommand } from "../commands";
 import { isPg } from "../db/dialect";
 import {
   type ConversationSliceCursorRow,
-  type ConversationSliceFlushReason,
   createConversationSlicesRepository,
 } from "../db/repositories/conversation-slices";
 import { createWhatsAppBackfillRangeRepository } from "../db/repositories/whatsapp-backfill-ranges";
@@ -13,68 +12,39 @@ import type { WhatsAppGroupIndexingConfig } from "../db/repositories/whatsapp-gr
 import type { DB } from "../db/schema";
 import { MAX_MATERIALIZATION_ATTEMPTS } from "../entities/materialize-replay";
 import { isReasoningTextCommand, isToolProgressCommand } from "../progress-settings";
-import {
-  WHATSAPP_PROVIDER_TIMESTAMP_MAX_FUTURE_MS,
-  effectiveWhatsAppMessageTimestamp,
-} from "../whatsapp/provider-timestamp";
+import { WHATSAPP_PROVIDER_TIMESTAMP_MAX_FUTURE_MS } from "../whatsapp/provider-timestamp";
+import type { ChunkEngineKnobs } from "./chunk-engine";
+import { runStreamTick, withProviderBackoff } from "./chunk-engine-runner";
 import { estimateTokens } from "./chunking";
-import { isRetryableProviderError } from "./provider-fallback";
+import { resolveChunkEngineKnobs } from "./config-default";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import { runWithConcurrency } from "./sync-utils";
-import { evaluateIdleClose, runLlmChunkingPass } from "./whatsapp-llm-chunker";
+import { ATTACHMENT_PLACEHOLDER_TEXT, parseAttachmentsJson } from "./transcript";
+import {
+  type WhatsAppLlmChunkerDeps,
+  createWhatsAppChunkStreamAdapter,
+  evaluateIdleClose,
+  runLlmChunkingPass,
+} from "./whatsapp-llm-chunker";
 
-export const DEFAULT_WHATSAPP_SLICE_GAP_MINUTES = 25;
-export const DEFAULT_WHATSAPP_SLICE_MAX_AGE_MINUTES = 120;
-export const DEFAULT_WHATSAPP_SLICE_MAX_MESSAGES = 50;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES = 500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS = 20_000;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_CYCLE_MESSAGES = 1500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PENDING_SLICES_MAX = 200;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_PENDING_FILES_MAX = 500;
 export const DEFAULT_WHATSAPP_BACKFILL_GRAPH_OPEN_FACTS_MAX = 5000;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_MESSAGES = 250;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_TOKENS = 7500;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES = 10;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_TARGET_MESSAGES = 40;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_MESSAGES = 80;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_MAX_TOKENS = 1500;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_TICK_MINUTES = 30;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_IDLE_CLOSE_HOURS = 96;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES = 15;
 export const DEFAULT_WHATSAPP_LLM_CHUNK_REASONING_EFFORT = "high" as const;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_TOPIC_REGISTRY_CAP = 30;
-export const DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL = 4;
 
 const MINUTE_MS = 60 * 1000;
 const DEFAULT_CLAIM_STALE_MS = 5 * MINUTE_MS;
-const SYNTHETIC_ATTACHMENT_TEXT = "see attached files.";
 const SINGLE_EMOJI_PATTERN =
   /^(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\p{Emoji_Modifier}|\uFE0E|\uFE0F)*(?:\u200D(?:\p{Extended_Pictographic}|\p{Emoji_Presentation})(?:\p{Emoji_Modifier}|\uFE0E|\uFE0F)*)*$/u;
 
-export interface WhatsAppChunkerKnobs {
-  gapMinutes: number;
-  maxAgeMinutes: number;
-  maxMessages: number;
-}
-
 export type WhatsAppLlmReasoningEffort = "low" | "medium" | "high";
 
-export interface WhatsAppLlmChunkerKnobs {
-  windowMessages: number;
-  windowTokens: number;
-  minMessages: number;
-  targetMessages: number;
-  maxMessages: number;
-  maxTokens: number;
-  tickMinutes: number;
-  idleCloseHours: number;
-  provisionalRefreshMessages: number;
-  model: string | null;
-  reasoningEffort: WhatsAppLlmReasoningEffort;
-  burstThresholdMessages: number | null;
-  topicRegistryCap: number;
-  groupWorkerPool: number;
-}
+export type WhatsAppLlmChunkerKnobs = ChunkEngineKnobs;
 
 export interface WhatsAppLlmChunkerGroupOverrides {
   chunkWindowMessages: number | null;
@@ -111,25 +81,6 @@ export interface WhatsAppChunkerMessage {
   isBot: boolean;
 }
 
-export interface PlannedWhatsAppSlice {
-  firstMessageId: number;
-  lastMessageId: number;
-  startedAt: string;
-  endedAt: string;
-  messageCount: number;
-  denoisedMessageIds: number[];
-  flushReason: ConversationSliceFlushReason;
-  cursor: {
-    lastEffectiveAt: string;
-    lastMessageId: number;
-  };
-}
-
-export interface WhatsAppChunkerPlan {
-  slices: PlannedWhatsAppSlice[];
-  activeTailMessageIds: number[];
-}
-
 export interface WhatsAppChunkerRunSummary {
   conversationsProcessed: number;
   slicesCreated: number;
@@ -137,11 +88,6 @@ export interface WhatsAppChunkerRunSummary {
   messagesProcessed: number;
   maxAgeFlushes: number;
   maxSizeFlushes: number;
-}
-
-interface SortableChunkerMessage extends WhatsAppChunkerMessage {
-  effectiveMs: number;
-  rawIndex: number;
 }
 
 interface ChunkerRawRow {
@@ -152,12 +98,7 @@ interface ChunkerRawRow {
   attachments: string | null;
   provider_timestamp: string | null;
   received_at: string;
-}
-
-interface ChunkerTimestampRow {
-  id: number;
-  provider_timestamp: string | null;
-  received_at: string;
+  effective_at: string | null;
 }
 
 interface ChunkWhatsAppGroupOptions {
@@ -167,7 +108,6 @@ interface ChunkWhatsAppGroupOptions {
   now?: Date;
   claimStaleMs?: number;
   onConversationClaimed?: (conversationId: number) => Promise<void>;
-  defaultKnobs?: Partial<WhatsAppChunkerKnobs>;
   defaultLlmKnobs?: Partial<WhatsAppLlmChunkerKnobs>;
   llmGenerate?: WhatsAppLlmGenerate;
   onOpenChunkShrunk?: (indexedFileId: string) => Promise<void>;
@@ -180,7 +120,6 @@ interface ChunkWhatsAppGroupsOptions {
   now?: Date;
   claimStaleMs?: number;
   onConversationClaimed?: (conversationId: number) => Promise<void>;
-  defaultKnobs?: Partial<WhatsAppChunkerKnobs>;
   defaultLlmKnobs?: Partial<WhatsAppLlmChunkerKnobs>;
   llmGenerate?: WhatsAppLlmGenerate;
   onOpenChunkShrunk?: (indexedFileId: string) => Promise<void>;
@@ -198,17 +137,6 @@ type WhatsAppLlmGenerate = (
     label?: string;
   },
 ) => Promise<string>;
-
-export function resolveWhatsAppChunkerKnobs(
-  group: WhatsAppGroupIndexingConfig,
-  defaults: Partial<WhatsAppChunkerKnobs> = {},
-): WhatsAppChunkerKnobs {
-  return {
-    gapMinutes: group.sliceGapMinutes ?? defaults.gapMinutes ?? DEFAULT_WHATSAPP_SLICE_GAP_MINUTES,
-    maxAgeMinutes: group.sliceMaxAgeMinutes ?? defaults.maxAgeMinutes ?? DEFAULT_WHATSAPP_SLICE_MAX_AGE_MINUTES,
-    maxMessages: group.sliceMaxMessages ?? defaults.maxMessages ?? DEFAULT_WHATSAPP_SLICE_MAX_MESSAGES,
-  };
-}
 
 function positiveInteger(value: number | null | undefined): number | undefined {
   return value != null && Number.isInteger(value) && value > 0 ? value : undefined;
@@ -235,66 +163,46 @@ function resolveReasoningEffort(
   return defaultValue ?? DEFAULT_WHATSAPP_LLM_CHUNK_REASONING_EFFORT;
 }
 
+/**
+ * Per-group column overrides win over the connector scope config, which wins
+ * over the WHATSAPP_CHUNK schema defaults. Group and scope values arrive
+ * unvalidated, so both stay behind the positive-integer guards.
+ */
 export function resolveWhatsAppLlmChunkerKnobs(
   group: WhatsAppGroupIndexingConfig & Partial<WhatsAppLlmChunkerGroupOverrides>,
   defaults: Partial<WhatsAppLlmChunkerKnobs> = {},
 ): WhatsAppLlmChunkerKnobs {
+  const base = resolveChunkEngineKnobs("WHATSAPP_CHUNK", undefined);
   return {
-    windowMessages: resolvePositiveInteger(
-      group.chunkWindowMessages,
-      defaults.windowMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_MESSAGES,
-    ),
-    windowTokens: resolvePositiveInteger(
-      group.chunkWindowTokens,
-      defaults.windowTokens,
-      DEFAULT_WHATSAPP_LLM_CHUNK_WINDOW_TOKENS,
-    ),
-    minMessages: resolvePositiveInteger(
-      group.chunkMinMessages,
-      defaults.minMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES,
-    ),
-    targetMessages: resolvePositiveInteger(
-      group.chunkTargetMessages,
-      defaults.targetMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_TARGET_MESSAGES,
-    ),
-    maxMessages: resolvePositiveInteger(
-      group.chunkMaxMessages,
-      defaults.maxMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_MAX_MESSAGES,
-    ),
-    maxTokens: resolvePositiveInteger(group.chunkMaxTokens, defaults.maxTokens, DEFAULT_WHATSAPP_LLM_CHUNK_MAX_TOKENS),
-    tickMinutes: resolvePositiveInteger(
-      group.chunkTickMinutes,
-      defaults.tickMinutes,
-      DEFAULT_WHATSAPP_LLM_CHUNK_TICK_MINUTES,
-    ),
-    idleCloseHours: resolvePositiveInteger(
-      group.chunkIdleCloseHours,
-      defaults.idleCloseHours,
-      DEFAULT_WHATSAPP_LLM_CHUNK_IDLE_CLOSE_HOURS,
-    ),
+    windowMessages: resolvePositiveInteger(group.chunkWindowMessages, defaults.windowMessages, base.windowMessages),
+    windowTokens: resolvePositiveInteger(group.chunkWindowTokens, defaults.windowTokens, base.windowTokens),
+    minMessages: resolvePositiveInteger(group.chunkMinMessages, defaults.minMessages, base.minMessages),
+    targetMessages: resolvePositiveInteger(group.chunkTargetMessages, defaults.targetMessages, base.targetMessages),
+    maxMessages: resolvePositiveInteger(group.chunkMaxMessages, defaults.maxMessages, base.maxMessages),
+    maxTokens: resolvePositiveInteger(group.chunkMaxTokens, defaults.maxTokens, base.maxTokens),
+    tickMinutes: resolvePositiveInteger(group.chunkTickMinutes, defaults.tickMinutes, base.tickMinutes),
+    idleCloseHours: resolvePositiveInteger(group.chunkIdleCloseHours, defaults.idleCloseHours, base.idleCloseHours),
     provisionalRefreshMessages: resolvePositiveInteger(
       group.chunkProvisionalRefreshMessages,
       defaults.provisionalRefreshMessages,
-      DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
+      base.provisionalRefreshMessages,
     ),
-    model: resolveModel(group.chunkModel, defaults.model),
-    reasoningEffort: resolveReasoningEffort(group.chunkReasoningEffort, defaults.reasoningEffort),
+    model: resolveModel(group.chunkModel, defaults.model ?? base.model),
+    reasoningEffort: resolveReasoningEffort(
+      group.chunkReasoningEffort,
+      defaults.reasoningEffort ?? base.reasoningEffort,
+    ),
     burstThresholdMessages:
-      positiveInteger(group.chunkBurstThresholdMessages) ?? positiveInteger(defaults.burstThresholdMessages) ?? null,
+      positiveInteger(group.chunkBurstThresholdMessages) ??
+      positiveInteger(defaults.burstThresholdMessages) ??
+      base.burstThresholdMessages,
     topicRegistryCap: resolvePositiveInteger(
       group.chunkTopicRegistryCap,
       defaults.topicRegistryCap,
-      DEFAULT_WHATSAPP_LLM_CHUNK_TOPIC_REGISTRY_CAP,
+      base.topicRegistryCap,
     ),
-    groupWorkerPool: resolvePositiveInteger(
-      group.chunkGroupWorkerPool,
-      defaults.groupWorkerPool,
-      DEFAULT_WHATSAPP_LLM_CHUNK_GROUP_WORKER_POOL,
-    ),
+    groupWorkerPool: resolvePositiveInteger(group.chunkGroupWorkerPool, defaults.groupWorkerPool, base.groupWorkerPool),
+    maxWindowsPerRun: resolvePositiveInteger(undefined, defaults.maxWindowsPerRun, base.maxWindowsPerRun),
   };
 }
 
@@ -312,27 +220,6 @@ class WhatsAppBackfillGraphInvariantError extends Error {
   ) {
     super(message);
   }
-}
-
-function effectiveTimeMs(value: string): number {
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-/**
- * Provider timestamp validation lives in TypeScript so SQLite and Postgres use
- * the same floor, skew, and invalid-date behavior without dialect-specific casts.
- */
-function effectiveTimestamp(row: ChunkerTimestampRow, now: Date): string {
-  return effectiveWhatsAppMessageTimestamp(row.provider_timestamp, row.received_at, now);
-}
-
-function isAfterCursor(message: { id: number; effectiveAt: string }, cursor: ConversationSliceCursorRow): boolean {
-  if (cursor.last_effective_at === null || cursor.last_message_id === null) return true;
-  return (
-    message.effectiveAt > cursor.last_effective_at ||
-    (message.effectiveAt === cursor.last_effective_at && message.id > cursor.last_message_id)
-  );
 }
 
 /**
@@ -361,13 +248,8 @@ function emptyRunSummary(): WhatsAppChunkerRunSummary {
 }
 
 function hasAttachments(value: string | null): boolean {
-  if (!value) return false;
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) && parsed.length > 0;
-  } catch {
-    return value.trim().length > 0;
-  }
+  const parsed = parseAttachmentsJson(value);
+  return parsed.count > 0 || parsed.malformed;
 }
 
 function isControlMessage(text: string): boolean {
@@ -389,7 +271,7 @@ function isReactionOnly(message: WhatsAppChunkerMessage): boolean {
 function isCaptionlessMedia(message: WhatsAppChunkerMessage): boolean {
   if (!hasAttachments(message.attachments)) return false;
   const text = message.text.trim();
-  return text.length === 0 || text.toLowerCase() === SYNTHETIC_ATTACHMENT_TEXT;
+  return text.length === 0 || text.toLowerCase() === ATTACHMENT_PLACEHOLDER_TEXT;
 }
 
 export function isIndexableWhatsAppChunkMessage(message: WhatsAppChunkerMessage): boolean {
@@ -398,105 +280,6 @@ export function isIndexableWhatsAppChunkMessage(message: WhatsAppChunkerMessage)
   if (isReactionOnly(message)) return false;
   if (isCaptionlessMedia(message)) return false;
   return message.text.trim().length > 0 || hasAttachments(message.attachments);
-}
-
-function toSortableMessages(messages: WhatsAppChunkerMessage[]): SortableChunkerMessage[] {
-  return messages
-    .map((message) => ({ ...message, effectiveMs: effectiveTimeMs(message.effectiveAt), rawIndex: 0 }))
-    .sort((left, right) => left.effectiveMs - right.effectiveMs || left.id - right.id)
-    .map((message, rawIndex) => ({ ...message, rawIndex }));
-}
-
-function buildSlice(
-  sortedMessages: SortableChunkerMessage[],
-  denoisedMessages: SortableChunkerMessage[],
-  startIndex: number,
-  endIndex: number,
-  flushReason: ConversationSliceFlushReason,
-): PlannedWhatsAppSlice {
-  const kept = denoisedMessages.slice(startIndex, endIndex + 1);
-  const firstKept = kept[0];
-  const lastKept = kept[kept.length - 1];
-  if (!firstKept || !lastKept) {
-    throw new Error("Cannot build an empty WhatsApp slice");
-  }
-
-  const rawRange = sortedMessages.slice(firstKept.rawIndex, lastKept.rawIndex + 1);
-  const rangeIds = rawRange.map((message) => message.id);
-
-  return {
-    firstMessageId: Math.min(...rangeIds),
-    lastMessageId: Math.max(...rangeIds),
-    startedAt: firstKept.effectiveAt,
-    endedAt: lastKept.effectiveAt,
-    messageCount: kept.length,
-    denoisedMessageIds: kept.map((message) => message.id),
-    flushReason,
-    cursor: {
-      lastEffectiveAt: lastKept.effectiveAt,
-      lastMessageId: lastKept.id,
-    },
-  };
-}
-
-export function planWhatsAppConversationSlices(
-  messages: WhatsAppChunkerMessage[],
-  knobs: WhatsAppChunkerKnobs,
-  now = new Date(),
-): WhatsAppChunkerPlan {
-  const sortedMessages = toSortableMessages(messages);
-  const denoisedMessages = sortedMessages.filter(isIndexableWhatsAppChunkMessage);
-  const slices: PlannedWhatsAppSlice[] = [];
-  const gapMs = knobs.gapMinutes * MINUTE_MS;
-  const maxAgeMs = knobs.maxAgeMinutes * MINUTE_MS;
-  const maxMessages = Math.max(1, knobs.maxMessages);
-  let currentStartIndex: number | null = null;
-
-  for (let index = 0; index < denoisedMessages.length; index += 1) {
-    const current = denoisedMessages[index];
-    if (!current) continue;
-
-    if (currentStartIndex === null) {
-      currentStartIndex = index;
-      continue;
-    }
-
-    const previous = denoisedMessages[index - 1];
-    if (previous && current.effectiveMs - previous.effectiveMs >= gapMs) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, index - 1, "gap"));
-      currentStartIndex = index;
-      continue;
-    }
-
-    const first = denoisedMessages[currentStartIndex];
-    if (!first) continue;
-    const messageCount = index - currentStartIndex + 1;
-    const ageMs = current.effectiveMs - first.effectiveMs;
-    if (messageCount >= maxMessages) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, index, "max_size"));
-      currentStartIndex = null;
-      continue;
-    }
-    if (ageMs >= maxAgeMs) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, index, "max_age"));
-      currentStartIndex = null;
-    }
-  }
-
-  if (currentStartIndex !== null) {
-    const lastIndex = denoisedMessages.length - 1;
-    const last = denoisedMessages[lastIndex];
-    if (last && last.effectiveMs <= now.getTime() - gapMs) {
-      slices.push(buildSlice(sortedMessages, denoisedMessages, currentStartIndex, lastIndex, "gap"));
-      return { slices, activeTailMessageIds: [] };
-    }
-    return {
-      slices,
-      activeTailMessageIds: denoisedMessages.slice(currentStartIndex).map((message) => message.id),
-    };
-  }
-
-  return { slices, activeTailMessageIds: [] };
 }
 
 async function findGroupConversation(db: Kysely<DB>, groupJid: string): Promise<{ id: number } | undefined> {
@@ -513,90 +296,120 @@ async function listMessagesAfterCursor(
   db: Kysely<DB>,
   conversationId: number,
   cursor: ConversationSliceCursorRow,
-  now: Date,
+  limit: number,
   openFirstMessageId?: number,
 ): Promise<WhatsAppChunkerMessage[]> {
   const lowerBound = cursorReceivedAtLowerBound(cursor);
-  const open = await createConversationSlicesRepository(db).getOpenSlice(conversationId);
-  const historyStartId = open?.first_message_id ?? openFirstMessageId;
+  const historyStartId = openFirstMessageId;
   let query = db
     .selectFrom("conversation_messages")
-    .select(["id", "provider_message_id", "is_bot", "text", "attachments", "provider_timestamp", "received_at"])
-    .where("conversation_id", "=", conversationId);
+    .select([
+      "id",
+      "provider_message_id",
+      "is_bot",
+      "text",
+      "attachments",
+      "provider_timestamp",
+      "received_at",
+      "effective_at",
+    ])
+    .where("conversation_id", "=", conversationId)
+    .where("effective_at", "is not", null);
   query = query.where((eb) =>
     eb.or([
       eb.and([eb("source", "=", "live"), ...(lowerBound ? [eb("received_at", ">", lowerBound)] : [])]),
       ...(historyStartId !== undefined ? [eb.and([eb("source", "=", "history"), eb("id", ">=", historyStartId)])] : []),
     ]),
   );
-  const rows = await query.orderBy("id", "asc").execute();
-
-  return rows
-    .map((row: ChunkerRawRow) => ({
-      id: row.id,
-      providerMessageId: row.provider_message_id,
-      effectiveAt: effectiveTimestamp(row, now),
-      text: row.text,
-      attachments: row.attachments,
-      isBot: row.is_bot === 1,
-    }))
-    .filter((message) => isAfterCursor(message, cursor))
-    .sort(
-      (left, right) => effectiveTimeMs(left.effectiveAt) - effectiveTimeMs(right.effectiveAt) || left.id - right.id,
+  if (cursor.last_effective_at !== null && cursor.last_message_id !== null) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", ">", cursor.last_effective_at as string),
+        eb.and([
+          eb("effective_at", "=", cursor.last_effective_at as string),
+          eb("id", ">", cursor.last_message_id as number),
+        ]),
+      ]),
     );
+  }
+  const rows = await query.orderBy("effective_at", "asc").orderBy("id", "asc").limit(limit).execute();
+
+  return rows.map((row: ChunkerRawRow) => ({
+    id: row.id,
+    providerMessageId: row.provider_message_id,
+    effectiveAt: row.effective_at as string,
+    text: row.text,
+    attachments: row.attachments,
+    isBot: row.is_bot === 1,
+  }));
 }
 
 async function countLateArrivals(
   db: Kysely<DB>,
   conversationId: number,
   cursor: ConversationSliceCursorRow,
-  now: Date,
 ): Promise<number> {
   if (cursor.last_effective_at === null || cursor.last_message_id === null) return 0;
 
   const lowerBound = cursorReceivedAtLowerBound(cursor);
   let query = db
     .selectFrom("conversation_messages")
-    .select(["id", "provider_timestamp", "received_at"])
+    .select(({ fn }) => fn.countAll<number>().as("count"))
     .where("conversation_id", "=", conversationId)
     .where("source", "=", "live")
-    .where("id", ">", cursor.last_message_id);
+    .where("id", ">", cursor.last_message_id)
+    .where("effective_at", "<", cursor.last_effective_at);
   if (lowerBound) query = query.where("received_at", ">", lowerBound);
-  const rows = await query.execute();
-
-  return rows.filter(
-    (row: ChunkerTimestampRow) => !isAfterCursor({ id: row.id, effectiveAt: effectiveTimestamp(row, now) }, cursor),
-  ).length;
+  const row = await query.executeTakeFirstOrThrow();
+  return Number(row.count);
 }
 
 async function runLlmChunkingWithBackoff(
   options: ChunkWhatsAppGroupOptions,
   params: Parameters<typeof runLlmChunkingPass>[1],
 ): Promise<Awaited<ReturnType<typeof runLlmChunkingPass>>> {
-  if (!options.llmGenerate) return { windowsProcessed: 0, slicesClosed: 0, openSliceId: null };
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await runLlmChunkingPass(
+  if (!options.llmGenerate) {
+    return {
+      windowsProcessed: 0,
+      slicesClosed: 0,
+      messagesProcessed: 0,
+      pendingRemaining: false,
+      openSliceId: null,
+    };
+  }
+  return withProviderBackoff(
+    () =>
+      runLlmChunkingPass(
         {
           db: options.db,
           logger: options.logger,
-          generate: options.llmGenerate,
+          generate: options.llmGenerate as WhatsAppLlmGenerate,
           now: () => (options.now ?? new Date()).getTime(),
           onOpenChunkShrunk:
             options.onOpenChunkShrunk ??
             ((indexedFileId) => purgeConversationalFactsForFile(options.db, indexedFileId)),
         },
         params,
-      );
-    } catch (error) {
-      if (!isRetryableProviderError(error) || attempt >= 2) throw error;
-      const waitMs = Math.min(100 * 2 ** attempt, 1000);
-      options.logger.warn({ groupJid: params.groupJid, attempt: attempt + 1, waitMs }, "WhatsApp LLM provider backoff");
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
-  }
+      ),
+    {
+      logger: options.logger,
+      logContext: { groupJid: params.groupJid },
+      message: "WhatsApp LLM provider backoff",
+    },
+  );
 }
 
+/**
+ * The live tick resolves the conversation once, up front, and no longer
+ * re-checks that it still exists before the pass. Deleting a conversation
+ * cascades its slice cursor row away, so the pass claim finds nothing and the
+ * tick ends as `claim_unavailable` — the re-check only duplicated that.
+ *
+ * Residual: if the group jid is remapped to a different conversation between
+ * `findGroupConversation` and the tick, the roster is built from the new jid
+ * while the messages still come from the stale conversation id. Remaps are not
+ * observed in practice and the next tick self-corrects.
+ */
 async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<WhatsAppChunkerRunSummary> {
   const { db, group, logger } = options;
   const now = options.now ?? new Date();
@@ -604,7 +417,7 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
   if (!conversation) return emptyRunSummary();
   const repo = createConversationSlicesRepository(db);
   const knobs = resolveWhatsAppLlmChunkerKnobs(group, options.defaultLlmKnobs);
-  const openBeforeIdleClose = await repo.getOpenSlice(conversation.id);
+  const openBeforeIdleClose = await repo.getOpenSlice(conversation.id, null);
   await evaluateIdleClose(
     {
       db,
@@ -640,54 +453,61 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
     db,
     conversation.id,
     cursor,
-    now,
+    knobs.windowMessages + 1,
     openBeforeIdleClose?.first_message_id,
   );
-  const denoisedMessages = messages.filter(isIndexableWhatsAppChunkMessage);
-  const lateArrivals = await countLateArrivals(db, conversation.id, cursor, now);
+  const lateArrivals = await countLateArrivals(db, conversation.id, cursor);
   if (lateArrivals > 0) logger.info({ conversationId: conversation.id, lateArrivals }, "late_arrival_skipped");
-  if (denoisedMessages.length === 0 || !options.llmGenerate) {
+  if (messages.length === 0 || !options.llmGenerate) {
     return { ...emptyRunSummary(), conversationsProcessed: 1, lateArrivals };
   }
 
-  const lastAttemptMs = group.chunkLastLlmAttemptAt ? Date.parse(group.chunkLastLlmAttemptAt) : Number.NaN;
-  const open = await repo.getOpenSlice(conversation.id);
-  const burstThreshold = knobs.burstThresholdMessages ?? Math.max(1, knobs.windowMessages - (open?.message_count ?? 0));
-  if (
-    Number.isFinite(lastAttemptMs) &&
-    now.getTime() - lastAttemptMs < knobs.tickMinutes * MINUTE_MS &&
-    denoisedMessages.length < burstThreshold
-  ) {
-    return emptyRunSummary();
-  }
-
-  await db
-    .updateTable("whatsapp_groups")
-    .set({ chunk_last_llm_attempt_at: now.toISOString() })
-    .where("jid", "=", group.jid)
-    .where("index_enabled", "=", 1)
-    .execute();
-
-  try {
-    const result = await runLlmChunkingWithBackoff(options, {
+  const llmGenerate = options.llmGenerate;
+  const chunkDeps: WhatsAppLlmChunkerDeps = {
+    db,
+    logger,
+    generate: llmGenerate,
+    now: () => now.getTime(),
+    onOpenChunkShrunk:
+      options.onOpenChunkShrunk ?? ((indexedFileId) => purgeConversationalFactsForFile(db, indexedFileId)),
+  };
+  const tick = await runStreamTick({
+    db,
+    logger,
+    now,
+    adapter: createWhatsAppChunkStreamAdapter(chunkDeps, {
       conversationId: conversation.id,
       groupJid: group.jid,
       knobs,
-      mode: "live",
-      pendingMessageIds: messages.map((message) => message.id),
-    });
-    return {
-      conversationsProcessed: 1,
-      slicesCreated: result.slicesClosed,
-      lateArrivals,
-      messagesProcessed: messages.length,
-      maxAgeFlushes: 0,
-      maxSizeFlushes: 0,
-    };
-  } catch (error) {
-    logger.warn({ err: error, conversationId: conversation.id, groupJid: group.jid }, "WhatsApp LLM chunking failed");
-    return emptyRunSummary();
-  }
+    }),
+    generate: llmGenerate,
+    onOpenChunkShrunk: chunkDeps.onOpenChunkShrunk,
+    llmGated: true,
+    hasGenerator: true,
+    historyStartId: openBeforeIdleClose?.first_message_id,
+    readLastAttempt: async () => group.chunkLastLlmAttemptAt ?? null,
+    stampAttempt: async () => {
+      await db
+        .updateTable("whatsapp_groups")
+        .set({ chunk_last_llm_attempt_at: now.toISOString() })
+        .where("jid", "=", group.jid)
+        .where("index_enabled", "=", 1)
+        .execute();
+    },
+    stampWhen: "before_pass",
+    logContext: { conversationId: conversation.id, groupJid: group.jid },
+    failureMessage: "WhatsApp LLM chunking failed",
+    backoffMessage: "WhatsApp LLM provider backoff",
+  });
+  if (tick.tickSkipped || tick.failed) return emptyRunSummary();
+  return {
+    conversationsProcessed: 1,
+    slicesCreated: tick.slicesClosed,
+    lateArrivals,
+    messagesProcessed: tick.messagesProcessed,
+    maxAgeFlushes: 0,
+    maxSizeFlushes: 0,
+  };
 }
 
 interface WhatsAppBackfillGraphBacklog {
@@ -974,6 +794,12 @@ async function admitWhatsAppBackfillGraphChat(input: {
       conversationId: input.conversationId,
       knobs: resolveWhatsAppLlmChunkerKnobs(input.group, input.defaultLlmKnobs),
       mode: "backfill",
+      pendingUntil: page.rows.length
+        ? {
+            effectiveAt: page.rows[page.rows.length - 1]?.effective_at as string,
+            id: page.rows[page.rows.length - 1]?.id as number,
+          }
+        : undefined,
     },
   );
   if (page.rows.length === 0) {
@@ -1013,7 +839,10 @@ async function admitWhatsAppBackfillGraphChat(input: {
       groupJid: page.groupJid,
       knobs: resolveWhatsAppLlmChunkerKnobs(input.group, input.defaultLlmKnobs),
       mode: "backfill",
-      pendingMessageIds: page.rows.map((row) => row.id),
+      pendingUntil: {
+        effectiveAt: page.rows[page.rows.length - 1]?.effective_at as string,
+        id: page.rows[page.rows.length - 1]?.id as number,
+      },
     },
   );
   if (llmResult.skippedReason === "overlap_guard") {

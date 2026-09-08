@@ -2,7 +2,7 @@ export interface PersonEnrichmentProvider {
   readonly name: string;
   readonly version: string;
   enrichByLinkedinUrl(url: string): Promise<EnrichmentResult>;
-  allowance?(): Promise<{ remainingCalls: number | null }>;
+  allowance?(): Promise<{ remainingCalls: number | null; resetsAt?: string | null }>;
 }
 
 export type EnrichmentResult =

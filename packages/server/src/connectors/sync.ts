@@ -25,6 +25,7 @@ import { settleContainersFromProviderFacts } from "../entities/container-settlem
 import { isRecreateActive } from "../entities/recreate-state";
 import { heapStats, heapUsedMb } from "../lib/heap";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
+import { createChunkGenerate } from "./chunk-generate";
 import type { ConsolidatedLoopAgenticGenerator } from "./consolidated-loop";
 import { resolveConnectorCredentials } from "./credential-providers";
 import { reconcileDanglingCrmRollups, refreshCrmActivityRollups } from "./crm-rollup";
@@ -164,9 +165,6 @@ export async function runConnectorSync(
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
       | "CONTACT_POINT_DEFAULT_REGION"
-      | "WHATSAPP_SLICE_GAP_MINUTES"
-      | "WHATSAPP_SLICE_MAX_AGE_MINUTES"
-      | "WHATSAPP_SLICE_MAX_MESSAGES"
       | "WHATSAPP_CHUNK_WINDOW_MESSAGES"
       | "WHATSAPP_CHUNK_WINDOW_TOKENS"
       | "WHATSAPP_CHUNK_MIN_MESSAGES"
@@ -176,13 +174,34 @@ export async function runConnectorSync(
       | "WHATSAPP_CHUNK_TICK_MINUTES"
       | "WHATSAPP_CHUNK_IDLE_CLOSE_HOURS"
       | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+      | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
       | "WHATSAPP_CHUNK_MODEL"
       | "WHATSAPP_CHUNK_REASONING_EFFORT"
       | "WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES"
       | "WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP"
       | "WHATSAPP_CHUNK_GROUP_WORKER_POOL"
+      | "WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN"
+      | "SLACK_CHUNK_WINDOW_MESSAGES"
+      | "SLACK_CHUNK_WINDOW_TOKENS"
+      | "SLACK_CHUNK_MIN_MESSAGES"
+      | "SLACK_CHUNK_TARGET_MESSAGES"
+      | "SLACK_CHUNK_MAX_MESSAGES"
+      | "SLACK_CHUNK_MAX_TOKENS"
+      | "SLACK_THREAD_MIN_MESSAGES"
+      | "SLACK_CHUNK_TICK_MINUTES"
+      | "SLACK_CHUNK_IDLE_CLOSE_HOURS"
+      | "SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+      | "SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
+      | "SLACK_CHUNK_MODEL"
+      | "SLACK_CHUNK_REASONING_EFFORT"
+      | "SLACK_CHUNK_BURST_THRESHOLD_MESSAGES"
+      | "SLACK_CHUNK_TOPIC_REGISTRY_CAP"
+      | "SLACK_CHUNK_CHANNEL_WORKER_POOL"
+      | "SLACK_CHUNK_MAX_WINDOWS_PER_RUN"
+      | "SLACK_DISCOVERY_PAGE_ROWS"
+      | "SLACK_DISCOVERY_MAX_PAGES"
+      | "SLACK_EMISSION_LEGACY_PER_RUN"
       | "SLACK_ENTITY_SYNC"
-      | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"
       | "WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES"
       | "WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS"
@@ -241,9 +260,6 @@ export async function runConnectorSync(
         : config.connector_type === "whatsapp"
           ? {
               ...storedScopeConfig,
-              sliceGapMinutes: storedScopeConfig.sliceGapMinutes ?? appConfig?.WHATSAPP_SLICE_GAP_MINUTES,
-              sliceMaxAgeMinutes: storedScopeConfig.sliceMaxAgeMinutes ?? appConfig?.WHATSAPP_SLICE_MAX_AGE_MINUTES,
-              sliceMaxMessages: storedScopeConfig.sliceMaxMessages ?? appConfig?.WHATSAPP_SLICE_MAX_MESSAGES,
               chunkWindowMessages: storedScopeConfig.chunkWindowMessages ?? appConfig?.WHATSAPP_CHUNK_WINDOW_MESSAGES,
               chunkWindowTokens: storedScopeConfig.chunkWindowTokens ?? appConfig?.WHATSAPP_CHUNK_WINDOW_TOKENS,
               chunkMinMessages: storedScopeConfig.chunkMinMessages ?? appConfig?.WHATSAPP_CHUNK_MIN_MESSAGES,
@@ -255,6 +271,9 @@ export async function runConnectorSync(
               chunkProvisionalRefreshMessages:
                 storedScopeConfig.chunkProvisionalRefreshMessages ??
                 appConfig?.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
+              chunkProvisionalRefreshMaxMinutes:
+                storedScopeConfig.chunkProvisionalRefreshMaxMinutes ??
+                appConfig?.WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES,
               chunkModel: storedScopeConfig.chunkModel ?? appConfig?.WHATSAPP_CHUNK_MODEL,
               chunkReasoningEffort:
                 storedScopeConfig.chunkReasoningEffort ?? appConfig?.WHATSAPP_CHUNK_REASONING_EFFORT,
@@ -264,7 +283,8 @@ export async function runConnectorSync(
                 storedScopeConfig.chunkTopicRegistryCap ?? appConfig?.WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP,
               chunkGroupWorkerPool:
                 storedScopeConfig.chunkGroupWorkerPool ?? appConfig?.WHATSAPP_CHUNK_GROUP_WORKER_POOL,
-              salienceBatchLimit: storedScopeConfig.salienceBatchLimit ?? appConfig?.WHATSAPP_SALIENCE_BATCH_LIMIT,
+              chunkMaxWindowsPerRun:
+                storedScopeConfig.chunkMaxWindowsPerRun ?? appConfig?.WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN,
               emissionRefreshDays: storedScopeConfig.emissionRefreshDays ?? appConfig?.WHATSAPP_EMISSION_REFRESH_DAYS,
               backfillGraphPageMessages:
                 storedScopeConfig.backfillGraphPageMessages ?? appConfig?.WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES,
@@ -394,10 +414,7 @@ export async function runConnectorSync(
             logger: syncLogger,
           })
         : null;
-    const whatsappChunkerGenerate = salienceGenerator
-      ? (prompt: string, opts: Parameters<NonNullable<typeof salienceGenerator>["generate"]>[1]) =>
-          salienceGenerator.generate(prompt, opts)
-      : undefined;
+    const chunkGenerate = createChunkGenerate(salienceGenerator);
 
     for await (const item of connector.sync({
       db,
@@ -410,10 +427,31 @@ export async function runConnectorSync(
       ownerEmail,
       resolveNameToEmail,
       salienceGenerator,
-      whatsappChunkerGenerate,
+      whatsappChunkerGenerate: chunkGenerate,
+      slackChunkerGenerate: chunkGenerate,
       slackIndexing: options.slackIndexingFacade ?? null,
       appConfig: {
         SLACK_ENTITY_SYNC: appConfig?.SLACK_ENTITY_SYNC,
+        SLACK_CHUNK_WINDOW_MESSAGES: appConfig?.SLACK_CHUNK_WINDOW_MESSAGES,
+        SLACK_CHUNK_WINDOW_TOKENS: appConfig?.SLACK_CHUNK_WINDOW_TOKENS,
+        SLACK_CHUNK_MIN_MESSAGES: appConfig?.SLACK_CHUNK_MIN_MESSAGES,
+        SLACK_CHUNK_TARGET_MESSAGES: appConfig?.SLACK_CHUNK_TARGET_MESSAGES,
+        SLACK_CHUNK_MAX_MESSAGES: appConfig?.SLACK_CHUNK_MAX_MESSAGES,
+        SLACK_CHUNK_MAX_TOKENS: appConfig?.SLACK_CHUNK_MAX_TOKENS,
+        SLACK_THREAD_MIN_MESSAGES: appConfig?.SLACK_THREAD_MIN_MESSAGES,
+        SLACK_CHUNK_TICK_MINUTES: appConfig?.SLACK_CHUNK_TICK_MINUTES,
+        SLACK_CHUNK_IDLE_CLOSE_HOURS: appConfig?.SLACK_CHUNK_IDLE_CLOSE_HOURS,
+        SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES: appConfig?.SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
+        SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: appConfig?.SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES,
+        SLACK_CHUNK_MODEL: appConfig?.SLACK_CHUNK_MODEL,
+        SLACK_CHUNK_REASONING_EFFORT: appConfig?.SLACK_CHUNK_REASONING_EFFORT,
+        SLACK_CHUNK_BURST_THRESHOLD_MESSAGES: appConfig?.SLACK_CHUNK_BURST_THRESHOLD_MESSAGES,
+        SLACK_CHUNK_TOPIC_REGISTRY_CAP: appConfig?.SLACK_CHUNK_TOPIC_REGISTRY_CAP,
+        SLACK_CHUNK_CHANNEL_WORKER_POOL: appConfig?.SLACK_CHUNK_CHANNEL_WORKER_POOL,
+        SLACK_CHUNK_MAX_WINDOWS_PER_RUN: appConfig?.SLACK_CHUNK_MAX_WINDOWS_PER_RUN,
+        SLACK_DISCOVERY_PAGE_ROWS: appConfig?.SLACK_DISCOVERY_PAGE_ROWS,
+        SLACK_DISCOVERY_MAX_PAGES: appConfig?.SLACK_DISCOVERY_MAX_PAGES,
+        SLACK_EMISSION_LEGACY_PER_RUN: appConfig?.SLACK_EMISSION_LEGACY_PER_RUN,
       },
       onEntitySeed: async (seed) => {
         await factRepo.upsertFact({
@@ -517,6 +555,13 @@ export async function runConnectorSync(
           await persistEnvelopeMetadata(db, itemResult.indexedFileId, item.emailEnvelope);
         }
 
+        /**
+         * An embeddings-only refresh re-emits the transcript without re-running the
+         * LLM stages, so derived llm_task facts must not be reconciled (tombstoned)
+         * until the full refresh that can re-derive them.
+         */
+        const derivedFactsContentChanged =
+          itemResult.kind !== "unchanged" && item.enrichmentRefresh !== "embeddings_only";
         await emitFactsForSyncedItem({
           db,
           factRepo,
@@ -526,7 +571,7 @@ export async function runConnectorSync(
           item,
           indexedFileId: itemResult.indexedFileId,
           emitCorrespondentFacts: connector.emitsCorrespondentFacts ?? false,
-          contentChanged: itemResult.kind !== "unchanged",
+          contentChanged: derivedFactsContentChanged,
           generator: llmTaskGenerator,
         });
 
@@ -665,6 +710,8 @@ export async function runConnectorSync(
 
     activeSyncs.delete(config.id);
 
+    const syncDiagnostics = connector.getSyncDiagnostics?.() ?? {};
+
     syncLogger.info(
       {
         processed: result.itemsProcessed,
@@ -672,10 +719,23 @@ export async function runConnectorSync(
         updated: result.itemsUpdated,
         archived: result.itemsArchived,
         errors: result.errors.length,
+        ...syncDiagnostics,
         ...heapStats(startHeapMb),
       },
       "Sync complete",
     );
+
+    if (
+      connectorType === "linkedin_aimfox" &&
+      typeof syncDiagnostics.threadsListed === "number" &&
+      syncDiagnostics.threadsListed > 0 &&
+      result.itemsProcessed === 0
+    ) {
+      syncLogger.warn(
+        { threadsListed: syncDiagnostics.threadsListed, ...syncDiagnostics },
+        `LinkedIn sync walked ${syncDiagnostics.threadsListed} threads and persisted nothing`,
+      );
+    }
 
     return result;
   } catch (err) {
@@ -756,7 +816,7 @@ async function linkConversationSliceIndexedFile(
 ): Promise<void> {
   const result = await db
     .updateTable("conversation_slices")
-    .set({ indexed_file_id: indexedFileId })
+    .set({ indexed_file_id: indexedFileId, legacy_unjudged_at: null })
     .where("id", "=", sliceId)
     .executeTakeFirst();
   if (Number(result.numUpdatedRows ?? 0) === 0) {
@@ -787,7 +847,6 @@ export interface SyncSchedulerDeps {
       | "TEAMS_INITIAL_LOOKBACK_DAYS"
       | "TEAMS_MAX_INFLIGHT"
       | "CONTACT_POINT_DEFAULT_REGION"
-      | "WHATSAPP_SALIENCE_BATCH_LIMIT"
       | "WHATSAPP_EMISSION_REFRESH_DAYS"
       | "WHATSAPP_CHUNK_WINDOW_MESSAGES"
       | "WHATSAPP_CHUNK_WINDOW_TOKENS"
@@ -798,11 +857,33 @@ export interface SyncSchedulerDeps {
       | "WHATSAPP_CHUNK_TICK_MINUTES"
       | "WHATSAPP_CHUNK_IDLE_CLOSE_HOURS"
       | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+      | "WHATSAPP_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
       | "WHATSAPP_CHUNK_MODEL"
       | "WHATSAPP_CHUNK_REASONING_EFFORT"
       | "WHATSAPP_CHUNK_BURST_THRESHOLD_MESSAGES"
       | "WHATSAPP_CHUNK_TOPIC_REGISTRY_CAP"
       | "WHATSAPP_CHUNK_GROUP_WORKER_POOL"
+      | "WHATSAPP_CHUNK_MAX_WINDOWS_PER_RUN"
+      | "SLACK_CHUNK_WINDOW_MESSAGES"
+      | "SLACK_CHUNK_WINDOW_TOKENS"
+      | "SLACK_CHUNK_MIN_MESSAGES"
+      | "SLACK_CHUNK_TARGET_MESSAGES"
+      | "SLACK_CHUNK_MAX_MESSAGES"
+      | "SLACK_CHUNK_MAX_TOKENS"
+      | "SLACK_THREAD_MIN_MESSAGES"
+      | "SLACK_CHUNK_TICK_MINUTES"
+      | "SLACK_CHUNK_IDLE_CLOSE_HOURS"
+      | "SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+      | "SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
+      | "SLACK_CHUNK_MODEL"
+      | "SLACK_CHUNK_REASONING_EFFORT"
+      | "SLACK_CHUNK_BURST_THRESHOLD_MESSAGES"
+      | "SLACK_CHUNK_TOPIC_REGISTRY_CAP"
+      | "SLACK_CHUNK_CHANNEL_WORKER_POOL"
+      | "SLACK_CHUNK_MAX_WINDOWS_PER_RUN"
+      | "SLACK_DISCOVERY_PAGE_ROWS"
+      | "SLACK_DISCOVERY_MAX_PAGES"
+      | "SLACK_EMISSION_LEGACY_PER_RUN"
       | "MICROSOFT_CLIENT_ID"
       | "MICROSOFT_CLIENT_SECRET"
       | "MICROSOFT_TENANT"
