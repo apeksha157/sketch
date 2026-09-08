@@ -116,7 +116,7 @@ function runMigrationSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
     });
 
     /**
-     * Later migrations (228) build indexes on provider_thread_id, and SQLite
+     * Later migrations (230) build indexes on provider_thread_id, and SQLite
      * refuses to drop a column an index references, so this down must run
      * through the migrator in order rather than out of sequence.
      */
