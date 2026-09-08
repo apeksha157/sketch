@@ -31,6 +31,60 @@ describe("GetEntity public handler", () => {
     const closed = await handleGetEntity({ entityId: "entity-client" }, zeroEmailDeps());
     expect(closed.content[0]?.text).toBe("Entity entity-client not found.");
   });
+
+  it("serializes Zoho CRM current fields on timeline items", async () => {
+    const now = "2026-09-08T10:00:00.000Z";
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "cfg-zoho-entity",
+        connector_type: "zoho_crm",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "owner",
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "file-zoho-deal",
+        connector_config_id: "cfg-zoho-entity",
+        provider_file_id: "Deals:d1",
+        file_name: "Client renewal deal",
+        file_type: "crm_deal",
+        content_category: "structured",
+        source: "zoho_crm",
+        source_meta: JSON.stringify({
+          zohoCrm: {
+            module: "Deals",
+            recordId: "d1",
+            stage: "Negotiation",
+          },
+        }),
+        source_updated_at: now,
+        synced_at: now,
+      })
+      .execute();
+    await db
+      .insertInto("entity_mentions")
+      .values({
+        id: "mention-client-zoho-deal",
+        entity_id: "entity-client",
+        indexed_file_id: "file-zoho-deal",
+        confidence: "EXTRACTED",
+        source: "test",
+        relation: "mentioned",
+        mentioned_at: now,
+      })
+      .execute();
+
+    const result = await handleGetEntity({ entityId: "entity-client", sections: ["timeline"] }, deps());
+    const body = JSON.parse(result.content[0]?.text ?? "{}") as {
+      timeline: { items: Array<{ fileId: string; crmFields?: { stage?: string } }> };
+    };
+
+    expect(body.timeline.items.find((item) => item.fileId === "file-zoho-deal")?.crmFields?.stage).toBe("Negotiation");
+  });
 });
 
 function deps() {

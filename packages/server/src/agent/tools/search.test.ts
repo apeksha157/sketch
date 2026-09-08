@@ -357,6 +357,128 @@ it("filters empty-query search by fileTypes as a narrowing predicate", async () 
   expect(text).not.toContain("Zoho note record");
 });
 
+it("filters Zoho CRM records by current-value fields", async () => {
+  const now = new Date().toISOString();
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-search-tools-zoho-crm-fields",
+      connector_type: "zoho_crm",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-crm-linkedin-open",
+        connector_config_id: "cfg-search-tools-zoho-crm-fields",
+        provider_file_id: "Leads:linkedin-open",
+        file_name: "CRM field marker LinkedIn open lead",
+        file_type: "crm_lead",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "crm field marker",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-crm-referral-open",
+        connector_config_id: "cfg-search-tools-zoho-crm-fields",
+        provider_file_id: "Leads:referral-open",
+        file_name: "CRM field marker Referral open lead",
+        file_type: "crm_lead",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "crm field marker",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-crm-linkedin-closed",
+        connector_config_id: "cfg-search-tools-zoho-crm-fields",
+        provider_file_id: "Leads:linkedin-closed",
+        file_name: "CRM field marker LinkedIn closed lead",
+        file_type: "crm_lead",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "crm field marker",
+        source_updated_at: now,
+        synced_at: now,
+      },
+      {
+        id: "file-crm-body-only",
+        connector_config_id: "cfg-search-tools-zoho-crm-fields",
+        provider_file_id: "Leads:body-only",
+        file_name: "CRM field marker body-only mention",
+        file_type: "crm_lead",
+        content_category: "document",
+        source: "zoho_crm",
+        content: "crm field marker linkedin eligible",
+        source_updated_at: now,
+        synced_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("crm_record_fields")
+    .values([
+      {
+        indexed_file_id: "file-crm-linkedin-open",
+        field: "leadSource",
+        value: "LinkedIn",
+        value_norm: "linkedin",
+      },
+      { indexed_file_id: "file-crm-linkedin-open", field: "status", value: "Open", value_norm: "open" },
+      { indexed_file_id: "file-crm-linkedin-open", field: "tag", value: "Eligible", value_norm: "eligible" },
+      {
+        indexed_file_id: "file-crm-referral-open",
+        field: "leadSource",
+        value: "Referral",
+        value_norm: "referral",
+      },
+      { indexed_file_id: "file-crm-referral-open", field: "status", value: "Open", value_norm: "open" },
+      {
+        indexed_file_id: "file-crm-linkedin-closed",
+        field: "leadSource",
+        value: "LinkedIn",
+        value_norm: "linkedin",
+      },
+      { indexed_file_id: "file-crm-linkedin-closed", field: "status", value: "Closed", value_norm: "closed" },
+    ])
+    .execute();
+
+  const byLeadSource = await handleSearch(
+    z
+      .object(searchToolSchema)
+      .parse({ query: "crm field marker", source: "zoho_crm", crmFields: { leadSource: "linkedin" } }),
+    deps(),
+  );
+  const byLeadSourceText = byLeadSource.content[0]?.text ?? "";
+  expect(byLeadSourceText).toContain("LinkedIn open lead");
+  expect(byLeadSourceText).toContain("LinkedIn closed lead");
+  expect(byLeadSourceText).not.toContain("Referral open lead");
+  expect(byLeadSourceText).not.toContain("body-only mention");
+
+  const byTwoKeys = await handleSearch(
+    { query: "crm field marker", source: "zoho_crm", crmFields: { leadSource: "linkedin", status: "open" } },
+    deps(),
+  );
+  const byTwoKeysText = byTwoKeys.content[0]?.text ?? "";
+  expect(byTwoKeysText).toContain("LinkedIn open lead");
+  expect(byTwoKeysText).not.toContain("LinkedIn closed lead");
+
+  const byTag = await handleSearch(
+    { query: "crm field marker", source: "zoho_crm", crmFields: { tag: "eligible" } },
+    deps(),
+  );
+  const byTagText = byTag.content[0]?.text ?? "";
+  expect(byTagText).toContain("LinkedIn open lead");
+  expect(byTagText).not.toContain("body-only mention");
+});
+
 it("filters by participantEmail and domain facts without matching body-only mentions", async () => {
   const now = new Date().toISOString();
   await db

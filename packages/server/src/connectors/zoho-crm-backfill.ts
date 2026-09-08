@@ -1,5 +1,11 @@
 import type { Kysely } from "kysely";
-import { type ZohoCrmMetaStringKey, type ZohoCrmSourceMeta, readSourceMeta } from "../db/repositories/connectors";
+import {
+  type ZohoCrmMetaStringKey,
+  type ZohoCrmSourceMeta,
+  readSourceMeta,
+  readZohoCrmMeta,
+} from "../db/repositories/connectors";
+import { createCrmRecordFieldsRepository } from "../db/repositories/crm-record-fields";
 import type { DB } from "../db/schema";
 
 const PAGE_SIZE = 500;
@@ -46,6 +52,7 @@ export interface ZohoSourceMetaBackfillCensus {
   rowsSeen: number;
   wouldUpdate: number;
   updated: number;
+  fieldRowsWritten: number;
   skippedAlreadyPopulated: number;
   skippedMalformedProviderFileId: number;
   truncatedNotes: number;
@@ -53,12 +60,13 @@ export interface ZohoSourceMetaBackfillCensus {
 
 export async function backfillZohoSourceMeta(
   db: Kysely<DB>,
-  opts: { apply: boolean; force?: boolean },
+  opts: { apply: boolean; force?: boolean; fields?: boolean },
 ): Promise<ZohoSourceMetaBackfillCensus> {
   const census: ZohoSourceMetaBackfillCensus = {
     rowsSeen: 0,
     wouldUpdate: 0,
     updated: 0,
+    fieldRowsWritten: 0,
     skippedAlreadyPopulated: 0,
     skippedMalformedProviderFileId: 0,
     truncatedNotes: 0,
@@ -93,6 +101,12 @@ export async function backfillZohoSourceMeta(
       const sourceMeta = readSourceMeta(row);
       if (sourceMeta?.zohoCrm && !opts.force) {
         census.skippedAlreadyPopulated += 1;
+        if (opts.fields && opts.apply) {
+          census.fieldRowsWritten += await createCrmRecordFieldsRepository(db).replaceForFile(
+            row.id,
+            readZohoCrmMeta(sourceMeta),
+          );
+        }
         continue;
       }
       const parsed = parseProviderFileId(row.provider_file_id);
@@ -105,11 +119,20 @@ export async function backfillZohoSourceMeta(
       const zohoCrm = buildBackfilledZohoMeta(row, parsed, truncatedNote);
       census.wouldUpdate += 1;
       if (!opts.apply) continue;
-      await db
-        .updateTable("indexed_files")
-        .set({ source_meta: JSON.stringify({ ...(sourceMeta ?? {}), zohoCrm }) })
-        .where("id", "=", row.id)
-        .execute();
+      await db.transaction().execute(async (trx) => {
+        const nextSourceMeta = { ...(sourceMeta ?? {}), zohoCrm };
+        await trx
+          .updateTable("indexed_files")
+          .set({ source_meta: JSON.stringify(nextSourceMeta) })
+          .where("id", "=", row.id)
+          .execute();
+        if (opts.fields) {
+          census.fieldRowsWritten += await createCrmRecordFieldsRepository(trx).replaceForFile(
+            row.id,
+            readZohoCrmMeta(nextSourceMeta),
+          );
+        }
+      });
       census.updated += 1;
     }
   }

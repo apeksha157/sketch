@@ -1311,6 +1311,13 @@ export interface CrmFieldHistoryTable {
   source_modified_at: string | null;
 }
 
+export interface CrmRecordFieldsTable {
+  indexed_file_id: string;
+  field: string;
+  value: string;
+  value_norm: string;
+}
+
 export interface ContainerClassificationsTable {
   connector_config_id: string;
   container_id: string;
@@ -2179,6 +2186,7 @@ export interface DB {
   email_thread_summaries: EmailThreadSummariesTable;
   crm_object_summaries: CrmObjectSummariesTable;
   crm_field_history: CrmFieldHistoryTable;
+  crm_record_fields: CrmRecordFieldsTable;
   container_classifications: ContainerClassificationsTable;
   containers: ContainersTable;
   access_scopes: AccessScopesTable;

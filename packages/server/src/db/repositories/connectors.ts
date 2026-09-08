@@ -65,6 +65,7 @@ export interface ZohoCrmSourceMeta {
   website?: string;
   companySize?: string;
   tag?: string;
+  tags?: string[];
   lastActivityTime?: string;
   backfilled?: boolean;
 }
@@ -107,6 +108,10 @@ export function readZohoCrmMeta(sourceMeta: Record<string, unknown> | null | und
     if (rendered) meta[key] = rendered;
   }
   if (value.backfilled === true) meta.backfilled = true;
+  if (Array.isArray(value.tags)) {
+    const tags = value.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
+    if (tags.length > 0) meta.tags = tags;
+  }
   if (Array.isArray(value.related)) {
     const related = value.related.filter((item): item is NonNullable<ZohoCrmSourceMeta["related"]>[number] => {
       if (!item || typeof item !== "object" || Array.isArray(item)) return false;

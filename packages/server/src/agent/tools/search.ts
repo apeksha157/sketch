@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { resolveContentPrincipals } from "../../access/principals";
 import {
+  CRM_FILTER_FIELDS,
   KIND_TO_RULES,
   SEARCHABLE_SOURCES,
   SEARCH_KINDS,
@@ -32,7 +33,7 @@ Use this to find information before asking others. Examples:
 - "anything from Oliver or Ohoud lately"  → SearchEntities then Search({ entityIds: [<a>, <b>], entityIdsMode: "or", sortBy: "recency" })
 - "emails from Ranjith yesterday"  → SearchEntities then Search({ kind: "email", entityIds: [<a>], after: "...", before: "..." })
 
-\`query\` is semantic + keyword text — do NOT put operators in it ("OR", "from:", email addresses as filters). To narrow results, prefer filters over query wording. On zero results, broaden the query terms or relax a filter — rewording against the same filters rarely changes the outcome.
+\`query\` is semantic + keyword text — do NOT put operators in it ("OR", "from:", email addresses as filters). To narrow results, prefer filters over query wording. Use \`crmFields\` for exact Zoho CRM current-value filters such as lead source, owner, stage, status, priority, industry, tag, or call type. On zero results, broaden the query terms or relax a filter — rewording against the same filters rarely changes the outcome.
 
 \`kind\` and \`source\` are ANDed — pair them consistently (e.g. source "outlook" or "gmail" pairs with kind "email", not "message"; incompatible pairs are rejected). \`kind\` cannot be combined with \`source: "local"\` (local files have no kind taxonomy).`;
 
@@ -72,6 +73,13 @@ export const searchToolSchema = {
     .string()
     .optional()
     .describe("Filter to files with an attendee or correspondent fact under this email domain."),
+  crmFields: z
+    .partialRecord(z.enum(CRM_FILTER_FIELDS), z.string().min(1))
+    .optional()
+    .describe(
+      "Filter Zoho CRM records by current field values. Keys: stage, status, leadStatus, leadSource, " +
+        "owner, priority, industry, tag, callType. Multiple keys are ANDed.",
+    ),
   sortBy: z
     .enum(["relevance", "recency"])
     .optional()
@@ -169,6 +177,7 @@ export async function handleSearch(
     parentRecordId,
     participantEmail,
     domain,
+    crmFields,
     sortBy,
     expandThreads,
     after,
@@ -199,6 +208,7 @@ export async function handleSearch(
       parentRecordId,
       participantEmail,
       domain: normalizedDomain,
+      crmFields,
       sortBy,
       after,
       before,
@@ -243,6 +253,16 @@ export async function handleSearch(
     );
   }
 
+  const blankCrmField = Object.entries(crmFields ?? {}).find(([, value]) => !value?.trim());
+  if (blankCrmField) {
+    return done(
+      "empty",
+      `crmFields.${blankCrmField[0]} is empty. Give each CRM field filter a value or drop the key.`,
+      0,
+      "blank crmFields value",
+    );
+  }
+
   /**
    * A kind whose rules never reach the given source compiles to an empty
    * intersection — the query cannot match anything regardless of the query
@@ -274,6 +294,7 @@ export async function handleSearch(
     !!parentRecordId ||
     !!participantEmail ||
     !!normalizedDomain ||
+    Object.keys(crmFields ?? {}).length > 0 ||
     !!after ||
     !!before;
 
@@ -281,7 +302,8 @@ export async function handleSearch(
     return done(
       "empty",
       "Need a query or at least one filter " +
-        "(kind, source, entityIds, fileTypes, threadId, parentRecordId, participantEmail, domain, after, before).",
+        "(kind, source, entityIds, fileTypes, threadId, parentRecordId, participantEmail, domain, " +
+        "crmFields, after, before).",
       0,
       "no query and no filter",
     );
@@ -334,6 +356,7 @@ export async function handleSearch(
     parentRecordId,
     participantEmail,
     domain: normalizedDomain,
+    crmFields,
     limit: effectiveLimit,
     after,
     before,
@@ -377,6 +400,12 @@ export async function handleSearch(
     if (parentRecordId) applied.push(`parentRecordId=${parentRecordId}`);
     if (participantEmail) applied.push(`participantEmail=${participantEmail}`);
     if (normalizedDomain) applied.push(`domain=${normalizedDomain}`);
+    if (crmFields && Object.keys(crmFields).length > 0) {
+      const fieldFilters = Object.entries(crmFields)
+        .map(([field, value]) => `${field}:${value}`)
+        .join(",");
+      applied.push(`crmFields=${fieldFilters}`);
+    }
     if (after) applied.push(`after=${after}`);
     if (before) applied.push(`before=${before}`);
     if (applied.length === 0) return "";
@@ -389,6 +418,7 @@ export async function handleSearch(
     if (parentRecordId) relax.push("drop parentRecordId");
     if (participantEmail) relax.push("drop participantEmail");
     if (normalizedDomain) relax.push("drop domain");
+    if (crmFields && Object.keys(crmFields).length > 0) relax.push("drop crmFields");
     if (after || before) relax.push("widen the date range");
     const queryAdvice = trimmedQuery
       ? "Try broader query terms, or relax a filter"

@@ -24,6 +24,7 @@ async function main(): Promise<void> {
       db: { type: "string" },
       apply: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      fields: { type: "boolean", default: false },
     },
   });
   const db = await createDbFromArg(parsed.values.db);
@@ -31,7 +32,11 @@ async function main(): Promise<void> {
     await runMigrations(db);
     console.log(
       JSON.stringify(
-        await backfillZohoSourceMeta(db, { apply: parsed.values.apply, force: parsed.values.force }),
+        await backfillZohoSourceMeta(db, {
+          apply: parsed.values.apply,
+          force: parsed.values.force,
+          fields: parsed.values.fields,
+        }),
         null,
         2,
       ),

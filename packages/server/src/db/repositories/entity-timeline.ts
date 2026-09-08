@@ -29,9 +29,12 @@ export interface TimelineItem {
     stage?: string;
     status?: string;
     leadStatus?: string;
+    leadSource?: string;
+    owner?: string;
     priority?: string;
     dueDate?: string;
-    leadSource?: string;
+    industry?: string;
+    tags?: string[];
   };
 }
 
@@ -285,9 +288,12 @@ function crmFieldsFor(meta: ReturnType<typeof readZohoCrmMeta>): TimelineItem["c
     stage: meta.stage,
     status: meta.status,
     leadStatus: meta.leadStatus,
+    leadSource: meta.leadSource,
+    owner: meta.owner,
     priority: meta.priority,
     dueDate: meta.dueDate,
-    leadSource: meta.leadSource,
+    industry: meta.industry,
+    tags: meta.tags,
   };
   return Object.values(fields).some(Boolean) ? fields : undefined;
 }

@@ -26,7 +26,7 @@ const entitySectionSchema = z.enum(["identity", "relations", "timeline"]);
 export const getEntityToolDescription = [
   "Get one entity as structured JSON: identity/profile card, visible relations, and a paged chronological timeline.",
   "Prefer this over sketch_get_entity_context when you need file IDs, relation IDs, company/person rollups, " +
-    "or content inline with timeline items.",
+    "CRM current fields, or content inline with timeline items.",
 ].join("\n\n");
 
 export const getEntityToolSchema = {
@@ -221,6 +221,7 @@ function serializeTimelineItem(item: TimelinePageItem) {
     url: item.url,
     rollupGroupId: item.rollupGroupId,
     crmActivity: item.crmActivity,
+    crmFields: item.crmFields,
     viaEntityIds: item.viaEntityIds,
   };
 }

@@ -21,6 +21,7 @@ import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
 import { readSourceMeta } from "../db/repositories/connectors";
+import { createCrmRecordFieldsRepository, normalizeCrmRecordFieldValue } from "../db/repositories/crm-record-fields";
 import { createEntityRepository } from "../db/repositories/entities";
 import { fileVisibilityRuleSql, visibleFileIdsSql } from "../db/repositories/file-visibility-rule";
 import { createSettingsRepository } from "../db/repositories/settings";
@@ -77,6 +78,20 @@ export const SEARCHABLE_SOURCES = buildSearchableSources(CONNECTOR_TYPES);
 
 export { filterAccessibleFileIds } from "./sync-utils";
 
+export const CRM_FILTER_FIELDS = [
+  "stage",
+  "status",
+  "leadStatus",
+  "leadSource",
+  "owner",
+  "priority",
+  "industry",
+  "tag",
+  "callType",
+] as const;
+
+export type CrmFilterField = (typeof CRM_FILTER_FIELDS)[number];
+
 export const RBAC_MODE_VISIBLE_SET = "visible-set";
 export const RBAC_MODE_INLINE_RULE = "inline-rule";
 export const RBAC_MODE_SQLITE = "pre-filter (fts) + post-filter (vector)";
@@ -96,6 +111,7 @@ export interface SearchOptions {
   parentRecordId?: string;
   participantEmail?: string;
   domain?: string;
+  crmFields?: Partial<Record<CrmFilterField, string>>;
   /** Max results (default 10). */
   limit?: number;
   /** Content category filter: "document" or "structured". */
@@ -190,6 +206,7 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
       ${userFilter}
       ${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
       ${opts?.category ? sql`AND indexed_files.content_category = ${opts.category}` : sql``}
+      ${extraFilterSql(opts)}
       ORDER BY relevance DESC
       LIMIT ${limit}
     `;
@@ -219,6 +236,7 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
 		${userFilter}
 		${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
 		${opts?.category ? sql`AND indexed_files.content_category = ${opts.category}` : sql``}
+		${extraFilterSql(opts)}
 		ORDER BY relevance
 		LIMIT ${limit}
 	`;
@@ -499,7 +517,9 @@ function participantEmailExistsSql(alias: string, predicate: RawBuilder<unknown>
 }
 
 function extraFilterSql(
-  opts: Pick<SearchOptions, "fileTypes" | "threadId" | "parentRecordId" | "participantEmail" | "domain"> | undefined,
+  opts:
+    | Pick<SearchOptions, "fileTypes" | "threadId" | "parentRecordId" | "participantEmail" | "domain" | "crmFields">
+    | undefined,
   alias = "indexed_files",
 ) {
   const parts: ReturnType<typeof sql>[] = [];
@@ -524,7 +544,30 @@ function extraFilterSql(
       participantEmailExistsSql(alias, sql`lower(indexed_file_facts.subject_email) LIKE ('%@' || lower(${domain}))`),
     );
   }
+  for (const [field, value] of crmFieldFilterEntries(opts?.crmFields)) {
+    parts.push(
+      sql`EXISTS (
+        SELECT 1
+        FROM crm_record_fields f
+        WHERE f.indexed_file_id = ${sql.ref(`${alias}.id`)}
+        AND f.field = ${field}
+        AND f.value_norm = ${normalizeCrmRecordFieldValue(value)}
+      )`,
+    );
+  }
   return parts.length > 0 ? sql`AND ${sql.join(parts, sql` AND `)}` : sql``;
+}
+
+function crmFieldFilterEntries(
+  crmFields: Partial<Record<CrmFilterField, string>> | undefined,
+): Array<[CrmFilterField, string]> {
+  if (!crmFields) return [];
+  const entries: Array<[CrmFilterField, string]> = [];
+  for (const field of CRM_FILTER_FIELDS) {
+    const value = crmFields[field]?.trim();
+    if (value) entries.push([field, value]);
+  }
+  return entries;
 }
 
 // ── Hybrid Search ─────────────────────────────────────────────────────────
@@ -1505,6 +1548,14 @@ function describeFilters(opts: HybridSearchOptions): Array<{
       shown: opts.participantEmail ?? "",
     },
     { field: "domain", label: "Participant domain", value: opts.domain ?? null, shown: opts.domain ?? "" },
+    {
+      field: "crmFields",
+      label: "CRM fields",
+      value: crmFieldFilterEntries(opts.crmFields).length > 0 ? opts.crmFields : null,
+      shown: crmFieldFilterEntries(opts.crmFields)
+        .map(([field, value]) => `${field}=${value}`)
+        .join(", "),
+    },
     { field: "category", label: "Category", value: opts.category ?? null, shown: opts.category ?? "" },
     {
       field: "contentTypes",
@@ -1582,10 +1633,13 @@ async function attributeFilterDrops(
         "rollup_group_id",
         "is_archived",
       ])
-      .where("id", "in", scoredFileIds)
+      .where(idInList(db, sql.ref("indexed_files.id"), scoredFileIds))
       .execute();
     const participantEmails =
       opts.participantEmail || opts.domain ? await loadParticipantEmailsForFiles(db, scoredFileIds) : new Map();
+    const crmFields = crmFieldFilterEntries(opts.crmFields).length
+      ? await loadCrmFieldsForFiles(db, scoredFileIds)
+      : new Map();
 
     const survivedSqlIds = new Set(survivedSql.map((file) => file.id));
     const survivedTimeIds = new Set(survivedTime.map((file) => file.id));
@@ -1596,7 +1650,7 @@ async function attributeFilterDrops(
         attribution.set(row.id, {
           ...identity,
           droppedAt: "filter",
-          dropReason: sqlFilterReason(row, opts, participantEmails.get(row.id) ?? []),
+          dropReason: sqlFilterReason(row, opts, participantEmails.get(row.id) ?? [], crmFields.get(row.id) ?? []),
         });
         continue;
       }
@@ -1627,6 +1681,7 @@ function sqlFilterReason(
   },
   opts: HybridSearchOptions,
   participantEmails: string[],
+  crmFields: Array<{ field: string; valueNorm: string }>,
 ): string {
   if (row.is_archived !== 0) return "archived";
   if (isBodylessCrmActivity(row)) return "bodyless CRM activity summarized on its parent object";
@@ -1655,6 +1710,12 @@ function sqlFilterReason(
       return `no attendee or correspondent fact from domain ${domain}`;
     }
   }
+  for (const [field, value] of crmFieldFilterEntries(opts.crmFields)) {
+    const valueNorm = normalizeCrmRecordFieldValue(value);
+    if (!crmFields.some((row) => row.field === field && row.valueNorm === valueNorm)) {
+      return `no CRM field ${field}=${value}`;
+    }
+  }
   if (opts.category && row.content_category !== opts.category) {
     return `category is ${row.content_category}, not ${opts.category}`;
   }
@@ -1670,6 +1731,20 @@ function sqlFilterReason(
     if (!matches) return `does not match the requested kind (source ${row.source}, type ${row.file_type ?? "none"})`;
   }
   return "excluded by a metadata filter";
+}
+
+async function loadCrmFieldsForFiles(
+  db: Kysely<DB>,
+  fileIds: string[],
+): Promise<Map<string, Array<{ field: string; valueNorm: string }>>> {
+  const rows = await createCrmRecordFieldsRepository(db).listForFiles(fileIds);
+  const byFile = new Map<string, Array<{ field: string; valueNorm: string }>>();
+  for (const row of rows) {
+    const fields = byFile.get(row.indexed_file_id) ?? [];
+    fields.push({ field: row.field, valueNorm: row.value_norm });
+    byFile.set(row.indexed_file_id, fields);
+  }
+  return byFile;
 }
 
 async function loadParticipantEmailsForFiles(db: Kysely<DB>, fileIds: string[]): Promise<Map<string, string[]>> {
@@ -2252,6 +2327,7 @@ async function browseLatest(
     parentRecordId?: string;
     participantEmail?: string;
     domain?: string;
+    crmFields?: Partial<Record<CrmFilterField, string>>;
     after?: string;
     before?: string;
     limit: number;
@@ -2366,6 +2442,7 @@ export async function search(
     parentRecordId?: string;
     participantEmail?: string;
     domain?: string;
+    crmFields?: Partial<Record<CrmFilterField, string>>;
     category?: string;
     limit?: number;
     after?: string;
@@ -2446,6 +2523,7 @@ export async function search(
       !!opts?.parentRecordId ||
       !!opts?.participantEmail ||
       !!opts?.domain ||
+      crmFieldFilterEntries(opts?.crmFields).length > 0 ||
       !!opts?.after ||
       !!opts?.before;
     if (!hasFilter) return [];
@@ -2460,6 +2538,7 @@ export async function search(
       parentRecordId: opts?.parentRecordId,
       participantEmail: opts?.participantEmail,
       domain: opts?.domain,
+      crmFields: opts?.crmFields,
       after: opts?.after,
       before: opts?.before,
       limit,
@@ -2635,6 +2714,7 @@ export async function search(
       parentRecordId: opts?.parentRecordId,
       participantEmail: opts?.participantEmail,
       domain: opts?.domain,
+      crmFields: opts?.crmFields,
       category: opts?.category,
       limit: fetchLimit,
       queryEmbedding,
