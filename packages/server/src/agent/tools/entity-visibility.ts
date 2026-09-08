@@ -2,11 +2,30 @@ import { sql } from "kysely";
 import { resolveContentPrincipals } from "../../access/principals";
 import { idInList } from "../../connectors/id-in-list";
 import type { AccessPrincipal } from "../../connectors/types";
+import type { FileViewer } from "../../db/repositories/connectors";
 import { fileVisibilityRuleSql } from "../../db/repositories/file-visibility-rule";
 import type { SketchMcpDeps } from "./types";
 
 export function contentPrincipalDeps(deps: SketchMcpDeps) {
   return { ...deps, adminBypass: { enabled: deps.adminReadAllEnabled === true } };
+}
+
+/**
+ * Public MCP currently supplies email principals only. Translating them into a
+ * FileViewer with `email: null` and `emails` populated is exact for that surface;
+ * non-email principal types are preserved for timeline visibility separately.
+ */
+export function viewerForPrincipals(
+  principals: AccessPrincipal[] | undefined,
+  slackEntitySyncEnabled: boolean,
+): FileViewer {
+  if (principals === undefined) return { email: null, emails: [], isAdmin: true, slackEntitySyncEnabled };
+  return {
+    email: null,
+    emails: principals.filter((principal) => principal.type === "email").map((principal) => principal.value),
+    isAdmin: false,
+    slackEntitySyncEnabled,
+  };
 }
 
 /**

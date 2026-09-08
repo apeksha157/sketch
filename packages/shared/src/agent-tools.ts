@@ -180,6 +180,12 @@ export const AGENT_TOOL_CATALOG: AgentToolCatalogEntry[] = [
     category: "sketch",
   },
   {
+    name: "mcp__sketch__ListEntities",
+    label: "List entities",
+    description: "List people, companies, or projects by entity activity and status.",
+    category: "sketch",
+  },
+  {
     name: "mcp__sketch__GetEntityContext",
     label: "Get entity context",
     description: "Get cross-source context and recent mentions for an entity.",

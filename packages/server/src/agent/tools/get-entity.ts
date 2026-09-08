@@ -18,7 +18,7 @@ import {
   createEntityTimelineRepository,
 } from "../../db/repositories/entity-timeline";
 import type { DB } from "../../db/schema";
-import { contentPrincipalDeps, visibleEntityIdsForPublic } from "./entity-visibility";
+import { contentPrincipalDeps, viewerForPrincipals, visibleEntityIdsForPublic } from "./entity-visibility";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
 const entitySectionSchema = z.enum(["identity", "relations", "timeline"]);
@@ -95,21 +95,6 @@ function decodeCursor(cursor: string | undefined): TimelineCursor | undefined {
 
 function encodeCursor(cursor: TimelineCursor | null): string | null {
   return cursor ? Buffer.from(JSON.stringify(cursor)).toString("base64url") : null;
-}
-
-/**
- * Public MCP currently supplies email principals only. Translating them into a
- * FileViewer with `email: null` and `emails` populated is exact for that surface;
- * non-email principal types are preserved for timeline visibility separately.
- */
-function viewerForPrincipals(principals: AccessPrincipal[] | undefined, slackEntitySyncEnabled: boolean): FileViewer {
-  if (principals === undefined) return { email: null, emails: [], isAdmin: true, slackEntitySyncEnabled };
-  return {
-    email: null,
-    emails: principals.filter((principal) => principal.type === "email").map((principal) => principal.value),
-    isAdmin: false,
-    slackEntitySyncEnabled,
-  };
 }
 
 function notFound(entityId: string): ToolResult {

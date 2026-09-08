@@ -192,6 +192,7 @@ describe("MCP OAuth routes", () => {
       "sketch_get_entity_context",
       "sketch_get_file_content",
       "sketch_get_thread",
+      "sketch_list_entities",
       "sketch_search",
       "sketch_search_delivery_targets",
       "sketch_search_entities",

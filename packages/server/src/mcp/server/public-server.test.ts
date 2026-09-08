@@ -308,6 +308,68 @@ async function seedPublicMcpSearchFiles(email: string) {
     .execute();
 }
 
+async function seedPublicMcpListEntities(userId: string) {
+  const now = "2026-09-07T10:00:00.000Z";
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-public-mcp-list-entities",
+      connector_type: "outlook",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: userId,
+    })
+    .execute();
+  await db
+    .insertInto("entities")
+    .values([
+      {
+        id: "entity-mcp-first",
+        name: "First Inbound",
+        source_type: "company",
+        status: "confirmed",
+        hotness: 20,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: "entity-mcp-second",
+        name: "Second Inbound",
+        source_type: "company",
+        status: "confirmed",
+        hotness: 10,
+        created_at: now,
+        updated_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("entity_touch_stats")
+    .values([
+      {
+        entity_id: "entity-mcp-first",
+        last_touch_at: "2026-09-07T12:00:00.000Z",
+        last_inbound_at: "2026-09-07T12:00:00.000Z",
+        last_outbound_at: null,
+        touch_count_30d: 2,
+        touch_count_90d: 2,
+        source_last_touch: JSON.stringify({ outlook: "2026-09-07T12:00:00.000Z" }),
+        computed_at: now,
+      },
+      {
+        entity_id: "entity-mcp-second",
+        last_touch_at: "2026-09-07T11:00:00.000Z",
+        last_inbound_at: "2026-09-07T11:00:00.000Z",
+        last_outbound_at: null,
+        touch_count_30d: 1,
+        touch_count_90d: 1,
+        source_last_touch: JSON.stringify({ outlook: "2026-09-07T11:00:00.000Z" }),
+        computed_at: now,
+      },
+    ])
+    .execute();
+}
+
 describe("public MCP server", () => {
   it("is available and advertises OAuth discovery", async () => {
     const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
@@ -362,6 +424,7 @@ describe("public MCP server", () => {
       "sketch_get_entity_context",
       "sketch_get_file_content",
       "sketch_get_thread",
+      "sketch_list_entities",
       "sketch_search",
       "sketch_search_delivery_targets",
       "sketch_search_entities",
@@ -597,6 +660,41 @@ describe("public MCP server", () => {
       expect.objectContaining({ fileId: "file-company-note", viaEntityIds: ["entity-company"] }),
     ]);
     expect(secondBody.timeline.nextCursor).toBeNull();
+  });
+
+  it("pages list entities through public MCP with admin read-all", async () => {
+    const { token, user } = await createOAuthTokenForUser({ email: "admin@example.com" });
+    await db.updateTable("users").set({ auth_role: "admin" }).where("id", "=", user.id).execute();
+    await seedPublicMcpListEntities(user.id);
+    const app = createApp(db, createTestConfig({}), {
+      logger: createTestLogger(),
+      isAdminReadAllEnabled: async () => true,
+    });
+
+    const first = await callMcpTool(token, app, "sketch_list_entities", {
+      sortBy: "lastInbound",
+      minTouches90d: 1,
+      limit: 1,
+    });
+    const firstBody = JSON.parse(first.result.content[0]?.text ?? "{}") as {
+      entities: Array<{ id: string }>;
+      nextCursor: string | null;
+    };
+    expect(firstBody.entities).toEqual([expect.objectContaining({ id: "entity-mcp-first" })]);
+    expect(firstBody.nextCursor).not.toBeNull();
+
+    const second = await callMcpTool(token, app, "sketch_list_entities", {
+      sortBy: "lastInbound",
+      minTouches90d: 1,
+      limit: 1,
+      cursor: firstBody.nextCursor,
+    });
+    const secondBody = JSON.parse(second.result.content[0]?.text ?? "{}") as {
+      entities: Array<{ id: string }>;
+      nextCursor: string | null;
+    };
+    expect(secondBody.entities).toEqual([expect.objectContaining({ id: "entity-mcp-second" })]);
+    expect(secondBody.nextCursor).toBeNull();
   });
 
   it("rate limits by token even when the forwarded IP changes", async () => {

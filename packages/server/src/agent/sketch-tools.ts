@@ -10,6 +10,7 @@ import { createSearchDeliveryTargetsTool } from "./tools/delivery-targets";
 import { createGithubCliTool } from "./tools/github-cli";
 import { createInboxWorkflowTools } from "./tools/inbox-workflows";
 import { createLinearApiTool } from "./tools/linear-api";
+import { createListEntitiesTool } from "./tools/list-entities";
 import { createListFollowupsTool } from "./tools/list-followups";
 import { createListTasksTool } from "./tools/list-tasks";
 import { createLocalClaudeSessionTool } from "./tools/local-claude-session";
@@ -137,6 +138,7 @@ export function createSketchMcpToolDefinitions(deps: SketchMcpDeps) {
         ]
       : []),
     ...createSearchTools(deps),
+    createListEntitiesTool(deps),
     createListFollowupsTool(deps),
     createListTasksTool(deps),
     ...(deps.availableManagedIntegrations?.has("clickup") ? [createClickUpApiTool(deps)] : []),
