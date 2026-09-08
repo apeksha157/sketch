@@ -827,3 +827,146 @@ describe("GetFileContent view: full", () => {
     expect(denied.content[0]?.text).toBe("File file-bob not found.");
   });
 });
+
+describe("GetFileContent fileIds batch", () => {
+  it("returns three files in request order with per-file truncation", async () => {
+    await db
+      .insertInto("indexed_files")
+      .values([
+        {
+          id: "batch-short-a",
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: "batch-short-a",
+          file_name: "Batch short A",
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          content: "short-a",
+          access_scope_id: "scope-alice",
+          source_updated_at: new Date().toISOString(),
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "batch-long",
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: "batch-long",
+          file_name: "Batch long",
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          content: "0123456789abcdef",
+          access_scope_id: "scope-alice",
+          source_updated_at: new Date().toISOString(),
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "batch-short-b",
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: "batch-short-b",
+          file_name: "Batch short B",
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          content: "short-b",
+          access_scope_id: "scope-alice",
+          source_updated_at: new Date().toISOString(),
+          synced_at: new Date().toISOString(),
+        },
+      ])
+      .execute();
+
+    const result = await handleGetFileContent(
+      { fileIds: ["batch-short-b", "batch-long", "batch-short-a"], maxCharsPerFile: 8 },
+      {
+        ...deps(),
+        publicMcp: {
+          userPrincipals: ["alice@example.com"],
+          filterEntityMetadata: true,
+          maxFileContentChars: 1_000,
+        },
+      },
+    );
+    const parsed = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(parsed.files.map((file: { fileId: string }) => file.fileId)).toEqual([
+      "batch-short-b",
+      "batch-long",
+      "batch-short-a",
+    ]);
+    expect(parsed.files[0]).toMatchObject({ found: true, content: "short-b", contentTruncated: false });
+    expect(parsed.files[1]).toMatchObject({ found: true, content: "01234567", contentTruncated: true });
+    expect(parsed.files[2]).toMatchObject({ found: true, content: "short-a", contentTruncated: false });
+    expect(parsed.contentTruncated).toBe(true);
+  });
+
+  it("keeps hidden batch IDs unfound and fails closed with no principals", async () => {
+    const visible = await handleGetFileContent({ fileIds: ["file-alice", "file-bob"] }, deps());
+    const visibleParsed = JSON.parse(visible.content[0]?.text ?? "{}");
+
+    expect(visibleParsed.files[0]).toMatchObject({ fileId: "file-alice", found: true });
+    expect(visibleParsed.files[0].content).toContain("A");
+    expect(visibleParsed.files[1]).toEqual({ fileId: "file-bob", found: false });
+
+    const denied = await handleGetFileContent({ fileIds: ["file-alice", "file-bob"] }, zeroEmailDeps());
+    const deniedParsed = JSON.parse(denied.content[0]?.text ?? "{}");
+
+    expect(deniedParsed.files).toEqual([
+      { fileId: "file-alice", found: false },
+      { fileId: "file-bob", found: false },
+    ]);
+  });
+
+  it("shares the total cap across files and rejects full view batching", async () => {
+    await db
+      .insertInto("indexed_files")
+      .values([
+        {
+          id: "batch-total-a",
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: "batch-total-a",
+          file_name: "Batch total A",
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          content: "12345",
+          access_scope_id: "scope-alice",
+          source_updated_at: new Date().toISOString(),
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "batch-total-b",
+          connector_config_id: "cfg-search-tools",
+          provider_file_id: "batch-total-b",
+          file_name: "Batch total B",
+          file_type: "doc",
+          content_category: "document",
+          source: "google_drive",
+          content: "67890",
+          access_scope_id: "scope-alice",
+          source_updated_at: new Date().toISOString(),
+          synced_at: new Date().toISOString(),
+        },
+      ])
+      .execute();
+
+    const capped = await handleGetFileContent(
+      { fileIds: ["batch-total-a", "batch-total-b"], maxCharsPerFile: 10 },
+      {
+        ...deps(),
+        publicMcp: {
+          userPrincipals: ["alice@example.com"],
+          filterEntityMetadata: true,
+          maxFileContentChars: 5,
+        },
+      },
+    );
+    const cappedParsed = JSON.parse(capped.content[0]?.text ?? "{}");
+
+    expect(cappedParsed.files[0]).toMatchObject({ content: "12345", contentTruncated: false });
+    expect(cappedParsed.files[1]).toMatchObject({ content: "", contentTruncated: true });
+    expect(cappedParsed.contentTruncated).toBe(true);
+
+    const bad = await handleGetFileContent({ fileIds: ["batch-total-a"], view: "full" }, deps());
+    expect(bad.isError).toBe(true);
+  });
+});
