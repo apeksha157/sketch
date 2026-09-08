@@ -109,6 +109,23 @@ async function runUserMutation<T>(db: UserDb, callback: (trx: UserDb) => Promise
   return db.transaction().execute((trx) => callback(trx));
 }
 
+export class BenchmarkUserRemovalBlockedError extends Error {}
+
+/** Hold the same owner lock as benchmark execution until user removal commits. */
+export async function lockUserForRemoval(db: UserDb, id: string): Promise<void> {
+  await db.updateTable("users").set({ name: sql`name` }).where("id", "=", id).execute();
+  const active = await db
+    .selectFrom("benchmark_enrollments")
+    .select("id")
+    .where("user_id", "=", id)
+    .where("active_run_id", "is not", null)
+    .executeTakeFirst();
+  if (active)
+    throw new BenchmarkUserRemovalBlockedError(
+      "Finish the user's benchmark batches and cleanup before deleting this user.",
+    );
+}
+
 export function createUserRepository(db: UserDb, options: UserRepositoryOptions = {}): UserRepository {
   return createUserRepositoryWithContext(db, { cacheDb: db }, options);
 }
@@ -440,6 +457,13 @@ function createUserRepositoryWithContext(
     },
 
     async remove(id: string) {
+      if (!db.isTransaction && !options.skipMutationTransaction) {
+        return createUserRepositoryWithContext(db, settingsCacheInvalidation, options).transaction((repo) =>
+          repo.remove(id),
+        );
+      }
+      await lockUserForRemoval(db, id);
+      await db.updateTable("benchmark_enrollments").set({ user_id: null }).where("user_id", "=", id).execute();
       await db.deleteFrom("user_entity_links").where("user_id", "=", id).execute();
       await db
         .deleteFrom("agent_environment_variable_shares")

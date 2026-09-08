@@ -161,11 +161,29 @@ describe("Claude Agent SDK stream fixture mapping", () => {
         kind: "intermediate_text",
         text: "I'll do both operations simultaneously since the read depends on the write. Let me start with the write first, then read.",
       },
-      { kind: "tool_use", toolName: "Write", input: { file_path: "sdk-fixture.txt", content: "fixture-ok" } },
-      { kind: "tool_use", toolName: "Read", input: { file_path: "sdk-fixture.txt" } },
+      {
+        kind: "tool_use",
+        toolName: "Write",
+        input: { file_path: "sdk-fixture.txt", content: "fixture-ok" },
+        toolCallId: "<TOOL_USE_ID_1>",
+        startedAt: 31,
+      },
+      {
+        kind: "tool_use",
+        toolName: "Read",
+        input: { file_path: "sdk-fixture.txt" },
+        toolCallId: "<TOOL_USE_ID_2>",
+        startedAt: 44,
+      },
     ]);
     expect(replay.integrationProgressEvents).toEqual([
-      { kind: "tool_use", toolName: "Write", input: { file_path: "sdk-fixture.txt", content: "fixture-ok" } },
+      {
+        kind: "tool_use",
+        toolName: "Write",
+        input: { file_path: "sdk-fixture.txt", content: "fixture-ok" },
+        toolCallId: "<TOOL_USE_ID_1>",
+        startedAt: 31,
+      },
       {
         kind: "tool_result",
         toolName: "Write",
@@ -173,7 +191,13 @@ describe("Claude Agent SDK stream fixture mapping", () => {
         output: "File created successfully at: sdk-fixture.txt",
         isError: false,
       },
-      { kind: "tool_use", toolName: "Read", input: { file_path: "sdk-fixture.txt" } },
+      {
+        kind: "tool_use",
+        toolName: "Read",
+        input: { file_path: "sdk-fixture.txt" },
+        toolCallId: "<TOOL_USE_ID_2>",
+        startedAt: 44,
+      },
       {
         kind: "tool_result",
         toolName: "Read",

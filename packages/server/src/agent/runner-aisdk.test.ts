@@ -335,6 +335,7 @@ describe("runAgent AI SDK runtime path", () => {
       ],
     });
     const onProgressEvent = vi.fn().mockResolvedValue(undefined);
+    const onToolProgressEnd = vi.fn().mockRejectedValue(new Error("timeline unavailable"));
     const onSessionId = vi.fn().mockResolvedValue(undefined);
 
     const turn1 = await runAgent({
@@ -347,6 +348,7 @@ describe("runAgent AI SDK runtime path", () => {
       logger: createTestLogger(),
       platform: "slack",
       onProgressEvent,
+      onToolProgressEnd,
       onSessionId,
       agentRuntime: "aisdk",
       agentRuntimeProvider: mockProvider(model),
@@ -366,13 +368,24 @@ describe("runAgent AI SDK runtime path", () => {
     });
 
     expect(turn1.trace.progressEvents).toEqual([
-      { kind: "tool_use", toolName: "Read", input: { file_path: "notes/today.txt" } },
+      {
+        kind: "tool_use",
+        toolName: "Read",
+        input: { file_path: "notes/today.txt" },
+        toolCallId: "tool-1",
+        startedAt: expect.any(Number),
+      },
     ]);
     expect(turn1.trace.finalText).toBe("saw alpha");
     expect(turn2.sessionId).toBe(turn1.sessionId);
     expect(turn2.rawUsage.isResumedSession).toBe(true);
     expect(turn2.trace.finalText).toBe("resumed");
     expect(onSessionId).toHaveBeenCalledWith(turn1.sessionId);
+    expect(onToolProgressEnd).toHaveBeenCalledWith({
+      toolCallId: "tool-1",
+      status: "succeeded",
+      endedAt: expect.any(Number),
+    });
 
     const rows = await createAgentMessagesRepository(db).loadBySession(turn1.sessionId);
     expect(rows.map((row) => row.role)).toEqual(["user", "assistant", "tool", "assistant", "user", "assistant"]);
@@ -637,6 +650,8 @@ describe("runAgent AI SDK runtime path", () => {
       kind: "tool_use",
       toolName: "Skill",
       input: { skill: "canvas" },
+      toolCallId: "tool-skill",
+      startedAt: expect.any(Number),
     });
     expect(result.rawUsage.toolCalls).toContainEqual(
       expect.objectContaining({ toolName: "Skill", skillName: "canvas" }),
@@ -719,6 +734,8 @@ describe("runAgent AI SDK runtime path", () => {
       kind: "tool_use",
       toolName: "mcp__sketch__SendFileToChat",
       input: { file_path: uploadPath },
+      toolCallId: "tool-upload",
+      startedAt: expect.any(Number),
     });
   });
 
@@ -921,6 +938,8 @@ describe("runAgent AI SDK runtime path", () => {
       kind: "tool_use",
       toolName: "Bash",
       input: { command },
+      toolCallId: "tool-bash",
+      startedAt: expect.any(Number),
     });
     expect(loadIntegrationProvider).toHaveBeenCalled();
     expect(provider.getBrokerSpec).toHaveBeenCalledWith({ userEmail: "owner@example.com", claudeConfigDir: workspace });

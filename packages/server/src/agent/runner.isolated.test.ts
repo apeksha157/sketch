@@ -797,9 +797,27 @@ describe("runAgent", () => {
     expect(result.rawUsage.toolCalls).toHaveLength(3);
     expect(result.trace.progressEvents).toEqual([
       { kind: "intermediate_text", text: "Let me check." },
-      { kind: "tool_use", toolName: "Bash", input: { command: "ls" } },
-      { kind: "tool_use", toolName: "Skill", input: { skill: "canvas" } },
-      { kind: "tool_use", toolName: "mcp__plugin_pipedream__action", input: { app: "slack" } },
+      {
+        kind: "tool_use",
+        toolName: "Bash",
+        input: { command: "ls" },
+        toolCallId: "t1",
+        startedAt: expect.any(Number),
+      },
+      {
+        kind: "tool_use",
+        toolName: "Skill",
+        input: { skill: "canvas" },
+        toolCallId: "t2",
+        startedAt: expect.any(Number),
+      },
+      {
+        kind: "tool_use",
+        toolName: "mcp__plugin_pipedream__action",
+        input: { app: "slack" },
+        toolCallId: "t3",
+        startedAt: expect.any(Number),
+      },
     ]);
     expect(result.rawUsage.toolCalls[0]).toEqual(expect.objectContaining({ toolName: "Bash", skillName: null }));
     expect(result.rawUsage.toolCalls[1]).toEqual(expect.objectContaining({ toolName: "Skill", skillName: "canvas" }));
@@ -810,6 +828,88 @@ describe("runAgent", () => {
       expect(tc.startedAt).toBeGreaterThan(0);
       expect(tc.endedAt).toBeGreaterThanOrEqual(tc.startedAt);
     }
+  });
+
+  it("ends SDK tool progress by actual ID and isolates end callback failures", async () => {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    vi.mocked(query).mockImplementation((() => {
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sess-lifecycle" };
+        yield {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "same-a", name: "Bash", input: { command: "first" } },
+              { type: "tool_use", id: "same-b", name: "Bash", input: { command: "second" } },
+            ],
+          },
+        };
+        yield {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "same-b", is_error: true, content: "second failed" }],
+          },
+        };
+        yield {
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "same-a", content: "first succeeded" }],
+          },
+        };
+        yield makeRichResultMessage({ session_id: "sess-lifecycle" });
+      })();
+    }) as unknown as typeof query);
+
+    const onToolResult = vi.fn().mockResolvedValue(undefined);
+    const onToolProgressEnd = vi.fn().mockRejectedValue(new Error("timeline unavailable"));
+    const result = await runAgent(
+      makeBaseParams({
+        onToolResult,
+        onToolProgressEnd,
+        sessionMode: "fresh",
+        persistSession: false,
+      }),
+    );
+
+    expect(result.sessionId).toBe("sess-lifecycle");
+    expect(result.trace.progressEvents).toEqual([
+      {
+        kind: "tool_use",
+        toolName: "Bash",
+        input: { command: "first" },
+        toolCallId: "same-a",
+        startedAt: expect.any(Number),
+      },
+      {
+        kind: "tool_use",
+        toolName: "Bash",
+        input: { command: "second" },
+        toolCallId: "same-b",
+        startedAt: expect.any(Number),
+      },
+    ]);
+    expect(onToolResult).toHaveBeenNthCalledWith(1, {
+      toolName: "Bash",
+      input: { command: "second" },
+      output: "second failed",
+      isError: true,
+    });
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      toolName: "Bash",
+      input: { command: "first" },
+      output: "first succeeded",
+      isError: false,
+    });
+    expect(onToolProgressEnd).toHaveBeenNthCalledWith(1, {
+      toolCallId: "same-b",
+      status: "failed",
+      endedAt: expect.any(Number),
+    });
+    expect(onToolProgressEnd).toHaveBeenNthCalledWith(2, {
+      toolCallId: "same-a",
+      status: "succeeded",
+      endedAt: expect.any(Number),
+    });
   });
 
   it("skips progress-derived integration cards for scheduled tasks", async () => {
@@ -960,7 +1060,13 @@ describe("runAgent", () => {
     );
 
     expect(result.trace.progressEvents).toEqual([
-      { kind: "tool_use", toolName: "mcp__plugin_pipedream__slack_send_message", input: { app: "slack" } },
+      {
+        kind: "tool_use",
+        toolName: "mcp__plugin_pipedream__slack_send_message",
+        input: { app: "slack" },
+        toolCallId: "tool-1",
+        startedAt: expect.any(Number),
+      },
     ]);
     expect(onToolResult).toHaveBeenCalledExactlyOnceWith({
       toolName: "mcp__plugin_pipedream__slack_send_message",
@@ -1154,7 +1260,13 @@ describe("runAgent", () => {
 
     expect(onProgressEvent).toHaveBeenCalledTimes(1);
     expect(result.trace.progressEvents).toEqual([
-      { kind: "tool_use", toolName: "Read", input: { file_path: "config.json" } },
+      {
+        kind: "tool_use",
+        toolName: "Read",
+        input: { file_path: "config.json" },
+        toolCallId: "t1",
+        startedAt: expect.any(Number),
+      },
     ]);
     expect(result.trace.finalText).toBe("I found the issue.\n\nI updated the config and parser.");
     expect(result.messageSent).toBe(true);

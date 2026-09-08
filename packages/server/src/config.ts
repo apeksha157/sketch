@@ -26,8 +26,8 @@ export const configSchema = z.object({
     .number()
     .int()
     .min(60_000)
-    .max(10 * 60_000)
-    .default(10 * 60_000),
+    .max(60 * 60_000)
+    .default(30 * 60_000),
 
   // Files
   MAX_FILE_SIZE_MB: z.coerce.number().default(20),
@@ -240,6 +240,10 @@ export const configSchema = z.object({
   // Security
   ENCRYPTION_KEY: z.string().optional(),
   SYSTEM_SECRET: z.string().optional(),
+  BENCHMARKS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 
   // Bootstrap (managed seed)
   BOOTSTRAP_ADMIN_EMAIL: z.preprocess((v) => (v === "" ? undefined : v), z.string().email().optional()),

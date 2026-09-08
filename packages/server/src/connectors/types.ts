@@ -360,6 +360,7 @@ export interface ContactPointSeed {
   source: string;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  lastRepliedAt?: string | null;
   makePrimary?: boolean;
   phoneCountry?: PhoneCountryCode | null;
 }
@@ -437,7 +438,11 @@ export type IndexedFileFactRaw =
       sourceRefKey: string;
     }
   | { providerFileId: string; author: { name?: string; email?: string; sourceId?: string } }
-  | { providerFileId: string; parent: { source: string; sourceId: string; contextSnippet?: string } }
+  | {
+      providerFileId: string;
+      parent: { source: string; sourceId: string; contextSnippet?: string };
+      selfRecord?: boolean;
+    }
   | {
       indexedFileId: string;
       task: NonNullable<SyncedItem["task"]>;

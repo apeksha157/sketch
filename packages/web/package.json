@@ -1,6 +1,6 @@
 {
   "name": "@sketch/web",
-  "version": "1.7.6",
+  "version": "1.7.7",
   "private": true,
   "license": "Elastic-2.0",
   "type": "module",

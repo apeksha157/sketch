@@ -342,6 +342,8 @@ describe("DefaultAgentRuntimeMcpToolProvider", () => {
     expect(result.trace.progressEvents).toContainEqual({
       kind: "tool_use",
       toolName: "mcp__canvas__echo",
+      toolCallId: "tool-mcp",
+      startedAt: expect.any(Number),
       input: { message: "from-agent" },
     });
     expect(server.deleteRequests()).toBeGreaterThan(0);

@@ -70,6 +70,7 @@ export async function materializeContactPointFact(
       createdByUserId: fact.created_by_user_id,
       verifiedAt: readString(contact, "verifiedAt"),
       lastContactedAt: readString(contact, "lastContactedAt"),
+      lastRepliedAt: readString(contact, "lastRepliedAt"),
       makePrimary: readBoolean(contact, "makePrimary"),
     });
   } catch (err) {

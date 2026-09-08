@@ -744,6 +744,55 @@ describe("chat route", () => {
     ]);
   });
 
+  it("preserves progress lifecycle metadata and technical whitespace from streamed data", () => {
+    const detail = "pnpm\n  test --filter web\n--run";
+    const messages = buildChatThreadMessages([
+      {
+        id: "a-technical",
+        role: "assistant",
+        parts: [
+          {
+            type: "data-progress",
+            id: "progress",
+            data: {
+              items: [
+                {
+                  id: "run-1",
+                  revision: 4,
+                  status: "running",
+                  startedAt: 1_000,
+                  mode: "technical",
+                  kind: "shell",
+                  label: "Running tests",
+                  toolName: "Bash",
+                  detail,
+                  detailFormat: "command",
+                  detailRedacted: true,
+                  integration: { appId: "web", name: "Web" },
+                  icon: { type: "tool", name: "Bash" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const progress = messages[0]?.timeline?.[0];
+    expect(progress?.type).toBe("progress");
+    const item = progress?.type === "progress" ? progress.progressItems?.[0] : undefined;
+    expect(item).toMatchObject({
+      id: "run-1",
+      revision: 4,
+      status: "running",
+      startedAt: 1_000,
+      mode: "technical",
+      detail,
+      detailRedacted: true,
+      integration: { appId: "web", name: "Web" },
+    });
+  });
+
   it("keeps legacy assistant progress lines when structured items are absent", () => {
     const messages = buildChatThreadMessages([
       {
