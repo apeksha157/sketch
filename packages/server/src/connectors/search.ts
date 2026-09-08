@@ -90,6 +90,11 @@ export const VISIBLE_SET_CAP = 10_000;
 export interface SearchOptions {
   /** Filter by source provider. */
   source?: string;
+  fileTypes?: string[];
+  threadId?: string;
+  parentRecordId?: string;
+  participantEmail?: string;
+  domain?: string;
   /** Max results (default 10). */
   limit?: number;
   /** Content category filter: "document" or "structured". */
@@ -475,6 +480,52 @@ function kindFilterSql(rules: KindRule[]) {
   return sql`AND (${sql.join(parts, sql` OR `)})`;
 }
 
+/** Accepts "@Example.com", " example.com " etc. and yields the bare lower-cased domain, or undefined when empty. */
+export function normalizeDomainFilter(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^@+/, "").toLowerCase();
+  return normalized || undefined;
+}
+
+function participantEmailExistsSql(alias: string, predicate: RawBuilder<unknown>) {
+  return sql`EXISTS (
+    SELECT 1
+    FROM indexed_file_facts
+    WHERE indexed_file_facts.indexed_file_id = ${sql.ref(`${alias}.id`)}
+    AND indexed_file_facts.deleted_at IS NULL
+    AND indexed_file_facts.fact_type IN ('attendee', 'correspondent')
+    AND ${predicate}
+  )`;
+}
+
+function extraFilterSql(
+  opts: Pick<SearchOptions, "fileTypes" | "threadId" | "parentRecordId" | "participantEmail" | "domain"> | undefined,
+  alias = "indexed_files",
+) {
+  const parts: ReturnType<typeof sql>[] = [];
+  const domain = normalizeDomainFilter(opts?.domain);
+  if (opts?.fileTypes?.length) {
+    parts.push(
+      sql`${sql.ref(`${alias}.file_type`)} IN (${sql.join(
+        opts.fileTypes.map((fileType) => sql`${fileType}`),
+        sql`, `,
+      )})`,
+    );
+  }
+  if (opts?.threadId) parts.push(sql`${sql.ref(`${alias}.thread_id`)} = ${opts.threadId}`);
+  if (opts?.parentRecordId) parts.push(sql`${sql.ref(`${alias}.rollup_group_id`)} = ${opts.parentRecordId}`);
+  if (opts?.participantEmail) {
+    parts.push(
+      participantEmailExistsSql(alias, sql`lower(indexed_file_facts.subject_email) = lower(${opts.participantEmail})`),
+    );
+  }
+  if (domain) {
+    parts.push(
+      participantEmailExistsSql(alias, sql`lower(indexed_file_facts.subject_email) LIKE ('%@' || lower(${domain}))`),
+    );
+  }
+  return parts.length > 0 ? sql`AND ${sql.join(parts, sql` AND `)}` : sql``;
+}
+
 // ── Hybrid Search ─────────────────────────────────────────────────────────
 
 export interface HybridSearchOptions extends SearchOptions {
@@ -526,6 +577,8 @@ export interface HybridSearchResult {
   similarity: number | null;
   /** Combined score (higher = more relevant). */
   score: number;
+  threadId?: string | null;
+  rollupGroupId?: string | null;
   threadKey?: string;
   messageCount?: number;
   latestSubject?: string;
@@ -730,6 +783,7 @@ export async function hybridSearch(
           sql`,`,
         )})`
       : sql``;
+  const extraFilter = extraFilterSql(opts);
 
   // ── 1. FTS keyword search ───────────────────────────────────
   if (isPg(db)) {
@@ -746,6 +800,7 @@ export async function hybridSearch(
         ${accessFilter ?? sql``}
         ${kindFilter}
         ${sourcesFilter}
+        ${extraFilter}
         ORDER BY rank DESC
         LIMIT ${candidateLimit}
       `.execute(db);
@@ -781,6 +836,7 @@ export async function hybridSearch(
         ${accessFilter ?? sql``}
         ${kindFilter}
         ${sourcesFilter}
+        ${extraFilter}
         ORDER BY rank
         LIMIT ${candidateLimit}
       `.execute(db);
@@ -1151,6 +1207,7 @@ export async function hybridSearch(
       "provider_file_id",
       "provider_url",
       "source_path",
+      "rollup_group_id",
       "source_updated_at",
       "source_created_at",
       "access_scope_id",
@@ -1185,6 +1242,7 @@ export async function hybridSearch(
   if (opts?.contentTypes && opts.contentTypes.length > 0) {
     metaQuery = metaQuery.where("content_category", "in", opts.contentTypes);
   }
+  metaQuery = metaQuery.where(sql<SqlBool>`TRUE ${extraFilterSql(opts)}`);
 
   const files = await metaQuery.execute();
 
@@ -1386,6 +1444,7 @@ function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions, accessFil
   }
   if (opts.category) parts.push(sql`AND indexed_files.content_category = ${opts.category}`);
   if (opts.kindRules?.length) parts.push(kindFilterSql(opts.kindRules));
+  parts.push(extraFilterSql(opts));
   if (accessFilter) parts.push(accessFilter);
   return sql`${requiredPredicate} ${sql.join(parts, sql` `)}`;
 }
@@ -1416,6 +1475,26 @@ function describeFilters(opts: HybridSearchOptions): Array<{
       value: opts.kindRules?.length ? opts.kindRules : null,
       shown: `${opts.kindRules?.length ?? 0} rule(s)`,
     },
+    {
+      field: "fileTypes",
+      label: "File types",
+      value: opts.fileTypes?.length ? opts.fileTypes : null,
+      shown: (opts.fileTypes ?? []).join(", "),
+    },
+    { field: "threadId", label: "Thread ID", value: opts.threadId ?? null, shown: opts.threadId ?? "" },
+    {
+      field: "parentRecordId",
+      label: "Parent record ID",
+      value: opts.parentRecordId ?? null,
+      shown: opts.parentRecordId ?? "",
+    },
+    {
+      field: "participantEmail",
+      label: "Participant email",
+      value: opts.participantEmail ?? null,
+      shown: opts.participantEmail ?? "",
+    },
+    { field: "domain", label: "Participant domain", value: opts.domain ?? null, shown: opts.domain ?? "" },
     { field: "category", label: "Category", value: opts.category ?? null, shown: opts.category ?? "" },
     {
       field: "contentTypes",
@@ -1483,9 +1562,20 @@ async function attributeFilterDrops(
 
     const rows = await db
       .selectFrom("indexed_files")
-      .select(["id", "file_name", "source", "content_category", "file_type", "is_archived"])
+      .select([
+        "id",
+        "file_name",
+        "source",
+        "content_category",
+        "file_type",
+        "thread_id",
+        "rollup_group_id",
+        "is_archived",
+      ])
       .where("id", "in", scoredFileIds)
       .execute();
+    const participantEmails =
+      opts.participantEmail || opts.domain ? await loadParticipantEmailsForFiles(db, scoredFileIds) : new Map();
 
     const survivedSqlIds = new Set(survivedSql.map((file) => file.id));
     const survivedTimeIds = new Set(survivedTime.map((file) => file.id));
@@ -1496,7 +1586,7 @@ async function attributeFilterDrops(
         attribution.set(row.id, {
           ...identity,
           droppedAt: "filter",
-          dropReason: sqlFilterReason(row, opts),
+          dropReason: sqlFilterReason(row, opts, participantEmails.get(row.id) ?? []),
         });
         continue;
       }
@@ -1517,14 +1607,44 @@ async function attributeFilterDrops(
  * the SQL on both dialects — the day these drift, the trace starts lying.
  */
 function sqlFilterReason(
-  row: { is_archived: number; source: string; content_category: string; file_type: string | null },
+  row: {
+    is_archived: number;
+    source: string;
+    content_category: string;
+    file_type: string | null;
+    thread_id: string | null;
+    rollup_group_id: string | null;
+  },
   opts: HybridSearchOptions,
+  participantEmails: string[],
 ): string {
   if (row.is_archived !== 0) return "archived";
   if (isBodylessCrmActivity(row)) return "bodyless CRM activity summarized on its parent object";
   if (opts.source && row.source !== opts.source) return `source is ${row.source}, not ${opts.source}`;
   if (opts.sources?.length && !opts.sources.includes(row.source))
     return `source ${row.source} not in the requested set`;
+  if (opts.fileTypes?.length && !opts.fileTypes.includes(row.file_type ?? "")) {
+    return `file type ${row.file_type ?? "none"} not in the requested set`;
+  }
+  if (opts.threadId && row.thread_id !== opts.threadId) {
+    return `threadId is ${row.thread_id ?? "none"}, not ${opts.threadId}`;
+  }
+  if (opts.parentRecordId && row.rollup_group_id !== opts.parentRecordId) {
+    return `parentRecordId is ${row.rollup_group_id ?? "none"}, not ${opts.parentRecordId}`;
+  }
+  if (opts.participantEmail) {
+    const requested = opts.participantEmail.toLowerCase();
+    if (!participantEmails.some((email) => email.toLowerCase() === requested)) {
+      return `no attendee or correspondent fact for ${opts.participantEmail}`;
+    }
+  }
+  const domain = normalizeDomainFilter(opts.domain);
+  if (domain) {
+    const suffix = `@${domain}`;
+    if (!participantEmails.some((email) => email.toLowerCase().endsWith(suffix))) {
+      return `no attendee or correspondent fact from domain ${domain}`;
+    }
+  }
   if (opts.category && row.content_category !== opts.category) {
     return `category is ${row.content_category}, not ${opts.category}`;
   }
@@ -1540,6 +1660,25 @@ function sqlFilterReason(
     if (!matches) return `does not match the requested kind (source ${row.source}, type ${row.file_type ?? "none"})`;
   }
   return "excluded by a metadata filter";
+}
+
+async function loadParticipantEmailsForFiles(db: Kysely<DB>, fileIds: string[]): Promise<Map<string, string[]>> {
+  const rows = await db
+    .selectFrom("indexed_file_facts")
+    .select(["indexed_file_id", "subject_email"])
+    .where("indexed_file_id", "in", fileIds)
+    .where("deleted_at", "is", null)
+    .where("fact_type", "in", ["attendee", "correspondent"])
+    .where("subject_email", "is not", null)
+    .execute();
+  const byFile = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!row.indexed_file_id || !row.subject_email) continue;
+    const emails = byFile.get(row.indexed_file_id) ?? [];
+    emails.push(row.subject_email);
+    byFile.set(row.indexed_file_id, emails);
+  }
+  return byFile;
 }
 
 /**
@@ -1620,6 +1759,7 @@ type SearchMetadataFile = {
   provider_file_id: string;
   provider_url: string | null;
   source_path: string | null;
+  rollup_group_id: string | null;
   source_updated_at: string | null;
   source_created_at: string | null;
   access_scope_id: string | null;
@@ -1678,6 +1818,8 @@ async function collapseEmailSearchResults(
         snippet: scoreData?.snippet ?? null,
         similarity: scoreData?.similarity ?? null,
         score: scoreData?.score ?? 0,
+        threadId: file.thread_id,
+        rollupGroupId: file.rollup_group_id,
       });
       continue;
     }
@@ -1730,6 +1872,8 @@ async function collapseEmailSearchResults(
       snippet: bestScore?.snippet ?? null,
       similarity: bestScore?.similarity ?? null,
       score: bestScore?.score ?? 0,
+      threadId: best.thread_id,
+      rollupGroupId: best.rollup_group_id,
     });
   }
 
@@ -1899,6 +2043,11 @@ async function browseLatest(
     entityScope?: EntityScope;
     userPrincipals?: AccessPrincipalInput[];
     slackEntitySyncEnabled?: boolean;
+    fileTypes?: string[];
+    threadId?: string;
+    parentRecordId?: string;
+    participantEmail?: string;
+    domain?: string;
     after?: string;
     before?: string;
     limit: number;
@@ -1918,6 +2067,8 @@ async function browseLatest(
       "source_updated_at",
       "source_created_at",
       "summary",
+      "thread_id",
+      "rollup_group_id",
     ])
     .where("is_archived", "=", 0)
     .where(bodylessCrmActivityPredicateSql());
@@ -1938,6 +2089,7 @@ async function browseLatest(
   }
   if (opts.sources?.length) q = q.where("source", "in", opts.sources);
   if (opts.entityScope) q = q.where(entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope));
+  q = q.where(sql<SqlBool>`TRUE ${extraFilterSql(opts)}`);
 
   if ((opts.userPrincipals ?? []).length > 0) {
     const userPrincipals = opts.userPrincipals ?? [];
@@ -1989,6 +2141,8 @@ async function browseLatest(
     score: 0,
     similarity: null,
     snippet: null,
+    threadId: f.thread_id,
+    rollupGroupId: f.rollup_group_id,
   }));
 }
 
@@ -2011,6 +2165,11 @@ export async function search(
     source?: string;
     sources?: string[];
     kindRules?: KindRule[];
+    fileTypes?: string[];
+    threadId?: string;
+    parentRecordId?: string;
+    participantEmail?: string;
+    domain?: string;
     category?: string;
     limit?: number;
     after?: string;
@@ -2085,6 +2244,11 @@ export async function search(
       !!opts?.sources?.length ||
       !!opts?.source ||
       !!entityScope ||
+      !!opts?.fileTypes?.length ||
+      !!opts?.threadId ||
+      !!opts?.parentRecordId ||
+      !!opts?.participantEmail ||
+      !!opts?.domain ||
       !!opts?.after ||
       !!opts?.before;
     if (!hasFilter) return [];
@@ -2094,6 +2258,11 @@ export async function search(
       entityScope,
       userPrincipals: opts?.userPrincipals,
       slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+      fileTypes: opts?.fileTypes,
+      threadId: opts?.threadId,
+      parentRecordId: opts?.parentRecordId,
+      participantEmail: opts?.participantEmail,
+      domain: opts?.domain,
       after: opts?.after,
       before: opts?.before,
       limit,
@@ -2263,6 +2432,11 @@ export async function search(
       source: opts?.source,
       sources: opts?.sources,
       kindRules: opts?.kindRules,
+      fileTypes: opts?.fileTypes,
+      threadId: opts?.threadId,
+      parentRecordId: opts?.parentRecordId,
+      participantEmail: opts?.participantEmail,
+      domain: opts?.domain,
       category: opts?.category,
       limit: fetchLimit,
       queryEmbedding,

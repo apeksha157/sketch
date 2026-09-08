@@ -467,6 +467,45 @@ describe("runEnrichment — claim semantics", () => {
     expect(pendingCount).toBe(1);
   });
 
+  it("keeps fetching batches past the first fetch until the backlog is drained", async () => {
+    const ids = Array.from({ length: 52 }, () => randomUUID());
+    for (const id of ids) {
+      await seedFile(db, id, "some content here");
+      await setStatus(id, "pending");
+    }
+
+    const result = await runEnrichment({ db, logger: createTestLogger(), embeddingProvider: null });
+
+    expect(result.filesProcessed).toBe(52);
+    expect(result.stoppedReason).toBeUndefined();
+  });
+
+  it("enriches fresh and future-dated files before an old backfill", async () => {
+    const oldId = randomUUID();
+    const newId = randomUUID();
+    const futureId = randomUUID();
+    const createdAts: Array<[string, string]> = [
+      [oldId, "2025-01-01T00:00:00.000Z"],
+      [newId, new Date().toISOString()],
+      [futureId, "2030-01-01T00:00:00.000Z"],
+    ];
+    for (const [id, createdAt] of createdAts) {
+      await seedFile(db, id, "some content here");
+      await db
+        .updateTable("indexed_files")
+        .set({ source_created_at: createdAt, embedding_status: "pending" })
+        .where("id", "=", id)
+        .execute();
+    }
+
+    const result = await runEnrichment({ db, logger: createTestLogger(), embeddingProvider: null, maxFilesPerRun: 2 });
+
+    expect(result.filesProcessed).toBe(2);
+    expect(await getStatus(futureId)).toBe("done");
+    expect(await getStatus(newId)).toBe("done");
+    expect(await getStatus(oldId)).toBe("pending");
+  });
+
   it("stops before claiming another file when the time budget is exhausted", async () => {
     const ids = [randomUUID(), randomUUID()];
     for (const id of ids) {
@@ -815,7 +854,7 @@ describe("runEnrichment — chronological pending-files order", () => {
     }
   });
 
-  it("processes pending files in source_created_at ascending order with id as tiebreaker", async () => {
+  it("processes pending files newest-first by effective recency with id as tiebreaker", async () => {
     await db
       .insertInto("connector_configs")
       .values({
@@ -881,7 +920,7 @@ describe("runEnrichment — chronological pending-files order", () => {
     });
 
     expect(result.filesProcessed).toBe(4);
-    expect(order).toEqual([oldest, middleEarlier, middleLater, newest]);
+    expect(order).toEqual([newest, middleLater, middleEarlier, oldest]);
   });
 
   it("honors scheduled retry backoff but lets explicit reruns bypass it", async () => {

@@ -34,10 +34,7 @@ import {
   WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
   toEmailPrincipals,
 } from "./types";
-import {
-  DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES,
-  DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
-} from "./whatsapp-chunker";
+import { DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES } from "./whatsapp-chunker";
 
 export const DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES = 120;
 export const WHATSAPP_EMISSION_REFRESH_DAYS = 7;
@@ -328,6 +325,7 @@ async function syncedItemForKeptSlice(
   logger: Logger,
   now: Date,
   provisionalRefreshMaxMinutes: number,
+  defaultMinMessages: number,
 ): Promise<{ item: SyncedItem | null; skippedNoScope: boolean; skipReason: WhatsAppEmissionSkipReason | null }> {
   const rendered = await renderSlice(db, context, logger);
   if (rendered.serializedRosterSnapshot !== context.slice.roster_snapshot) {
@@ -355,7 +353,7 @@ async function syncedItemForKeptSlice(
   let enrichmentRefresh: "full" | "embeddings_only" = "full";
   let previousEmission: ConversationSliceEmissionAnchor | null = null;
   if (context.slice.status === "open") {
-    const minMessages = context.chunkMinMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES;
+    const minMessages = context.chunkMinMessages ?? defaultMinMessages;
     if (context.slice.message_count < minMessages) {
       logger.debug(
         {
@@ -437,6 +435,12 @@ export async function* emitWhatsAppSyncedItems(options: {
   logger: Logger;
   emissionRefreshDays?: number;
   provisionalRefreshMaxMinutes: number;
+  /**
+   * Open-slice emission floor when the group has no `chunk_min_messages`
+   * override. Callers resolve it through the same scope-config → schema-default
+   * ladder the chunker uses, so `WHATSAPP_CHUNK_MIN_MESSAGES` governs both.
+   */
+  minMessages: number;
   now?: Date;
   onSkippedNoScope?: () => void;
   /**
@@ -467,6 +471,7 @@ export async function* emitWhatsAppSyncedItems(options: {
         options.logger,
         now,
         options.provisionalRefreshMaxMinutes,
+        options.minMessages,
       );
       if (skippedNoScope) options.onSkippedNoScope?.();
       if (skipReason) options.onSkipReason?.(skipReason);

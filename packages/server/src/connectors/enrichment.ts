@@ -40,8 +40,23 @@ import { extractDatesFromText } from "./tagging";
 
 /** Max files to enrich for explicit/manual runs. */
 export const MAX_FILES_PER_RUN = 5000;
-export const SCHEDULED_ENRICHMENT_MAX_FILES_PER_RUN = 50;
 export const SCHEDULED_ENRICHMENT_TIME_BUDGET_MS = 5 * 60 * 1000;
+/**
+ * Fetch size for the batch loop inside a run. The run keeps fetching batches
+ * until its time budget or file cap is spent — light files (emails, chat)
+ * enrich in a second or two, so a single fixed-size fetch left most of the
+ * budget unused and capped throughput at 50 files per scheduler tick.
+ */
+const ENRICHMENT_FETCH_BATCH_SIZE = 50;
+/**
+ * Recency-fair ordering: every Nth batch is drawn oldest-first, the rest
+ * newest-first (~80/20 with N=5). Newest-first keeps today's email ahead of
+ * a churned multi-thousand-record CRM backfill and reaches future-dated
+ * calendar events (which pure oldest-first ordering starved forever); the
+ * oldest slice keeps the backlog tail draining so newest-first cannot starve
+ * it in the other direction.
+ */
+const NEWEST_BATCHES_PER_OLDEST_SLICE = 5;
 /**
  * Terminal retry cap for each durable enrichment stage. With the current
  * backoff ladder this gives roughly two and a half days of retries; no new
@@ -553,209 +568,247 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
   const hasGenerator = () => !!deps.generator || !!deps.geminiApiKey;
   const touchedEmailThreads = new Map<string, { connectorConfigId: string; threadId: string }>();
 
-  // Find files needing enrichment
-  let query = db
-    .selectFrom("indexed_files")
-    .select([
-      "id",
-      "file_name",
-      "file_type",
-      "content_category",
-      "content_hash",
-      "source",
-      "source_path",
-      "mime_type",
-      "provider_file_id",
-      "thread_id",
-      "connector_config_id",
-      "source_created_at",
-      "source_updated_at",
-      "embedding_status",
-      "summary_status",
-      "embedding_attempts",
-      "embedding_next_retry_at",
-      "summary_attempts",
-      "summary_next_retry_at",
-      "synced_at",
-    ])
-    .where("is_archived", "=", 0);
+  /**
+   * Fetch one batch of files needing enrichment. Rebuilt per batch so the
+   * retry-at cutoff stays current, with files already handled this run
+   * excluded — a file that stays eligible after being skipped must not be
+   * refetched into an infinite loop. The exclusion list is bounded by
+   * maxFilesPerRun (5000), within both dialects' bind-parameter limits.
+   */
+  const seenFileIds = new Set<string>();
+  const fetchBatch = async (orderNewest: boolean, limit: number) => {
+    let query = db
+      .selectFrom("indexed_files")
+      .select([
+        "id",
+        "file_name",
+        "file_type",
+        "content_category",
+        "content_hash",
+        "source",
+        "source_path",
+        "mime_type",
+        "provider_file_id",
+        "thread_id",
+        "connector_config_id",
+        "source_created_at",
+        "source_updated_at",
+        "embedding_status",
+        "summary_status",
+        "embedding_attempts",
+        "embedding_next_retry_at",
+        "summary_attempts",
+        "summary_next_retry_at",
+        "synced_at",
+      ])
+      .where("is_archived", "=", 0);
 
-  if (deps.fileIds && deps.fileIds.length > 0) {
-    query = query.where("id", "in", deps.fileIds);
-  } else {
-    const now = new Date().toISOString();
-    query = query.where((eb) =>
-      eb.or([
-        eb("embedding_status", "=", "pending"),
-        eb.and([
-          eb("embedding_status", "=", "failed"),
-          eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
-          eb.or([eb("embedding_next_retry_at", "is", null), eb("embedding_next_retry_at", "<=", now)]),
+    if (deps.fileIds && deps.fileIds.length > 0) {
+      query = query.where("id", "in", deps.fileIds);
+    } else {
+      const now = new Date().toISOString();
+      query = query.where((eb) =>
+        eb.or([
+          eb("embedding_status", "=", "pending"),
+          eb.and([
+            eb("embedding_status", "=", "failed"),
+            eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
+            eb.or([eb("embedding_next_retry_at", "is", null), eb("embedding_next_retry_at", "<=", now)]),
+          ]),
+          eb.and([eb("embedding_status", "=", "done"), eb("summary_status", "=", "pending")]),
+          eb.and([
+            eb("embedding_status", "=", "done"),
+            eb("summary_status", "=", "failed"),
+            eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
+            eb.or([eb("summary_next_retry_at", "is", null), eb("summary_next_retry_at", "<=", now)]),
+          ]),
         ]),
-        eb.and([eb("embedding_status", "=", "done"), eb("summary_status", "=", "pending")]),
-        eb.and([
-          eb("embedding_status", "=", "done"),
-          eb("summary_status", "=", "failed"),
-          eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
-          eb.or([eb("summary_next_retry_at", "is", null), eb("summary_next_retry_at", "<=", now)]),
-        ]),
-      ]),
-    );
-  }
-
-  const pendingFiles = await query
-    .orderBy("source_created_at", "asc")
-    .orderBy("id", "asc")
-    .limit(maxFilesPerRun)
-    .execute();
-
-  if (pendingFiles.length === 0) {
-    logger.debug("No files pending enrichment");
-    return result;
-  }
-
-  logger.info({ count: pendingFiles.length }, "Starting enrichment run");
-  deps.onProgress?.({ phase: "enrich", completed: 0, total: pendingFiles.length });
-
-  for (let idx = 0; idx < pendingFiles.length; idx++) {
-    if (deps.shouldCancel?.()) {
-      result.stoppedReason = "cancelled";
-      throw new Error("Re-enrich stopped");
-    }
-    if (timeBudgetMs !== undefined && nowMs() - startedAtMs >= timeBudgetMs) {
-      result.stoppedReason = "time_budget";
-      logger.info(
-        {
-          processed: result.filesProcessed,
-          skipped: result.filesSkipped,
-          failed: result.filesFailed,
-          budgetMs: timeBudgetMs,
-        },
-        "Enrichment run stopped at time budget",
       );
+    }
+    if (seenFileIds.size > 0) {
+      query = query.where("id", "not in", [...seenFileIds]);
+    }
+
+    const ordered = orderNewest
+      ? query.orderBy(sql`COALESCE(source_created_at, synced_at)`, "desc").orderBy("id", "desc")
+      : query.orderBy("source_created_at", "asc").orderBy("id", "asc");
+    return ordered.limit(limit).execute();
+  };
+
+  const batchSize = Math.min(ENRICHMENT_FETCH_BATCH_SIZE, maxFilesPerRun);
+  let batchIndex = 0;
+  let fetchedCount = 0;
+  let completedCount = 0;
+  let runStarted = false;
+
+  outer: while (!result.stoppedReason) {
+    const remaining = maxFilesPerRun - fetchedCount;
+    if (remaining <= 0) {
+      result.stoppedReason = "file_limit";
       break;
     }
-    const fileMeta = pendingFiles[idx];
-    const file = { ...fileMeta, content: await fetchFileContent(db, fileMeta.id) };
-    const fileVersion = contentVersionOf(file);
-    const fileStart = Date.now();
-    try {
-      const isImage = file.mime_type?.startsWith("image/") || file.file_type === "image";
-      const isStructured = file.content_category === "structured";
-      const isEmailMessage = file.file_type === "email_message";
-      const threadContext =
-        isEmailMessage && file.thread_id
-          ? await (async () => {
-              const generator = getGenerator();
-              return generator
-                ? ensureEmailThreadSummary(db, generator, file.connector_config_id, file.thread_id)
-                : Promise.resolve(null);
-            })()
-          : null;
+    const orderNewest = batchIndex % NEWEST_BATCHES_PER_OLDEST_SLICE !== NEWEST_BATCHES_PER_OLDEST_SLICE - 1;
+    const pendingFiles = await fetchBatch(orderNewest, Math.min(batchSize, remaining));
+    batchIndex++;
+    if (pendingFiles.length === 0) {
+      break;
+    }
+    fetchedCount += pendingFiles.length;
 
-      // Summary-only pass: file already has embeddings, just needs AI summary
-      const needsSummaryOnly =
-        file.embedding_status === "done" && file.summary_status !== "done" && file.summary_status !== "skipped";
+    if (!runStarted) {
+      runStarted = true;
+      logger.info({ count: pendingFiles.length }, "Starting enrichment run");
+      deps.onProgress?.({ phase: "enrich", completed: 0, total: fetchedCount });
+    }
 
-      if (needsSummaryOnly) {
-        if (file.content && !isImage && !isStructured && hasGenerator()) {
-          const wordCount = file.content.split(/\s+/).filter(Boolean).length;
-          const minWordsForSummary = minWordsForSmartEnrichment(file.file_type, threadContext);
-          if (wordCount >= minWordsForSummary) {
-            try {
-              const generator = getGenerator();
-              if (!generator) throw new Error("Enrichment generator unavailable");
-              const knownEntities = await buildFileScopedKnownEntities(
-                { db, logger },
-                file.id,
-                deps.knownEntities ?? [],
-                file.content,
-              );
-              const participantBlock = await buildParticipantBlock(
-                { db, logger },
-                { fileId: file.id, fileContent: file.content },
-              );
-              const personCandidateBlock = buildPersonCandidateBlock(deps.personCandidateScan, file.content, {
-                participantBlock,
-              });
-              await smartEnrichFile(
-                {
-                  db,
-                  logger,
-                  generator,
-                  embeddingProvider: deps.embeddingProvider,
-                  orgContext: deps.orgContext,
-                  knownEntities,
+    for (let idx = 0; idx < pendingFiles.length; idx++) {
+      if (deps.shouldCancel?.()) {
+        result.stoppedReason = "cancelled";
+        throw new Error("Re-enrich stopped");
+      }
+      if (timeBudgetMs !== undefined && nowMs() - startedAtMs >= timeBudgetMs) {
+        result.stoppedReason = "time_budget";
+        logger.info(
+          {
+            processed: result.filesProcessed,
+            skipped: result.filesSkipped,
+            failed: result.filesFailed,
+            budgetMs: timeBudgetMs,
+          },
+          "Enrichment run stopped at time budget",
+        );
+        break outer;
+      }
+      const fileMeta = pendingFiles[idx];
+      seenFileIds.add(fileMeta.id);
+      const file = { ...fileMeta, content: await fetchFileContent(db, fileMeta.id) };
+      const fileVersion = contentVersionOf(file);
+      const fileStart = Date.now();
+      try {
+        const isImage = file.mime_type?.startsWith("image/") || file.file_type === "image";
+        const isStructured = file.content_category === "structured";
+        const isEmailMessage = file.file_type === "email_message";
+        const threadContext =
+          isEmailMessage && file.thread_id
+            ? await (async () => {
+                const generator = getGenerator();
+                return generator
+                  ? ensureEmailThreadSummary(db, generator, file.connector_config_id, file.thread_id)
+                  : Promise.resolve(null);
+              })()
+            : null;
+
+        // Summary-only pass: file already has embeddings, just needs AI summary
+        const needsSummaryOnly =
+          file.embedding_status === "done" && file.summary_status !== "done" && file.summary_status !== "skipped";
+
+        if (needsSummaryOnly) {
+          if (file.content && !isImage && !isStructured && hasGenerator()) {
+            const wordCount = file.content.split(/\s+/).filter(Boolean).length;
+            const minWordsForSummary = minWordsForSmartEnrichment(file.file_type, threadContext);
+            if (wordCount >= minWordsForSummary) {
+              try {
+                const generator = getGenerator();
+                if (!generator) throw new Error("Enrichment generator unavailable");
+                const knownEntities = await buildFileScopedKnownEntities(
+                  { db, logger },
+                  file.id,
+                  deps.knownEntities ?? [],
+                  file.content,
+                );
+                const participantBlock = await buildParticipantBlock(
+                  { db, logger },
+                  { fileId: file.id, fileContent: file.content },
+                );
+                const personCandidateBlock = buildPersonCandidateBlock(deps.personCandidateScan, file.content, {
                   participantBlock,
-                  personCandidateBlock,
-                  debugDumpDir: deps.debugDumpDir,
-                  stageReport: deps.stageReport,
-                  ensureFresh: () => ensureFileFresh(db, file.id, fileVersion),
-                  recordLlmUsage: recordLlmUsageForFile(deps, file.id),
-                },
-                {
-                  id: file.id,
-                  fileName: file.file_name,
-                  content: file.content,
-                  threadContext,
-                  contentCategory: file.content_category,
-                  fileType: file.file_type,
-                  source: file.source_path?.split("/")[0] ?? "unknown",
-                  sourcePath: file.source_path,
-                  contentHash: file.content_hash,
-                  connectorConfigId: file.connector_config_id,
-                  sourceCreatedAt: file.source_created_at,
-                  sourceUpdatedAt: file.source_updated_at,
-                },
-              );
-              await ensureFileFresh(db, file.id, fileVersion);
-              const floor = await applyEngagementFloor(
-                { db, logger },
-                {
-                  fileId: file.id,
-                  fileContent: file.content,
-                  connectorConfigId: file.connector_config_id,
-                  contentHash: file.content_hash,
-                },
-              );
-              deps.stageReport?.({
-                stage: "engagementFloor",
-                label: "Engagement floor",
-                kind: "code",
-                status: "done",
-                summary: { ...floor },
-              });
-              await ensureFileFresh(db, file.id, fileVersion);
-              if (floor.emitted > 0) {
-                await materializeUnmaterializedFacts(db, logger, {
-                  embeddingProvider: deps.embeddingProvider,
-                  factTypes: ["llm_relation"],
-                  stageReport: deps.stageReport,
-                  indexedFileIds: [file.id],
                 });
-              } else {
-                reportMaterializeNoop(deps.stageReport);
+                await smartEnrichFile(
+                  {
+                    db,
+                    logger,
+                    generator,
+                    embeddingProvider: deps.embeddingProvider,
+                    orgContext: deps.orgContext,
+                    knownEntities,
+                    participantBlock,
+                    personCandidateBlock,
+                    debugDumpDir: deps.debugDumpDir,
+                    stageReport: deps.stageReport,
+                    ensureFresh: () => ensureFileFresh(db, file.id, fileVersion),
+                    recordLlmUsage: recordLlmUsageForFile(deps, file.id),
+                  },
+                  {
+                    id: file.id,
+                    fileName: file.file_name,
+                    content: file.content,
+                    threadContext,
+                    contentCategory: file.content_category,
+                    fileType: file.file_type,
+                    source: file.source_path?.split("/")[0] ?? "unknown",
+                    sourcePath: file.source_path,
+                    contentHash: file.content_hash,
+                    connectorConfigId: file.connector_config_id,
+                    sourceCreatedAt: file.source_created_at,
+                    sourceUpdatedAt: file.source_updated_at,
+                  },
+                );
+                await ensureFileFresh(db, file.id, fileVersion);
+                const floor = await applyEngagementFloor(
+                  { db, logger },
+                  {
+                    fileId: file.id,
+                    fileContent: file.content,
+                    connectorConfigId: file.connector_config_id,
+                    contentHash: file.content_hash,
+                  },
+                );
+                deps.stageReport?.({
+                  stage: "engagementFloor",
+                  label: "Engagement floor",
+                  kind: "code",
+                  status: "done",
+                  summary: { ...floor },
+                });
+                await ensureFileFresh(db, file.id, fileVersion);
+                if (floor.emitted > 0) {
+                  await materializeUnmaterializedFacts(db, logger, {
+                    embeddingProvider: deps.embeddingProvider,
+                    factTypes: ["llm_relation"],
+                    stageReport: deps.stageReport,
+                    indexedFileIds: [file.id],
+                  });
+                } else {
+                  reportMaterializeNoop(deps.stageReport);
+                }
+                await resetSummaryRetry(db, file.id, fileVersion);
+              } catch (err) {
+                if (err instanceof StaleEnrichmentError) throw err;
+                reportPostSmartSkipped(deps.stageReport, err);
+                logger.warn(
+                  {
+                    err,
+                    fileId: file.id,
+                    fileName: file.file_name,
+                    sourcePath: file.source_path,
+                    mimeType: file.mime_type,
+                    contentCategory: file.content_category,
+                    contentChars: file.content?.length ?? 0,
+                    wordCount,
+                  },
+                  "Summary-only enrichment failed",
+                );
+                await markSummaryFailure(db, file.id, Number(file.summary_attempts ?? 0), fileVersion);
+                result.filesFailed++;
+                continue;
               }
-              await resetSummaryRetry(db, file.id, fileVersion);
-            } catch (err) {
-              if (err instanceof StaleEnrichmentError) throw err;
-              reportPostSmartSkipped(deps.stageReport, err);
-              logger.warn(
-                {
-                  err,
-                  fileId: file.id,
-                  fileName: file.file_name,
-                  sourcePath: file.source_path,
-                  mimeType: file.mime_type,
-                  contentCategory: file.content_category,
-                  contentChars: file.content?.length ?? 0,
-                  wordCount,
-                },
-                "Summary-only enrichment failed",
-              );
-              await markSummaryFailure(db, file.id, Number(file.summary_attempts ?? 0), fileVersion);
-              result.filesFailed++;
-              continue;
+            } else {
+              const skippedQuery = db
+                .updateTable("indexed_files")
+                .set({ summary_status: "skipped", summary_attempts: 0, summary_next_retry_at: null })
+                .where("id", "=", file.id);
+              const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
+              assertFreshUpdate(skippedResult, file.id);
             }
           } else {
             const skippedQuery = db
@@ -765,15 +818,63 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
             const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
             assertFreshUpdate(skippedResult, file.id);
           }
+          await emitAndMaterializeDocumentFactsFromStoredFile(file, deps, getGenerator());
+          result.filesProcessed++;
+          if (isEmailMessage && file.thread_id) {
+            touchedEmailThreads.set(`${file.connector_config_id}:${file.thread_id}`, {
+              connectorConfigId: file.connector_config_id,
+              threadId: file.thread_id,
+            });
+          }
+          const elapsed = ((Date.now() - fileStart) / 1000).toFixed(1);
+          logger.info(
+            { fileName: file.file_name, progress: `${idx + 1}/${pendingFiles.length}`, elapsed: `${elapsed}s` },
+            "Summary-only enrichment done",
+          );
+          continue;
+        }
+
+        // Full enrichment: optimistic lock, chunk, embed, summarize.
+        // Scheduled runs only claim pending/failed — never `processing`, since
+        // that would let two concurrent runs (e.g. scheduled + manual trigger)
+        // both "claim" the same file and race on chunk_embeddings inserts.
+        // Stuck `processing` rows are recovered by `recoverStaleEnrichments`.
+        // Explicit fileIds reruns can claim any status (manual override).
+        const claimableStatuses = deps.fileIds ? ["pending", "failed", "processing", "done"] : ["pending", "failed"];
+        const claimResult = await db
+          .updateTable("indexed_files")
+          .set({ embedding_status: "processing" })
+          .where("id", "=", file.id)
+          .where("embedding_status", "in", claimableStatuses)
+          .where("synced_at", "=", file.synced_at)
+          .executeTakeFirst();
+        if (claimResult.numUpdatedRows === BigInt(0)) {
+          result.filesSkipped++;
+          continue;
+        }
+
+        if (isImage) {
+          await enrichImage(file, deps);
+        } else if (file.content) {
+          await enrichTextDocument(file as typeof file & { content: string }, isStructured, deps, threadContext);
         } else {
           const skippedQuery = db
             .updateTable("indexed_files")
-            .set({ summary_status: "skipped", summary_attempts: 0, summary_next_retry_at: null })
+            .set({ embedding_status: "skipped" })
             .where("id", "=", file.id);
           const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
           assertFreshUpdate(skippedResult, file.id);
+          result.filesSkipped++;
+          continue;
         }
-        await emitAndMaterializeDocumentFactsFromStoredFile(file, deps, getGenerator());
+
+        const doneQuery = db
+          .updateTable("indexed_files")
+          .set({ embedding_status: "done", embedding_attempts: 0, embedding_next_retry_at: null })
+          .where("id", "=", file.id);
+        const doneResult = await applyContentVersionWhere(doneQuery, fileVersion).executeTakeFirst();
+        assertFreshUpdate(doneResult, file.id);
+
         result.filesProcessed++;
         if (isEmailMessage && file.thread_id) {
           touchedEmailThreads.set(`${file.connector_config_id}:${file.thread_id}`, {
@@ -781,92 +882,39 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
             threadId: file.thread_id,
           });
         }
+
         const elapsed = ((Date.now() - fileStart) / 1000).toFixed(1);
         logger.info(
-          { fileName: file.file_name, progress: `${idx + 1}/${pendingFiles.length}`, elapsed: `${elapsed}s` },
-          "Summary-only enrichment done",
+          {
+            fileName: file.file_name,
+            progress: `${completedCount + 1}/${fetchedCount}`,
+            elapsed: `${elapsed}s`,
+          },
+          "Enriched file",
         );
-        continue;
+      } catch (err) {
+        if (err instanceof StaleEnrichmentError) {
+          logger.info({ fileId: file.id, fileName: file.file_name }, "Skipped stale enrichment result");
+          result.filesSkipped++;
+          continue;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn({ err, fileId: file.id, fileName: file.file_name }, "Enrichment failed for file");
+        result.errors.push({ fileId: file.id, error: message });
+        result.filesFailed++;
+
+        await markEmbeddingFailure(db, file.id, Number(file.embedding_attempts ?? 0), fileVersion);
+      } finally {
+        completedCount++;
+        deps.onProgress?.({ phase: "enrich", completed: completedCount, total: fetchedCount });
+        await yieldToEventLoop();
       }
-
-      // Full enrichment: optimistic lock, chunk, embed, summarize.
-      // Scheduled runs only claim pending/failed — never `processing`, since
-      // that would let two concurrent runs (e.g. scheduled + manual trigger)
-      // both "claim" the same file and race on chunk_embeddings inserts.
-      // Stuck `processing` rows are recovered by `recoverStaleEnrichments`.
-      // Explicit fileIds reruns can claim any status (manual override).
-      const claimableStatuses = deps.fileIds ? ["pending", "failed", "processing", "done"] : ["pending", "failed"];
-      const claimResult = await db
-        .updateTable("indexed_files")
-        .set({ embedding_status: "processing" })
-        .where("id", "=", file.id)
-        .where("embedding_status", "in", claimableStatuses)
-        .where("synced_at", "=", file.synced_at)
-        .executeTakeFirst();
-      if (claimResult.numUpdatedRows === BigInt(0)) {
-        result.filesSkipped++;
-        continue;
-      }
-
-      if (isImage) {
-        await enrichImage(file, deps);
-      } else if (file.content) {
-        await enrichTextDocument(file as typeof file & { content: string }, isStructured, deps, threadContext);
-      } else {
-        const skippedQuery = db
-          .updateTable("indexed_files")
-          .set({ embedding_status: "skipped" })
-          .where("id", "=", file.id);
-        const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
-        assertFreshUpdate(skippedResult, file.id);
-        result.filesSkipped++;
-        continue;
-      }
-
-      const doneQuery = db
-        .updateTable("indexed_files")
-        .set({ embedding_status: "done", embedding_attempts: 0, embedding_next_retry_at: null })
-        .where("id", "=", file.id);
-      const doneResult = await applyContentVersionWhere(doneQuery, fileVersion).executeTakeFirst();
-      assertFreshUpdate(doneResult, file.id);
-
-      result.filesProcessed++;
-      if (isEmailMessage && file.thread_id) {
-        touchedEmailThreads.set(`${file.connector_config_id}:${file.thread_id}`, {
-          connectorConfigId: file.connector_config_id,
-          threadId: file.thread_id,
-        });
-      }
-
-      const elapsed = ((Date.now() - fileStart) / 1000).toFixed(1);
-      logger.info(
-        {
-          fileName: file.file_name,
-          progress: `${idx + 1}/${pendingFiles.length}`,
-          elapsed: `${elapsed}s`,
-        },
-        "Enriched file",
-      );
-    } catch (err) {
-      if (err instanceof StaleEnrichmentError) {
-        logger.info({ fileId: file.id, fileName: file.file_name }, "Skipped stale enrichment result");
-        result.filesSkipped++;
-        continue;
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      logger.warn({ err, fileId: file.id, fileName: file.file_name }, "Enrichment failed for file");
-      result.errors.push({ fileId: file.id, error: message });
-      result.filesFailed++;
-
-      await markEmbeddingFailure(db, file.id, Number(file.embedding_attempts ?? 0), fileVersion);
-    } finally {
-      deps.onProgress?.({ phase: "enrich", completed: idx + 1, total: pendingFiles.length });
-      await yieldToEventLoop();
     }
   }
 
-  if (!result.stoppedReason && pendingFiles.length >= maxFilesPerRun) {
-    result.stoppedReason = "file_limit";
+  if (!runStarted) {
+    logger.debug("No files pending enrichment");
+    return result;
   }
 
   logger.info(
@@ -1092,6 +1140,13 @@ async function enrichTextDocument(
     assertFreshUpdate(summaryResult, file.id);
   }
 
+  /**
+   * `summaryAlreadyResolved` is true for any file whose summary is already done
+   * or skipped, not only for an embeddings-only chunk refresh. Re-embed paths
+   * that keep the summary (vector reset, entity backfill, stale-enrichment
+   * recovery) therefore skip document-fact re-materialization too, which
+   * preserves their existing facts instead of tombstoning them.
+   */
   if (!summaryAlreadyResolved) {
     await emitAndMaterializeDocumentFactsFromStoredFile(file, deps, generator);
   }

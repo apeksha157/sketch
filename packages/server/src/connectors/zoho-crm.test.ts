@@ -11,6 +11,8 @@ import {
   formatCrmRecordContent,
   makeProviderFileId,
   moduleToFileType,
+  recordToSyncedItem,
+  toZohoModifiedSince,
 } from "./zoho-crm";
 
 const logger = pino({ level: "silent" });
@@ -87,6 +89,72 @@ describe("Zoho CRM connector", () => {
       "https://accounts.zoho.in/oauth/v2/token",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("refreshTokens treats a token expiring within the 30-minute buffer as stale", async () => {
+    const connector = createZohoCrmConnector();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ access_token: "new-token", expires_in: 3600 }));
+
+    const result = await connector.refreshTokens?.(
+      credentials({ expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString() }),
+    );
+
+    expect(result?.access_token).toBe("new-token");
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://accounts.zoho.in/oauth/v2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("refreshes and retries once when the access token expires mid-run", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "minted-mid-run", expires_in: 3600 }))
+      .mockResolvedValueOnce(jsonResponse({ users: [{ id: "u1" }] }));
+    const connector = createZohoCrmConnector();
+    const creds = credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() });
+
+    await expect(connector.validateCredentials(creds)).resolves.toBeUndefined();
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://accounts.zoho.in/oauth/v2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://www.zohoapis.in/crm/v6/users?type=CurrentUser",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Zoho-oauthtoken minted-mid-run" }),
+      }),
+    );
+    expect(creds.access_token).toBe("minted-mid-run");
+  });
+
+  it("gives up after one mid-run retry when the refreshed token is still rejected", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "still-bad", expires_in: 3600 }))
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }));
+    const connector = createZohoCrmConnector();
+
+    await expect(
+      connector.validateCredentials(credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() })),
+    ).rejects.toThrow(/token is invalid or revoked; reconnect required/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("formats If-Modified-Since cursors to second precision with a numeric offset", () => {
+    expect(toZohoModifiedSince("2026-09-05T13:42:32.482Z")).toBe("2026-09-05T13:42:32+00:00");
+    expect(toZohoModifiedSince("2026-09-05T13:42:32Z")).toBe("2026-09-05T13:42:32+00:00");
+  });
+
+  it("passes an unparseable cursor through unchanged instead of throwing", () => {
+    expect(toZohoModifiedSince("not-a-date")).toBe("not-a-date");
   });
 
   it("discovers standard modules, skips inactive modules, and keeps parent-like order", async () => {
@@ -259,6 +327,93 @@ describe("Zoho CRM connector", () => {
     ]);
   });
 
+  it("writes structured Zoho source meta from raw deal, task, and account records", () => {
+    const deal = recordToSyncedItem(
+      { logicalName: "Deals", apiName: "Deals", label: "Deals" },
+      {
+        id: "d1",
+        Deal_Name: "Acme renewal",
+        Stage: "Negotiation",
+        Amount: 12500,
+        Closing_Date: "2026-10-01",
+        Probability: 70,
+        Account_Name: { id: "a1", name: "Acme Corp" },
+        Owner: { id: "u1", name: "Owner One" },
+        Created_Time: "2026-01-01T00:00:00+05:30",
+        Modified_Time: "2026-01-02T00:00:00+05:30",
+      },
+    );
+    const task = recordToSyncedItem(
+      { logicalName: "Tasks", apiName: "Tasks", label: "Tasks" },
+      {
+        id: "t1",
+        Subject: "Follow up",
+        Status: "In Progress",
+        Priority: "High",
+        Due_Date: "2026-01-10",
+        $se_module: "Deals",
+        What_Id: { id: "d1", name: "Acme renewal" },
+        Who_Id: { id: "c1", name: "Jane Buyer" },
+        Owner: { id: "u1", name: "Owner One" },
+        Created_Time: "2026-01-03T00:00:00+05:30",
+        Modified_Time: "2026-01-04T00:00:00+05:30",
+      },
+    );
+    const account = recordToSyncedItem(
+      { logicalName: "Accounts", apiName: "Accounts", label: "Accounts" },
+      {
+        id: "a1",
+        Account_Name: "Acme Corp",
+        Website: "https://acme.test",
+        Industry: "Financial Services",
+        Employees: 250,
+        Tag: [{ name: "Tier 1" }, { name: "Strategic" }],
+        Last_Activity_Time: "2026-02-01T00:00:00+05:30",
+        Created_Time: "2026-01-01T00:00:00+05:30",
+        Modified_Time: "2026-01-05T00:00:00+05:30",
+      },
+    );
+
+    expect(deal?.sourceMeta?.zohoCrm).toEqual({
+      module: "Deals",
+      recordId: "d1",
+      owner: "Owner One",
+      createdTime: "2026-01-01T00:00:00+05:30",
+      modifiedTime: "2026-01-02T00:00:00+05:30",
+      stage: "Negotiation",
+      amount: "12500",
+      closingDate: "2026-10-01",
+      probability: "70",
+    });
+    expect(task?.sourceMeta?.zohoCrm).toEqual({
+      module: "Tasks",
+      recordId: "t1",
+      related: [
+        { role: "what", module: "Deals", id: "d1" },
+        { role: "who", module: "Contacts", id: "c1" },
+      ],
+      owner: "Owner One",
+      createdTime: "2026-01-03T00:00:00+05:30",
+      modifiedTime: "2026-01-04T00:00:00+05:30",
+      status: "In Progress",
+      priority: "High",
+      dueDate: "2026-01-10",
+    });
+    expect(account?.sourceMeta?.zohoCrm).toEqual({
+      module: "Accounts",
+      recordId: "a1",
+      createdTime: "2026-01-01T00:00:00+05:30",
+      modifiedTime: "2026-01-05T00:00:00+05:30",
+      industry: "Financial Services",
+      website: "https://acme.test",
+      companySize: "250",
+      tag: "Tier 1, Strategic",
+      lastActivityTime: "2026-02-01T00:00:00+05:30",
+    });
+    expect(task?.sourceMeta?.zohoCrm).not.toHaveProperty("amount");
+    expect(account?.sourceMeta?.zohoCrm).not.toHaveProperty("stage");
+  });
+
   it("syncs paginated standard modules with If-Modified-Since and CRM graph hints", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
       const url = String(input);
@@ -294,7 +449,7 @@ describe("Zoho CRM connector", () => {
       }
       if (url.includes("/Accounts?")) {
         expect(url).toContain("fields=");
-        expect((init?.headers as Record<string, string>)["If-Modified-Since"]).toBe("2026-01-01T00:00:00.000Z");
+        expect((init?.headers as Record<string, string>)["If-Modified-Since"]).toBe("2026-01-01T00:00:00+00:00");
         // Second page (token-based) returns empty to end pagination.
         if (url.includes("page_token=")) {
           return Promise.resolve(jsonResponse({ data: [], info: { more_records: false } }));

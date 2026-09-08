@@ -36,6 +36,7 @@ export const PERSONAL_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
   "mail.com",
   "zoho.com",
   "yandex.com",
+  "mail.ru",
   "fastmail.com",
   "hey.com",
   "tutanota.com",

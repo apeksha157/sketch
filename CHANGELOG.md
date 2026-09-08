@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.7] -- 2026-09-07
+
+- Extracts the WhatsApp LLM boundary chunker into a shared `connectors/chunk-engine.ts` engine behind a `ChunkStreamAdapter` interface so Slack (P1) can reuse the same window-loading, LLM-boundary bisect, claim-revalidation and idle-close logic without forking; WhatsApp behaviour is unchanged and existing call sites/tests are untouched.
+- Links CRM activity, CRM record files and LinkedIn conversations to the client's **company** entity via deterministic roll-up in the materializer (`materializeParentEntity` follows live `works_at` edges filtered to the fact's own connector), self-record mentions when `sourceId === providerFileId`, and a new `createMentionIfAbsent` insert-or-skip variant; includes a backfill script (`backfill-entity-mentions.ts`) with dry-run census and `--apply` mode.
+- Adds structured `source_meta.zohoCrm` blocks (stage, status, lead status, priority, due date, amount, closing date, probability, owner, industry, website, company size, tag, last activity, related ids) to every Zoho CRM record, tracks field changes (stage, status, leadStatus, probability, closingDate) in a new `crm_field_history` table on resync, exposes `crmFields` on timeline items and `GET /api/entities/:id/crm-field-history`, and includes a content-parsing backfill script with `--apply`/`--force` flags.
+- Removes the extra three-second deadline around integration availability resolution and credential minting so discovery and ClickUp validation that exceed the threshold no longer cause connected integrations to disappear from the automation builder.
+- Records LinkedIn message direction (inbound vs outbound) from `sender.id` versus the account id, adds `last_replied_at` to `entity_contact_points`, and computes an `entity_touch_stats` rollup (last touch, last inbound/outbound, 30/90-day touch counts, last touch per source) inside the existing hotness sweep with `GET /api/entities/:id` returning `profile.touchStats`; fixes a hotness-decay underflow that silently aborted `recomputeAllHotness` on entities dormant ~870+ days.
+- Parallelises CI by running quality checks, server unit/web tests, and two server integration shards concurrently, reducing expected workflow duration from ~17 min to ~8–10 min while retaining the existing single-PGlite-per-shard isolation and a single aggregate required check.
+- Adds `sketch_get_entity` MCP tool returning an entity's identity, relations and a keyset-paged cross-source timeline in one call, with `sections`, `relationsLimit`, `sources`, `fileTypes`, `includePeople` (company → fold in `works_at` people's files), `includeContent` + `maxCharsPerItem` inline text, and RBAC filtering via `visibleEntityIdsForPublic`.
+- Adds `sketch_get_thread` MCP tool that dispatches on the anchor file to return the full ordered conversation (email thread, LinkedIn conversation, calendar series, CRM record rollup, or single file) with paging, per-message content truncation, and summary withheld when the caller cannot see every member.
+- Adds narrowing filters to `sketch_search` — `fileTypes`, `threadId`, `parentRecordId`, `participantEmail`, `domain` — applied as AND predicates on every candidate path (FTS, KNN, metadata, recency browse) using `indexed_file_facts` for participant/domain matching; search results now print `threadId` and `rollupGroupId` for chaining into `sketch_get_thread`.
+- Adds `mail.ru` to the personal-email denylist and `accounts@`/`finance@` to the role-account local parts so they no longer mint junk company entities on ingest.
+
 ## [1.7.6] -- 2026-09-07
 
 - Prevents CI Typecheck heap exhaustion by setting `NODE_OPTIONS=--max-old-space-size=4096` on the CI runner, ensuring the server’s TypeScript checker completes without OOM.

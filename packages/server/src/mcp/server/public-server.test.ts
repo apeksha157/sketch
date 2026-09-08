@@ -121,6 +121,122 @@ async function seedWhatsAppGroupMembership(groupJid: string, participantJid: str
     .execute();
 }
 
+async function seedCompanyTimeline(userId: string, email: string) {
+  const now = "2026-09-07T10:00:00.000Z";
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-entity-mcp",
+      connector_type: "outlook",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: userId,
+    })
+    .execute();
+  await db
+    .insertInto("access_scopes")
+    .values({
+      id: "scope-entity-mcp",
+      connector_config_id: "cfg-entity-mcp",
+      scope_type: "mailbox",
+      provider_scope_id: "mailbox",
+    })
+    .execute();
+  await db
+    .insertInto("access_scope_members")
+    .values({ access_scope_id: "scope-entity-mcp", principal_type: "email", principal_value: email })
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "file-company-note",
+        connector_config_id: "cfg-entity-mcp",
+        provider_file_id: "provider-company-note",
+        file_name: "Company note",
+        file_type: "email_message",
+        content_category: "document",
+        content: "Company note content",
+        source: "outlook",
+        access_scope_id: "scope-entity-mcp",
+        source_updated_at: "2026-09-07T09:00:00.000Z",
+        synced_at: now,
+      },
+      {
+        id: "file-person-email",
+        connector_config_id: "cfg-entity-mcp",
+        provider_file_id: "provider-person-email",
+        file_name: "Person email",
+        file_type: "email_message",
+        content_category: "document",
+        content: "Person email content for a company contact",
+        source: "outlook",
+        access_scope_id: "scope-entity-mcp",
+        source_updated_at: "2026-09-07T11:00:00.000Z",
+        synced_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("entities")
+    .values([
+      {
+        id: "entity-company",
+        name: "Example Co",
+        source_type: "company",
+        status: "confirmed",
+        hotness: 0,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: "entity-person",
+        name: "Pat Person",
+        source_type: "person",
+        status: "confirmed",
+        hotness: 0,
+        created_at: now,
+        updated_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("entity_mentions")
+    .values([
+      {
+        id: "mention-company",
+        entity_id: "entity-company",
+        indexed_file_id: "file-company-note",
+        confidence: "EXTRACTED",
+        source: "test",
+        relation: "mentioned",
+        mentioned_at: now,
+      },
+      {
+        id: "mention-person",
+        entity_id: "entity-person",
+        indexed_file_id: "file-person-email",
+        confidence: "EXTRACTED",
+        source: "test",
+        relation: "mentioned",
+        mentioned_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("entity_relationships")
+    .values({
+      id: "rel-person-company",
+      source_entity_id: "entity-person",
+      target_entity_id: "entity-company",
+      relationship_type: "works_at",
+      confidence: "EXTRACTED",
+      confidence_score: 0.9,
+      source: "test",
+    })
+    .execute();
+}
+
 async function seedPublicMcpSearchFiles(email: string) {
   await db
     .insertInto("connector_configs")
@@ -242,8 +358,10 @@ describe("public MCP server", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { tools: Array<{ name: string }> } };
     expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([
+      "sketch_get_entity",
       "sketch_get_entity_context",
       "sketch_get_file_content",
+      "sketch_get_thread",
       "sketch_search",
       "sketch_search_delivery_targets",
       "sketch_search_entities",
@@ -431,6 +549,54 @@ describe("public MCP server", () => {
         .executeTakeFirst();
       expect(row?.access_bypass).toBe("admin");
     });
+  });
+
+  it("returns a company timeline with included people through sketch_get_entity", async () => {
+    const { token, user } = await createOAuthTokenForUser({ email: "mcp@example.com" });
+    await seedCompanyTimeline(user.id, "mcp@example.com");
+    const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
+
+    const first = await callMcpTool(token, app, "sketch_get_entity", {
+      entityId: "entity-company",
+      sections: ["timeline"],
+      timeline: { includePeople: true, includeContent: true, maxCharsPerItem: 8, limit: 1 },
+    });
+    const firstBody = JSON.parse(first.result.content[0]?.text ?? "{}") as {
+      entity?: unknown;
+      relations?: unknown;
+      timeline: {
+        items: Array<{ fileId: string; viaEntityIds: string[]; content: string; contentTruncated: boolean }>;
+        nextCursor: string | null;
+        entityIds: string[];
+        contentTruncated?: boolean;
+      };
+    };
+
+    expect(firstBody.entity).toBeUndefined();
+    expect(firstBody.relations).toBeUndefined();
+    expect(firstBody.timeline.entityIds).toEqual(["entity-company", "entity-person"]);
+    expect(firstBody.timeline.items).toHaveLength(1);
+    expect(firstBody.timeline.items[0]).toMatchObject({
+      fileId: "file-person-email",
+      viaEntityIds: ["entity-person"],
+      content: "Person e",
+      contentTruncated: true,
+    });
+    expect(firstBody.timeline.contentTruncated).toBe(true);
+    expect(firstBody.timeline.nextCursor).not.toBeNull();
+
+    const second = await callMcpTool(token, app, "sketch_get_entity", {
+      entityId: "entity-company",
+      sections: ["timeline"],
+      timeline: { includePeople: true, limit: 1, cursor: firstBody.timeline.nextCursor },
+    });
+    const secondBody = JSON.parse(second.result.content[0]?.text ?? "{}") as {
+      timeline: { items: Array<{ fileId: string; viaEntityIds: string[] }>; nextCursor: string | null };
+    };
+    expect(secondBody.timeline.items).toEqual([
+      expect.objectContaining({ fileId: "file-company-note", viaEntityIds: ["entity-company"] }),
+    ]);
+    expect(secondBody.timeline.nextCursor).toBeNull();
   });
 
   it("rate limits by token even when the forwarded IP changes", async () => {

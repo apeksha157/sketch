@@ -38,21 +38,31 @@ export function collectMetaStringValues(raw: string | null): Set<string> {
   const values = new Set<string>();
   if (!raw) return values;
   try {
-    const stack: unknown[] = [JSON.parse(raw) as unknown];
-    while (stack.length > 0) {
-      const item = stack.pop();
-      if (typeof item === "string") {
-        values.add(item);
-      } else if (Array.isArray(item)) {
-        stack.push(...item);
-      } else if (item && typeof item === "object") {
-        stack.push(...Object.values(item as Record<string, unknown>));
-      }
-    }
+    for (const value of sourceMetaContainerEvidence(JSON.parse(raw) as unknown)) values.add(value);
   } catch {
     return values;
   }
   return values;
+}
+
+export function sourceMetaContainerEvidence(sourceMeta: unknown): string[] {
+  const values = new Set<string>();
+  const root =
+    sourceMeta && typeof sourceMeta === "object" && !Array.isArray(sourceMeta)
+      ? { ...(sourceMeta as Record<string, unknown>), zohoCrm: undefined }
+      : sourceMeta;
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const item = stack.pop();
+    if (typeof item === "string") {
+      values.add(item);
+    } else if (Array.isArray(item)) {
+      stack.push(...item);
+    } else if (item && typeof item === "object") {
+      stack.push(...Object.values(item as Record<string, unknown>));
+    }
+  }
+  return [...values];
 }
 
 export function prepareFilesForContainerMatching<T extends ContainerFileMatcherFile>(

@@ -18,7 +18,7 @@ vi.mock("@/routes/dashboard", () => ({
   }),
 }));
 
-function setupStatus(overrides: { whatsappConnected?: boolean } = {}) {
+function setupStatus(overrides: { slackConnected?: boolean; whatsappConnected?: boolean } = {}) {
   server.use(
     http.get("/api/setup/status", () =>
       HttpResponse.json({
@@ -27,7 +27,7 @@ function setupStatus(overrides: { whatsappConnected?: boolean } = {}) {
         adminEmail: "admin@test.com",
         orgName: "Acme",
         botName: "Sketch",
-        slackConnected: true,
+        slackConnected: overrides.slackConnected ?? true,
         whatsappConnected: overrides.whatsappConnected ?? false,
         llmConnected: true,
         llmProvider: "anthropic",
@@ -493,5 +493,61 @@ describe("ConnectorPicker connector capabilities", () => {
     renderPicker([]);
 
     expect(await screen.findByRole("button", { name: /WhatsApp Groups/i })).toBeInTheDocument();
+  });
+
+  it("only surfaces Slack after the Slack channel is connected, and points setup at Channels", async () => {
+    const user = userEvent.setup();
+    const slackDescription = "Channels Sketch has joined are indexed automatically";
+    setupStatus({ slackConnected: false });
+    const { unmount } = renderWithProviders(
+      <ConnectorPicker
+        connectors={[]}
+        teamMemberCount={3}
+        connectorMemberCounts={{}}
+        sourceCounts={new Map()}
+        totalFiles={0}
+        localFileCount={0}
+        sourceFilter={null}
+        onSourceFilterChange={() => {}}
+        onConnected={() => {}}
+        onManageConnector={() => {}}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Browse all/i }));
+    await screen.findByText("Fireflies");
+    expect(screen.queryByText(slackDescription)).not.toBeInTheDocument();
+    unmount();
+
+    setupStatus({ slackConnected: true });
+    renderPicker([]);
+
+    await user.click(await screen.findByRole("button", { name: /Browse all/i }));
+    const row = connectorRowByDescription(slackDescription);
+    await waitFor(() => expect(within(row).getByText("Set up under Channels")).toBeInTheDocument());
+    expect(within(row).queryByRole("button", { name: /Connect/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Slack$/ })).not.toBeInTheDocument();
+  });
+
+  it("renders the provisioned Slack connector as a source chip with a manage action", async () => {
+    const user = userEvent.setup();
+    const slack = connector({
+      id: "slack-conn",
+      connectorType: "slack",
+      authType: "system",
+      createdBy: "admin-1",
+      fileCount: 12,
+      isOwner: true,
+      canManage: true,
+      canSync: true,
+      canChangeScope: true,
+    });
+    const onManage = renderPicker([slack]);
+
+    expect(await screen.findByRole("button", { name: /Slack/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Browse all/i }));
+    const row = connectorRowByDescription("12 slices");
+    await user.click(within(row).getByRole("button", { name: /Manage/i }));
+    expect(onManage).toHaveBeenCalledWith(expect.objectContaining({ type: "slack" }), slack);
   });
 });

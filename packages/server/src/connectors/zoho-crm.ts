@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
+import type { ZohoCrmMetaStringKey, ZohoCrmSourceMeta } from "../db/repositories/connectors";
 import { normalizeEmailDomain, normalizeWebsiteDomain } from "../db/repositories/entity-domains";
 import type {
   Connector,
@@ -10,7 +11,15 @@ import type {
   SyncedItem,
 } from "./types";
 
-const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+/**
+ * Zoho access tokens live 60 minutes and are normally refreshed only at run
+ * start. A full module scan takes 20+ minutes on large CRMs, so a 5-minute
+ * buffer let tokens expire mid-run and surface as a misleading "reconnect
+ * required" failure. 30 minutes forces a fresh token before any long scan,
+ * and the 401 refresh-and-retry in zohoApiRequest covers runs that outlast
+ * even that.
+ */
+const TOKEN_REFRESH_BUFFER_MS = 30 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 6;
 const RETRY_BASE_MS = 1000;
@@ -99,6 +108,7 @@ export interface DiscoveredZohoModule {
 interface ZohoRequestOptions {
   headers?: Record<string, string>;
   attempt?: number;
+  retriedAfterRefresh?: boolean;
 }
 
 function requireOAuthCredentials(credentials: ConnectorCredentials): OAuthCredentials {
@@ -284,7 +294,27 @@ async function zohoApiRequest<T>(
   if (response.status === 204 || response.status === 304) {
     return {} as T;
   }
+  /**
+   * A 401 on a stale token usually means it expired during a long scan, not
+   * that the connection is broken. Refresh once and retry before giving up.
+   * The freshness gate matters: Zoho also returns 401 for non-expiry reasons
+   * (e.g. scope mismatch), and refreshing on those would burn the per-token
+   * refresh-grant rate limit — a young token that gets a 401 fails straight
+   * through. The refreshed token is copied back onto the shared credentials
+   * object so every later request in this run reuses it instead of
+   * re-minting per request; a genuinely revoked refresh token surfaces as
+   * the accurate "refresh token is invalid or revoked" error from
+   * refreshZohoCrmTokens.
+   */
   if (response.status === 401) {
+    if (!opts.retriedAfterRefresh && !isTokenFresh(credentials)) {
+      logger?.info({ path }, "Zoho CRM access token rejected, refreshing and retrying");
+      const refreshed = await refreshZohoCrmTokens({ ...credentials, expires_at: undefined });
+      if (refreshed) {
+        Object.assign(credentials, refreshed);
+        return zohoApiRequest(credentials, path, logger, { ...opts, retriedAfterRefresh: true, attempt: 1 });
+      }
+    }
     throw new Error("Zoho CRM token is invalid or revoked; reconnect required");
   }
   if (response.status === 429) {
@@ -379,9 +409,49 @@ function importantFields(moduleApiName: string): string[] {
   const normalized = normalizeModuleApiName(moduleApiName);
   const common = ["Owner", "Email", "Phone", "Mobile", "Created_Time", "Modified_Time"];
   const byModule: Record<string, string[]> = {
-    accounts: ["Account_Name", "Website", "Industry", "Annual_Revenue", "Account_Type", ...common],
-    contacts: ["Full_Name", "First_Name", "Last_Name", "Email", "Title", "Account_Name", "Phone", "Mobile", "Owner"],
-    leads: ["Full_Name", "First_Name", "Last_Name", "Company", "Email", "Lead_Status", "Lead_Source", "Phone", "Owner"],
+    accounts: [
+      "Account_Name",
+      "Website",
+      "Industry",
+      "Annual_Revenue",
+      "Account_Type",
+      "Employees",
+      "Company_Size",
+      "No_of_Employees",
+      "Tag",
+      "Last_Activity_Time",
+      ...common,
+    ],
+    contacts: [
+      "Full_Name",
+      "First_Name",
+      "Last_Name",
+      "Email",
+      "Title",
+      "Account_Name",
+      "Phone",
+      "Mobile",
+      "Industry",
+      "Website",
+      "Lead_Source",
+      "Employees",
+      "Company_Size",
+      "No_of_Employees",
+      "Tag",
+      "Last_Activity_Time",
+      ...common,
+    ],
+    leads: [
+      "Full_Name",
+      "First_Name",
+      "Last_Name",
+      "Company",
+      "Email",
+      "Lead_Status",
+      "Lead_Source",
+      "Phone",
+      ...common,
+    ],
     deals: [
       "Deal_Name",
       "Stage",
@@ -391,11 +461,11 @@ function importantFields(moduleApiName: string): string[] {
       "Expected_Revenue",
       "Account_Name",
       "Contact_Name",
-      "Owner",
+      ...common,
     ],
-    tasks: ["Subject", "Status", "Priority", "Due_Date", "What_Id", "Who_Id", "Owner"],
+    tasks: ["Subject", "Status", "Priority", "Due_Date", "What_Id", "Who_Id", ...common],
     notes: ["Note_Title", "Parent_Id", "Owner", "Created_Time", "Modified_Time"],
-    calls: ["Subject", "Call_Type", "Call_Start_Time", "Call_Duration", "What_Id", "Who_Id", "Owner"],
+    calls: ["Subject", "Call_Type", "Call_Start_Time", "Call_Duration", "What_Id", "Who_Id", ...common],
     events: ["Event_Title", "Subject", "Start_DateTime", "End_DateTime", "What_Id", "Who_Id", "Owner"],
     meetings: ["Event_Title", "Subject", "Start_DateTime", "End_DateTime", "What_Id", "Who_Id", "Owner"],
   };
@@ -619,6 +689,101 @@ function rollupGroupIdForRecord(moduleApiName: string, record: ZohoRecord): stri
   return null;
 }
 
+type ZohoRelatedRole = NonNullable<ZohoCrmSourceMeta["related"]>[number]["role"];
+
+function sourceMetaString(value: unknown): string | undefined {
+  const rendered = fieldValue(value);
+  return rendered || undefined;
+}
+
+function addMetaString(meta: ZohoCrmSourceMeta, key: ZohoCrmMetaStringKey, value: unknown): void {
+  const rendered = sourceMetaString(value);
+  if (rendered) meta[key] = rendered;
+}
+
+function addOwnerMeta(meta: ZohoCrmSourceMeta, value: unknown): void {
+  const owner = asLookup(value)?.name?.trim();
+  if (owner) meta.owner = owner;
+}
+
+function relatedSourceMetaItem(
+  role: ZohoRelatedRole,
+  record: ZohoRecord,
+  value: unknown,
+  fallback: StandardModule,
+): NonNullable<ZohoCrmSourceMeta["related"]>[number] | null {
+  const id = lookupId(value);
+  if (!id) return null;
+  const module =
+    role === "who" ? lookupModuleApiName(value, fallback) : relatedModuleForLookup(record, value, fallback);
+  return { role, module, id };
+}
+
+function relatedSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSourceMeta["related"] {
+  const normalized = normalizeModuleApiName(moduleApiName);
+  const related =
+    normalized === "notes"
+      ? [relatedSourceMetaItem("parent", record, record.Parent_Id, "Contacts")]
+      : ["tasks", "calls", "events", "meetings"].includes(normalized)
+        ? [
+            relatedSourceMetaItem("what", record, record.What_Id, "Accounts"),
+            relatedSourceMetaItem("who", record, record.Who_Id, "Contacts"),
+          ]
+        : [];
+  return related.filter((item): item is NonNullable<ZohoCrmSourceMeta["related"]>[number] => Boolean(item));
+}
+
+function tagSourceMeta(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return sourceMetaString(value);
+  const names = value
+    .map((item) => lookupName(item) ?? sourceMetaString(item))
+    .filter((item): item is string => Boolean(item));
+  return names.length > 0 ? names.join(", ") : undefined;
+}
+
+function zohoCrmSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSourceMeta {
+  const meta: ZohoCrmSourceMeta = { module: moduleApiName, recordId: record.id ?? "" };
+  const related = relatedSourceMeta(moduleApiName, record);
+  if (related && related.length > 0) meta.related = related;
+  addOwnerMeta(meta, record.Owner);
+  addMetaString(meta, "createdTime", record.Created_Time);
+  addMetaString(meta, "modifiedTime", record.Modified_Time);
+
+  const normalized = normalizeModuleApiName(moduleApiName);
+  if (normalized === "deals") {
+    addMetaString(meta, "stage", record.Stage);
+    addMetaString(meta, "amount", record.Amount);
+    addMetaString(meta, "closingDate", record.Closing_Date);
+    addMetaString(meta, "probability", record.Probability);
+  }
+  if (normalized === "leads") {
+    addMetaString(meta, "leadStatus", record.Lead_Status);
+    addMetaString(meta, "leadSource", record.Lead_Source);
+  }
+  if (normalized === "contacts") {
+    addMetaString(meta, "leadSource", record.Lead_Source);
+  }
+  if (normalized === "tasks") {
+    addMetaString(meta, "status", record.Status);
+    addMetaString(meta, "priority", record.Priority);
+    addMetaString(meta, "dueDate", record.Due_Date);
+  }
+  if (normalized === "calls") {
+    addMetaString(meta, "callType", record.Call_Type);
+    addMetaString(meta, "callDuration", record.Call_Duration);
+    addMetaString(meta, "callStart", record.Call_Start_Time);
+  }
+  if (normalized === "accounts" || normalized === "contacts") {
+    addMetaString(meta, "industry", record.Industry);
+    addMetaString(meta, "website", record.Website);
+    addMetaString(meta, "companySize", record.Employees ?? record.Company_Size ?? record.No_of_Employees);
+    addMetaString(meta, "lastActivityTime", record.Last_Activity_Time);
+    const tag = tagSourceMeta(record.Tag);
+    if (tag) meta.tag = tag;
+  }
+  return meta;
+}
+
 function addDomain(domains: Set<string>, domain: string | null): void {
   if (domain) domains.add(domain);
 }
@@ -721,7 +886,11 @@ function relationshipsForRecord(moduleApiName: string, record: ZohoRecord): NonN
   return relationships;
 }
 
-function recordToSyncedItem(module: DiscoveredZohoModule, record: ZohoRecord, orgName?: string): SyncedItem | null {
+export function recordToSyncedItem(
+  module: DiscoveredZohoModule,
+  record: ZohoRecord,
+  orgName?: string,
+): SyncedItem | null {
   if (!record.id) return null;
   const content = formatCrmRecordContent(module.apiName, record);
   const contentCategory = isActivityModule(module.apiName) && activityBody(record) ? "document" : "structured";
@@ -755,6 +924,7 @@ function recordToSyncedItem(module: DiscoveredZohoModule, record: ZohoRecord, or
     ),
     sourceCreatedAt: record.Created_Time ?? null,
     sourceUpdatedAt: record.Modified_Time ?? null,
+    sourceMeta: { zohoCrm: zohoCrmSourceMeta(module.apiName, record) },
     entitySeeds,
     personSeeds,
     parentEntities,
@@ -785,14 +955,20 @@ async function resolveModuleFields(
   } catch (err) {
     logger.warn({ err, module: moduleApiName }, "Zoho CRM field discovery failed; using important fields");
   }
-  if (names.length === 0) names = importantFields(moduleApiName);
+  const important = importantFields(moduleApiName);
+  const discovered = new Set(names);
+  const forced = names.length === 0 ? important : important.filter((name) => discovered.has(name));
+  if (names.length === 0) names = important;
   // System fields are valid on every CRM module and are required downstream
   // (cursor, change detection, owner seeding), so force them to the front.
+  // Structured source_meta reads the important fields, so they go ahead of the
+  // rest of the discovered list and survive the ZOHO_MAX_FIELDS cut; only names
+  // discovery confirmed are forced, because Zoho rejects unknown field names.
   // Parent-relation lookups (What_Id/Who_Id/Parent_Id) drive activity rollup but
   // Zoho's field-discovery omits them, so force them in too — otherwise activities
   // never resolve a rollup_group_id and orphan from their parent object.
   const ordered = [
-    ...new Set(["Created_Time", "Modified_Time", "Owner", ...rollupRelationFields(moduleApiName), ...names]),
+    ...new Set(["Created_Time", "Modified_Time", "Owner", ...rollupRelationFields(moduleApiName), ...forced, ...names]),
   ];
   return ordered.slice(0, ZOHO_MAX_FIELDS).join(",");
 }
@@ -816,6 +992,21 @@ function rollupRelationFields(moduleApiName: string): string[] {
   }
 }
 
+/**
+ * Zoho silently ignores If-Modified-Since values it cannot parse, and our
+ * stored cursors (ISO with milliseconds and a "Z" suffix) fall in that
+ * bucket — so every "incremental" sync was a full scan. Verified against the
+ * live API: the same instant sent as "2026-09-05T20:04:23.341Z" returned all
+ * records, while "2026-09-05T20:04:23+00:00" returned 304. Format to second
+ * precision with an explicit numeric offset; an unparseable cursor is passed
+ * through unchanged (Zoho ignores it, matching the old behaviour).
+ */
+export function toZohoModifiedSince(cursor: string): string {
+  const parsed = new Date(cursor);
+  if (Number.isNaN(parsed.getTime())) return cursor;
+  return parsed.toISOString().replace(/\.\d{3}Z$/, "+00:00");
+}
+
 async function* syncModule(
   credentials: OAuthCredentials,
   module: DiscoveredZohoModule,
@@ -826,7 +1017,7 @@ async function* syncModule(
   let page = 0;
   let pageToken: string | null = null;
   let moreRecords = true;
-  const headers = cursor ? { "If-Modified-Since": cursor } : undefined;
+  const headers = cursor ? { "If-Modified-Since": toZohoModifiedSince(cursor) } : undefined;
   const fields = await resolveModuleFields(credentials, module.apiName, logger);
 
   // Zoho v6 caps offset pagination at the first 2000 records; beyond that the

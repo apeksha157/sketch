@@ -42,6 +42,92 @@ export function readSourceMeta(row: Pick<IndexedFilesTable, "source_meta">): Rec
   }
 }
 
+export interface ZohoCrmSourceMeta {
+  module: string;
+  recordId: string;
+  related?: Array<{ role: "what" | "who" | "parent"; module: string; id: string }>;
+  owner?: string;
+  createdTime?: string;
+  modifiedTime?: string;
+  stage?: string;
+  amount?: string;
+  closingDate?: string;
+  probability?: string;
+  leadStatus?: string;
+  leadSource?: string;
+  status?: string;
+  priority?: string;
+  dueDate?: string;
+  callType?: string;
+  callDuration?: string;
+  callStart?: string;
+  industry?: string;
+  website?: string;
+  companySize?: string;
+  tag?: string;
+  lastActivityTime?: string;
+  backfilled?: boolean;
+}
+
+export type ZohoCrmMetaStringKey = {
+  [K in keyof ZohoCrmSourceMeta]-?: ZohoCrmSourceMeta[K] extends string | undefined ? K : never;
+}[keyof ZohoCrmSourceMeta];
+
+export function readZohoCrmMeta(sourceMeta: Record<string, unknown> | null | undefined): ZohoCrmSourceMeta | null {
+  const raw = sourceMeta?.zohoCrm;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  const module = typeof value.module === "string" ? value.module : null;
+  const recordId = typeof value.recordId === "string" ? value.recordId : null;
+  if (!module || !recordId) return null;
+  const meta: ZohoCrmSourceMeta = { module, recordId };
+  for (const key of [
+    "owner",
+    "createdTime",
+    "modifiedTime",
+    "stage",
+    "amount",
+    "closingDate",
+    "probability",
+    "leadStatus",
+    "leadSource",
+    "status",
+    "priority",
+    "dueDate",
+    "callType",
+    "callDuration",
+    "callStart",
+    "industry",
+    "website",
+    "companySize",
+    "tag",
+    "lastActivityTime",
+  ] as const) {
+    const rendered = readZohoCrmMetaString(value[key]);
+    if (rendered) meta[key] = rendered;
+  }
+  if (value.backfilled === true) meta.backfilled = true;
+  if (Array.isArray(value.related)) {
+    const related = value.related.filter((item): item is NonNullable<ZohoCrmSourceMeta["related"]>[number] => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const row = item as Record<string, unknown>;
+      return (
+        (row.role === "what" || row.role === "who" || row.role === "parent") &&
+        typeof row.module === "string" &&
+        typeof row.id === "string"
+      );
+    });
+    if (related.length > 0) meta.related = related;
+  }
+  return meta;
+}
+
+function readZohoCrmMetaString(value: unknown): string | undefined {
+  if (typeof value === "string") return value || undefined;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
 function serializeSourceMeta(value: Record<string, unknown> | undefined): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -76,6 +162,73 @@ export function viewerPrincipals(viewer: FileViewer): AccessPrincipal[] {
   }
   for (const lid of viewer.whatsappLids ?? []) principals.push({ type: "whatsapp_lid", value: lid });
   return normalizeAccessPrincipals(principals);
+}
+
+export type ThreadFileSelector = { threadId: string } | { rollupGroupId: string };
+
+interface ThreadFilesOptions {
+  connectorConfigId: string;
+  by: ThreadFileSelector;
+  visibility?: { principals: AccessPrincipal[]; slackEntitySyncEnabled: boolean };
+  excludeProviderFileId?: string;
+}
+
+/**
+ * Files that belong to one conversation: an email/LinkedIn/calendar thread
+ * (`thread_id`) or a CRM record rollup (`rollup_group_id`). One builder feeds
+ * both the page and the count so their predicates cannot drift.
+ */
+function threadFilesQuery(db: Kysely<DB>, opts: ThreadFilesOptions) {
+  let query = db
+    .selectFrom("indexed_files")
+    .where("indexed_files.is_archived", "=", 0)
+    .where("indexed_files.connector_config_id", "=", opts.connectorConfigId);
+  query =
+    "threadId" in opts.by
+      ? query.where("indexed_files.thread_id", "=", opts.by.threadId)
+      : query.where("indexed_files.rollup_group_id", "=", opts.by.rollupGroupId);
+  if (opts.excludeProviderFileId) {
+    query = query.where("indexed_files.provider_file_id", "!=", opts.excludeProviderFileId);
+  }
+  if (opts.visibility) {
+    query = query.where(
+      fileVisibilityRuleSql({
+        principals: opts.visibility.principals,
+        slackEntitySyncEnabled: opts.visibility.slackEntitySyncEnabled,
+        archived: "exclude",
+        alias: "indexed_files",
+      }),
+    );
+  }
+  return query;
+}
+
+export const THREAD_FILE_COLUMNS = [
+  "indexed_files.id",
+  "indexed_files.connector_config_id",
+  "indexed_files.file_name",
+  "indexed_files.file_type",
+  "indexed_files.source",
+  "indexed_files.provider_url",
+  "indexed_files.source_updated_at",
+  "indexed_files.source_created_at",
+  "indexed_files.thread_id",
+  "indexed_files.rollup_group_id",
+] as const;
+
+export async function listThreadFiles(db: Kysely<DB>, opts: ThreadFilesOptions & { limit: number; offset: number }) {
+  return threadFilesQuery(db, opts)
+    .select([...THREAD_FILE_COLUMNS])
+    .orderBy(sql`coalesce(indexed_files.source_updated_at, indexed_files.source_created_at) asc`)
+    .orderBy("indexed_files.id", "asc")
+    .limit(opts.limit)
+    .offset(opts.offset)
+    .execute();
+}
+
+export async function countThreadFiles(db: Kysely<DB>, opts: ThreadFilesOptions): Promise<number> {
+  const row = await threadFilesQuery(db, opts).select(sql<number>`count(*)`.as("count")).executeTakeFirst();
+  return Number(row?.count ?? 0);
 }
 
 type ResolvedPrincipal = { userId: string; userName: string | null; email: string | null };
@@ -1252,6 +1405,12 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
           "indexed_files.provider_file_id",
           "indexed_files.rollup_group_id",
           "indexed_files.source",
+          "indexed_files.thread_id",
+          "indexed_files.file_type",
+          "indexed_files.file_name",
+          "indexed_files.provider_url",
+          "indexed_files.source_updated_at",
+          "indexed_files.source_created_at",
         ])
         .where("indexed_files.id", "=", fileId)
         .where("indexed_files.is_archived", "=", 0);

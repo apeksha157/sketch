@@ -221,6 +221,10 @@ export function ManageConnectorDialog({
                     </>
                   )}
                 </Button>
+              ) : definition.channelProvisioned ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Fix the connection under Channels, then sync again.
+                </p>
               ) : (
                 <p className="mt-2 text-xs text-muted-foreground">Credentials can't be updated from this account.</p>
               )}

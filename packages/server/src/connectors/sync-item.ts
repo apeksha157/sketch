@@ -1,7 +1,8 @@
-import type { Kysely } from "kysely";
+import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
 import type { Logger } from "pino";
-import { createConnectorRepository } from "../db/repositories/connectors";
+import { type ZohoCrmSourceMeta, createConnectorRepository, readZohoCrmMeta } from "../db/repositories/connectors";
+import { type CrmFieldHistoryAppendRow, createCrmFieldHistoryRepository } from "../db/repositories/crm-field-history";
 import { createRawContentRepository } from "../db/repositories/raw-contents";
 import type { DB } from "../db/schema";
 import { normalizeSourceTimestampForStorage } from "../timestamps";
@@ -10,6 +11,11 @@ import { getSyncIdentity, getSyncIdentityForItem, syncIdentityKey } from "./sync
 import type { ConnectorType, SyncedItem } from "./types";
 
 type ConnectorRepository = ReturnType<typeof createConnectorRepository>;
+type SyncItemDb = Kysely<DB> | Transaction<DB>;
+
+const TRACKED_ZOHO_FIELDS = ["stage", "status", "leadStatus", "probability", "closingDate"] as const;
+
+export type TrackedZohoField = (typeof TRACKED_ZOHO_FIELDS)[number];
 
 export type ExistingContentHashMap = Map<
   string,
@@ -136,6 +142,10 @@ export async function processSyncedItem({
   }
 
   const existing = existingHashes.get(syncIdentityKey(getSyncIdentityForItem(item, connectorConfigId, connectorType)));
+  const zohoFieldChanges =
+    connectorType === "zoho_crm"
+      ? diffTrackedZohoFields(readZohoCrmMeta(existing?.sourceMeta), readZohoCrmMeta(item.sourceMeta))
+      : [];
   const rollupGroupIds = uniqueRollupGroupIds([existing?.rollupGroupId, item.rollupGroupId ?? null]);
   const sourceCreatedAt =
     item.sourceCreatedAt === null || item.sourceCreatedAt === undefined
@@ -166,30 +176,34 @@ export async function processSyncedItem({
      * run is not saved and the next incremental sync re-fetches the detail.
      */
     const rawContentPersisted = await persistRawContent(db, existing.id, item, logger);
-    await db
-      .updateTable("indexed_files")
-      .set({
-        synced_at: new Date().toISOString(),
-        provider_file_id: item.providerFileId,
-        provider_message_id: item.providerMessageId ?? undefined,
-        thread_id: item.threadId ?? undefined,
-        file_name: item.fileName ?? undefined,
-        source_path: item.sourcePath ?? undefined,
-        provider_url: item.providerUrl ?? undefined,
-        file_type: item.fileType ?? undefined,
-        content_category: item.contentCategory ?? undefined,
-        source_created_at: sourceCreatedAt,
-        source_updated_at: sourceUpdatedAt,
-        ...(item.isAllDay !== undefined ? { is_all_day: item.isAllDay ? 1 : 0 } : {}),
-        mime_type: item.mimeType ?? undefined,
-        rollup_group_id: item.rollupGroupId ?? null,
-        ...(item.sourceMeta !== undefined && rawContentPersisted
-          ? { source_meta: JSON.stringify(item.sourceMeta) }
-          : {}),
-      })
-      .where("id", "=", existing.id)
-      .execute();
-
+    await db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("indexed_files")
+        .set({
+          synced_at: new Date().toISOString(),
+          provider_file_id: item.providerFileId,
+          provider_message_id: item.providerMessageId ?? undefined,
+          thread_id: item.threadId ?? undefined,
+          file_name: item.fileName ?? undefined,
+          source_path: item.sourcePath ?? undefined,
+          provider_url: item.providerUrl ?? undefined,
+          file_type: item.fileType ?? undefined,
+          content_category: item.contentCategory ?? undefined,
+          source_created_at: sourceCreatedAt,
+          source_updated_at: sourceUpdatedAt,
+          ...(item.isAllDay !== undefined ? { is_all_day: item.isAllDay ? 1 : 0 } : {}),
+          mime_type: item.mimeType ?? undefined,
+          rollup_group_id: item.rollupGroupId ?? null,
+          ...(item.sourceMeta !== undefined && rawContentPersisted
+            ? { source_meta: JSON.stringify(item.sourceMeta) }
+            : {}),
+        })
+        .where("id", "=", existing.id)
+        .execute();
+      if (rawContentPersisted) {
+        await appendZohoFieldHistory(trx, existing.id, item.providerFileId, sourceUpdatedAt ?? null, zohoFieldChanges);
+      }
+    });
     await repo.linkConnectorFile(connectorConfigId, existing.id);
     await syncItemAccess(repo, connectorConfigId, existing.id, item);
     return { kind: "unchanged", indexedFileId: existing.id, rollupGroupIds };
@@ -233,6 +247,7 @@ export async function processSyncedItem({
 
     await txRepo.linkConnectorFile(connectorConfigId, upsertResult.id);
     await syncItemAccess(txRepo, connectorConfigId, upsertResult.id, item);
+    await appendZohoFieldHistory(trx, upsertResult.id, item.providerFileId, sourceUpdatedAt ?? null, zohoFieldChanges);
     return upsertResult;
   });
 
@@ -249,6 +264,44 @@ export async function processSyncedItem({
   }
 
   return { kind: itemResult.created ? "created" : "updated", indexedFileId: itemResult.id, rollupGroupIds };
+}
+
+export function diffTrackedZohoFields(
+  before: ZohoCrmSourceMeta | null,
+  after: ZohoCrmSourceMeta | null,
+): Array<{ field: TrackedZohoField; oldValue: string; newValue: string }> {
+  if (!before || !after) return [];
+  return TRACKED_ZOHO_FIELDS.flatMap((field) => {
+    const oldValue = before[field];
+    const newValue = after[field];
+    if (!oldValue || !newValue || oldValue === newValue) return [];
+    return [{ field, oldValue, newValue }];
+  });
+}
+
+async function appendZohoFieldHistory(
+  db: SyncItemDb,
+  indexedFileId: string,
+  providerFileId: string,
+  sourceModifiedAt: string | null,
+  changes: ReturnType<typeof diffTrackedZohoFields>,
+): Promise<void> {
+  if (changes.length === 0) return;
+  const entity = await db
+    .selectFrom("entity_source_refs")
+    .select("entity_id")
+    .where("source", "=", "zoho_crm")
+    .where("source_id", "=", providerFileId)
+    .executeTakeFirst();
+  const rows: CrmFieldHistoryAppendRow[] = changes.map((change) => ({
+    indexedFileId,
+    entityId: entity?.entity_id ?? null,
+    field: change.field,
+    oldValue: change.oldValue,
+    newValue: change.newValue,
+    sourceModifiedAt,
+  }));
+  await createCrmFieldHistoryRepository(db).append(rows);
 }
 
 /** Returns true when there was nothing to persist or the upsert succeeded. */

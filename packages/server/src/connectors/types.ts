@@ -360,6 +360,7 @@ export interface ContactPointSeed {
   source: string;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  lastRepliedAt?: string | null;
   makePrimary?: boolean;
   phoneCountry?: PhoneCountryCode | null;
 }
@@ -437,7 +438,11 @@ export type IndexedFileFactRaw =
       sourceRefKey: string;
     }
   | { providerFileId: string; author: { name?: string; email?: string; sourceId?: string } }
-  | { providerFileId: string; parent: { source: string; sourceId: string; contextSnippet?: string } }
+  | {
+      providerFileId: string;
+      parent: { source: string; sourceId: string; contextSnippet?: string };
+      selfRecord?: boolean;
+    }
   | {
       indexedFileId: string;
       task: NonNullable<SyncedItem["task"]>;
@@ -550,6 +555,15 @@ export interface Connector {
 
   /** Whether one sync enumerates the complete source corpus for stale-file reconciliation. */
   readonly syncIsCompleteSnapshot?: boolean;
+
+  /**
+   * Whether the connector row is provisioned automatically when its messaging
+   * channel is configured under Settings, rather than created through the
+   * connectors API. The Files page may sync such a connector but must not
+   * disconnect it or rotate its credentials: the channel owns that lifecycle,
+   * and a deleted row would just be re-provisioned on the next startup.
+   */
+  readonly channelProvisioned?: boolean;
 
   /**
    * File types that should be promoted to entities during sync.
