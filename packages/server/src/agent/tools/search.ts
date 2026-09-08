@@ -1,10 +1,13 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
+import { sql } from "kysely";
 import { z } from "zod/v4";
 import { resolveContentPrincipals } from "../../access/principals";
+import { idInList } from "../../connectors/id-in-list";
 import {
   KIND_TO_RULES,
   SEARCHABLE_SOURCES,
   SEARCH_KINDS,
+  filterAccessibleFileIds,
   getFileContent,
   kindsForSource,
   normalizeDomainFilter,
@@ -113,17 +116,26 @@ export const getEntityContextToolSchema = {
     .describe("ISO date string. Only return mentions after this date. Example: '2026-03-01'."),
 };
 
-export const getFileContentToolDescription = `Retrieve the content of an indexed file by its ID. Use this after Search returns a relevant result and you need the complete text — e.g. a meeting summary, complete document, or full task description.
+export const getFileContentToolDescription = `Retrieve the content of one indexed file by ID, or a batch of up to 20 indexed files by ID. Use this after Search returns relevant results and you need the complete text — e.g. meeting summaries, complete documents, or full task descriptions.
 
 Pass view: "full" to get the raw stored version where one exists — for meetings this is the complete sentence-by-sentence transcript with speakers and timestamps. Full view is paged; pass the offset from the previous page's footer to continue reading.
 
-The ID comes from a previous Search result.`;
+Batch reads use fileIds and return JSON in the same order requested, including duplicates. Batch reads are summary/indexed-content only: view and offset are single-file only. maxCharsPerFile is batch-only and defaults to 2000. Batch reads share one total content cap across all files (50000 characters on the public MCP), so a large batch with a high maxCharsPerFile is cut from the tail and marked contentTruncated.`;
 
 /** Page size for view: "full" responses on every surface (JS string length, the same metric as offsets). */
 export const FULL_CONTENT_PAGE_CHARS = 50_000;
 
 export const getFileContentToolSchema = {
-  fileId: z.string().describe("The indexed file ID from a Search result."),
+  fileId: z
+    .string()
+    .optional()
+    .describe("The indexed file ID from a Search result. Use exactly one of fileId or fileIds."),
+  fileIds: z
+    .array(z.string())
+    .min(1)
+    .max(20)
+    .optional()
+    .describe("Batch of indexed file IDs from Search results. Use exactly one of fileId or fileIds."),
   view: z
     .enum(["summary", "full"])
     .optional()
@@ -136,6 +148,13 @@ export const getFileContentToolSchema = {
     .min(0)
     .optional()
     .describe('Character offset to continue a paged view: "full" read. Only valid with view: "full".'),
+  maxCharsPerFile: z
+    .number()
+    .int()
+    .min(1)
+    .max(10000)
+    .optional()
+    .describe("Batch-only per-file indexed-content cap. Defaults to 2000."),
 };
 
 export type SearchArgs = z.infer<z.ZodObject<typeof searchToolSchema>>;
@@ -561,9 +580,21 @@ export async function handleGetEntityContext(
 }
 
 export async function handleGetFileContent(
-  { fileId, view, offset }: GetFileContentArgs,
+  { fileId, fileIds, view, offset, maxCharsPerFile }: GetFileContentArgs,
   deps: SketchMcpDeps,
 ): Promise<ToolResult> {
+  if ((fileId === undefined) === (fileIds === undefined)) {
+    return { content: [{ type: "text", text: "Exactly one of fileId or fileIds is required." }], isError: true };
+  }
+  if (fileIds !== undefined && view !== undefined) {
+    return { content: [{ type: "text", text: "view is only valid with fileId, not fileIds." }], isError: true };
+  }
+  if (fileIds !== undefined && offset !== undefined) {
+    return { content: [{ type: "text", text: "offset is only valid with fileId, not fileIds." }], isError: true };
+  }
+  if (fileId !== undefined && maxCharsPerFile !== undefined) {
+    return { content: [{ type: "text", text: "maxCharsPerFile is only valid with fileIds." }], isError: true };
+  }
   if (offset !== undefined && view !== "full") {
     return { content: [{ type: "text", text: 'offset is only valid with view: "full".' }], isError: true };
   }
@@ -571,13 +602,62 @@ export async function handleGetFileContent(
     return { content: [{ type: "text", text: "File content not available." }] };
   }
   const userPrincipals = await resolveContentPrincipals(contentPrincipalDeps(deps));
-  if (deps.publicMcp && userPrincipals !== undefined && userPrincipals.length === 0) {
-    return { content: [{ type: "text", text: `File ${fileId} not found.` }] };
+  if (fileIds !== undefined) {
+    const visibleFileIds = await filterAccessibleFileIds(
+      deps.db,
+      fileIds,
+      userPrincipals,
+      deps.slackEntitySyncEnabled ?? true,
+    );
+    const visibleIdList = [...visibleFileIds];
+    const rows =
+      visibleIdList.length > 0
+        ? await deps.db
+            .selectFrom("indexed_files")
+            .select(["id", "file_name", "source", "provider_url", "content", "summary"])
+            .where(idInList(deps.db, sql.ref("indexed_files.id"), visibleIdList))
+            .execute()
+        : [];
+    const fileById = new Map(rows.map((row) => [row.id, row]));
+    const perFileCap = maxCharsPerFile ?? 2000;
+    const totalCap = deps.publicMcp?.maxFileContentChars ?? 50_000;
+    let remaining = totalCap;
+    let contentTruncated = false;
+
+    const files = fileIds.map((requestedFileId) => {
+      const file = fileById.get(requestedFileId);
+      if (!file) return { fileId: requestedFileId, found: false };
+
+      const fullContent = file.content ?? file.summary ?? "(no content)";
+      const content = remaining > 0 ? fullContent.slice(0, Math.min(perFileCap, remaining)) : "";
+      const fileContentTruncated = remaining <= 0 || content.length < fullContent.length;
+      remaining -= content.length;
+      contentTruncated = contentTruncated || fileContentTruncated;
+
+      return {
+        fileId: requestedFileId,
+        found: true,
+        fileName: file.file_name,
+        source: file.source,
+        url: file.provider_url,
+        content,
+        contentTruncated: fileContentTruncated,
+      };
+    });
+
+    return { content: [{ type: "text", text: JSON.stringify({ files, contentTruncated }, null, 2) }] };
   }
-  const file = await getFileContent(deps.db, fileId, userPrincipals, deps.slackEntitySyncEnabled ?? true);
+  const singleFileId = fileId;
+  if (singleFileId === undefined) {
+    return { content: [{ type: "text", text: "Exactly one of fileId or fileIds is required." }], isError: true };
+  }
+  if (deps.publicMcp && userPrincipals !== undefined && userPrincipals.length === 0) {
+    return { content: [{ type: "text", text: `File ${singleFileId} not found.` }] };
+  }
+  const file = await getFileContent(deps.db, singleFileId, userPrincipals, deps.slackEntitySyncEnabled ?? true);
 
   if (!file) {
-    return { content: [{ type: "text", text: `File ${fileId} not found.` }] };
+    return { content: [{ type: "text", text: `File ${singleFileId} not found.` }] };
   }
 
   const lines: string[] = [];
@@ -592,7 +672,7 @@ export async function handleGetFileContent(
      * The raw lookup runs only after getFileContent above vetted the id
      * against the caller's principals — getRawContent has no ACL of its own.
      */
-    const raw = await createRawContentRepository(deps.db).getRawContent(fileId, "transcript");
+    const raw = await createRawContentRepository(deps.db).getRawContent(singleFileId, "transcript");
     const chosen =
       raw?.content ??
       `(no separate raw version stored — returning indexed content)\n\n${file.content ?? file.summary ?? "(no content)"}`;
