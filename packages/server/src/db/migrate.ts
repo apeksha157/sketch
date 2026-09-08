@@ -236,6 +236,7 @@ import * as m233CrmFieldHistory from "./migrations/233-crm-field-history";
 import * as m233WebhookEndpointSlots from "./migrations/233-webhook-endpoint-slots";
 import * as m234EntityTouchStats from "./migrations/234-entity-touch-stats";
 import * as m235 from "./migrations/235-benchmark-workspace";
+import * as m236 from "./migrations/236-requeue-linkedin-conversation-summaries";
 import type { DB } from "./schema";
 
 /**
@@ -481,6 +482,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "233-webhook-endpoint-slots": m233WebhookEndpointSlots,
           "234-entity-touch-stats": m234EntityTouchStats,
           "235-benchmark-workspace": m235,
+          "236-requeue-linkedin-conversation-summaries": m236,
         };
       },
     },

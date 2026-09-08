@@ -5,6 +5,7 @@ import { search } from "../../connectors/search";
 import { createUserRepository } from "../../db/repositories/users";
 import type { DB } from "../../db/schema";
 import { createTestDb, spyOnExecutedSql } from "../../test-utils";
+import { handleGetThread } from "./get-thread";
 import {
   handleGetEntityContext,
   handleGetFileContent,
@@ -570,6 +571,205 @@ it("normalizes legacy person subtypes in search and context output", async () =>
 
   const searchResult = await handleSearch({ query: "Legacy Person" }, deps());
   expect(searchResult.content[0]?.text).toContain("(external)");
+});
+
+it("collapses LinkedIn thread segments, expands on request, and still collapses email threads", async () => {
+  const now = new Date().toISOString();
+  await db
+    .insertInto("connector_configs")
+    .values([
+      {
+        id: "cfg-search-tools-linkedin",
+        connector_type: "linkedin_aimfox",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+      {
+        id: "cfg-search-tools-gmail",
+        connector_type: "gmail",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      },
+    ])
+    .execute();
+
+  await db
+    .insertInto("indexed_files")
+    .values([
+      {
+        id: "linkedin-segment-1",
+        connector_config_id: "cfg-search-tools-linkedin",
+        provider_file_id: "linkedin-segment-1",
+        thread_id: "linkedin-thread-1",
+        file_name: "LinkedIn thread with Maya 1",
+        file_type: "linkedin_conversation",
+        content_category: "document",
+        source: "linkedin_aimfox",
+        content: "linkedin collapse marker first segment",
+        summary: "First LinkedIn segment summary",
+        access_scope_id: "scope-alice",
+        source_created_at: "2026-09-01T10:00:00.000Z",
+        source_updated_at: "2026-09-01T10:00:00.000Z",
+        source_meta: JSON.stringify({
+          segmentManifest: {
+            messageCount: 5,
+            inboundCount: 3,
+            outboundCount: 2,
+            lastInboundAt: "2026-09-01T10:00:00.000Z",
+            lastOutboundAt: "2026-09-01T09:00:00.000Z",
+          },
+        }),
+        synced_at: now,
+      },
+      {
+        id: "linkedin-segment-2",
+        connector_config_id: "cfg-search-tools-linkedin",
+        provider_file_id: "linkedin-segment-2",
+        thread_id: "linkedin-thread-1",
+        file_name: "LinkedIn thread with Maya 2",
+        file_type: "linkedin_conversation",
+        content_category: "document",
+        source: "linkedin_aimfox",
+        content: "linkedin collapse marker second segment",
+        summary: "Second LinkedIn segment summary",
+        access_scope_id: "scope-alice",
+        source_created_at: "2026-09-03T10:00:00.000Z",
+        source_updated_at: "2026-09-03T10:00:00.000Z",
+        source_meta: JSON.stringify({
+          segmentManifest: {
+            messageCount: 3,
+            inboundCount: 2,
+            outboundCount: 1,
+            lastInboundAt: "2026-09-03T10:00:00.000Z",
+            lastOutboundAt: "2026-09-03T09:00:00.000Z",
+          },
+        }),
+        synced_at: now,
+      },
+      {
+        id: "linkedin-segment-3",
+        connector_config_id: "cfg-search-tools-linkedin",
+        provider_file_id: "linkedin-segment-3",
+        thread_id: "linkedin-thread-1",
+        file_name: "Maya follow-up part 3",
+        file_type: "linkedin_conversation",
+        content_category: "document",
+        source: "linkedin_aimfox",
+        content: "visible unscored segment",
+        summary: "Third Maya segment summary",
+        access_scope_id: "scope-alice",
+        source_created_at: "2026-09-02T10:00:00.000Z",
+        source_updated_at: "2026-09-02T10:00:00.000Z",
+        source_meta: JSON.stringify({
+          segmentManifest: {
+            messageCount: 2,
+            inboundCount: 1,
+            outboundCount: 1,
+            lastInboundAt: null,
+            lastOutboundAt: "2026-09-02T10:00:00.000Z",
+          },
+        }),
+        synced_at: now,
+      },
+      {
+        id: "email-thread-1",
+        connector_config_id: "cfg-search-tools-gmail",
+        provider_file_id: "email-thread-1",
+        provider_message_id: "<email-thread-1@example.com>",
+        thread_id: "email-thread-1",
+        file_name: "Email thread first",
+        file_type: "email_message",
+        content_category: "document",
+        source: "gmail",
+        content: "email collapse marker first",
+        summary: "First email summary",
+        access_scope_id: "scope-alice",
+        source_created_at: "2026-09-01T10:00:00.000Z",
+        source_updated_at: "2026-09-01T10:00:00.000Z",
+        synced_at: now,
+      },
+      {
+        id: "email-thread-2",
+        connector_config_id: "cfg-search-tools-gmail",
+        provider_file_id: "email-thread-2",
+        provider_message_id: "<email-thread-2@example.com>",
+        thread_id: "email-thread-1",
+        file_name: "Email thread second",
+        file_type: "email_message",
+        content_category: "document",
+        source: "gmail",
+        content: "email collapse marker second",
+        summary: "Second email summary",
+        access_scope_id: "scope-alice",
+        source_created_at: "2026-09-02T10:00:00.000Z",
+        source_updated_at: "2026-09-02T10:00:00.000Z",
+        synced_at: now,
+      },
+    ])
+    .execute();
+  await db
+    .insertInto("email_message_envelopes")
+    .values([
+      {
+        indexed_file_id: "email-thread-1",
+        connector_config_id: "cfg-search-tools-gmail",
+        provider_file_id: "email-thread-1",
+        provider_message_id: "<email-thread-1@example.com>",
+        thread_id: "email-thread-1",
+        subject: "Email first",
+        sent_at: "2026-09-01T10:00:00.000Z",
+        from_json: JSON.stringify({ name: "Maya", email: "maya@example.com" }),
+        to_json: JSON.stringify([{ name: "Owner", email: "owner@example.com" }]),
+        cc_json: JSON.stringify([]),
+        owner_email: "owner@example.com",
+        provider_url: null,
+      },
+      {
+        indexed_file_id: "email-thread-2",
+        connector_config_id: "cfg-search-tools-gmail",
+        provider_file_id: "email-thread-2",
+        provider_message_id: "<email-thread-2@example.com>",
+        thread_id: "email-thread-1",
+        subject: "Email second",
+        sent_at: "2026-09-02T10:00:00.000Z",
+        from_json: JSON.stringify({ name: "Maya", email: "maya@example.com" }),
+        to_json: JSON.stringify([{ name: "Owner", email: "owner@example.com" }]),
+        cc_json: JSON.stringify([]),
+        owner_email: "owner@example.com",
+        provider_url: null,
+      },
+    ])
+    .execute();
+
+  const collapsed = await handleSearch({ query: "linkedin collapse marker", source: "linkedin_aimfox" }, deps());
+  const collapsedText = collapsed.content[0]?.text ?? "";
+  expect(collapsedText).toContain("LinkedIn thread with Maya");
+  expect(collapsedText).toContain("thread: 10 messages, 6 in / 4 out, last from them (2026-09-03)");
+  expect(collapsedText.match(/sketchId: linkedin-segment-/g)).toHaveLength(1);
+
+  const bestId = collapsedText.match(/sketchId: (linkedin-segment-\d)/)?.[1];
+  expect(bestId).toBeTruthy();
+  const thread = await handleGetThread({ fileId: bestId ?? "" }, deps());
+  const parsedThread = JSON.parse(thread.content[0]?.text ?? "{}") as { total: number };
+  expect(parsedThread.total).toBe(3);
+
+  const expanded = await handleSearch(
+    {
+      query: "linkedin collapse marker",
+      source: "linkedin_aimfox",
+      expandThreads: true,
+    },
+    deps(),
+  );
+  const expandedText = expanded.content[0]?.text ?? "";
+  expect(expandedText.match(/sketchId: linkedin-segment-/g)).toHaveLength(2);
+
+  const email = await handleSearch({ query: "email collapse marker", kind: "email" }, deps());
+  const emailText = email.content[0]?.text ?? "";
+  expect(emailText.match(/sketchId: email-thread-/g)).toHaveLength(1);
+  expect(emailText).toContain("Email second");
 });
 
 function deps() {
