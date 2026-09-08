@@ -179,9 +179,6 @@ async function deliverMessageToUser(
   if (!deps.userRepo || !deps.sendDm || !deps.currentUserId) {
     return { status: "failed", error: "messaging is not available in this context." };
   }
-  if (params.recipientUserId === deps.currentUserId) {
-    return { status: "failed", error: "cannot send a message to yourself." };
-  }
 
   const recipient = await deps.userRepo.findById(params.recipientUserId);
   if (!recipient) return { status: "failed", error: "user not found." };
