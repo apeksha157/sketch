@@ -31,6 +31,7 @@ export interface UseWebChatReconciliationParams<TMessage extends ReconciliationM
   ) => Promise<{ messages: TMessage[]; updatedAt: string | null }>;
   setMessages: (messages: TMessage[]) => void;
   clearError: () => void;
+  mergeMessages?: (current: TMessage[], incoming: TMessage[]) => TMessage[];
 }
 
 export interface WebChatReconciliationResult {
@@ -48,6 +49,97 @@ function latestUserMessageId(messages: ReconciliationMessage[]): string | null {
 
 function containsMessage(messages: ReconciliationMessage[], messageId: string | null): boolean {
   return !messageId || messages.some((message) => message.id === messageId);
+}
+
+type ProgressSnapshotMessage = ReconciliationMessage & {
+  parts?: unknown;
+};
+
+function progressPartId(part: unknown): string | null {
+  if (!part || typeof part !== "object") return null;
+  const value = (part as { id?: unknown }).id;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function progressItemId(item: unknown): string | null {
+  if (!item || typeof item !== "object") return null;
+  const value = (item as { id?: unknown }).id;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function progressItemRevision(item: unknown): number | null {
+  if (!item || typeof item !== "object") return null;
+  const value = (item as { revision?: unknown }).revision;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function mergeProgressPart(currentPart: unknown, incomingPart: unknown): unknown {
+  if (!incomingPart || typeof incomingPart !== "object") return incomingPart;
+  const incomingRecord = incomingPart as { type?: unknown; data?: unknown };
+  if (incomingRecord.type !== "data-progress" || !incomingRecord.data || typeof incomingRecord.data !== "object") {
+    return incomingPart;
+  }
+  if (!currentPart || typeof currentPart !== "object") return incomingPart;
+  const currentRecord = currentPart as { data?: unknown };
+  if (!currentRecord.data || typeof currentRecord.data !== "object") return incomingPart;
+
+  const incomingData = incomingRecord.data as { items?: unknown };
+  const currentData = currentRecord.data as { items?: unknown };
+  if (!Array.isArray(incomingData.items) || !Array.isArray(currentData.items)) return incomingPart;
+
+  const currentItemsById = new Map<string, unknown>();
+  for (const item of currentData.items) {
+    const id = progressItemId(item);
+    if (id) currentItemsById.set(id, item);
+  }
+
+  const mergedItems = incomingData.items.map((incomingItem) => {
+    const id = progressItemId(incomingItem);
+    if (!id) return incomingItem;
+    const currentItem = currentItemsById.get(id);
+    if (!currentItem) return incomingItem;
+    const incomingRevision = progressItemRevision(incomingItem);
+    const currentRevision = progressItemRevision(currentItem);
+    if (incomingRevision === null || currentRevision === null || currentRevision <= incomingRevision) {
+      return incomingItem;
+    }
+    return currentItem;
+  });
+
+  return {
+    ...incomingRecord,
+    data: { ...incomingData, items: mergedItems },
+  };
+}
+
+/**
+ * Reconciles persisted progress snapshots without allowing an older snapshot to regress a newer invocation.
+ * Incoming message and part order remains authoritative, and rows absent from the incoming snapshot stay removed.
+ */
+export function mergeProgressMessageSnapshots<TMessage extends ProgressSnapshotMessage>(
+  current: TMessage[],
+  incoming: TMessage[],
+): TMessage[] {
+  const currentByMessageId = new Map(current.map((message) => [message.id, message]));
+  return incoming.map((incomingMessage) => {
+    const currentMessage = currentByMessageId.get(incomingMessage.id);
+    if (!currentMessage || !Array.isArray(incomingMessage.parts) || !Array.isArray(currentMessage.parts)) {
+      return incomingMessage;
+    }
+
+    const currentPartsById = new Map<string, unknown>();
+    for (const part of currentMessage.parts) {
+      const id = progressPartId(part);
+      if (id) currentPartsById.set(id, part);
+    }
+
+    const parts = incomingMessage.parts.map((part) => {
+      const id = progressPartId(part);
+      if (!id) return part;
+      return mergeProgressPart(currentPartsById.get(id), part);
+    });
+    return { ...incomingMessage, parts };
+  });
 }
 
 function isReconciliationActive<TMessage extends ReconciliationMessage>(
@@ -172,7 +264,9 @@ export function useWebChatReconciliation<TMessage extends ReconciliationMessage>
         const latestUserId = latestUserMessageId(currentParams.messages);
         if (!containsMessage(messages, latestUserId)) return;
 
-        currentParams.setMessages(messages);
+        currentParams.setMessages(
+          currentParams.mergeMessages ? currentParams.mergeMessages(currentParams.messages, messages) : messages,
+        );
         currentParams.clearError();
         adopted = true;
         adoptedPendingProgress = currentParams.hasPendingProgress(messages);

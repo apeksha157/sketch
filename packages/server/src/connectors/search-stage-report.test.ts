@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "../db/schema";
 import { createTestDb } from "../test-utils";
 import type { StageReport } from "./enrichment-stage-report";
-import { search } from "./search";
+import { RBAC_MODE_SQLITE, search } from "./search";
 
 let db: Kysely<DB>;
 
@@ -109,6 +109,12 @@ describe("search stage reporting", () => {
     expect(stages.indexOf("ftsCandidates")).toBeLessThan(stages.indexOf("fuse"));
     expect(stages.indexOf("fuse")).toBeLessThan(stages.indexOf("filter"));
     expect(stages.indexOf("filter")).toBeLessThan(stages.indexOf("finalize"));
+
+    const filter = reports.find((report) => report.stage === "filter");
+    expect(filter?.outcomes?.find((outcome) => outcome.kind === "bodylessCrmActivities")).toMatchObject({
+      result: "kept",
+      reason: "structured CRM activity types summarized on parent objects",
+    });
   });
 
   it("skips embedQuery with a reason when no embedding provider is configured", async () => {
@@ -151,19 +157,25 @@ describe("search stage reporting", () => {
 
   it("marks a file the access filter denied", async () => {
     await insertFile("file-a");
+    await db
+      .insertInto("file_access")
+      .values({
+        indexed_file_id: "file-a",
+        principal_type: "email",
+        principal_value: "someone-else@example.com",
+      })
+      .execute();
     const reports: StageReport[] = [];
-    await search(db, "auth", {
+    const results = await search(db, "auth", {
       limit: 5,
       userPrincipals: [{ type: "email", value: "nobody@example.com" }],
       stageReport: (report) => reports.push(report),
     });
 
+    expect(results).toEqual([]);
     const rbac = reports.find((report) => report.stage === "rbac");
     expect(rbac?.status).toBe("done");
-    const candidates = reports.find((report) => report.stage === "finalize")?.candidates ?? [];
-    for (const candidate of candidates) {
-      if (candidate.droppedAt === "rbac") expect(candidate.dropReason).toBe("no matching access principal");
-    }
+    expect(rbac?.summary?.mode).toBe(RBAC_MODE_SQLITE);
   });
 
   it("reports resolveEntities as skipped when the search was not entity-scoped", async () => {

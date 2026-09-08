@@ -7,6 +7,7 @@ import { Kysely, SqliteDialect, sql } from "kysely";
 import pino from "pino";
 import { inject, vi } from "vitest";
 import type { Config } from "./config";
+import { ensureSqliteVecTables } from "./db/index";
 import type { DB } from "./db/schema";
 import { PG_TEMPLATE_PATH } from "./test-global-setup-pg";
 
@@ -65,12 +66,31 @@ export async function createTestDb(): Promise<Kysely<DB>> {
   return db;
 }
 
-export function spyOnExecutedSql(db: Kysely<DB>): { readonly count: number; sqls: string[] } {
+/** Creates an isolated in-memory SQLite database with the search vector tables available. */
+export async function createTestSqliteVecDb(): Promise<Kysely<DB>> {
+  const buf = await getTemplateBuffer();
+  const raw = new Database(buf);
+  const sqliteVec = await import("sqlite-vec");
+  sqliteVec.load(raw);
+  ensureSqliteVecTables(raw);
+  const db = new Kysely<DB>({ dialect: new SqliteDialect({ database: raw }) });
+  await db.selectFrom("users").select("id").limit(0).execute();
+  return db;
+}
+
+export function spyOnExecutedSql(db: Kysely<DB>): {
+  readonly count: number;
+  sqls: string[];
+  queries: Array<{ sql: string; parameters: readonly unknown[] }>;
+  mockRestore: () => void;
+} {
   const sqls: string[] = [];
+  const queries: Array<{ sql: string; parameters: readonly unknown[] }> = [];
   const executor = db.getExecutor();
   const executeQuery = executor.executeQuery.bind(executor);
-  vi.spyOn(executor, "executeQuery").mockImplementation((query) => {
+  const spy = vi.spyOn(executor, "executeQuery").mockImplementation((query) => {
     sqls.push(query.sql);
+    queries.push({ sql: query.sql, parameters: query.parameters });
     return executeQuery(query);
   });
   return {
@@ -78,6 +98,8 @@ export function spyOnExecutedSql(db: Kysely<DB>): { readonly count: number; sqls
       return sqls.length;
     },
     sqls,
+    queries,
+    mockRestore: () => spy.mockRestore(),
   };
 }
 
@@ -173,6 +195,7 @@ export function flush() {
 export function createTestConfig(overrides: Partial<Config> = {}): Config {
   return {
     DB_TYPE: "sqlite",
+    BENCHMARKS_ENABLED: false,
     SQLITE_PATH: ":memory:",
     SLACK_CHANNEL_HISTORY_LIMIT: 5,
     SLACK_THREAD_HISTORY_LIMIT: 50,
@@ -181,10 +204,6 @@ export function createTestConfig(overrides: Partial<Config> = {}): Config {
     WHATSAPP_RUNTIME_MODE: "inprocess",
     WHATSAPP_GATEWAY_PORT: 3901,
     WHATSAPP_HISTORY_LOOKBACK_DAYS: 30,
-    WHATSAPP_SLICE_GAP_MINUTES: 25,
-    WHATSAPP_SLICE_MAX_AGE_MINUTES: 120,
-    WHATSAPP_SLICE_MAX_MESSAGES: 50,
-    WHATSAPP_SALIENCE_BATCH_LIMIT: 50,
     WHATSAPP_EMISSION_REFRESH_DAYS: 7,
     WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES: 500,
     WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS: 20_000,

@@ -3,8 +3,8 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import type { DB } from "../db/schema";
 import type { GeminiGenerator } from "./gemini-generate";
+import { CRM_ACTIVITY_FILE_TYPES } from "./types";
 
-const CRM_ACTIVITY_FILE_TYPES = ["crm_task", "crm_note", "crm_call", "crm_event", "crm_meeting"] as const;
 const DEFAULT_MAX_GROUPS_PER_RUN = 100;
 const DEFAULT_ACTIVITY_CHUNK_SIZE = 50;
 const MAX_ACTIVITY_TEXT_CHARS = 1200;

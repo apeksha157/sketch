@@ -722,6 +722,8 @@ export interface EntityMention {
   id: string;
   contextSnippet: string | null;
   chunkIndex: number | null;
+  /** How the file links the entity: attended, authored, mentioned, … */
+  relation?: string;
   mentionedAt: string;
   sourceDate: string;
   file: {
@@ -1076,6 +1078,8 @@ export interface EntityTimelineItem {
   mentionConfidence: "EXTRACTED" | "INFERRED" | "AMBIGUOUS";
   mentionCount: number;
   contextSnippet: string | null;
+  /** Distinct mention relations for this file, structural before "mentioned". */
+  relations?: string[];
   url: string | null;
   rollupGroupId: string | null;
   crmActivity: {
@@ -1374,6 +1378,7 @@ export interface ConnectorConfig {
   authType: string;
   credentialSource?: "local" | "canvas";
   scopeConfig: Record<string, unknown>;
+  visibility?: "owner" | "workspace";
   hierarchyLevels?: HierarchyLevel[] | null;
   containerClassificationEnabled?: boolean;
 
@@ -2661,8 +2666,38 @@ export const api = {
           canUpdateCredentials?: boolean;
           canBrowseScope?: boolean;
           canEnrich?: boolean;
+          visibility?: "owner" | "workspace";
+          scopeConfig?: Record<string, unknown>;
         }>;
       }>("/api/connectors/mine");
+    },
+    updateEnrichment(id: string, enrichment: { enabled: boolean; dailyCap: number; autoMerge: boolean }) {
+      return request<{
+        connector: {
+          id: string;
+          connectorType: string;
+          scopeConfig: Record<string, unknown>;
+          visibility: "owner" | "workspace";
+          syncStatus: string;
+        };
+      }>(`/api/connectors/${id}/enrichment`, {
+        method: "PUT",
+        body: JSON.stringify(enrichment),
+      });
+    },
+    updateVisibility(id: string, visibility: "owner" | "workspace") {
+      return request<{
+        connector: {
+          id: string;
+          connectorType: string;
+          scopeConfig: Record<string, unknown>;
+          visibility: "owner" | "workspace";
+          syncStatus: string;
+        };
+      }>(`/api/connectors/${id}/visibility`, {
+        method: "PUT",
+        body: JSON.stringify({ visibility }),
+      });
     },
     rotateKey(id: string, apiKey: string) {
       return request<{ ok: boolean }>(`/api/connectors/${id}/rotate-key`, {
@@ -2888,6 +2923,11 @@ export const api = {
         run: { status: "unchanged" | "completed"; digestHash: string };
         proposals: ContainerClassificationProposal[];
       }>(`/api/connectors/${id}/container-classification`, { method: "POST" });
+    },
+  },
+  enrichment: {
+    allowance() {
+      return request<{ remaining: number; resetsAt: string | null }>("/api/enrichment/allowance");
     },
   },
   googleOAuth: {
@@ -3743,6 +3783,12 @@ export const api = {
     },
     snippets(id: string, fileId: string) {
       return request<{ quotes: string[] }>(`/api/entities/${id}/snippets?fileId=${encodeURIComponent(fileId)}`);
+    },
+    /** Whole indexed chunks the entity was found in, not read-time snippet windows. */
+    passages(id: string, fileId: string) {
+      return request<{ passages: { chunkIndex: number; text: string }[] }>(
+        `/api/entities/${id}/snippets?fileId=${encodeURIComponent(fileId)}&mode=passages`,
+      );
     },
     create(data: { name: string; sourceType: string; subtype?: string; aliases?: string[] }) {
       return request<{ entity: EntityListItem }>("/api/entities", {

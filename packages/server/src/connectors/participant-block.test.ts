@@ -22,7 +22,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import type { DB } from "../db/schema";
 import { createTestDb } from "../test-utils";
-import { buildParticipantBlock, parseActionItemOwners } from "./participant-block";
+import { assertNoRawSlackIdentifiers, buildParticipantBlock, parseActionItemOwners } from "./participant-block";
+import { seedSlackInterleavedStreamFiles, seedSlackSliceFile } from "./participant-block-slack-fixture";
 
 const testLogger = pino({ enabled: false });
 
@@ -332,5 +333,125 @@ describe("buildWhatsAppSpeakerBlock via buildParticipantBlock", () => {
     const block = await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" });
     expect(block).toContain("Meeting participants");
     await db.destroy();
+  });
+});
+
+describe("buildSlackSpeakerBlock via buildParticipantBlock", () => {
+  let db!: Kysely<DB>;
+
+  beforeEach(async () => {
+    db = await createTestDb();
+    await seedConnector(db);
+  });
+
+  afterEach(async () => {
+    await db.destroy();
+  });
+
+  it("lists only the denoised speakers with their roster affiliation and email", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, { fileId, connectorConfigId: CONNECTOR_ID });
+
+    const block = await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" });
+
+    expect(block).toContain("Conversation participants (spoke in this chunk)");
+    expect(block).toContain("- Dana Teammate (teammate) · dana@example.com");
+    expect(block).toContain("- Ray External (external)");
+    expect(block).not.toContain("Quiet Member");
+    expect(block).not.toContain("U0SPEAKER1");
+    expect(block).not.toContain("U0QUIET001");
+  });
+
+  it("falls back to the first..last id range when denoised ids are absent", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, { fileId, connectorConfigId: CONNECTOR_ID, denoised: false });
+
+    const block = await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" });
+
+    expect(block).toContain("- Dana Teammate (teammate) · dana@example.com");
+    expect(block).toContain("- Ray External (external)");
+    expect(block).toContain("- Quiet Member (external)");
+  });
+
+  it("renders nothing when the slice carries no usable roster snapshot", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, { fileId, connectorConfigId: CONNECTOR_ID, rosterSnapshot: "[]" });
+
+    expect(await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" })).toBe("");
+  });
+
+  it("folds the id-range fallback by stream so channel and thread slices stay separate", async () => {
+    const channelFileId = randomUUID();
+    const threadFileId = randomUUID();
+    await seedFile(db, channelFileId);
+    await seedFile(db, threadFileId);
+    await seedSlackInterleavedStreamFiles(db, { channelFileId, threadFileId });
+
+    const channelBlock = await buildParticipantBlock(
+      { db, logger: testLogger },
+      { fileId: channelFileId, fileContent: "" },
+    );
+    const threadBlock = await buildParticipantBlock(
+      { db, logger: testLogger },
+      { fileId: threadFileId, fileContent: "" },
+    );
+
+    expect(channelBlock).toContain("- Cara Channel (teammate) · cara@example.com");
+    expect(channelBlock).not.toContain("Theo Thread");
+    expect(threadBlock).toContain("- Theo Thread (external)");
+    expect(threadBlock).not.toContain("Cara Channel");
+  });
+
+  it("refuses a leaked roster id but accepts capitalised company-style names", () => {
+    const rosterIds = ["U0SPEAKER1", "U0SPEAKER2", "U0QUIET001"];
+    expect(() => assertNoRawSlackIdentifiers("- Dana Teammate (teammate)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- UNITEDHEALTH (entity)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- WELLSFARGO (entity)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- UNILEVER1 (entity)", rosterIds)).not.toThrow();
+    expect(() => assertNoRawSlackIdentifiers("- U0SPEAKER1 (external)", rosterIds)).toThrow(/raw Slack user id/);
+    expect(() => assertNoRawSlackIdentifiers("- <@U123> (external)", rosterIds)).toThrow(/raw Slack user id/);
+  });
+
+  it("renders a chunk whose speakers carry capitalised entity display names", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, {
+      fileId,
+      connectorConfigId: CONNECTOR_ID,
+      rosterSnapshot: JSON.stringify({
+        channelId: "C0PBTEST",
+        channelName: "pb-test",
+        participants: [
+          { slackUserId: "U0SPEAKER1", displayName: "UNITEDHEALTH", kind: "entity", email: null },
+          { slackUserId: "U0SPEAKER2", displayName: "WELLSFARGO", kind: "entity", email: null },
+        ],
+      }),
+    });
+
+    const block = await buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" });
+
+    expect(block).toContain("- UNITEDHEALTH (entity)");
+    expect(block).toContain("- WELLSFARGO (entity)");
+  });
+
+  it("refuses a chunk whose roster leaked a raw Slack id as a display name", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await seedSlackSliceFile(db, {
+      fileId,
+      connectorConfigId: CONNECTOR_ID,
+      rosterSnapshot: JSON.stringify({
+        channelId: "C0PBTEST",
+        channelName: "pb-test",
+        participants: [{ slackUserId: "U0SPEAKER1", displayName: "U0SPEAKER1", kind: "external", email: null }],
+      }),
+    });
+
+    await expect(buildParticipantBlock({ db, logger: testLogger }, { fileId, fileContent: "" })).rejects.toThrow(
+      /raw Slack user id/,
+    );
   });
 });

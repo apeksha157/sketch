@@ -817,6 +817,41 @@ describe("createEntityRepository contact points", () => {
     ]);
   });
 
+  it("keeps the newest contact point reply timestamp", async () => {
+    const entity = await repo.upsertPersonEntity({
+      name: "Reply Lead",
+      subtype: "external",
+      source: "seed",
+      sourceId: "seed:reply-lead",
+    });
+
+    await repo.upsertContactPoint({
+      entityId: entity.id,
+      kind: "linkedin",
+      value: "reply-lead",
+      source: "aimfox",
+      lastRepliedAt: "2026-01-03T00:00:00.000Z",
+    });
+    await repo.upsertContactPoint({
+      entityId: entity.id,
+      kind: "linkedin",
+      value: "reply-lead",
+      source: "aimfox",
+      lastRepliedAt: "2026-01-01T00:00:00.000Z",
+    });
+    await repo.upsertContactPoint({
+      entityId: entity.id,
+      kind: "linkedin",
+      value: "reply-lead",
+      source: "aimfox",
+      lastRepliedAt: null,
+    });
+
+    const rows = await repo.getContactPointsForEntity(entity.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.last_replied_at).toBe("2026-01-03T00:00:00.000Z");
+  });
+
   it("finds people by either contact point email or metadata email", async () => {
     const metadataOnly = await repo.upsertPersonEntity({
       name: "Metadata Person",

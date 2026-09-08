@@ -9,6 +9,8 @@ import { randomUUID } from "node:crypto";
 import { type Kysely, sql } from "kysely";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
+import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
+import { createEntityRepository } from "../db/repositories/entities";
 import type { DB } from "../db/schema";
 import { getSharedPgDb } from "../test-utils";
 import { clearEnrichmentData } from "./enrichment";
@@ -178,6 +180,70 @@ describe("file_embeddings on Postgres", () => {
 
     expect(rows.rows).toHaveLength(1);
     expect(rows.rows[0].indexed_file_id).toBe(fileId);
+  });
+
+  it("preserves summary enrichment on an embeddings-only content refresh", async () => {
+    const fileId = randomUUID();
+    await seedFile(db, fileId);
+    await db
+      .updateTable("indexed_files")
+      .set({ content_hash: "old-hash", embedding_status: "done", summary_status: "done", summary: "Old summary" })
+      .where("id", "=", fileId)
+      .execute();
+    const entity = await createEntityRepository(db).upsertEntity({
+      name: "Acme",
+      sourceType: "company",
+      status: "confirmed",
+    });
+    await createEntityRepository(db).createMention({
+      entityId: entity.id,
+      indexedFileId: fileId,
+      confidence: "INFERRED",
+      source: "llm_extraction",
+      relation: "mentioned",
+    });
+    const vector = makeVector(EMBEDDING_DIMENSIONS, { 3: 0.6 });
+    await sql`INSERT INTO file_embeddings (indexed_file_id, embedding) VALUES (${fileId}, ${vector}::vector)`.execute(
+      db,
+    );
+
+    await createConnectorRepository(db).upsertFile({
+      source: "google_drive",
+      providerFileId: fileId,
+      providerUrl: null,
+      fileName: "test.txt",
+      fileType: "text",
+      contentCategory: "document",
+      content: "new content",
+      sourcePath: "My Drive",
+      sourceMeta: { messageCount: 2 },
+      enrichmentRefresh: "embeddings_only",
+      contentHash: "new-hash",
+      sourceCreatedAt: null,
+      sourceUpdatedAt: "2026-09-05T00:00:00.000Z",
+      connectorConfigId: "conn-pg",
+    });
+
+    const row = await db
+      .selectFrom("indexed_files")
+      .select(["embedding_status", "summary_status", "summary", "source_meta"])
+      .where("id", "=", fileId)
+      .executeTakeFirstOrThrow();
+    const mentions = await db
+      .selectFrom("entity_mentions")
+      .select("id")
+      .where("indexed_file_id", "=", fileId)
+      .execute();
+    const embeddings = await sql<{ indexed_file_id: string }>`
+      SELECT indexed_file_id FROM file_embeddings WHERE indexed_file_id = ${fileId}
+    `.execute(db);
+
+    expect(row.embedding_status).toBe("pending");
+    expect(row.summary_status).toBe("done");
+    expect(row.summary).toBe("Old summary");
+    expect(readSourceMeta(row)).toEqual({ messageCount: 2 });
+    expect(mentions).toHaveLength(1);
+    expect(embeddings.rows).toHaveLength(1);
   });
 
   it("upserts file_embeddings with ON CONFLICT DO UPDATE", async () => {

@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, createTestPgDb } from "../../test-utils";
+import { createMigrator } from "../migrate";
 import { createConversationSlicesRepository } from "../repositories/conversation-slices";
 import { createConversationRepository } from "../repositories/conversations";
 import type { DB } from "../schema";
@@ -114,14 +115,22 @@ function runMigrationSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       await expect(slices.claimStreamCursorIfPending({ ...claim, claimToken: "token-b" })).resolves.toBe(true);
     });
 
+    /**
+     * Later migrations (230) build indexes on provider_thread_id, and SQLite
+     * refuses to drop a column an index references, so this down must run
+     * through the migrator in order rather than out of sequence.
+     */
     it("down-migration drops the stream cursor table and thread column", async () => {
-      await migration.down(db as unknown as Kysely<unknown>);
+      const migrator = createMigrator(db);
+      const downResult = await migrator.migrateTo("152-reseed-combined-durability-routes");
+      expect(downResult.error).toBeUndefined();
       const tables = await db.introspection.getTables();
       const names = tables.map((table) => table.name);
       expect(names).not.toContain("conversation_slice_stream_cursors");
       const sliceTable = tables.find((table) => table.name === "conversation_slices");
       expect(sliceTable?.columns.map((column) => column.name)).not.toContain("provider_thread_id");
-      await migration.up(db as unknown as Kysely<unknown>);
+      const upResult = await migrator.migrateToLatest();
+      expect(upResult.error).toBeUndefined();
     });
   });
 }

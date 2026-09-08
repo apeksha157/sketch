@@ -4,6 +4,7 @@
  * trigger button.
  */
 import { ConnectorLogo } from "@/components/connector-logos";
+import { FileContentPreview } from "@/components/file-content-preview";
 import { FileShareDialog } from "@/components/file-share-dialog";
 import type { ConnectorConfig, EmailAddr, EmailThreadMessage, FileAccess, FileContent, LinkedEntity } from "@/lib/api";
 import { ApiRequestError, api } from "@/lib/api";
@@ -94,7 +95,7 @@ export function FileDetailSheet({
           )}
         </div>
 
-        {file && <FileDetailFooter fileId={file.id} fileName={file.fileName} connector={connector} />}
+        {file && connector && <FileDetailFooter fileId={file.id} fileName={file.fileName} connector={connector} />}
       </SheetContent>
     </Sheet>
   );
@@ -239,7 +240,7 @@ function FileDetailContent({
           fallbackContent={file.content}
         />
       ) : (
-        file.content && <ContentPreview content={file.content} />
+        file.content && <FileContentPreview content={file.content} />
       )}
     </div>
   );
@@ -276,7 +277,7 @@ function EmailThreadView({
   }
 
   if (error || !data || data.messages.length === 0) {
-    return fallbackContent ? <ContentPreview content={fallbackContent} /> : null;
+    return fallbackContent ? <FileContentPreview content={fallbackContent} /> : null;
   }
 
   return (
@@ -405,34 +406,12 @@ function GatedFileDetail({ file, access }: { file: GatedFileMeta; access: FileAc
   );
 }
 
-const CONTENT_PREVIEW_LIMIT = 2000;
-
-function ContentPreview({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const isLong = content.length > CONTENT_PREVIEW_LIMIT;
-  const displayContent = expanded || !isLong ? content : `${content.slice(0, CONTENT_PREVIEW_LIMIT)}\u2026`;
-
-  return (
-    <div>
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Content</p>
-      <pre
-        className={`mt-1 overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed whitespace-pre-wrap ${expanded ? "max-h-[70vh]" : "max-h-96"}`}
-      >
-        {displayContent}
-      </pre>
-      {isLong && (
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="mt-1 text-[11px] text-primary hover:underline"
-        >
-          {expanded ? "Show less" : `Show full content (${(content.length / 1000).toFixed(1)}k chars)`}
-        </button>
-      )}
-    </div>
-  );
-}
-
+/**
+ * Ops actions for the Files page. Only mounted once a connector resolved:
+ * `useDashboardAuth` reads route context and would throw for hosts that render
+ * the sheet outside the dashboard route tree, and without a connector every
+ * capability is false so the footer renders nothing anyway.
+ */
 function FileDetailFooter({
   fileId,
   fileName,

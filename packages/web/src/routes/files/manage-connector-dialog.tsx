@@ -1,4 +1,8 @@
-import { IntegrationIcon } from "@/components/connect-integration-dialog";
+import {
+  ConnectorSettingsFields,
+  IntegrationIcon,
+  LinkedinVisibilitySwitch,
+} from "@/components/connect-integration-dialog";
 /**
  * ManageConnectorDialog — status summary, sync scope configuration, credential
  * update, and disconnect flow for a connected integration.
@@ -11,8 +15,9 @@ import { IntegrationIcon } from "@/components/connect-integration-dialog";
 import { HierarchyMappingPanel } from "@/components/hierarchy-mapping-panel";
 import { GenericScopeEditor } from "@/components/scope-picker";
 import type { ConnectorConfig, HierarchyLevel, WhatsAppGroupMemberLabel } from "@/lib/api";
-import { api } from "@/lib/api";
-import type { IntegrationDefinition } from "@/lib/integrations";
+import { ApiRequestError, api } from "@/lib/api";
+import type { IntegrationDefinition, SettingsField, SettingsValues } from "@/lib/integrations";
+import { settingsFromScope } from "@/lib/integrations";
 import {
   ArrowsClockwiseIcon,
   CheckCircleIcon,
@@ -74,6 +79,7 @@ export function ManageConnectorDialog({
 
   const canDisconnect = connector?.canDisconnect === true;
   const canSync = connector?.canSync === true;
+  const canManage = connector?.canManage === true;
   const canChangeScope = connector?.canChangeScope === true;
   const canUpdateCredentials = connector?.canUpdateCredentials === true;
 
@@ -145,8 +151,14 @@ export function ManageConnectorDialog({
 
   const isError = connector.syncStatus === "error";
 
+  const editorOwnedScopeKeys = new Set(["visibility", definition.settingsScopeKey]);
   const scopeEntries = Object.entries(connector.scopeConfig ?? {}).filter(
-    ([, v]) => v != null && v !== "" && !(Array.isArray(v) && v.length === 0),
+    ([key, v]) =>
+      !editorOwnedScopeKeys.has(key) &&
+      v != null &&
+      v !== "" &&
+      (typeof v !== "object" || Array.isArray(v)) &&
+      !(Array.isArray(v) && v.length === 0),
   );
 
   return (
@@ -209,6 +221,10 @@ export function ManageConnectorDialog({
                     </>
                   )}
                 </Button>
+              ) : definition.channelProvisioned ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Fix the connection under Channels, then sync again.
+                </p>
               ) : (
                 <p className="mt-2 text-xs text-muted-foreground">Credentials can't be updated from this account.</p>
               )}
@@ -243,6 +259,17 @@ export function ManageConnectorDialog({
 
           {connector.connectorType === "gmail" && <GmailFilteredEmails connectorId={connector.id} />}
           {connector.connectorType === "gmail" && <GmailConversations connector={connector} />}
+          {connector.connectorType === "linkedin_aimfox" &&
+            canManage &&
+            definition.settingsFields &&
+            definition.settingsScopeKey && (
+              <LinkedinSettingsEditor
+                connector={connector}
+                fields={definition.settingsFields}
+                stored={connector.scopeConfig?.[definition.settingsScopeKey]}
+                canChangeEnrichment={canChangeScope}
+              />
+            )}
 
           <div className="flex items-center justify-between border-t border-border pt-3">
             {canDisconnect ? (
@@ -806,6 +833,104 @@ const EMAIL_MAX_LOOKBACK_DAYS = 1095;
 function normalizeEmailLookbackDays(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 90;
   return Math.max(1, Math.min(Math.floor(value), EMAIL_MAX_LOOKBACK_DAYS));
+}
+
+/**
+ * Visibility and contact-lookup settings for a LinkedIn connector behind one Save.
+ * Visibility goes through its own route (it rewrites file grants); lookup settings go
+ * through the enrichment route rather than the scope PATCH, so neither resets the sync cursor.
+ */
+function LinkedinSettingsEditor({
+  connector,
+  fields,
+  stored,
+  canChangeEnrichment,
+}: {
+  connector: ConnectorConfig;
+  fields: SettingsField[];
+  stored: unknown;
+  canChangeEnrichment: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const currentVisibility = connector.visibility ?? "owner";
+  const current = useMemo(() => settingsFromScope(fields, stored), [fields, stored]);
+  const [visibility, setVisibility] = useState<"owner" | "workspace">(currentVisibility);
+  const [values, setValues] = useState<SettingsValues>(current);
+
+  useEffect(() => {
+    setVisibility(currentVisibility);
+  }, [currentVisibility]);
+  useEffect(() => {
+    setValues(current);
+  }, [current]);
+
+  const visibilityDirty = visibility !== currentVisibility;
+  const enrichmentDirty = fields.some((field) => values[field.key] !== current[field.key]);
+  const dirty = visibilityDirty || enrichmentDirty;
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (visibilityDirty) await api.integrations.updateVisibility(connector.id, visibility);
+      if (enrichmentDirty) {
+        await api.integrations.updateEnrichment(connector.id, {
+          enabled: values.enabled === true,
+          dailyCap: Number(values.dailyCap),
+          autoMerge: values.autoMerge === true,
+        });
+      }
+    },
+    onSuccess: () => {
+      toast.success("LinkedIn settings updated.");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+      queryClient.invalidateQueries({ queryKey: ["all-files"] });
+      queryClient.invalidateQueries({ queryKey: ["hybrid-search"] });
+    },
+    onError: (error: Error) => {
+      if (error instanceof ApiRequestError && error.status === 409) {
+        toast.error(error.code === "SYNC_IN_PROGRESS" ? "Sync in progress, try again in a moment" : error.message);
+        return;
+      }
+      toast.error(error.message);
+    },
+  });
+
+  return (
+    <div className="space-y-3 border-t border-border pt-3">
+      <Label className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">LinkedIn</Label>
+      <div className="space-y-2">
+        <LinkedinVisibilitySwitch
+          value={visibility}
+          onChange={setVisibility}
+          disabled={mutation.isPending}
+          id={`manage-${connector.id}-visibility`}
+        />
+        {canChangeEnrichment && (
+          <ConnectorSettingsFields
+            fields={fields}
+            values={values}
+            onChange={(key, value) => setValues((prev) => ({ ...prev, [key]: value }))}
+            disabled={mutation.isPending}
+            idPrefix={`manage-${connector.id}`}
+          />
+        )}
+      </div>
+      <Button
+        size="sm"
+        className="h-7 text-xs"
+        onClick={() => mutation.mutate()}
+        disabled={!dirty || mutation.isPending}
+      >
+        {mutation.isPending ? (
+          <>
+            <SpinnerGapIcon size={12} className="animate-spin" />
+            Saving...
+          </>
+        ) : (
+          "Save"
+        )}
+      </Button>
+    </div>
+  );
 }
 
 function EmailScopeEditor({

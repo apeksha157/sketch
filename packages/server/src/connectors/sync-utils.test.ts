@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { IN_CLAUSE_CHUNK_SIZE, chunk, streamWithConcurrency } from "./sync-utils";
+import {
+  IN_CLAUSE_CHUNK_SIZE,
+  buildSliceSourcePath,
+  chunk,
+  formatSliceTimeRange,
+  stableContentHash,
+  streamWithConcurrency,
+} from "./sync-utils";
+
+describe("emission helpers", () => {
+  it("hashes content deterministically", () => {
+    expect(stableContentHash("hello")).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+  });
+
+  it("normalizes valid time ranges and preserves invalid timestamps", () => {
+    expect(formatSliceTimeRange({ started_at: "2026-09-07T12:00:00+05:30", ended_at: "invalid" })).toBe(
+      "2026-09-07T06:30:00.000Z to invalid",
+    );
+    expect(formatSliceTimeRange({ started_at: "invalid", ended_at: "invalid" })).toBe("invalid");
+  });
+
+  it("builds encoded connector slice paths", () => {
+    expect(buildSliceSourcePath("slack", "slice-1", { channelId: "C 1", threadTs: "1.2" })).toBe(
+      "slack://slice/slice-1?channelId=C+1&threadTs=1.2",
+    );
+  });
+});
 
 describe("chunk", () => {
   it("returns no chunks for an empty array", () => {

@@ -85,6 +85,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
         testStep: mocks.testStep,
       },
       webChat: {
+        progressSettings: vi.fn().mockResolvedValue({ toolProgress: "friendly" }),
+        updateProgressSettings: vi.fn(async (toolProgress) => ({ toolProgress })),
         messages: mocks.loadMessages,
         conversations: mocks.webChatConversations,
         interrupt: mocks.interruptChat,
@@ -2096,6 +2098,93 @@ describe("AutomationBuilderPage", () => {
         { type: "text", text: "Google Drive · Slack" },
         { type: "data-question-batch-answer", data: answer },
       ],
+    });
+  });
+
+  it("retains later running calls and assistant updates after a completed first call", () => {
+    const messages = builderChatThreadMessages([
+      {
+        id: "builder-live",
+        role: "assistant",
+        parts: [
+          {
+            type: "data-progress",
+            id: "first",
+            data: {
+              lines: [],
+              items: [
+                { id: "first", kind: "tool", label: "Read task", status: "succeeded", startedAt: 1000, endedAt: 1009 },
+              ],
+            },
+          },
+          { type: "text", text: "Checking the connection." },
+          {
+            type: "data-progress",
+            id: "second",
+            data: {
+              lines: [],
+              items: [
+                { id: "second", kind: "integration", label: "Using ClickUp", status: "running", startedAt: 1010 },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+    expect(messages[0]?.timeline).toMatchObject([
+      { type: "progress", progressItems: [{ id: "first", status: "succeeded" }] },
+      { type: "text", text: "Checking the connection." },
+      { type: "progress", progressItems: [{ id: "second", status: "running" }] },
+    ]);
+  });
+
+  it("keeps builder progress identity, lifecycle, and technical detail fields", () => {
+    const detail = "curl https://example.test\n  --header 'x-safe: value'";
+    const items = builderChatThreadMessages([
+      {
+        id: "builder-progress",
+        role: "assistant",
+        parts: [
+          {
+            type: "data-progress",
+            id: "progress",
+            data: {
+              lines: [],
+              items: [
+                {
+                  id: "builder-call-1",
+                  revision: 7,
+                  status: "failed",
+                  startedAt: 2_000,
+                  endedAt: 3_000,
+                  mode: "technical",
+                  kind: "integration",
+                  label: "Calling Web",
+                  toolName: "mcp__web__request",
+                  detail,
+                  detailFormat: "command",
+                  detailTruncated: true,
+                  integration: { appId: "web", name: "Web", icon: "/web.svg" },
+                  icon: { type: "generic" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const progress = items[0]?.timeline?.[0];
+    expect(progress?.type === "progress" ? progress.progressItems?.[0] : undefined).toMatchObject({
+      id: "builder-call-1",
+      revision: 7,
+      status: "failed",
+      startedAt: 2_000,
+      endedAt: 3_000,
+      mode: "technical",
+      detail,
+      detailTruncated: true,
+      integration: { appId: "web", name: "Web", icon: "/web.svg" },
     });
   });
 

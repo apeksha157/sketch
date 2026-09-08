@@ -275,16 +275,16 @@
 }
 
 .sketch-timeline-window {
-  transition: height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: height 320ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .sketch-timeline-window-track {
-  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform;
 }
 
 .sketch-timeline-entry {
-  transition: opacity 220ms ease-out;
+  transition: opacity 320ms ease-out;
 }
 
 .sketch-timeline-entry-exiting {

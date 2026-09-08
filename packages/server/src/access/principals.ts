@@ -39,7 +39,8 @@ export async function resolveContentPrincipals(deps: ContentPrincipalDeps): Prom
 
   const user = await deps.userRepo.findById(deps.currentUserId);
   if (!user) return [];
-  if (!deps.publicMcp && deps.adminBypass.enabled && user.auth_role === "admin") return undefined;
+  const bypassAllowed = deps.publicMcp ? deps.publicMcp.adminReadAll === true : true;
+  if (bypassAllowed && deps.adminBypass.enabled && user.auth_role === "admin") return undefined;
   if (!deps.userRepo.getVerifiedEmailsForUser) return [];
 
   const emails = await deps.userRepo.getVerifiedEmailsForUser(deps.currentUserId);

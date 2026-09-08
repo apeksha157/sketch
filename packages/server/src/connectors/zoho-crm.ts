@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
+import type { ZohoCrmMetaStringKey, ZohoCrmSourceMeta } from "../db/repositories/connectors";
 import { normalizeEmailDomain, normalizeWebsiteDomain } from "../db/repositories/entity-domains";
 import type {
   Connector,
@@ -96,7 +97,7 @@ type ZohoRecord = Record<string, unknown> & {
 type ParentEntity = NonNullable<SyncedItem["parentEntities"]>[number];
 type RelationshipEndpoint = NonNullable<SyncedItem["relationships"]>[number]["source"];
 
-const ACTIVITY_MODULES = new Set(["tasks", "notes", "calls", "events", "meetings"]);
+export const ACTIVITY_MODULES = new Set(["tasks", "notes", "calls", "events", "meetings"]);
 
 export interface DiscoveredZohoModule {
   logicalName: StandardModule;
@@ -408,9 +409,49 @@ function importantFields(moduleApiName: string): string[] {
   const normalized = normalizeModuleApiName(moduleApiName);
   const common = ["Owner", "Email", "Phone", "Mobile", "Created_Time", "Modified_Time"];
   const byModule: Record<string, string[]> = {
-    accounts: ["Account_Name", "Website", "Industry", "Annual_Revenue", "Account_Type", ...common],
-    contacts: ["Full_Name", "First_Name", "Last_Name", "Email", "Title", "Account_Name", "Phone", "Mobile", "Owner"],
-    leads: ["Full_Name", "First_Name", "Last_Name", "Company", "Email", "Lead_Status", "Lead_Source", "Phone", "Owner"],
+    accounts: [
+      "Account_Name",
+      "Website",
+      "Industry",
+      "Annual_Revenue",
+      "Account_Type",
+      "Employees",
+      "Company_Size",
+      "No_of_Employees",
+      "Tag",
+      "Last_Activity_Time",
+      ...common,
+    ],
+    contacts: [
+      "Full_Name",
+      "First_Name",
+      "Last_Name",
+      "Email",
+      "Title",
+      "Account_Name",
+      "Phone",
+      "Mobile",
+      "Industry",
+      "Website",
+      "Lead_Source",
+      "Employees",
+      "Company_Size",
+      "No_of_Employees",
+      "Tag",
+      "Last_Activity_Time",
+      ...common,
+    ],
+    leads: [
+      "Full_Name",
+      "First_Name",
+      "Last_Name",
+      "Company",
+      "Email",
+      "Lead_Status",
+      "Lead_Source",
+      "Phone",
+      ...common,
+    ],
     deals: [
       "Deal_Name",
       "Stage",
@@ -420,11 +461,11 @@ function importantFields(moduleApiName: string): string[] {
       "Expected_Revenue",
       "Account_Name",
       "Contact_Name",
-      "Owner",
+      ...common,
     ],
-    tasks: ["Subject", "Status", "Priority", "Due_Date", "What_Id", "Who_Id", "Owner"],
+    tasks: ["Subject", "Status", "Priority", "Due_Date", "What_Id", "Who_Id", ...common],
     notes: ["Note_Title", "Parent_Id", "Owner", "Created_Time", "Modified_Time"],
-    calls: ["Subject", "Call_Type", "Call_Start_Time", "Call_Duration", "What_Id", "Who_Id", "Owner"],
+    calls: ["Subject", "Call_Type", "Call_Start_Time", "Call_Duration", "What_Id", "Who_Id", ...common],
     events: ["Event_Title", "Subject", "Start_DateTime", "End_DateTime", "What_Id", "Who_Id", "Owner"],
     meetings: ["Event_Title", "Subject", "Start_DateTime", "End_DateTime", "What_Id", "Who_Id", "Owner"],
   };
@@ -648,6 +689,101 @@ function rollupGroupIdForRecord(moduleApiName: string, record: ZohoRecord): stri
   return null;
 }
 
+type ZohoRelatedRole = NonNullable<ZohoCrmSourceMeta["related"]>[number]["role"];
+
+function sourceMetaString(value: unknown): string | undefined {
+  const rendered = fieldValue(value);
+  return rendered || undefined;
+}
+
+function addMetaString(meta: ZohoCrmSourceMeta, key: ZohoCrmMetaStringKey, value: unknown): void {
+  const rendered = sourceMetaString(value);
+  if (rendered) meta[key] = rendered;
+}
+
+function addOwnerMeta(meta: ZohoCrmSourceMeta, value: unknown): void {
+  const owner = asLookup(value)?.name?.trim();
+  if (owner) meta.owner = owner;
+}
+
+function relatedSourceMetaItem(
+  role: ZohoRelatedRole,
+  record: ZohoRecord,
+  value: unknown,
+  fallback: StandardModule,
+): NonNullable<ZohoCrmSourceMeta["related"]>[number] | null {
+  const id = lookupId(value);
+  if (!id) return null;
+  const module =
+    role === "who" ? lookupModuleApiName(value, fallback) : relatedModuleForLookup(record, value, fallback);
+  return { role, module, id };
+}
+
+function relatedSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSourceMeta["related"] {
+  const normalized = normalizeModuleApiName(moduleApiName);
+  const related =
+    normalized === "notes"
+      ? [relatedSourceMetaItem("parent", record, record.Parent_Id, "Contacts")]
+      : ["tasks", "calls", "events", "meetings"].includes(normalized)
+        ? [
+            relatedSourceMetaItem("what", record, record.What_Id, "Accounts"),
+            relatedSourceMetaItem("who", record, record.Who_Id, "Contacts"),
+          ]
+        : [];
+  return related.filter((item): item is NonNullable<ZohoCrmSourceMeta["related"]>[number] => Boolean(item));
+}
+
+function tagSourceMeta(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return sourceMetaString(value);
+  const names = value
+    .map((item) => lookupName(item) ?? sourceMetaString(item))
+    .filter((item): item is string => Boolean(item));
+  return names.length > 0 ? names.join(", ") : undefined;
+}
+
+function zohoCrmSourceMeta(moduleApiName: string, record: ZohoRecord): ZohoCrmSourceMeta {
+  const meta: ZohoCrmSourceMeta = { module: moduleApiName, recordId: record.id ?? "" };
+  const related = relatedSourceMeta(moduleApiName, record);
+  if (related && related.length > 0) meta.related = related;
+  addOwnerMeta(meta, record.Owner);
+  addMetaString(meta, "createdTime", record.Created_Time);
+  addMetaString(meta, "modifiedTime", record.Modified_Time);
+
+  const normalized = normalizeModuleApiName(moduleApiName);
+  if (normalized === "deals") {
+    addMetaString(meta, "stage", record.Stage);
+    addMetaString(meta, "amount", record.Amount);
+    addMetaString(meta, "closingDate", record.Closing_Date);
+    addMetaString(meta, "probability", record.Probability);
+  }
+  if (normalized === "leads") {
+    addMetaString(meta, "leadStatus", record.Lead_Status);
+    addMetaString(meta, "leadSource", record.Lead_Source);
+  }
+  if (normalized === "contacts") {
+    addMetaString(meta, "leadSource", record.Lead_Source);
+  }
+  if (normalized === "tasks") {
+    addMetaString(meta, "status", record.Status);
+    addMetaString(meta, "priority", record.Priority);
+    addMetaString(meta, "dueDate", record.Due_Date);
+  }
+  if (normalized === "calls") {
+    addMetaString(meta, "callType", record.Call_Type);
+    addMetaString(meta, "callDuration", record.Call_Duration);
+    addMetaString(meta, "callStart", record.Call_Start_Time);
+  }
+  if (normalized === "accounts" || normalized === "contacts") {
+    addMetaString(meta, "industry", record.Industry);
+    addMetaString(meta, "website", record.Website);
+    addMetaString(meta, "companySize", record.Employees ?? record.Company_Size ?? record.No_of_Employees);
+    addMetaString(meta, "lastActivityTime", record.Last_Activity_Time);
+    const tag = tagSourceMeta(record.Tag);
+    if (tag) meta.tag = tag;
+  }
+  return meta;
+}
+
 function addDomain(domains: Set<string>, domain: string | null): void {
   if (domain) domains.add(domain);
 }
@@ -750,7 +886,11 @@ function relationshipsForRecord(moduleApiName: string, record: ZohoRecord): NonN
   return relationships;
 }
 
-function recordToSyncedItem(module: DiscoveredZohoModule, record: ZohoRecord, orgName?: string): SyncedItem | null {
+export function recordToSyncedItem(
+  module: DiscoveredZohoModule,
+  record: ZohoRecord,
+  orgName?: string,
+): SyncedItem | null {
   if (!record.id) return null;
   const content = formatCrmRecordContent(module.apiName, record);
   const contentCategory = isActivityModule(module.apiName) && activityBody(record) ? "document" : "structured";
@@ -784,6 +924,7 @@ function recordToSyncedItem(module: DiscoveredZohoModule, record: ZohoRecord, or
     ),
     sourceCreatedAt: record.Created_Time ?? null,
     sourceUpdatedAt: record.Modified_Time ?? null,
+    sourceMeta: { zohoCrm: zohoCrmSourceMeta(module.apiName, record) },
     entitySeeds,
     personSeeds,
     parentEntities,
@@ -814,14 +955,20 @@ async function resolveModuleFields(
   } catch (err) {
     logger.warn({ err, module: moduleApiName }, "Zoho CRM field discovery failed; using important fields");
   }
-  if (names.length === 0) names = importantFields(moduleApiName);
+  const important = importantFields(moduleApiName);
+  const discovered = new Set(names);
+  const forced = names.length === 0 ? important : important.filter((name) => discovered.has(name));
+  if (names.length === 0) names = important;
   // System fields are valid on every CRM module and are required downstream
   // (cursor, change detection, owner seeding), so force them to the front.
+  // Structured source_meta reads the important fields, so they go ahead of the
+  // rest of the discovered list and survive the ZOHO_MAX_FIELDS cut; only names
+  // discovery confirmed are forced, because Zoho rejects unknown field names.
   // Parent-relation lookups (What_Id/Who_Id/Parent_Id) drive activity rollup but
   // Zoho's field-discovery omits them, so force them in too — otherwise activities
   // never resolve a rollup_group_id and orphan from their parent object.
   const ordered = [
-    ...new Set(["Created_Time", "Modified_Time", "Owner", ...rollupRelationFields(moduleApiName), ...names]),
+    ...new Set(["Created_Time", "Modified_Time", "Owner", ...rollupRelationFields(moduleApiName), ...forced, ...names]),
   ];
   return ordered.slice(0, ZOHO_MAX_FIELDS).join(",");
 }

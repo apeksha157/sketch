@@ -66,51 +66,44 @@ function runRepositorySuite(label: string, getDb: () => Promise<Kysely<DB>>, opt
       await expect(countRows(db, "conversation_slices")).resolves.toBe(1);
     });
 
-    it("updates salience verdict only for the active claim", async () => {
-      const { conversationId, firstMessageId, lastMessageId } = await seedConversationWindow(db);
+    it("preserves dropped verdicts when closing open slices", async () => {
+      const first = await seedConversationWindow(db);
+      const second = await seedConversationWindow(db);
       const repo = createConversationSlicesRepository(db);
-      const { row } = await repo.insertIfAbsent({
-        conversationId,
-        firstMessageId,
-        lastMessageId,
+      const idleSlice = await repo.insertIfAbsent({
+        conversationId: first.conversationId,
+        firstMessageId: first.firstMessageId,
+        lastMessageId: first.lastMessageId,
         startedAt: "2026-07-07T09:00:00.000Z",
         endedAt: "2026-07-07T09:05:00.000Z",
         messageCount: 2,
-        flushReason: "max_age",
+        flushReason: "gap",
         rosterSnapshot: "[]",
+        salienceVerdict: "dropped",
+        status: "open",
+      });
+      const boundarySlice = await repo.insertIfAbsent({
+        conversationId: second.conversationId,
+        firstMessageId: second.firstMessageId,
+        lastMessageId: second.lastMessageId,
+        startedAt: "2026-07-07T09:00:00.000Z",
+        endedAt: "2026-07-07T09:05:00.000Z",
+        messageCount: 2,
+        flushReason: "gap",
+        rosterSnapshot: "[]",
+        salienceVerdict: "dropped",
+        status: "open",
       });
 
-      const claimed = await repo.claimSalienceIfPending(row.id, {
-        claimToken: "salience-1",
-        now: "2026-07-07T09:00:00.000Z",
-        staleBefore: "2026-07-07T08:55:00.000Z",
-      });
-      const wrongClaim = await repo.updateSalienceVerdictIfClaimed(row.id, "salience-2", {
-        verdict: "dropped",
-        signals: JSON.stringify({ banter: true }),
-      });
-      const kept = await repo.updateSalienceVerdictIfClaimed(row.id, "salience-1", {
-        verdict: "kept",
-        signals: JSON.stringify({ decisions: 1 }),
-      });
-      const dropped = await repo.updateSalienceVerdictIfClaimed(row.id, "salience-1", {
-        verdict: "dropped",
-        signals: JSON.stringify({ banter: true }),
-      });
-      const stored = await db
-        .selectFrom("conversation_slices")
-        .selectAll()
-        .where("id", "=", row.id)
-        .executeTakeFirstOrThrow();
+      const idleClosed = await repo.closeOpenSlice(idleSlice.row.id, "max_age");
+      const boundaryClosed = await repo.closeSlice(boundarySlice.row.id);
 
-      expect(claimed).toBe(true);
-      expect(wrongClaim).toBeUndefined();
-      expect(kept?.salience_verdict).toBe("kept");
-      expect(dropped).toBeUndefined();
-      expect(stored.salience_verdict).toBe("kept");
-      expect(stored.salience_signals).toBe(JSON.stringify({ decisions: 1 }));
-      expect(stored.salience_claim_token).toBeNull();
-      expect(stored.salience_claimed_at).toBeNull();
+      expect(idleClosed).toMatchObject({ status: "closed", salience_verdict: "dropped", flush_reason: "max_age" });
+      expect(boundaryClosed).toMatchObject({
+        status: "closed",
+        salience_verdict: "dropped",
+        flush_reason: "llm_boundary",
+      });
     });
 
     it("gets and advances the composite slice cursor without regressing", async () => {

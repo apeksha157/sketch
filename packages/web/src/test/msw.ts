@@ -211,6 +211,10 @@ export const handlers = [
     return HttpResponse.json({ suggestion: null });
   }),
 
+  http.get("/api/enrichment/allowance", () => {
+    return HttpResponse.json({ remaining: 4200, resetsAt: null });
+  }),
+
   http.get("/api/mcp-servers", () => {
     return HttpResponse.json({ servers: [] });
   }),

@@ -59,6 +59,34 @@ export async function snippetsInFile(db: Kysely<DB>, fileId: string, name: strin
   return quotes;
 }
 
+export interface EntityPassage {
+  chunkIndex: number;
+  text: string;
+}
+
+export async function passagesInFile(
+  db: Kysely<DB>,
+  fileId: string,
+  name: string,
+  limit = 20,
+): Promise<EntityPassage[]> {
+  const needle = name.trim().toLowerCase();
+  if (needle.length === 0) return [];
+
+  const rows = await db
+    .selectFrom("document_chunks")
+    .select(["chunk_index", "content"])
+    .where("indexed_file_id", "=", fileId)
+    .where(sql`lower(content)`, "like", `%${needle}%`)
+    .orderBy("chunk_index")
+    .limit(limit)
+    .execute();
+
+  return rows
+    .filter((row) => extractSnippet(row.content, name) !== null)
+    .map((row) => ({ chunkIndex: row.chunk_index, text: row.content }));
+}
+
 /**
  * Read-time snippets for review-queue evidence: for each file, the first
  * chunk that mentions the proposed name, cut to a quote. One query for the

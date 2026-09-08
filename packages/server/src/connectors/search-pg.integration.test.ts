@@ -7,12 +7,12 @@
  */
 import { randomUUID } from "node:crypto";
 import { type Kysely, sql } from "kysely";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
 import type { DB } from "../db/schema";
-import { createTestPgDb, getSharedPgDb } from "../test-utils";
+import { createTestPgDb, getSharedPgDb, spyOnExecutedSql } from "../test-utils";
 import type { StageReport } from "./enrichment-stage-report";
-import { hybridSearch, searchFiles } from "./search";
+import { RBAC_MODE_INLINE_RULE, RBAC_MODE_VISIBLE_SET, hybridSearch, search, searchFiles } from "./search";
 
 /**
  * Build a sparse vector string of `dims` dimensions.
@@ -24,6 +24,26 @@ function makeVector(dims: number, values: Record<number, number> = {}): string {
     arr[Number(idx)] = val;
   }
   return `[${arr.join(",")}]`;
+}
+
+function mention(
+  id: string,
+  entityId: string,
+  indexedFileId: string,
+  relation: "mentioned" | "authored",
+  mentionedAt: string,
+) {
+  return {
+    id,
+    entity_id: entityId,
+    indexed_file_id: indexedFileId,
+    chunk_index: null,
+    context_snippet: null,
+    confidence: "confirmed",
+    source: "test",
+    relation,
+    mentioned_at: mentionedAt,
+  };
 }
 
 async function insertFile(
@@ -418,5 +438,333 @@ describe("hybridSearch vector hit sources", () => {
     expect(contentHit?.bestForFile).toBe(false);
     expect(nameHit?.bestForFile).toBe(false);
     expect((summaryHit?.distance ?? 1) < (contentHit?.distance ?? 0)).toBe(true);
+  });
+});
+
+describe("hybridSearch RBAC candidate pre-filtering", () => {
+  const principal = { type: "email" as const, value: "rbac-viewer@example.com" };
+  const visibleIds = Array.from({ length: 10 }, (_, index) => `rbac-visible-${index}`);
+  const hiddenIds = Array.from({ length: 401 }, (_, index) => `rbac-hidden-${index}`);
+  const queryEmbedding = new Array(EMBEDDING_DIMENSIONS).fill(0);
+  let db!: Kysely<DB>;
+
+  beforeAll(async () => {
+    db = await createTestPgDb();
+    queryEmbedding[0] = 1;
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "connector-rbac-prefilter",
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "admin",
+      })
+      .execute();
+    await db
+      .insertInto("access_scopes")
+      .values({
+        id: "scope-rbac-hidden",
+        connector_config_id: "connector-rbac-prefilter",
+        scope_type: "drive",
+        provider_scope_id: "hidden-drive",
+      })
+      .execute();
+
+    const now = new Date().toISOString();
+    await db
+      .insertInto("indexed_files")
+      .values([
+        ...visibleIds.map((id) => ({
+          id,
+          connector_config_id: "connector-rbac-prefilter",
+          provider_file_id: id,
+          file_name: `${id}.txt`,
+          file_type: "text",
+          content_category: "document",
+          source: "google_drive",
+          summary: "needle",
+          access_scope_id: null,
+          source_updated_at: now,
+          synced_at: now,
+        })),
+        ...hiddenIds.map((id) => ({
+          id,
+          connector_config_id: "connector-rbac-prefilter",
+          provider_file_id: id,
+          file_name: `needle ${id}.txt`,
+          file_type: "text",
+          content_category: "document",
+          source: "google_drive",
+          summary: null,
+          access_scope_id: "scope-rbac-hidden",
+          source_updated_at: now,
+          synced_at: now,
+        })),
+      ])
+      .execute();
+    await db
+      .insertInto("file_access")
+      .values(
+        visibleIds.map((id) => ({
+          indexed_file_id: id,
+          principal_type: principal.type,
+          principal_value: principal.value,
+        })),
+      )
+      .execute();
+
+    const visibleVector = makeVector(EMBEDDING_DIMENSIONS, { 0: 1, 1: 0.5 });
+    const hiddenVector = makeVector(EMBEDDING_DIMENSIONS, { 0: 1 });
+    for (let offset = 0; offset < hiddenIds.length; offset += 50) {
+      await db
+        .insertInto("file_embeddings")
+        .values(hiddenIds.slice(offset, offset + 50).map((id) => ({ indexed_file_id: id, embedding: hiddenVector })))
+        .execute();
+    }
+    await db
+      .insertInto("file_embeddings")
+      .values(visibleIds.map((id) => ({ indexed_file_id: id, embedding: visibleVector })))
+      .execute();
+  }, 60_000);
+
+  afterAll(async () => {
+    await db.destroy();
+  });
+
+  it("hybrid returns every visible file when higher-ranked hidden files exceed both candidate caps", async () => {
+    const reports: StageReport[] = [];
+    const options = { userPrincipals: [principal], limit: 10 };
+
+    const hybrid = await hybridSearch(db, "needle", {
+      ...options,
+      queryEmbedding,
+      stageReport: (report) => reports.push(report),
+    });
+
+    expect(hybrid.map((result) => result.id).sort()).toEqual(visibleIds.slice().sort());
+
+    const rbacReports = reports.filter((report) => report.stage === "rbac");
+    expect(rbacReports).toHaveLength(1);
+    expect(rbacReports[0]?.summary?.mode).toBe(RBAC_MODE_VISIBLE_SET);
+    expect(rbacReports[0]?.summary?.visibleFiles).toBe(10);
+  });
+
+  it("FTS-only returns every visible file when higher-ranked hidden files exceed the candidate cap", async () => {
+    const reports: StageReport[] = [];
+    const results = await hybridSearch(db, "needle", {
+      userPrincipals: [principal],
+      limit: 10,
+      stageReport: (report) => reports.push(report),
+    });
+
+    expect(results.map((result) => result.id).sort()).toEqual(visibleIds.slice().sort());
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.mode).toBe(RBAC_MODE_VISIBLE_SET);
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.visibleFiles).toBe(10);
+  });
+
+  it("KNN-only returns every visible file when higher-ranked hidden files exceed the candidate cap", async () => {
+    const reports: StageReport[] = [];
+    const results = await hybridSearch(db, "word-that-matches-no-file", {
+      userPrincipals: [principal],
+      queryEmbedding,
+      limit: 10,
+      stageReport: (report) => reports.push(report),
+    });
+
+    expect(results.map((result) => result.id).sort()).toEqual(visibleIds.slice().sort());
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.mode).toBe(RBAC_MODE_VISIBLE_SET);
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.visibleFiles).toBe(10);
+  });
+
+  it("uses the inline rule when the visible set exceeds the cap", async () => {
+    const inlinePrincipal = { type: "email" as const, value: "rbac-inline@example.com" };
+    const inlineIds = Array.from({ length: 5 }, (_, index) => `rbac-inline-visible-${index}`);
+    const now = new Date().toISOString();
+    await db
+      .insertInto("indexed_files")
+      .values(
+        inlineIds.map((id) => ({
+          id,
+          connector_config_id: "connector-rbac-prefilter",
+          provider_file_id: id,
+          file_name: `${id}.txt`,
+          file_type: "text",
+          content_category: "document",
+          source: "google_drive",
+          summary: "inline needle",
+          access_scope_id: null,
+          source_updated_at: now,
+          synced_at: now,
+        })),
+      )
+      .execute();
+    await db
+      .insertInto("file_access")
+      .values(
+        inlineIds.map((id) => ({
+          indexed_file_id: id,
+          principal_type: inlinePrincipal.type,
+          principal_value: inlinePrincipal.value,
+        })),
+      )
+      .execute();
+    await db
+      .insertInto("file_embeddings")
+      .values(inlineIds.map((id) => ({ indexed_file_id: id, embedding: makeVector(EMBEDDING_DIMENSIONS, { 0: 1 }) })))
+      .execute();
+
+    const reports: StageReport[] = [];
+    const results = await hybridSearch(
+      db,
+      "inline needle",
+      {
+        userPrincipals: [inlinePrincipal],
+        queryEmbedding,
+        limit: 5,
+        stageReport: (report) => reports.push(report),
+      },
+      { visibleSetCap: 2 },
+    );
+
+    expect(results.map((result) => result.id).sort()).toEqual(inlineIds.slice().sort());
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.mode).toBe(RBAC_MODE_INLINE_RULE);
+  });
+
+  it("uses the inline rule when branch overlap would otherwise hide the sixth distinct file", async () => {
+    const overlapPrincipal = { type: "email" as const, value: "rbac-overlap@example.com" };
+    const perFileIds = Array.from({ length: 4 }, (_, index) => `rbac-overlap-per-file-${index}`);
+    const overlapId = "rbac-overlap-public";
+    const entityOnlyId = "rbac-overlap-entity-only";
+    const expectedIds = [...perFileIds, overlapId, entityOnlyId];
+    const now = new Date().toISOString();
+
+    await db
+      .insertInto("entities")
+      .values({
+        id: "rbac-overlap-entity",
+        name: "RBAC Overlap Entity",
+        source_type: "company",
+        status: "confirmed",
+        share_with_everyone: 1,
+        hotness: 0,
+        created_at: now,
+        updated_at: now,
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values(
+        expectedIds.map((id) => ({
+          id,
+          connector_config_id: "connector-rbac-prefilter",
+          provider_file_id: id,
+          file_name: `${id}.txt`,
+          file_type: "text",
+          content_category: "document",
+          source: "google_drive",
+          summary: "overlap needle",
+          access_scope_id: id === entityOnlyId ? "scope-rbac-hidden" : null,
+          share_with_everyone: id === overlapId ? 1 : 0,
+          source_updated_at: now,
+          synced_at: now,
+        })),
+      )
+      .execute();
+    await db
+      .insertInto("file_access")
+      .values(
+        perFileIds.map((id) => ({
+          indexed_file_id: id,
+          principal_type: overlapPrincipal.type,
+          principal_value: overlapPrincipal.value,
+        })),
+      )
+      .execute();
+    await db
+      .insertInto("entity_mentions")
+      .values([
+        mention("rbac-overlap-mention-a", "rbac-overlap-entity", overlapId, "mentioned", now),
+        mention("rbac-overlap-mention-b", "rbac-overlap-entity", overlapId, "authored", now),
+        mention("rbac-overlap-mention-entity-only", "rbac-overlap-entity", entityOnlyId, "mentioned", now),
+      ])
+      .execute();
+    await db
+      .insertInto("file_embeddings")
+      .values(expectedIds.map((id) => ({ indexed_file_id: id, embedding: makeVector(EMBEDDING_DIMENSIONS, { 0: 1 }) })))
+      .execute();
+
+    const reports: StageReport[] = [];
+    const results = await hybridSearch(
+      db,
+      "overlap needle",
+      {
+        userPrincipals: [overlapPrincipal],
+        queryEmbedding,
+        limit: 6,
+        stageReport: (report) => reports.push(report),
+      },
+      { visibleSetCap: 5 },
+    );
+
+    expect(results.map((result) => result.id).sort()).toEqual(expectedIds.slice().sort());
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.mode).toBe(RBAC_MODE_INLINE_RULE);
+  });
+
+  it("search returns before embedding or search arms when the visible set is empty", async () => {
+    const emptyDb = await createTestPgDb();
+    const reports: StageReport[] = [];
+    const spy = spyOnExecutedSql(emptyDb);
+    let queryCountAtRbac: number | undefined;
+
+    try {
+      const results = await search(emptyDb, "needle", {
+        userPrincipals: [{ type: "email", value: "rbac-empty@example.com" }],
+        limit: 10,
+        stageReport: (report) => {
+          reports.push(report);
+          if (report.stage === "rbac") queryCountAtRbac = spy.count;
+        },
+      });
+
+      expect(results).toEqual([]);
+      expect(reports.find((report) => report.stage === "rbac")?.summary?.mode).toBe(RBAC_MODE_VISIBLE_SET);
+      expect(reports.find((report) => report.stage === "rbac")?.summary?.visibleFiles).toBe(0);
+      expect(spy.count).toBe(queryCountAtRbac);
+      expect(spy.sqls.some((queryText) => queryText.includes("settings"))).toBe(false);
+      expect(spy.sqls.some((queryText) => queryText.includes("file_embeddings"))).toBe(false);
+      expect(spy.sqls.some((queryText) => queryText.includes("chunk_embeddings"))).toBe(false);
+      expect(spy.sqls.some((queryText) => queryText.includes("file_field_embeddings"))).toBe(false);
+    } finally {
+      spy.mockRestore();
+      await emptyDb.destroy();
+    }
+  });
+
+  it("fails closed when a non-empty principal list normalises to nothing", async () => {
+    await insertFile(db, "rbac-public-normalized-empty", {
+      fileName: "normalized-empty-needle.txt",
+      summary: "normalized empty needle",
+    });
+
+    const reports: StageReport[] = [];
+    const results = await hybridSearch(db, "normalized empty needle", {
+      userPrincipals: [{ type: "email", value: "   " }],
+      queryEmbedding,
+      limit: 10,
+      stageReport: (report) => reports.push(report),
+    });
+
+    expect(results).toEqual([]);
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.mode).toBe(RBAC_MODE_VISIBLE_SET);
+    expect(reports.find((report) => report.stage === "rbac")?.summary?.visibleFiles).toBe(0);
+  });
+
+  it("keeps admin bypass and empty-principal fail-closed behavior", async () => {
+    const bypass = await hybridSearch(db, "needle", { limit: 10 });
+    const failClosed = await hybridSearch(db, "needle", { userPrincipals: [], queryEmbedding, limit: 10 });
+
+    expect(bypass.some((result) => hiddenIds.includes(result.id))).toBe(true);
+    expect(failClosed).toEqual([]);
   });
 });

@@ -2,6 +2,47 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.7] -- 2026-09-07
+
+- Extracts the WhatsApp LLM boundary chunker into a shared `connectors/chunk-engine.ts` engine behind a `ChunkStreamAdapter` interface so Slack (P1) can reuse the same window-loading, LLM-boundary bisect, claim-revalidation and idle-close logic without forking; WhatsApp behaviour is unchanged and existing call sites/tests are untouched.
+- Links CRM activity, CRM record files and LinkedIn conversations to the client's **company** entity via deterministic roll-up in the materializer (`materializeParentEntity` follows live `works_at` edges filtered to the fact's own connector), self-record mentions when `sourceId === providerFileId`, and a new `createMentionIfAbsent` insert-or-skip variant; includes a backfill script (`backfill-entity-mentions.ts`) with dry-run census and `--apply` mode.
+- Adds structured `source_meta.zohoCrm` blocks (stage, status, lead status, priority, due date, amount, closing date, probability, owner, industry, website, company size, tag, last activity, related ids) to every Zoho CRM record, tracks field changes (stage, status, leadStatus, probability, closingDate) in a new `crm_field_history` table on resync, exposes `crmFields` on timeline items and `GET /api/entities/:id/crm-field-history`, and includes a content-parsing backfill script with `--apply`/`--force` flags.
+- Removes the extra three-second deadline around integration availability resolution and credential minting so discovery and ClickUp validation that exceed the threshold no longer cause connected integrations to disappear from the automation builder.
+- Records LinkedIn message direction (inbound vs outbound) from `sender.id` versus the account id, adds `last_replied_at` to `entity_contact_points`, and computes an `entity_touch_stats` rollup (last touch, last inbound/outbound, 30/90-day touch counts, last touch per source) inside the existing hotness sweep with `GET /api/entities/:id` returning `profile.touchStats`; fixes a hotness-decay underflow that silently aborted `recomputeAllHotness` on entities dormant ~870+ days.
+- Parallelises CI by running quality checks, server unit/web tests, and two server integration shards concurrently, reducing expected workflow duration from ~17 min to ~8–10 min while retaining the existing single-PGlite-per-shard isolation and a single aggregate required check.
+- Adds `sketch_get_entity` MCP tool returning an entity's identity, relations and a keyset-paged cross-source timeline in one call, with `sections`, `relationsLimit`, `sources`, `fileTypes`, `includePeople` (company → fold in `works_at` people's files), `includeContent` + `maxCharsPerItem` inline text, and RBAC filtering via `visibleEntityIdsForPublic`.
+- Adds `sketch_get_thread` MCP tool that dispatches on the anchor file to return the full ordered conversation (email thread, LinkedIn conversation, calendar series, CRM record rollup, or single file) with paging, per-message content truncation, and summary withheld when the caller cannot see every member.
+- Adds narrowing filters to `sketch_search` — `fileTypes`, `threadId`, `parentRecordId`, `participantEmail`, `domain` — applied as AND predicates on every candidate path (FTS, KNN, metadata, recency browse) using `indexed_file_facts` for participant/domain matching; search results now print `threadId` and `rollupGroupId` for chaining into `sketch_get_thread`.
+- Adds `mail.ru` to the personal-email denylist and `accounts@`/`finance@` to the role-account local parts so they no longer mint junk company entities on ingest.
+
+## [1.7.6] -- 2026-09-07
+
+- Prevents CI Typecheck heap exhaustion by setting `NODE_OPTIONS=--max-old-space-size=4096` on the CI runner, ensuring the server’s TypeScript checker completes without OOM.
+- Public MCP (`/mcp`) now honours `admin_can_read_all_files`, so admin tokens see the same scope as the web app; every tool call audit row records whether the bypass was active via a nullable `access_bypass` column.
+
+## [1.7.5] -- 2026-09-06
+
+- Fixes entity-mention fan-out that exceeded the Postgres bind limit (int16 parameter count wraps above 65,535 IDs) by switching to `= ANY($1::text[])` on Postgres and chunked `IN` on SQLite; deduplicates file IDs in `filterAccessibleFileIds` and adds an integration test seeding 70,000 mentions.
+- Pushes entity scope into SQL as correlated `EXISTS` predicates instead of materialising every mention row into JS, eliminating 3–6 s per entity-scoped call on large tenants; empty scopes are short-circuited with a `LIMIT 1` probe before the paid embedding.
+- Replaces planner-ordered `LIKE '%q%'` entity search with tiered ranking (exact name > exact alias > prefix > substring, then hotness DESC) and an opt-in token-fallback query requiring 3+ char non-stop-words matched by at least half; collapses two per-search entity lookups into one visibility-filtered lookup that drives both the fusion boost and tool-side rerank.
+- Pushes RBAC into the FTS and KNN SQL arms as a pre-filter, using a visible-set regime (`= ANY($visibleIds)`) for principals under 10,000 files and an inline-rule regime for broad principals; adds a partial index on public files and returns full result sets for previously starved restricted principals without changing broad-principal behaviour.
+- Defaults `scope_config.enrichment.autoMerge` to `true` so clean SalesQL work-email matches (exactly one existing person with the same address) merge without review; personal addresses, role inboxes and multi-matches still file proposals into the human queue.
+- Hides bodyless CRM activities (`content_category = 'structured'`) on every search path—`searchFiles`, `hybridSearch` FTS, KNN arms, metadata query and `browseLatest`—using a shared predicate with NULL-safe form; moves `CRM_ACTIVITY_FILE_TYPES` to `connectors/types.ts` for cross-module reuse.
+- Expands entity timeline rows inline into the file's text: structural links (attendee, sender, assignee) show the file directly while "mentioned" rows show name-matched passages first with a "Show whole file" toggle; two-line rows replace snippet windows, and gated files render a no-access line in the strip.
+
+## [1.7.4] -- 2026-09-06
+
+- Adds LinkedIn connector visibility choice (`owner` or `workspace`), letting admins control whether synced conversations and profiles are searchable by everyone or only the connector owner; includes a dedicated `PUT /api/connectors/:id/visibility` route that reconciles file grants without resetting the sync cursor.
+- Introduces `PUT /api/connectors/:id/enrichment` route to update SalesQL enrichment settings (enabled, dailyCap, autoMerge) independently from scope changes, preserving the sync cursor and server-side `batch` knob.
+- Adds visibility and enrichment switches to the LinkedIn connect and manage dialogs with client-facing copy that avoids naming the provider; manage dialog saves both settings behind a single Save action.
+- Routes SalesQL merge proposals to the human review lane so machine-pair verdicts land as `awaiting_human` instead of stuck `pending_corroboration`; duplicate proposals for the same pair return the existing row without inserting.
+- Defaults SalesQL enrichment daily cap to 25 and keeps `autoMerge` off by default to prevent silent opt-in for existing connectors.
+- Adds `GET /api/enrichment/allowance` admin endpoint exposing remaining lookup credits and reset timestamp from the enrichment provider.
+- Includes LinkedIn conversations in `message`-kind search results so agent and search surfaces can reach synced threads without filtering by source.
+- Adds sync diagnostics to the LinkedIn connector, logging walked and persisted counters and warning when a run walks threads but persists nothing.
+- Returns `scopeConfig` on `/mine` for LinkedIn connectors so the UI can render current visibility and enrichment state.
+- Replaces the previous `SALESQL_ENRICH_ENABLED` and `SALESQL_ENRICH_MAX_PER_SYNC` env vars with `scope_config.enrichment` stored per connector.
+
 ## [1.7.3] -- 2026-09-04
 
 - Adds LinkedIn connector via Aimfox, admin-managed with shared workspace key, syncing conversations into the graph as timeline-shaped threads (cold outreach → meeting notes → follow-up) and only indexing threads with a reply.

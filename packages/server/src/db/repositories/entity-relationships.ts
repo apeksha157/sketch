@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
+import { resolveLiveEntity, resolveLiveEntityId } from "../../entities/redirect";
 import type { DB } from "../schema";
 import { type FileViewer, fileVisibilityPredicate } from "./connectors";
 import { whereLiveEntity } from "./entities";
@@ -167,6 +168,30 @@ export function createEntityRelationshipsRepository(db: Kysely<DB>) {
         truncated: outgoingTruncated || incomingTruncated,
         totalCount: Math.min(outgoingRows.length, limit) + Math.min(incomingRows.length, limit),
       };
+    },
+
+    async listLiveWorksAtCompanyIds(personEntityId: string, opts: { sources: readonly string[] }): Promise<string[]> {
+      if (opts.sources.length === 0) return [];
+      const livePersonId = await resolveLiveEntityId(db, personEntityId);
+      const rows = await db
+        .selectFrom("entity_relationships as r")
+        .innerJoin("entities as source", "source.id", "r.source_entity_id")
+        .select(["r.target_entity_id"])
+        .where((eb) =>
+          eb.or([eb("r.source_entity_id", "=", livePersonId), eb("source.merged_into_entity_id", "=", livePersonId)]),
+        )
+        .where("r.relationship_type", "=", "works_at")
+        .where("r.source", "in", opts.sources)
+        .where("r.valid_to", "is", null)
+        .orderBy("r.target_entity_id", "asc")
+        .execute();
+
+      const companyIds = new Set<string>();
+      for (const row of rows) {
+        const company = await resolveLiveEntity(db, row.target_entity_id);
+        if (company?.source_type === "company" && company.status !== "archived") companyIds.add(company.id);
+      }
+      return [...companyIds].sort();
     },
 
     /**

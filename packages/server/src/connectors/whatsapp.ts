@@ -1,13 +1,14 @@
 import { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
+import { resolveChunkEngineKnobs } from "./config-default";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import type { BrowseResult, Connector, ConnectorCredentials, SyncedItem } from "./types";
 import {
   type WhatsAppBackfillGraphKnobs,
-  type WhatsAppChunkerKnobs,
   type WhatsAppLlmChunkerKnobs,
   chunkWhatsAppIndexingGroups,
 } from "./whatsapp-chunker";
 import {
+  DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES,
   WHATSAPP_EMISSION_REFRESH_DAYS,
   emitWhatsAppSyncedItems,
   reconcileWhatsAppGroupAcls,
@@ -22,14 +23,6 @@ function assertSystemCredentials(credentials: ConnectorCredentials): void {
 function positiveInteger(value: unknown): number | undefined {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function chunkerDefaultsFromScopeConfig(scopeConfig: Record<string, unknown>): Partial<WhatsAppChunkerKnobs> {
-  return {
-    gapMinutes: positiveInteger(scopeConfig.sliceGapMinutes),
-    maxAgeMinutes: positiveInteger(scopeConfig.sliceMaxAgeMinutes),
-    maxMessages: positiveInteger(scopeConfig.sliceMaxMessages),
-  };
 }
 
 function emissionRefreshDaysFromScopeConfig(scopeConfig: Record<string, unknown>): number {
@@ -57,6 +50,7 @@ function llmChunkerDefaultsFromScopeConfig(scopeConfig: Record<string, unknown>)
     burstThresholdMessages: positiveInteger(scopeConfig.chunkBurstThresholdMessages) ?? null,
     topicRegistryCap: positiveInteger(scopeConfig.chunkTopicRegistryCap),
     groupWorkerPool: positiveInteger(scopeConfig.chunkGroupWorkerPool),
+    maxWindowsPerRun: positiveInteger(scopeConfig.chunkMaxWindowsPerRun),
   };
 }
 
@@ -122,7 +116,6 @@ export function createWhatsAppConnector(): Connector {
         db,
         groups,
         logger,
-        defaultKnobs: chunkerDefaultsFromScopeConfig(scopeConfig),
         defaultLlmKnobs: llmChunkerDefaultsFromScopeConfig(scopeConfig),
         llmGenerate: whatsappChunkerGenerate,
         onOpenChunkShrunk: (indexedFileId) => purgeConversationalFactsForFile(db, indexedFileId),
@@ -135,6 +128,12 @@ export function createWhatsAppConnector(): Connector {
         db,
         logger,
         emissionRefreshDays: emissionRefreshDaysFromScopeConfig(scopeConfig),
+        provisionalRefreshMaxMinutes:
+          positiveInteger(scopeConfig.chunkProvisionalRefreshMaxMinutes) ??
+          DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES,
+        minMessages:
+          positiveInteger(scopeConfig.chunkMinMessages) ??
+          resolveChunkEngineKnobs("WHATSAPP_CHUNK", undefined).minMessages,
         onSkippedNoScope: () => {
           skippedNoScope += 1;
         },
