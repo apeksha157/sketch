@@ -16,6 +16,7 @@ const proposedCase = {
   closedCount: 2,
   expectedText: "Ready for review",
 };
+const proposedModelCase = { ...proposedCase, webhookFamily: null };
 
 const conversation: DesignConversation = {
   id: "design-1",
@@ -42,12 +43,51 @@ function settingsRepository(): ReturnType<typeof createSettingsRepository> {
 }
 
 describe("benchmark case designer", () => {
+  it("publishes a provider schema that requires every case property", async () => {
+    const generateText = vi.fn().mockResolvedValue({
+      text: "",
+      output: {
+        message: "I prepared a focused ClickUp check.",
+        cases: [proposedModelCase],
+      },
+    });
+    const model = createBenchmarkModel(settingsRepository(), { generateText });
+
+    await model.design(conversation, "Suggest useful tests", new AbortController().signal);
+
+    const request = generateText.mock.calls[0]?.[0] as {
+      output: {
+        responseFormat: Promise<{
+          schema: {
+            properties: {
+              cases: { items: { required: string[] } };
+            };
+          };
+        }>;
+      };
+    };
+    const responseFormat = await request.output.responseFormat;
+    expect(responseFormat.schema.properties.cases.items.required).toEqual([
+      "title",
+      "integration",
+      "operation",
+      "prompt",
+      "facts",
+      "tags",
+      "selection",
+      "openCount",
+      "closedCount",
+      "expectedText",
+      "webhookFamily",
+    ]);
+  });
+
   it("uses validated structured output even when the provider text is truncated", async () => {
     const generateText = vi.fn().mockResolvedValue({
       text: '{"message":"I prepared',
       output: {
         message: "I prepared a focused ClickUp check.",
-        cases: [proposedCase],
+        cases: [proposedModelCase],
       },
     });
     const model = createBenchmarkModel(settingsRepository(), { generateText });
@@ -60,6 +100,7 @@ describe("benchmark case designer", () => {
       expect.objectContaining({
         output: expect.anything(),
         include: { requestBody: false, requestMessages: false, responseBody: false },
+        providerOptions: { openrouter: { reasoning: { effort: "low" } } },
       }),
     );
     expect(JSON.parse(generateText.mock.calls[0][0].prompt)).not.toHaveProperty("schema");
