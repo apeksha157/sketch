@@ -220,8 +220,13 @@ export interface SketchMcpDeps {
   agentAllowedTools?: string[] | null;
   agentOutputWriter?: AgentOutputWriter;
   originOrgContextEnabled?: boolean;
+  /**
+   * Set on public MCP and automation runs. Content reads bypass file ACLs for admins only when
+   * `adminReadAll` is explicitly true; automations never set it, so they cannot inherit the bypass.
+   */
   publicMcp?: {
     userPrincipals?: AccessPrincipalInput[];
+    adminReadAll?: boolean;
     filterEntityMetadata?: boolean;
     maxFileContentChars?: number;
   };

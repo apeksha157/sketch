@@ -15,20 +15,35 @@
  *   and ranking functions (bm25 vs ts_rank, sqlite-vec MATCH vs pgvector KNN), so a shared
  *   query builder abstraction would add complexity without benefit.
  */
-import type { Kysely, SqlBool } from "kysely";
+import type { Kysely, RawBuilder, SqlBool } from "kysely";
 import { sql } from "kysely";
 import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
 import { createEntityRepository } from "../db/repositories/entities";
-import { fileVisibilityRuleSql } from "../db/repositories/file-visibility-rule";
+import { fileVisibilityRuleSql, visibleFileIdsSql } from "../db/repositories/file-visibility-rule";
 import { createSettingsRepository } from "../db/repositories/settings";
 import type { DB } from "../db/schema";
 import { parseEmailAddrJson, parseEmailAddrListJson } from "./email/envelope-metadata";
 import type { EmailAddr } from "./email/normalized-email";
 import { createEnrichmentQueryEmbedder, resolveOpenRouterEnrichmentConfig } from "./enrichment-providers";
 import type { SearchCandidate, StageKey, StageReporter, VectorChunkHit } from "./enrichment-stage-report";
-import { type AccessPrincipalInput, CONNECTOR_TYPES, type ConnectorType, normalizeAccessPrincipals } from "./types";
+import {
+  type EntityScope,
+  entityScopeHasFiles,
+  entityScopePredicateSql,
+  findEntityLinkedFileIds,
+  resolveSqliteEntityScopeFileIds,
+} from "./entity-scope";
+import { idInList } from "./id-in-list";
+import { filterAccessibleFileIds } from "./sync-utils";
+import {
+  type AccessPrincipalInput,
+  CONNECTOR_TYPES,
+  CRM_ACTIVITY_FILE_TYPES,
+  type ConnectorType,
+  normalizeAccessPrincipals,
+} from "./types";
 import {
   type ScoredVector,
   VECTOR_HIT_DISPLAY_CAP,
@@ -59,9 +74,27 @@ function buildSearchableSources(connectorTypes: readonly ConnectorType[]): [Sear
 
 export const SEARCHABLE_SOURCES = buildSearchableSources(CONNECTOR_TYPES);
 
+export { filterAccessibleFileIds } from "./sync-utils";
+
+export const RBAC_MODE_VISIBLE_SET = "visible-set";
+export const RBAC_MODE_INLINE_RULE = "inline-rule";
+export const RBAC_MODE_SQLITE = "pre-filter (fts) + post-filter (vector)";
+
+/**
+ * Materialised ID arrays are much faster for restricted principals, but beyond roughly
+ * 10k visible files the bitmap scan costs tens of milliseconds and the inline visibility
+ * rule is cheap once at least about 10% of HNSW tuples pass.
+ */
+export const VISIBLE_SET_CAP = 10_000;
+
 export interface SearchOptions {
   /** Filter by source provider. */
   source?: string;
+  fileTypes?: string[];
+  threadId?: string;
+  parentRecordId?: string;
+  participantEmail?: string;
+  domain?: string;
   /** Max results (default 10). */
   limit?: number;
   /** Content category filter: "document" or "structured". */
@@ -86,6 +119,35 @@ export function fileAccessFilterSql(principalInput: AccessPrincipalInput[], slac
 }
 
 /**
+ * Zoho CRM sync classifies activity rows through `activityBody` in `zoho-crm.ts`,
+ * which reads `Description ?? Note_Content`: for CRM activity file types, `structured`
+ * means there is no free-text body, while `document` means there is one. Bodyless
+ * activity rows are summarized under their parent object by the CRM rollup. CRM rows
+ * still render a markdown header into `content`, and summaries are usually empty, so
+ * neither `content` nor `summary` can identify this case.
+ */
+export function bodylessCrmActivityPredicateSql(): RawBuilder<boolean> {
+  const fileTypes = sql.join(
+    CRM_ACTIVITY_FILE_TYPES.map((fileType) => sql`${fileType}`),
+    sql`, `,
+  );
+  return sql<boolean>`(
+    indexed_files.content_category IS NULL
+    OR indexed_files.content_category <> 'structured'
+    OR indexed_files.file_type IS NULL
+    OR indexed_files.file_type NOT IN (${fileTypes})
+  )`;
+}
+
+function isBodylessCrmActivity(row: { content_category: string | null; file_type: string | null }): boolean {
+  return (
+    row.content_category === "structured" &&
+    row.file_type !== null &&
+    CRM_ACTIVITY_FILE_TYPES.some((fileType) => fileType === row.file_type)
+  );
+}
+
+/**
  * Search the FTS5 index.
  *
  * Supports FTS5 query syntax:
@@ -103,13 +165,6 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
     principalList.length > 0
       ? sql`AND ${fileAccessFilterSql(principalList, opts?.slackEntitySyncEnabled ?? true)}`
       : sql``;
-
-  // Hide bodyless CRM activities ("empty reminders") from search — they're rolled
-  // up under their parent object, never surfaced as standalone results.
-  const excludeEmptyActivities = sql`AND NOT (
-    indexed_files.content_category = 'structured'
-    AND indexed_files.file_type IN ('crm_task', 'crm_call', 'crm_event', 'crm_meeting', 'crm_note')
-  )`;
 
   if (isPg(db)) {
     const tsQuery = sanitizeTsQuery(query);
@@ -130,7 +185,7 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
       FROM indexed_files
       WHERE indexed_files.search_vector @@ plainto_tsquery('english', ${query})
       AND indexed_files.is_archived = 0
-      ${excludeEmptyActivities}
+      AND ${bodylessCrmActivityPredicateSql()}
       ${userFilter}
       ${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
       ${opts?.category ? sql`AND indexed_files.content_category = ${opts.category}` : sql``}
@@ -159,7 +214,7 @@ export async function searchFiles(db: Kysely<DB>, query: string, opts?: SearchOp
 		INNER JOIN indexed_files_fts ON indexed_files.rowid = indexed_files_fts.rowid
 		WHERE indexed_files_fts MATCH ${ftsQuery}
 		AND indexed_files.is_archived = 0
-		${excludeEmptyActivities}
+		AND ${bodylessCrmActivityPredicateSql()}
 		${userFilter}
 		${opts?.source ? sql`AND indexed_files.source = ${opts.source}` : sql``}
 		${opts?.category ? sql`AND indexed_files.content_category = ${opts.category}` : sql``}
@@ -242,37 +297,6 @@ export async function getFileContent(
     providerUrl: file.provider_url,
     enrichmentStatus: file.enrichment_status,
   };
-}
-
-/**
- * Filter a list of indexed file IDs down to only those the user can access.
- *
- * Contract mirrors `getFileContent`:
- *   - `userPrincipals === undefined` → trusted bypass (server/agent boot, admin
- *     bypass): returns the input set unchanged.
- *   - `userPrincipals === []`        → caller has no resolvable principal → fail closed:
- *     returns an empty set.
- *   - `userPrincipals.length > 0`    → 3-tier check (unrestricted / scope / per-file).
- */
-export async function filterAccessibleFileIds(
-  db: Kysely<DB>,
-  fileIds: string[],
-  userPrincipals?: AccessPrincipalInput[],
-  slackEntitySyncEnabled = true,
-): Promise<Set<string>> {
-  if (fileIds.length === 0) return new Set();
-  if (userPrincipals === undefined) return new Set(fileIds);
-  const principals = normalizeAccessPrincipals(userPrincipals);
-  if (principals.length === 0) return new Set();
-
-  const files = await db
-    .selectFrom("indexed_files")
-    .select("id")
-    .where("id", "in", fileIds)
-    .where(fileVisibilityRuleSql({ principals, slackEntitySyncEnabled, archived: "exclude" }))
-    .execute();
-
-  return new Set(files.map((file) => file.id));
 }
 
 /**
@@ -408,7 +432,10 @@ export const KIND_TO_RULES: Record<SearchKind, KindRule[]> = {
     { sources: ["clickup"], fileTypes: ["task", "subtask"] },
     { sources: ["linear"], fileTypes: ["issue"] },
   ],
-  message: [{ sources: ["conversation", "whatsapp", "slack"] }],
+  message: [
+    { sources: ["conversation", "whatsapp", "slack"] },
+    { sources: ["linkedin_aimfox"], fileTypes: ["linkedin_conversation"] },
+  ],
   email: [{ sources: ["outlook", "gmail"], fileTypes: ["email_message"] }],
 };
 
@@ -453,6 +480,52 @@ function kindFilterSql(rules: KindRule[]) {
   return sql`AND (${sql.join(parts, sql` OR `)})`;
 }
 
+/** Accepts "@Example.com", " example.com " etc. and yields the bare lower-cased domain, or undefined when empty. */
+export function normalizeDomainFilter(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^@+/, "").toLowerCase();
+  return normalized || undefined;
+}
+
+function participantEmailExistsSql(alias: string, predicate: RawBuilder<unknown>) {
+  return sql`EXISTS (
+    SELECT 1
+    FROM indexed_file_facts
+    WHERE indexed_file_facts.indexed_file_id = ${sql.ref(`${alias}.id`)}
+    AND indexed_file_facts.deleted_at IS NULL
+    AND indexed_file_facts.fact_type IN ('attendee', 'correspondent')
+    AND ${predicate}
+  )`;
+}
+
+function extraFilterSql(
+  opts: Pick<SearchOptions, "fileTypes" | "threadId" | "parentRecordId" | "participantEmail" | "domain"> | undefined,
+  alias = "indexed_files",
+) {
+  const parts: ReturnType<typeof sql>[] = [];
+  const domain = normalizeDomainFilter(opts?.domain);
+  if (opts?.fileTypes?.length) {
+    parts.push(
+      sql`${sql.ref(`${alias}.file_type`)} IN (${sql.join(
+        opts.fileTypes.map((fileType) => sql`${fileType}`),
+        sql`, `,
+      )})`,
+    );
+  }
+  if (opts?.threadId) parts.push(sql`${sql.ref(`${alias}.thread_id`)} = ${opts.threadId}`);
+  if (opts?.parentRecordId) parts.push(sql`${sql.ref(`${alias}.rollup_group_id`)} = ${opts.parentRecordId}`);
+  if (opts?.participantEmail) {
+    parts.push(
+      participantEmailExistsSql(alias, sql`lower(indexed_file_facts.subject_email) = lower(${opts.participantEmail})`),
+    );
+  }
+  if (domain) {
+    parts.push(
+      participantEmailExistsSql(alias, sql`lower(indexed_file_facts.subject_email) LIKE ('%@' || lower(${domain}))`),
+    );
+  }
+  return parts.length > 0 ? sql`AND ${sql.join(parts, sql` AND `)}` : sql``;
+}
+
 // ── Hybrid Search ─────────────────────────────────────────────────────────
 
 export interface HybridSearchOptions extends SearchOptions {
@@ -465,10 +538,12 @@ export interface HybridSearchOptions extends SearchOptions {
   contentTypes?: string[];
   /** Embed the query for vector search. If null, only FTS5 is used. */
   queryEmbedding?: number[];
-  /** Restrict search to these file IDs only (entity-scoped search). */
+  /** Restrict search to these file IDs only. */
   fileIds?: string[];
-  /** File IDs linked to entities matching the query — used for entity boost in ranking. */
-  entityFileIds?: Set<string>;
+  /** Restrict search to files linked to these entities without materialising file IDs. */
+  entityScope?: EntityScope;
+  /** Entity matches whose links to the bounded candidate set receive a ranking boost. */
+  entityBoostEntityIds?: string[];
   /** Multi-source filter (OR-of-sources). Takes precedence over `source` when both set. */
   sources?: string[];
   /** Compiled kind rules — see KIND_TO_RULES. Caller (Search tool) translates `kind` → rules. */
@@ -502,11 +577,46 @@ export interface HybridSearchResult {
   similarity: number | null;
   /** Combined score (higher = more relevant). */
   score: number;
+  threadId?: string | null;
+  rollupGroupId?: string | null;
   threadKey?: string;
   messageCount?: number;
   latestSubject?: string;
   lastActivity?: string | null;
   participants?: string[];
+}
+
+export interface ResolvedAccessPredicate {
+  predicate: RawBuilder<unknown>;
+  mode: typeof RBAC_MODE_VISIBLE_SET | typeof RBAC_MODE_INLINE_RULE;
+  visibleCount?: number;
+}
+
+/**
+ * Internal-only controls used by `search()` and focused tests. Public callers should pass
+ * normal `HybridSearchOptions`; the precomputed predicate exists so `search()` can resolve
+ * RBAC before the embedding round-trip.
+ */
+interface HybridSearchInternalOptions {
+  resolvedAccessPredicate?: ResolvedAccessPredicate;
+  visibleSetCap?: number;
+}
+
+const NO_SCORED_CANDIDATE_REMAINDER = [
+  ["filter", "Metadata filters"],
+  ["finalize", "Collapse and slice"],
+] as const satisfies ReadonlyArray<readonly [StageKey, string]>;
+
+function reportNoScoredCandidateRemainder(stageReport: StageReporter | undefined, error: string): void {
+  for (const [stage, label] of NO_SCORED_CANDIDATE_REMAINDER) {
+    stageReport?.({
+      stage,
+      label,
+      kind: "code",
+      status: "skipped",
+      error,
+    });
+  }
 }
 
 /**
@@ -515,6 +625,79 @@ export interface HybridSearchResult {
  */
 function hnswEfSearch(vecLimit: number): number {
   return Math.min(1000, Math.max(40, vecLimit));
+}
+
+/**
+ * Resolves principal-scoped Postgres RBAC into either a materialised visible-file snapshot
+ * or the inline SQL rule. The visible-set regime is a snapshot taken before the embedding
+ * round-trip, so a grant revoked during that window is still honoured for that search; the
+ * inline-rule regime evaluates fresh in SQL.
+ */
+async function resolveAccessPredicate(
+  db: Kysely<DB>,
+  opts?: {
+    userPrincipals?: AccessPrincipalInput[];
+    accessBypassReason?: "admin";
+    slackEntitySyncEnabled?: boolean;
+    visibleSetCap?: number;
+  },
+): Promise<ResolvedAccessPredicate | undefined> {
+  if (!isPg(db) || opts?.accessBypassReason === "admin") return undefined;
+  const principalList = opts?.userPrincipals ?? [];
+  if (principalList.length === 0) return undefined;
+
+  const principals = normalizeAccessPrincipals(principalList);
+  if (principals.length === 0) {
+    return {
+      predicate: sql`AND FALSE`,
+      mode: RBAC_MODE_VISIBLE_SET,
+      visibleCount: 0,
+    };
+  }
+
+  const slackEntitySyncEnabled = opts?.slackEntitySyncEnabled ?? true;
+  const cap = opts?.visibleSetCap ?? VISIBLE_SET_CAP;
+  const visibleRows = await visibleFileIdsSql(
+    {
+      principals,
+      slackEntitySyncEnabled,
+      archived: "exclude",
+    },
+    cap + 1,
+  ).execute(db);
+  const visibleIds = [...new Set(visibleRows.rows.map((row) => row.id))];
+
+  if (visibleIds.length <= cap) {
+    return {
+      predicate: sql`AND ${idInList(db, sql.ref("indexed_files.id"), visibleIds)}`,
+      mode: RBAC_MODE_VISIBLE_SET,
+      visibleCount: visibleIds.length,
+    };
+  }
+
+  return {
+    predicate: sql`AND ${fileAccessFilterSql(principalList, slackEntitySyncEnabled)}`,
+    mode: RBAC_MODE_INLINE_RULE,
+  };
+}
+
+function reportPostgresRbacStage(
+  stageReport: StageReporter | undefined,
+  principalCount: number,
+  access: ResolvedAccessPredicate,
+): void {
+  stageReport?.({
+    stage: "rbac",
+    label: "Access filter",
+    kind: "code",
+    status: "done",
+    summary: {
+      principals: principalCount,
+      mode: access.mode,
+      ...(access.visibleCount !== undefined ? { visibleFiles: access.visibleCount } : {}),
+      note: "predicate applied inside the FTS and KNN WHERE",
+    },
+  });
 }
 
 /** RRF constant — standard value from the original paper. */
@@ -532,20 +715,22 @@ const ENTITY_BOOST = 0.005;
  * their own database instead.
  *
  * Strategy:
- * 1. Run FTS5 search → ranked keyword results
+ * 1. Run FTS search with access pre-filtering → ranked keyword results
  * 2. Run vector KNN search → ranked semantic results
  * 3. Merge via reciprocal rank fusion (RRF)
  * 4. Apply metadata filters (time, type, source)
- * 5. Apply RBAC
+ * 5. Post-filter SQLite vector candidates for access
  */
 export async function hybridSearch(
   db: Kysely<DB>,
   query: string,
   opts?: HybridSearchOptions,
+  internal?: HybridSearchInternalOptions,
 ): Promise<HybridSearchResult[]> {
   const limit = opts?.limit ?? 10;
   const candidateLimit = Math.max(limit * 40, 200);
   if (opts?.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
+  const principalList = opts?.userPrincipals ?? [];
   let scoredChunks: VectorChunkHit[] = [];
   /** Counted over every scored chunk, not the capped display slice. */
   let totalChunksScored = 0;
@@ -553,15 +738,41 @@ export async function hybridSearch(
   let totalImageVectors = 0;
   const ftsResults = new Map<string, { rank: number; snippet: string | null }>();
   const vecResults = new Map<string, { rank: number; similarity: number; snippet: string | null }>();
+  const fileIdScope = opts?.fileIds && opts.fileIds.length > 0 ? new Set(opts.fileIds) : null;
+  const sqliteEntityFileIdScope =
+    !isPg(db) && opts?.queryEmbedding && opts.entityScope
+      ? await resolveSqliteEntityScopeFileIds(db, opts.entityScope)
+      : null;
 
   // ── 0. Build filter fragments ────────────────────────────────
   const fileIdFilter =
     opts?.fileIds && opts.fileIds.length > 0
-      ? sql`AND indexed_files.id IN (${sql.join(
-          opts.fileIds.map((id) => sql`${id}`),
-          sql`,`,
-        )})`
+      ? sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`
       : sql``;
+  const entityScopeFilter = opts?.entityScope
+    ? sql`AND ${entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope)}`
+    : sql``;
+  const accessResolution =
+    internal?.resolvedAccessPredicate ??
+    (await resolveAccessPredicate(db, {
+      userPrincipals: opts?.userPrincipals,
+      accessBypassReason: opts?.accessBypassReason,
+      slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+      visibleSetCap: internal?.visibleSetCap,
+    }));
+  if (isPg(db) && principalList.length > 0 && opts?.accessBypassReason !== "admin" && !accessResolution) {
+    throw new Error("access predicate missing for a principal-scoped Postgres search");
+  }
+  if (accessResolution) {
+    reportPostgresRbacStage(opts?.stageReport, principalList.length, accessResolution);
+    if (accessResolution.mode === RBAC_MODE_VISIBLE_SET && accessResolution.visibleCount === 0) return [];
+  }
+  const accessFilter =
+    isPg(db) && accessResolution
+      ? accessResolution.predicate
+      : !isPg(db) && principalList.length > 0
+        ? sql`AND ${fileAccessFilterSql(principalList, opts?.slackEntitySyncEnabled ?? true)}`
+        : null;
   // Push `kind` and `sources` into FTS so candidates outside the requested
   // kind don't crowd out matches; we'd otherwise lose them past `limit * 3`.
   const kindFilter = opts?.kindRules?.length ? kindFilterSql(opts.kindRules) : sql``;
@@ -572,6 +783,7 @@ export async function hybridSearch(
           sql`,`,
         )})`
       : sql``;
+  const extraFilter = extraFilterSql(opts);
 
   // ── 1. FTS keyword search ───────────────────────────────────
   if (isPg(db)) {
@@ -582,9 +794,13 @@ export async function hybridSearch(
         FROM indexed_files
         WHERE indexed_files.search_vector @@ plainto_tsquery('english', ${query})
         AND indexed_files.is_archived = 0
+        AND ${bodylessCrmActivityPredicateSql()}
         ${fileIdFilter}
+        ${entityScopeFilter}
+        ${accessFilter ?? sql``}
         ${kindFilter}
         ${sourcesFilter}
+        ${extraFilter}
         ORDER BY rank DESC
         LIMIT ${candidateLimit}
       `.execute(db);
@@ -614,9 +830,13 @@ export async function hybridSearch(
         INNER JOIN indexed_files_fts ON indexed_files.rowid = indexed_files_fts.rowid
         WHERE indexed_files_fts MATCH ${ftsQuery}
         AND indexed_files.is_archived = 0
+        AND ${bodylessCrmActivityPredicateSql()}
         ${fileIdFilter}
+        ${entityScopeFilter}
+        ${accessFilter ?? sql``}
         ${kindFilter}
         ${sourcesFilter}
+        ${extraFilter}
         ORDER BY rank
         LIMIT ${candidateLimit}
       `.execute(db);
@@ -642,7 +862,7 @@ export async function hybridSearch(
 
     if (isPg(db)) {
       const dims = EMBEDDING_DIMENSIONS;
-      const vectorFilter = vectorPredicateSql(opts);
+      const vectorFilter = vectorPredicateSql(db, opts, accessFilter);
 
       /**
        * Both KNN reads run inside one transaction, because `SET LOCAL` outside a
@@ -655,7 +875,9 @@ export async function hybridSearch(
        * truncates the candidate pool. `iterative_scan` then covers the filtered case,
        * where a plain scan would hand back `ef_search` tuples and let the WHERE discard
        * most of them. `relaxed_order` is safe here because candidates are re-sorted by
-       * distance in JS before ranks are assigned.
+       * distance in JS before ranks are assigned. In the inline-rule regime the visibility
+       * rule sits in the WHERE and the scan stops at pgvector's default hnsw.max_scan_tuples,
+       * which is enough because that regime only runs above VISIBLE_SET_CAP files.
        */
       const vectorRows = await db.transaction().execute(async (trx) => {
         await sql`SET LOCAL hnsw.ef_search = ${sql.lit(hnswEfSearch(vecLimit))}`.execute(trx);
@@ -796,8 +1018,8 @@ export async function hybridSearch(
        * belonging to files that never reach the result set. On Postgres this is a no-op,
        * because the rows arrived scoped already.
        */
-      const scope = opts.fileIds && opts.fileIds.length > 0 ? new Set(opts.fileIds) : null;
-      const inScope = (fileId: string) => !scope || scope.has(fileId);
+      const inScope = (fileId: string) =>
+        (!fileIdScope || fileIdScope.has(fileId)) && (!sqliteEntityFileIdScope || sqliteEntityFileIdScope.has(fileId));
 
       const hits: ScoredVector[] = [];
       for (const row of chunkRows.rows) {
@@ -829,10 +1051,11 @@ export async function hybridSearch(
     }
 
     // Filter by file IDs if entity-scoped
-    const filteredVecResults =
-      opts?.fileIds && opts.fileIds.length > 0
-        ? allVecResults.filter((r) => opts.fileIds?.includes(r.fileId))
-        : allVecResults;
+    const filteredVecResults = allVecResults.filter(
+      (result) =>
+        (!fileIdScope || fileIdScope.has(result.fileId)) &&
+        (!sqliteEntityFileIdScope || sqliteEntityFileIdScope.has(result.fileId)),
+    );
 
     // Sort by distance (ascending) and assign ranks
     filteredVecResults.sort((a, b) => a.distance - b.distance);
@@ -887,6 +1110,9 @@ export async function hybridSearch(
 
   // ── 3. Merge via RRF ───────────────────────────────────────
   const allFileIds = new Set([...ftsResults.keys(), ...vecResults.keys()]);
+  const entityFileIds = opts?.entityBoostEntityIds?.length
+    ? await findEntityLinkedFileIds(db, [...allFileIds], opts.entityBoostEntityIds)
+    : undefined;
   const scored: Array<{ fileId: string; score: number; snippet: string | null; similarity: number | null }> = [];
 
   for (const fileId of allFileIds) {
@@ -899,7 +1125,7 @@ export async function hybridSearch(
     if (vec) score += 1 / (RRF_K + vec.rank);
 
     // Entity boost: files linked to entities matching the query get a score bump
-    if (opts?.entityFileIds?.has(fileId)) {
+    if (entityFileIds?.has(fileId)) {
       score += ENTITY_BOOST;
     }
 
@@ -921,7 +1147,7 @@ export async function hybridSearch(
     summary: {
       rrfK: RRF_K,
       entityBoost: ENTITY_BOOST,
-      boostedFiles: opts?.entityFileIds?.size ?? 0,
+      boostedFiles: entityFileIds?.size ?? 0,
       scored: scored.length,
     },
   });
@@ -934,19 +1160,33 @@ export async function hybridSearch(
      * that simply stops is indistinguishable from one that crashed, and "no candidates
      * survived scoring" is the answer someone opened the trace to find.
      */
-    for (const [stage, label] of [
-      ["filter", "Metadata filters"],
-      ["rbac", "Access filter"],
-      ["finalize", "Collapse and slice"],
-    ] as const) {
+    if (!isPg(db) && principalList.length > 0 && opts?.accessBypassReason !== "admin") {
       opts?.stageReport?.({
-        stage,
-        label,
+        stage: "rbac",
+        label: "Access filter",
+        kind: "code",
+        status: "done",
+        summary: {
+          principals: principalList.length,
+          mode: RBAC_MODE_SQLITE,
+          allowed: 0,
+          denied: 0,
+        },
+      });
+    }
+    if (!accessResolution && (isPg(db) || principalList.length === 0 || opts?.accessBypassReason === "admin")) {
+      opts?.stageReport?.({
+        stage: "rbac",
+        label: "Access filter",
         kind: "code",
         status: "skipped",
         error: "No candidates were scored — keyword and vector search both returned nothing",
       });
     }
+    reportNoScoredCandidateRemainder(
+      opts?.stageReport,
+      "No candidates were scored — keyword and vector search both returned nothing",
+    );
     return [];
   }
 
@@ -967,12 +1207,14 @@ export async function hybridSearch(
       "provider_file_id",
       "provider_url",
       "source_path",
+      "rollup_group_id",
       "source_updated_at",
       "source_created_at",
       "access_scope_id",
     ])
     .where("id", "in", topFileIds)
-    .where("is_archived", "=", 0);
+    .where("is_archived", "=", 0)
+    .where(bodylessCrmActivityPredicateSql());
 
   if (opts?.source) {
     metaQuery = metaQuery.where("source", "=", opts.source);
@@ -1000,6 +1242,7 @@ export async function hybridSearch(
   if (opts?.contentTypes && opts.contentTypes.length > 0) {
     metaQuery = metaQuery.where("content_category", "in", opts.contentTypes);
   }
+  metaQuery = metaQuery.where(sql<SqlBool>`TRUE ${extraFilterSql(opts)}`);
 
   const files = await metaQuery.execute();
 
@@ -1062,11 +1305,15 @@ export async function hybridSearch(
     })),
   });
 
-  // ── 6. Apply RBAC (batch query — same pattern as searchFiles) ─
-  const principalList = opts?.userPrincipals ?? [];
+  // ── 6. Apply RBAC ──────────────────────────────────────────
   let accessFiltered = filteredFiles;
 
-  if (principalList.length > 0 && filteredFiles.length > 0) {
+  /**
+   * Postgres candidates all arrive pre-filtered. SQLite pre-filters FTS but its vector
+   * arm has no indexed_files join, so vector-only hits are post-filtered here. Keeping
+   * that SQLite check deliberately departs from D8's original drop-post-filter plan.
+   */
+  if (!isPg(db) && principalList.length > 0 && filteredFiles.length > 0) {
     const fileIds = filteredFiles.map((f) => f.id);
 
     const accessRows = await sql<{ id: string }>`
@@ -1083,38 +1330,35 @@ export async function hybridSearch(
     accessFiltered = filteredFiles.filter((f) => allowedIds.has(f.id));
   }
 
-  if (opts?.stageReport && principalList.length > 0) {
-    const allowed = new Set(accessFiltered.map((file) => file.id));
-    opts.stageReport({
+  if (!isPg(db) || principalList.length === 0 || opts?.accessBypassReason === "admin") {
+    opts?.stageReport?.({
       stage: "rbac",
       label: "Access filter",
       kind: "code",
-      status: "done",
-      outcomes: filteredFiles.map((file) => ({
-        subject: file.file_name,
-        kind: file.source,
-        result: allowed.has(file.id) ? ("kept" as const) : ("dropped" as const),
-        reason: allowed.has(file.id) ? "visible to these principals" : "no matching access principal",
-      })),
+      status: principalList.length > 0 ? "done" : "skipped",
+      ...(opts?.accessBypassReason === "admin"
+        ? { error: "skipped — admin bypass" }
+        : principalList.length > 0
+          ? {
+              summary: {
+                principals: principalList.length,
+                mode: RBAC_MODE_SQLITE,
+                allowed: accessFiltered.length,
+                denied: filteredFiles.length - accessFiltered.length,
+              },
+              outcomes: (() => {
+                const allowed = new Set(accessFiltered.map((file) => file.id));
+                return filteredFiles.map((file) => ({
+                  subject: file.file_name,
+                  kind: file.source,
+                  result: allowed.has(file.id) ? ("kept" as const) : ("dropped" as const),
+                  reason: allowed.has(file.id) ? "visible to these principals" : "no matching access principal",
+                }));
+              })(),
+            }
+          : { error: "No principals supplied — access filter not applied" }),
     });
   }
-  opts?.stageReport?.({
-    stage: "rbac",
-    label: "Access filter",
-    kind: "code",
-    status: principalList.length > 0 ? "done" : "skipped",
-    ...(opts?.accessBypassReason === "admin"
-      ? { error: "skipped — admin bypass" }
-      : principalList.length > 0
-        ? {
-            summary: {
-              principals: principalList.length,
-              allowed: accessFiltered.length,
-              denied: filteredFiles.length - accessFiltered.length,
-            },
-          }
-        : { error: "No principals supplied — access filter not applied" }),
-  });
 
   // ── 7. Build final results ─────────────────────────────────
   const collapsed = await collapseEmailSearchResults(
@@ -1156,7 +1400,7 @@ export async function hybridSearch(
         scored,
         ftsResults,
         vecResults,
-        entityFileIds: opts.entityFileIds,
+        entityFileIds,
         attribution: dropAttribution,
         accessFiltered,
         collapsed,
@@ -1176,18 +1420,18 @@ export async function hybridSearch(
  * it was about to discard. Entity-scoped searches were the worst case — a scope covering a
  * small fraction of the corpus expected almost no surviving candidates.
  *
- * Time and RBAC stay out for now. Both are more expensive predicates and want a plan
- * measured against a real corpus before being pushed down.
+ * Time stays out because it wants a plan measured against a real corpus before being
+ * pushed down. On Postgres, RBAC is included so selective visibility cannot consume the
+ * candidate budget before fusion.
  */
-function vectorPredicateSql(opts: HybridSearchOptions) {
+function vectorPredicateSql(db: Kysely<DB>, opts: HybridSearchOptions, accessFilter: RawBuilder<unknown> | null) {
+  const requiredPredicate = sql`AND ${bodylessCrmActivityPredicateSql()}`;
   const parts = [];
   if (opts.fileIds && opts.fileIds.length > 0) {
-    parts.push(
-      sql`AND indexed_files.id IN (${sql.join(
-        opts.fileIds.map((id) => sql`${id}`),
-        sql`,`,
-      )})`,
-    );
+    parts.push(sql`AND ${idInList(db, sql.ref("indexed_files.id"), opts.fileIds)}`);
+  }
+  if (opts.entityScope) {
+    parts.push(sql`AND ${entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope)}`);
   }
   if (opts.source) parts.push(sql`AND indexed_files.source = ${opts.source}`);
   if (opts.sources && opts.sources.length > 0) {
@@ -1200,7 +1444,9 @@ function vectorPredicateSql(opts: HybridSearchOptions) {
   }
   if (opts.category) parts.push(sql`AND indexed_files.content_category = ${opts.category}`);
   if (opts.kindRules?.length) parts.push(kindFilterSql(opts.kindRules));
-  return parts.length > 0 ? sql`${sql.join(parts, sql` `)}` : sql``;
+  parts.push(extraFilterSql(opts));
+  if (accessFilter) parts.push(accessFilter);
+  return sql`${requiredPredicate} ${sql.join(parts, sql` `)}`;
 }
 
 /**
@@ -1229,6 +1475,26 @@ function describeFilters(opts: HybridSearchOptions): Array<{
       value: opts.kindRules?.length ? opts.kindRules : null,
       shown: `${opts.kindRules?.length ?? 0} rule(s)`,
     },
+    {
+      field: "fileTypes",
+      label: "File types",
+      value: opts.fileTypes?.length ? opts.fileTypes : null,
+      shown: (opts.fileTypes ?? []).join(", "),
+    },
+    { field: "threadId", label: "Thread ID", value: opts.threadId ?? null, shown: opts.threadId ?? "" },
+    {
+      field: "parentRecordId",
+      label: "Parent record ID",
+      value: opts.parentRecordId ?? null,
+      shown: opts.parentRecordId ?? "",
+    },
+    {
+      field: "participantEmail",
+      label: "Participant email",
+      value: opts.participantEmail ?? null,
+      shown: opts.participantEmail ?? "",
+    },
+    { field: "domain", label: "Participant domain", value: opts.domain ?? null, shown: opts.domain ?? "" },
     { field: "category", label: "Category", value: opts.category ?? null, shown: opts.category ?? "" },
     {
       field: "contentTypes",
@@ -1244,11 +1510,23 @@ function describeFilters(opts: HybridSearchOptions): Array<{
     },
     {
       field: "fileIds",
-      label: "Entity file scope",
+      label: "File ID scope",
       value: opts.fileIds?.length ? opts.fileIds : null,
       shown: `${opts.fileIds?.length ?? 0} file(s)`,
     },
+    {
+      field: "entityScope",
+      label: "Entity scope",
+      value: opts.entityScope ?? null,
+      shown: `${opts.entityScope?.entityIds.length ?? 0} entity/entities (${opts.entityScope?.mode ?? "and"})`,
+    },
     { field: "archived", label: "Archived excluded", value: true, shown: "is_archived = 0" },
+    {
+      field: "bodylessCrmActivities",
+      label: "Bodyless CRM activities hidden",
+      value: true,
+      shown: "structured CRM activity types summarized on parent objects",
+    },
   ].map((entry) => ({
     field: entry.field,
     label: entry.label,
@@ -1284,9 +1562,20 @@ async function attributeFilterDrops(
 
     const rows = await db
       .selectFrom("indexed_files")
-      .select(["id", "file_name", "source", "content_category", "file_type", "is_archived"])
+      .select([
+        "id",
+        "file_name",
+        "source",
+        "content_category",
+        "file_type",
+        "thread_id",
+        "rollup_group_id",
+        "is_archived",
+      ])
       .where("id", "in", scoredFileIds)
       .execute();
+    const participantEmails =
+      opts.participantEmail || opts.domain ? await loadParticipantEmailsForFiles(db, scoredFileIds) : new Map();
 
     const survivedSqlIds = new Set(survivedSql.map((file) => file.id));
     const survivedTimeIds = new Set(survivedTime.map((file) => file.id));
@@ -1297,7 +1586,7 @@ async function attributeFilterDrops(
         attribution.set(row.id, {
           ...identity,
           droppedAt: "filter",
-          dropReason: sqlFilterReason(row, opts),
+          dropReason: sqlFilterReason(row, opts, participantEmails.get(row.id) ?? []),
         });
         continue;
       }
@@ -1318,13 +1607,44 @@ async function attributeFilterDrops(
  * the SQL on both dialects — the day these drift, the trace starts lying.
  */
 function sqlFilterReason(
-  row: { is_archived: number; source: string; content_category: string; file_type: string | null },
+  row: {
+    is_archived: number;
+    source: string;
+    content_category: string;
+    file_type: string | null;
+    thread_id: string | null;
+    rollup_group_id: string | null;
+  },
   opts: HybridSearchOptions,
+  participantEmails: string[],
 ): string {
   if (row.is_archived !== 0) return "archived";
+  if (isBodylessCrmActivity(row)) return "bodyless CRM activity summarized on its parent object";
   if (opts.source && row.source !== opts.source) return `source is ${row.source}, not ${opts.source}`;
   if (opts.sources?.length && !opts.sources.includes(row.source))
     return `source ${row.source} not in the requested set`;
+  if (opts.fileTypes?.length && !opts.fileTypes.includes(row.file_type ?? "")) {
+    return `file type ${row.file_type ?? "none"} not in the requested set`;
+  }
+  if (opts.threadId && row.thread_id !== opts.threadId) {
+    return `threadId is ${row.thread_id ?? "none"}, not ${opts.threadId}`;
+  }
+  if (opts.parentRecordId && row.rollup_group_id !== opts.parentRecordId) {
+    return `parentRecordId is ${row.rollup_group_id ?? "none"}, not ${opts.parentRecordId}`;
+  }
+  if (opts.participantEmail) {
+    const requested = opts.participantEmail.toLowerCase();
+    if (!participantEmails.some((email) => email.toLowerCase() === requested)) {
+      return `no attendee or correspondent fact for ${opts.participantEmail}`;
+    }
+  }
+  const domain = normalizeDomainFilter(opts.domain);
+  if (domain) {
+    const suffix = `@${domain}`;
+    if (!participantEmails.some((email) => email.toLowerCase().endsWith(suffix))) {
+      return `no attendee or correspondent fact from domain ${domain}`;
+    }
+  }
   if (opts.category && row.content_category !== opts.category) {
     return `category is ${row.content_category}, not ${opts.category}`;
   }
@@ -1340,6 +1660,25 @@ function sqlFilterReason(
     if (!matches) return `does not match the requested kind (source ${row.source}, type ${row.file_type ?? "none"})`;
   }
   return "excluded by a metadata filter";
+}
+
+async function loadParticipantEmailsForFiles(db: Kysely<DB>, fileIds: string[]): Promise<Map<string, string[]>> {
+  const rows = await db
+    .selectFrom("indexed_file_facts")
+    .select(["indexed_file_id", "subject_email"])
+    .where("indexed_file_id", "in", fileIds)
+    .where("deleted_at", "is", null)
+    .where("fact_type", "in", ["attendee", "correspondent"])
+    .where("subject_email", "is not", null)
+    .execute();
+  const byFile = new Map<string, string[]>();
+  for (const row of rows) {
+    if (!row.indexed_file_id || !row.subject_email) continue;
+    const emails = byFile.get(row.indexed_file_id) ?? [];
+    emails.push(row.subject_email);
+    byFile.set(row.indexed_file_id, emails);
+  }
+  return byFile;
 }
 
 /**
@@ -1420,6 +1759,7 @@ type SearchMetadataFile = {
   provider_file_id: string;
   provider_url: string | null;
   source_path: string | null;
+  rollup_group_id: string | null;
   source_updated_at: string | null;
   source_created_at: string | null;
   access_scope_id: string | null;
@@ -1478,6 +1818,8 @@ async function collapseEmailSearchResults(
         snippet: scoreData?.snippet ?? null,
         similarity: scoreData?.similarity ?? null,
         score: scoreData?.score ?? 0,
+        threadId: file.thread_id,
+        rollupGroupId: file.rollup_group_id,
       });
       continue;
     }
@@ -1530,6 +1872,8 @@ async function collapseEmailSearchResults(
       snippet: bestScore?.snippet ?? null,
       similarity: bestScore?.similarity ?? null,
       score: bestScore?.score ?? 0,
+      threadId: best.thread_id,
+      rollupGroupId: best.rollup_group_id,
     });
   }
 
@@ -1663,59 +2007,6 @@ export async function browseFiles(
 }
 
 /**
- * Resolve a list of entity ids to the file ids that mention them.
- *
- * Mode:
- *  - "or"  → union: any file mentioning any of the entities
- *  - "and" → intersection: file must mention every entity
- *
- * For small `entityIds.length` (≤3) AND mode runs N small queries and intersects
- * Sets in app code — the planner consistently picks index scans for these and
- * the round-trip count is negligible. For larger N a single `GROUP BY ... HAVING
- * COUNT(DISTINCT entity_id)` query takes over (covered by the composite index
- * added in migration 042).
- */
-export async function resolveEntityFileIds(db: Kysely<DB>, entityIds: string[], mode: "and" | "or"): Promise<string[]> {
-  if (entityIds.length === 0) return [];
-  const uniqueIds = [...new Set(entityIds)];
-
-  if (mode === "or" || uniqueIds.length === 1) {
-    const rows = await db
-      .selectFrom("entity_mentions")
-      .select("indexed_file_id")
-      .distinct()
-      .where("entity_id", "in", uniqueIds)
-      .execute();
-    return rows.map((r) => r.indexed_file_id);
-  }
-
-  if (uniqueIds.length <= 3) {
-    const sets = await Promise.all(
-      uniqueIds.map(
-        async (id) =>
-          new Set(
-            (
-              await db.selectFrom("entity_mentions").select("indexed_file_id").where("entity_id", "=", id).execute()
-            ).map((r) => r.indexed_file_id),
-          ),
-      ),
-    );
-    let out = sets[0];
-    for (let i = 1; i < sets.length; i++) out = new Set([...out].filter((x) => sets[i].has(x)));
-    return [...out];
-  }
-
-  const rows = await db
-    .selectFrom("entity_mentions")
-    .select(["indexed_file_id", db.fn.count<number>("entity_id").distinct().as("n")])
-    .where("entity_id", "in", uniqueIds)
-    .groupBy("indexed_file_id")
-    .having((eb) => eb(eb.fn.count("entity_id").distinct(), "=", uniqueIds.length))
-    .execute();
-  return rows.map((r) => r.indexed_file_id);
-}
-
-/**
  * Coerce a date-like value (ISO string from SQLite, Date object from
  * node-postgres) to milliseconds since epoch. Returns null for null /
  * undefined / unparseable input so the caller can sort them last.
@@ -1749,16 +2040,19 @@ async function browseLatest(
   opts: {
     kindRules?: KindRule[];
     sources?: string[];
-    fileIds?: string[];
+    entityScope?: EntityScope;
     userPrincipals?: AccessPrincipalInput[];
     slackEntitySyncEnabled?: boolean;
+    fileTypes?: string[];
+    threadId?: string;
+    parentRecordId?: string;
+    participantEmail?: string;
+    domain?: string;
     after?: string;
     before?: string;
     limit: number;
   },
 ): Promise<HybridSearchResult[]> {
-  // Caller is responsible for the empty-fileIds short-circuit; selectFrom().where("id", "in", [])
-  // emits invalid `IN ()` SQL on SQLite.
   if (opts.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
   let q = db
     .selectFrom("indexed_files")
@@ -1773,8 +2067,11 @@ async function browseLatest(
       "source_updated_at",
       "source_created_at",
       "summary",
+      "thread_id",
+      "rollup_group_id",
     ])
-    .where("is_archived", "=", 0);
+    .where("is_archived", "=", 0)
+    .where(bodylessCrmActivityPredicateSql());
 
   if (opts.kindRules?.length) {
     const rules = opts.kindRules;
@@ -1791,7 +2088,8 @@ async function browseLatest(
     );
   }
   if (opts.sources?.length) q = q.where("source", "in", opts.sources);
-  if (opts.fileIds?.length) q = q.where("id", "in", opts.fileIds);
+  if (opts.entityScope) q = q.where(entityScopePredicateSql(sql.ref("indexed_files.id"), opts.entityScope));
+  q = q.where(sql<SqlBool>`TRUE ${extraFilterSql(opts)}`);
 
   if ((opts.userPrincipals ?? []).length > 0) {
     const userPrincipals = opts.userPrincipals ?? [];
@@ -1843,6 +2141,8 @@ async function browseLatest(
     score: 0,
     similarity: null,
     snippet: null,
+    threadId: f.thread_id,
+    rollupGroupId: f.rollup_group_id,
   }));
 }
 
@@ -1865,6 +2165,11 @@ export async function search(
     source?: string;
     sources?: string[];
     kindRules?: KindRule[];
+    fileTypes?: string[];
+    threadId?: string;
+    parentRecordId?: string;
+    participantEmail?: string;
+    domain?: string;
     category?: string;
     limit?: number;
     after?: string;
@@ -1876,8 +2181,17 @@ export async function search(
     entityIds?: string[];
     entityIdsMode?: "and" | "or";
     sortBy?: "relevance" | "recency";
-    /** Suppress search()'s own auto-entity-boost (caller will manage entityFileIds itself). */
+    /** Suppress search()'s own auto-entity-boost when the caller manages entity matching. */
     skipAutoEntityBoost?: boolean;
+    /**
+     * Entity ids already resolved by the caller for the fusion boost. When this
+     * option is present, including as an empty array, search uses exactly these
+     * ids and performs no entity discovery. When absent, search discovers up to
+     * ten unfiltered entities unless `skipAutoEntityBoost` is set. A hard entity
+     * scope from `entityId` or `entityIds` takes precedence, and no fusion boost
+     * is applied at all in that case.
+     */
+    boostEntityIds?: string[];
     geminiMaxRpm?: number;
     geminiMaxRetries?: number;
     openRouterApiKey?: string;
@@ -1891,26 +2205,26 @@ export async function search(
   const isRecency = opts?.sortBy === "recency";
   const trimmedQuery = query.trim();
 
-  // Resolve entityId / entityIds → fileIds for scoped search.
-  // Single `entityId` folds into the `entityIds` path (n=1, mode collapses).
   const allEntityIds =
     opts?.entityIds && opts.entityIds.length > 0 ? opts.entityIds : opts?.entityId ? [opts.entityId] : [];
-  let fileIds: string[] | undefined;
-  if (allEntityIds.length > 0) {
-    fileIds = await resolveEntityFileIds(db, allEntityIds, opts?.entityIdsMode ?? "and");
+  const entityScope =
+    allEntityIds.length > 0
+      ? { entityIds: [...new Set(allEntityIds)], mode: opts?.entityIdsMode ?? ("and" as const) }
+      : undefined;
+  const scopeHasFiles = entityScope && trimmedQuery !== "" ? await entityScopeHasFiles(db, entityScope) : undefined;
+  if (entityScope) {
     opts?.stageReport?.({
       stage: "resolveEntities",
       label: "Resolve entity scope",
       kind: "code",
       status: "done",
       summary: {
-        entityIds: allEntityIds.length,
-        mode: opts?.entityIdsMode ?? "and",
-        files: fileIds.length,
+        entityIds: entityScope.entityIds.length,
+        mode: entityScope.mode,
+        resolution: "correlated database predicate",
+        ...(scopeHasFiles === false ? { files: 0 } : {}),
       },
     });
-    // Empty-set short-circuit: avoid `IN ()` (invalid on SQLite) and skip the work.
-    if (fileIds.length === 0) return [];
   } else {
     opts?.stageReport?.({
       stage: "resolveEntities",
@@ -1921,26 +2235,54 @@ export async function search(
     });
   }
 
+  if (scopeHasFiles === false) return [];
+
   // Empty-query path: skip FTS/vector entirely. Require at least one structural filter.
   if (trimmedQuery === "") {
     const hasFilter =
       !!opts?.kindRules?.length ||
       !!opts?.sources?.length ||
       !!opts?.source ||
-      (fileIds !== undefined && fileIds.length > 0) ||
+      !!entityScope ||
+      !!opts?.fileTypes?.length ||
+      !!opts?.threadId ||
+      !!opts?.parentRecordId ||
+      !!opts?.participantEmail ||
+      !!opts?.domain ||
       !!opts?.after ||
       !!opts?.before;
     if (!hasFilter) return [];
     return browseLatest(db, {
       kindRules: opts?.kindRules,
       sources: opts?.sources ?? (opts?.source ? [opts.source] : undefined),
-      fileIds,
+      entityScope,
       userPrincipals: opts?.userPrincipals,
       slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+      fileTypes: opts?.fileTypes,
+      threadId: opts?.threadId,
+      parentRecordId: opts?.parentRecordId,
+      participantEmail: opts?.participantEmail,
+      domain: opts?.domain,
       after: opts?.after,
       before: opts?.before,
       limit,
     });
+  }
+
+  if (opts?.userPrincipals !== undefined && opts.userPrincipals.length === 0) return [];
+
+  const resolvedAccessPredicate = await resolveAccessPredicate(db, {
+    userPrincipals: opts?.userPrincipals,
+    accessBypassReason: opts?.accessBypassReason,
+    slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+  });
+  if (resolvedAccessPredicate?.mode === RBAC_MODE_VISIBLE_SET && resolvedAccessPredicate.visibleCount === 0) {
+    reportPostgresRbacStage(opts?.stageReport, opts?.userPrincipals?.length ?? 0, resolvedAccessPredicate);
+    reportNoScoredCandidateRemainder(
+      opts?.stageReport,
+      "No candidates were scored — the principal has no visible files",
+    );
+    return [];
   }
 
   let queryEmbedding: number[] | undefined;
@@ -2004,23 +2346,41 @@ export async function search(
         },
   );
 
-  // Auto-entity-discovery boost. Suppressed when the caller already pinned
-  // entityIds (would double-count) or asked to skip it.
-  let entityFileIds: Set<string> | undefined;
-  if (allEntityIds.length === 0 && !opts?.skipAutoEntityBoost) {
+  let entityBoostEntityIds: string[] | undefined;
+  if (allEntityIds.length > 0) {
+    opts?.stageReport?.({
+      stage: "discoverEntities",
+      label: "Discover entities",
+      kind: "code",
+      status: "skipped",
+      error: "Caller supplied a hard entity scope — no fusion boost discovery applied",
+    });
+  } else if (opts?.boostEntityIds !== undefined) {
+    entityBoostEntityIds = opts.boostEntityIds;
+    opts?.stageReport?.({
+      stage: "discoverEntities",
+      label: "Discover entities",
+      kind: "code",
+      status: "done",
+      summary: {
+        set: "fuse boost",
+        entitiesMatched: entityBoostEntityIds.length,
+        source: "caller-provided",
+        note: "Caller-resolved and visibility-filtered ids; search() performed no entity discovery.",
+      },
+      outcomes: entityBoostEntityIds.map((entityId) => ({
+        subject: entityId,
+        kind: "entity",
+        result: "linked" as const,
+        reason: "boosts files mentioning this entity",
+      })),
+    });
+  } else if (!opts?.skipAutoEntityBoost) {
     try {
       const entityRepo = createEntityRepository(db);
-      const matchingEntities = await entityRepo.searchEntities(trimmedQuery, { limit: 10 });
+      const matchingEntities = await entityRepo.searchEntities(trimmedQuery, { limit: 10, tokenFallback: true });
       if (matchingEntities.length > 0) {
-        const entityIds = matchingEntities.map((e) => e.id);
-        const mentions = await db
-          .selectFrom("entity_mentions")
-          .select("indexed_file_id")
-          .where("entity_id", "in", entityIds)
-          .execute();
-        if (mentions.length > 0) {
-          entityFileIds = new Set(mentions.map((m) => m.indexed_file_id));
-        }
+        entityBoostEntityIds = matchingEntities.map((entity) => entity.id);
       }
       opts?.stageReport?.({
         stage: "discoverEntities",
@@ -2030,8 +2390,8 @@ export async function search(
         summary: {
           set: "fuse boost",
           entitiesMatched: matchingEntities.length,
-          filesBoosted: entityFileIds?.size ?? 0,
-          note: "search()'s own discovery, limit 10, not public-filtered. This is the set applied at RRF fuse.",
+          source: "search-discovery",
+          note: "search()'s own discovery, limit 10, not public-filtered. Links are loaded only for fused candidates.",
         },
         outcomes: matchingEntities.map((entity) => ({
           subject: entity.name,
@@ -2050,27 +2410,45 @@ export async function search(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  } else {
+    opts?.stageReport?.({
+      stage: "discoverEntities",
+      label: "Discover entities",
+      kind: "code",
+      status: "skipped",
+      error: "Caller suppressed automatic entity discovery",
+    });
   }
 
   // Recency: overfetch from the hybrid pipeline so the truly newest file isn't
   // dropped past `limit` by RRF, then sort in JS and trim.
   const fetchLimit = isRecency ? Math.max(limit * 5, 50) : limit;
 
-  const results = await hybridSearch(db, trimmedQuery, {
-    stageReport: opts?.stageReport,
-    source: opts?.source,
-    sources: opts?.sources,
-    kindRules: opts?.kindRules,
-    category: opts?.category,
-    limit: fetchLimit,
-    queryEmbedding,
-    userPrincipals: opts?.userPrincipals,
-    ...(opts?.accessBypassReason ? { accessBypassReason: opts.accessBypassReason } : {}),
-    slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
-    fileIds,
-    entityFileIds,
-    timeFilter: opts?.after || opts?.before ? { after: opts?.after, before: opts?.before } : undefined,
-  });
+  const results = await hybridSearch(
+    db,
+    trimmedQuery,
+    {
+      stageReport: opts?.stageReport,
+      source: opts?.source,
+      sources: opts?.sources,
+      kindRules: opts?.kindRules,
+      fileTypes: opts?.fileTypes,
+      threadId: opts?.threadId,
+      parentRecordId: opts?.parentRecordId,
+      participantEmail: opts?.participantEmail,
+      domain: opts?.domain,
+      category: opts?.category,
+      limit: fetchLimit,
+      queryEmbedding,
+      userPrincipals: opts?.userPrincipals,
+      ...(opts?.accessBypassReason ? { accessBypassReason: opts.accessBypassReason } : {}),
+      slackEntitySyncEnabled: opts?.slackEntitySyncEnabled,
+      entityScope,
+      entityBoostEntityIds,
+      timeFilter: opts?.after || opts?.before ? { after: opts?.after, before: opts?.before } : undefined,
+    },
+    { resolvedAccessPredicate },
+  );
 
   if (isRecency) {
     results.sort(byRecencyDesc);

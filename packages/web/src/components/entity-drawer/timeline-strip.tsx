@@ -1,21 +1,28 @@
 /**
  * Vertical timeline for the entity drawer, day-grouped with a rail.
  *
- * Row anatomy: the file's title (for email that IS the subject line) leads,
- * the mention snippet sits under it clamped to two lines, and the source ·
- * count attribution closes the row. Day headers carry the date, so rows only
- * show a clock time — and only when the source recorded one (date-only files
- * would all read "12:00 AM").
+ * Row anatomy: the file's title (for email that IS the subject line) and a
+ * clock time on line one — day headers carry the date, so a time only shows
+ * when the source recorded one. Line two names how the file links the entity
+ * (Attended, Sent, Mentioned, …) and its source. Matcher working data — the
+ * stored snippet and the ×N mention count — is deliberately not rendered; it
+ * read as noise, and passages are only known once a row is expanded.
  *
- * Snippets are working data from the matcher and can be junk for structured
- * sources (gmail facts store "Corresponded {id}"); junk is suppressed rather
- * than shown. Expanding a row unclamps the snippet and fetches every mention
- * of the entity in that file, so ×N actually opens into N quotes.
+ * The whole row is one button and expands in place. Two link kinds share one
+ * expansion model with a pluggable passages source: structural rows (attendee,
+ * sender, CRM record) go straight to the file's text, rows linked only by the
+ * extractor ("mentioned") show their passages first with "Show whole file"
+ * underneath. Review hosts have no entity behind the row, so they pass
+ * `loadQuotes` and get the same shape. A passages source that resolves to
+ * nothing falls back to the file's text, so no row expands into an empty block.
  */
 import { ConnectorLogo } from "@/components/connector-logos";
-import { type EntityTimelineGroup, type EntityTimelineItem, api } from "@/lib/api";
+import { FileContentPreview } from "@/components/file-content-preview";
+import { ApiRequestError, type EntityTimelineGroup, type EntityTimelineItem, api } from "@/lib/api";
 import {
+  ArrowSquareOutIcon,
   CalendarBlankIcon,
+  CaretDownIcon,
   CheckCircleIcon,
   FileTextIcon,
   NoteIcon,
@@ -24,19 +31,21 @@ import {
 } from "@phosphor-icons/react";
 import { cn } from "@sketch/ui/lib/utils";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 interface TimelineStripProps {
   groups: EntityTimelineGroup[];
-  /** Enables per-file mention expansion; without it rows only unclamp. */
+  /** Enables the passages endpoint for rows the extractor alone linked. */
   entityId?: string;
   /**
-   * Custom quote source for rows without an entity behind them (review
-   * evidence): expansion calls this instead of the entity-mentions endpoint.
+   * Custom passages source for rows without an entity behind them (review
+   * evidence): expansion calls this instead of the passages endpoint.
    * `quotesScope` keys the cache — pass something stable like the review id.
    */
   loadQuotes?: (item: EntityTimelineItem) => Promise<(string | null)[]>;
   quotesScope?: string;
+  /** Name to mark inside passages; hosts without an entity in hand omit it. */
+  highlight?: string;
 }
 
 const CONNECTOR_GLYPHS = new Set([
@@ -68,6 +77,8 @@ function sourceLabel(sourceType: string): string {
 /**
  * Filter matcher-noise snippets: synthetic fact strings ("Corresponded
  * {hexid}") and snippets that just repeat the title add nothing under it.
+ * The strip no longer renders snippets, but the review band still folds
+ * evidence rows with it.
  */
 export function usefulSnippet(snippet: string | null, fileName: string): string | null {
   if (!snippet) return null;
@@ -76,6 +87,30 @@ export function usefulSnippet(snippet: string | null, fileName: string): string 
   if (/^corresponded [0-9a-f]{6,}$/i.test(trimmed)) return null;
   if (trimmed.toLowerCase() === fileName.trim().toLowerCase()) return null;
   return trimmed;
+}
+
+const RELATION_LABELS: Record<string, string> = {
+  attended: "Attended",
+  authored: "Sent",
+  corresponded: "Corresponded",
+  assigned: "Assigned",
+  mentioned: "Mentioned",
+  seeded: "Record",
+  contactable: "Contact",
+  organized: "Organised",
+  primary_contact: "Primary contact",
+};
+
+function relationLabel(relation: string): string {
+  const known = RELATION_LABELS[relation];
+  if (known) return known;
+  const spaced = relation.replace(/_/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** A file can carry both kinds; the structural link is the stronger claim. */
+function primaryRelation(relations: string[]): string {
+  return relations.find((r) => r !== "mentioned") ?? "mentioned";
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -143,49 +178,175 @@ function Glyph({ item }: { item: EntityTimelineItem }) {
   return <FileTextIcon size={12} aria-hidden />;
 }
 
+interface HighlightSegment {
+  start: number;
+  text: string;
+  match: boolean;
+}
+
 /**
- * The drill-down: every quote of the entity in this one file, deduped, once
- * the row expands. Fetched lazily per expansion from whichever source the
- * strip was given (entity mentions, or a custom loader for review evidence).
+ * Split on the needle by index rather than a built regex: the needle is an
+ * entity display name and would otherwise need escaping to stay literal.
  */
-function ExpandedQuotes({
-  scope,
-  item,
-  primarySnippet,
-  load,
-}: {
-  scope: string;
-  item: EntityTimelineItem;
-  primarySnippet: string | null;
-  load: (item: EntityTimelineItem) => Promise<(string | null)[]>;
-}) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["timeline-quotes", scope, item.fileId],
-    queryFn: () => load(item),
-  });
-  if (isLoading) return <p className="mt-1 text-[11px] text-muted-foreground">Loading mentions…</p>;
-  const seen = new Set<string>(primarySnippet ? [primarySnippet.toLowerCase()] : []);
-  const quotes: string[] = [];
-  for (const raw of data ?? []) {
-    const snippet = usefulSnippet(raw, item.fileName);
-    if (!snippet || seen.has(snippet.toLowerCase())) continue;
-    seen.add(snippet.toLowerCase());
-    quotes.push(snippet);
+function highlightSegments(text: string, needle: string): HighlightSegment[] {
+  const out: HighlightSegment[] = [];
+  const haystack = text.toLowerCase();
+  const target = needle.toLowerCase();
+  let cursor = 0;
+  while (cursor < text.length) {
+    const hit = haystack.indexOf(target, cursor);
+    if (hit === -1) break;
+    if (hit > cursor) out.push({ start: cursor, text: text.slice(cursor, hit), match: false });
+    out.push({ start: hit, text: text.slice(hit, hit + needle.length), match: true });
+    cursor = hit + needle.length;
   }
-  if (quotes.length === 0) {
-    // The primary snippet un-clamps on expand, so text WAS found and is
-    // already showing — claiming otherwise reads as a bug. Only say it
-    // when there is truly nothing to show.
-    if (primarySnippet) return null;
-    return <p className="mt-1 text-[11px] italic text-muted-foreground/70">No quotable text found in this file.</p>;
-  }
+  if (cursor < text.length) out.push({ start: cursor, text: text.slice(cursor), match: false });
+  return out;
+}
+
+function Highlighted({ text, needle }: { text: string; needle?: string }) {
+  const target = needle?.trim();
+  if (!target) return <>{text}</>;
+  const segments = highlightSegments(text, target);
+  if (!segments.some((s) => s.match)) return <>{text}</>;
   return (
-    <div className="mt-1 space-y-1 border-l-2 border-border pl-2">
-      {quotes.map((quote) => (
-        <p key={quote} className="text-[11px] leading-snug text-muted-foreground">
-          {quote}
-        </p>
-      ))}
+    <>
+      {segments.map((segment) =>
+        segment.match ? (
+          <mark key={segment.start} className="rounded-sm bg-primary/20 px-0.5 text-foreground">
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={segment.start}>{segment.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * Both file-scoped fetches gate the same way, so a denied passages call reads
+ * exactly like a denied content call instead of leaking a different word.
+ */
+function gateMessage(error: unknown): string | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  if (error.status === 403) return "You don't have access to this file's contents.";
+  if (error.status === 404) return "File not found.";
+  return null;
+}
+
+function isGated(error: unknown): boolean {
+  return gateMessage(error) !== null;
+}
+
+/**
+ * The file's stored text, shared with the Files page under the same query key
+ * so an expansion and the sheet never fetch twice.
+ */
+function WholeFile({ fileId }: { fileId: string }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["file-content", fileId],
+    queryFn: () => api.integrations.fileContent(fileId),
+    retry: (failureCount, err) => (isGated(err) ? false : failureCount < 3),
+  });
+
+  if (isLoading) return <p className="text-[11px] text-muted-foreground">Loading…</p>;
+  const gate = gateMessage(error);
+  if (gate) return <p className="text-[11px] text-muted-foreground">{gate}</p>;
+  const file = data?.file;
+  if (!file) return <p className="text-[11px] text-muted-foreground">File not found.</p>;
+
+  return (
+    <div className="space-y-1">
+      {file.content ? (
+        <FileContentPreview content={file.content} heading={null} />
+      ) : (
+        <p className="text-[11px] text-muted-foreground">No text stored for this file.</p>
+      )}
+      {file.providerUrl ? (
+        <a
+          href={file.providerUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-[11px] text-primary hover:underline"
+        >
+          Open in source
+          <ArrowSquareOutIcon size={12} />
+        </a>
+      ) : null}
+    </div>
+  );
+}
+
+interface RowExpansionProps {
+  item: EntityTimelineItem;
+  entityId?: string;
+  loadQuotes?: (item: EntityTimelineItem) => Promise<(string | null)[]>;
+  quotesScope?: string;
+  highlight?: string;
+}
+
+/** Only the extractor links this row, so passages are worth looking for. */
+function onlyMentioned(relations: string[]): boolean {
+  return relations.includes("mentioned") && relations.every((r) => r === "mentioned");
+}
+
+/**
+ * One expansion model, two entry points: with a passages source the row leads
+ * with the passages and hides the file body behind "Show whole file"; without
+ * one — or when the source resolves to nothing — it is the file body straight
+ * away. A gated passages fetch stops there rather than retrying as content.
+ */
+function RowExpansion({ item, entityId, loadQuotes, quotesScope, highlight }: RowExpansionProps) {
+  const hasPassages = !!loadQuotes || (!!entityId && onlyMentioned(item.relations ?? []));
+  const [wholeFileRequested, setWholeFileRequested] = useState(false);
+
+  const scope = loadQuotes ? (quotesScope ?? "custom") : (entityId ?? "none");
+  const passagesQuery = useQuery({
+    queryKey: ["timeline-passages", scope, item.fileId],
+    queryFn: async () => {
+      if (loadQuotes) {
+        const quotes = await loadQuotes(item);
+        return quotes.filter((q): q is string => !!q && q.trim().length > 0).map((q) => q.trim());
+      }
+      const { passages } = await api.entities.passages(entityId as string, item.fileId);
+      return passages.map((p) => p.text);
+    },
+    enabled: hasPassages,
+    retry: (failureCount, err) => (isGated(err) ? false : failureCount < 3),
+  });
+
+  const gate = gateMessage(passagesQuery.error);
+  const passages = [...new Set(passagesQuery.data ?? [])];
+  const awaitingPassages = hasPassages && passagesQuery.isPending;
+  const showWholeFile = !gate && !awaitingPassages && (!hasPassages || wholeFileRequested || passages.length === 0);
+
+  return (
+    <div className="mt-1.5 space-y-2 border-l-2 border-border pl-2.5">
+      {gate ? <p className="text-[11px] text-muted-foreground">{gate}</p> : null}
+      {awaitingPassages ? <p className="text-[11px] text-muted-foreground">Loading…</p> : null}
+      {passages.length > 0 ? (
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Where they come up</p>
+          <div className="mt-1 divide-y divide-border">
+            {passages.map((text) => (
+              <p key={text} className="py-1.5 text-[11px] leading-snug text-muted-foreground first:pt-0 last:pb-0">
+                <Highlighted text={text} needle={highlight} />
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {showWholeFile ? <WholeFile fileId={item.fileId} /> : null}
+      {!showWholeFile && !gate && !awaitingPassages ? (
+        <button
+          type="button"
+          onClick={() => setWholeFileRequested(true)}
+          className="cursor-pointer text-[11px] text-primary hover:underline"
+        >
+          Show whole file
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -195,72 +356,73 @@ function TimelineRow({
   entityId,
   loadQuotes,
   quotesScope,
+  highlight,
 }: {
   item: EntityTimelineItem;
   entityId?: string;
   loadQuotes?: (item: EntityTimelineItem) => Promise<(string | null)[]>;
   quotesScope?: string;
+  highlight?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const meta = item.crmActivity
+  const regionId = useId();
+  const activity = item.crmActivity
     ? (ACTIVITY_META[item.crmActivity.activityType] ?? { Icon: FileTextIcon, label: "Activity" })
     : null;
-  const snippet = item.crmActivity ? null : usefulSnippet(item.contextSnippet, item.fileName);
-  const load =
-    loadQuotes ??
-    (entityId
-      ? async (target: EntityTimelineItem) => {
-          const { quotes } = await api.entities.snippets(entityId, target.fileId);
-          if (quotes.length > 0) return quotes;
-          const res = await api.entities.mentions(entityId, { fileId: target.fileId, limit: 25 });
-          return res.mentions.map((mention) => mention.contextSnippet);
-        }
-      : undefined);
-  const scope = loadQuotes ? (quotesScope ?? "custom") : (entityId ?? "none");
-  const expandable = !item.crmActivity && (snippet !== null || !!loadQuotes || (item.mentionCount > 1 && !!entityId));
   const time = clockTime(item.occurredAt);
 
   const attribution: string[] = [];
-  if (meta) attribution.push(meta.label);
-  else attribution.push(sourceLabel(item.sourceType));
-  if (item.mentionCount > 1) attribution.push(`×${item.mentionCount}`);
+  if (activity) {
+    attribution.push(activity.label);
+  } else {
+    const relations = item.relations ?? [];
+    if (relations.length > 0) attribution.push(relationLabel(primaryRelation(relations)));
+    attribution.push(sourceLabel(item.sourceType));
+  }
 
   return (
     <div className="relative flex gap-2.5 pb-3.5 last:pb-0">
       <span className="relative z-10 flex size-6 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground">
         <Glyph item={item} />
       </span>
-      <button
-        type="button"
-        onClick={expandable ? () => setExpanded((v) => !v) : undefined}
-        aria-expanded={expandable ? expanded : undefined}
-        className={cn(
-          "min-w-0 flex-1 rounded-md pt-0.5 text-left",
-          expandable && "-mx-1.5 cursor-pointer px-1.5 transition-colors hover:bg-muted/40",
-        )}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <p className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-snug text-foreground">
+      <div className="min-w-0 flex-1 pt-0.5">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-controls={regionId}
+          className="-mx-1.5 flex w-[calc(100%+0.75rem)] cursor-pointer items-start gap-2 rounded-md px-1.5 text-left transition-colors hover:bg-muted/40"
+        >
+          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium leading-snug text-foreground">
             {item.fileName}
-          </p>
+          </span>
           {time ? <span className="shrink-0 pt-px text-[10px] text-muted-foreground">{time}</span> : null}
-        </div>
-        {snippet ? (
-          <p className={cn("mt-0.5 text-[11px] leading-snug text-muted-foreground", !expanded && "line-clamp-2")}>
-            {snippet}
-          </p>
-        ) : null}
-        {expanded && load ? <ExpandedQuotes scope={scope} item={item} primarySnippet={snippet} load={load} /> : null}
+          <CaretDownIcon
+            size={12}
+            className={cn("mt-0.5 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-180")}
+          />
+        </button>
         <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground/70">
           <span className="truncate">{attribution.join(" · ")}</span>
           {item.crmActivity?.hasBody ? <SparkleIcon size={10} weight="fill" className="shrink-0 text-primary" /> : null}
         </p>
-      </button>
+        <div id={regionId}>
+          {expanded ? (
+            <RowExpansion
+              item={item}
+              entityId={entityId}
+              loadQuotes={loadQuotes}
+              quotesScope={quotesScope}
+              highlight={highlight}
+            />
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
 
-export function TimelineStrip({ groups, entityId, loadQuotes, quotesScope }: TimelineStripProps) {
+export function TimelineStrip({ groups, entityId, loadQuotes, quotesScope, highlight }: TimelineStripProps) {
   const items = groups.flatMap((g) => g.items);
   const dayGroups = groupByDay(items);
 
@@ -282,6 +444,7 @@ export function TimelineStrip({ groups, entityId, loadQuotes, quotesScope }: Tim
                   entityId={entityId}
                   loadQuotes={loadQuotes}
                   quotesScope={quotesScope}
+                  highlight={highlight}
                 />
               ))}
             </div>

@@ -20,9 +20,9 @@ import type { Config } from "../config";
 import { ensureSlackConnectorConfig } from "../connectors/slack-provisioning";
 import type { createChannelRepository } from "../db/repositories/channels";
 import { createConnectorRepository } from "../db/repositories/connectors";
-import type { createSettingsRepository } from "../db/repositories/settings";
+import { type createSettingsRepository, invalidateSettingsCache } from "../db/repositories/settings";
 import { isUniqueConstraintError } from "../db/repositories/sub-entities";
-import type { createUserRepository } from "../db/repositories/users";
+import { BenchmarkUserRemovalBlockedError, createUserRepository, lockUserForRemoval } from "../db/repositories/users";
 import type { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
 import type { DB } from "../db/schema";
 import { createEmailTransport, sendVerificationEmail } from "../email";
@@ -894,24 +894,36 @@ export function userRoutes(users: UserRepo, deps: UserRoutesDeps) {
       return c.json({ error: { code: "FORBIDDEN", message: "Admin role required" } }, 403);
     }
 
-    if (existing.type === "human" && existing.email && deps.removeManagedMember) {
-      try {
-        await deps.removeManagedMember({ tenantUserId: existing.id, email: existing.email });
-      } catch (err) {
-        const response = managedRegistrationResponse(err);
+    try {
+      await deps.db.transaction().execute(async (trx) => {
+        await lockUserForRemoval(trx, id);
+        if (existing.type === "human" && existing.email && deps.removeManagedMember) {
+          try {
+            await deps.removeManagedMember({ tenantUserId: existing.id, email: existing.email });
+          } catch (err) {
+            const response = managedRegistrationResponse(err);
+            throw Object.assign(new Error("Managed membership removal failed"), { managedRemovalResponse: response });
+          }
+        }
+
+        /** Archive connectors after managed membership cleanup succeeds so a transient failure preserves integrations. */
+        const result = await createConnectorRepository(trx, deps.config.ENCRYPTION_KEY).archiveConnectorsForOwner(id);
+        if (result.archived > 0) {
+          deps.logger.info({ userId: id, count: result.archived }, "Archived connectors after user removal");
+        }
+
+        await createUserRepository(trx).remove(id);
+      });
+      invalidateSettingsCache(deps.db);
+    } catch (error) {
+      if (error instanceof BenchmarkUserRemovalBlockedError)
+        return c.json({ error: { code: "CONFLICT", message: error.message } }, 409);
+      if (error instanceof Error && "managedRemovalResponse" in error) {
+        const response = error.managedRemovalResponse as ReturnType<typeof managedRegistrationResponse>;
         return c.json(response.body, response.status as 400);
       }
+      throw error;
     }
-
-    // Archive any per-user connectors (Fireflies etc.) only after managed
-    // membership cleanup succeeds, so a transient platform failure leaves the
-    // local user and their integrations unchanged.
-    const result = await createConnectorRepository(deps.db, deps.config.ENCRYPTION_KEY).archiveConnectorsForOwner(id);
-    if (result.archived > 0) {
-      deps.logger.info({ userId: id, count: result.archived }, "Archived connectors after user removal");
-    }
-
-    await users.remove(id);
 
     /**
      * The org-wide Slack indexing singleton may have been owned by the removed

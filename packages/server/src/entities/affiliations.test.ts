@@ -23,7 +23,7 @@ import { createEntityDomainsRepository } from "../db/repositories/entity-domains
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
-import { inferAffiliationFromEmail, isProviderManagedEmailDomain } from "./affiliations";
+import { inferAffiliationFromEmail, isProviderManagedEmailDomain, isRoleAccountEmail } from "./affiliations";
 import { recreateEntityGraph } from "./recreate";
 import { confirmReview } from "./resolve";
 
@@ -657,5 +657,13 @@ describe("ELP-02: affiliation inference", () => {
       .where("target_entity_id", "=", domain.entity_id as string)
       .execute();
     expect(worksAt).toHaveLength(5);
+  });
+});
+
+describe("isRoleAccountEmail", () => {
+  it("treats accounts@ and finance@ mailboxes as role accounts, not people", () => {
+    expect(isRoleAccountEmail("accounts@acme.com")).toBe(true);
+    expect(isRoleAccountEmail("finance.team@acme.com")).toBe(true);
+    expect(isRoleAccountEmail("priya@acme.com")).toBe(false);
   });
 });

@@ -41,6 +41,7 @@ export function GithubAppIcon({ className }: { className?: string }) {
 }
 
 export function AppIcon({ name, icon, className, imageClassName, fallbackClassName }: AppIconProps) {
+  icon = name.trim().toLowerCase() === "clickup" ? "/logos/clickup.svg" : icon;
   const [loadedIcon, setLoadedIcon] = useState<string | null>(null);
   const [failedIcon, setFailedIcon] = useState<string | null>(null);
   const imageLoaded = Boolean(icon && loadedIcon === icon);

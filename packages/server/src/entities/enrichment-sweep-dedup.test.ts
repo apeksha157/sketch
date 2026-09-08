@@ -123,10 +123,10 @@ describe("SalesQL enrichment sweep dedup", () => {
     const rows = await graphVerdicts(db);
     expect(rows).toHaveLength(4);
     expect(rows.map((row) => row.status)).toEqual([
-      "pending_corroboration",
-      "pending_corroboration",
-      "pending_corroboration",
-      "pending_corroboration",
+      "awaiting_human",
+      "awaiting_human",
+      "awaiting_human",
+      "awaiting_human",
     ]);
     expect(rows.map((row) => [row.subject_entity_id, row.target_entity_id])).toEqual([
       ["linkedin-multi", "gmail-one"],

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Kysely, RawBuilder, Selectable } from "kysely";
 import { sql } from "kysely";
 import { deleteNameEmbedding } from "../../connectors/embeddings/trunk-name-embeddings";
+import type { AccessPrincipal } from "../../connectors/types";
 import {
   filterAliasWritesForEntityName,
   isJunkAliasValue,
@@ -15,16 +16,81 @@ import { type ProvenanceTier, strongestProvenanceTier } from "../../entities/pro
 import { resolveLiveEntity, resolveLiveEntityId, resolveSourceRefToLiveEntityId } from "../../entities/redirect";
 import { normalizePhoneLike } from "../../identity-normalization";
 import { yieldToEventLoop } from "../../lib/event-loop";
-import { parseTimestampMs } from "../../timestamps";
+import { maxIso, parseTimestampMs } from "../../timestamps";
 import { isPg } from "../dialect";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../schema";
 import { type FileViewer, fileVisibilityPredicate } from "./connectors";
 import { type EntityAliasProvenance, recordAlias, recordAliases } from "./entity-alias-rows";
+import { fileVisibilityRuleSql } from "./file-visibility-rule";
 
 const SYSTEM_ENTITY_SOURCE_TYPES = ["clickup_workspace", "clickup_space"];
 export const PROTECTED_ENTITY_SOURCES = ["team", "team_directory"];
 const HOTNESS_WINDOW_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ENTITY_SEARCH_TOKEN_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "that",
+  "this",
+  "what",
+  "who",
+  "how",
+  "of",
+  "is",
+  "are",
+  "was",
+  "were",
+  "our",
+  "your",
+  "their",
+  "about",
+  "into",
+  "meeting",
+  "call",
+  "email",
+  "re",
+  "fwd",
+]);
+
+type EntitySearchExpressions = {
+  exactName: RawBuilder<boolean>;
+  exactAlias: RawBuilder<boolean>;
+  prefix: RawBuilder<boolean>;
+  substring: RawBuilder<boolean>;
+  tier: RawBuilder<number>;
+};
+
+function escapeLikePattern(value: string): string {
+  return value.replaceAll("#", "##").replaceAll("%", "#%").replaceAll("_", "#_");
+}
+
+function entitySearchExpressions(normalizedQuery: string): EntitySearchExpressions {
+  const escaped = escapeLikePattern(normalizedQuery);
+  const exactName = sql<boolean>`lower(entities.name) = ${normalizedQuery}`;
+  const exactAlias = sql<boolean>`lower(entities.aliases) LIKE ${`%"${escaped}"%`} ESCAPE '#'`;
+  const prefix = sql<boolean>`(
+    lower(entities.name) LIKE ${`${escaped}%`} ESCAPE '#'
+    OR lower(entities.aliases) LIKE ${`%"${escaped}%`} ESCAPE '#'
+  )`;
+  const substring = sql<boolean>`(
+    lower(entities.name) LIKE ${`%${escaped}%`} ESCAPE '#'
+    OR lower(entities.aliases) LIKE ${`%${escaped}%`} ESCAPE '#'
+  )`;
+  const tier = sql<number>`CASE
+    WHEN ${exactName} THEN 1
+    WHEN ${exactAlias} THEN 2
+    WHEN ${prefix} THEN 3
+    ELSE 4
+  END`;
+  return { exactName, exactAlias, prefix, substring, tier };
+}
+
+function isPhoneShapedEntityQuery(query: string): boolean {
+  return /^[\d\s+\-().]+$/.test(query) && (query.match(/\d/g)?.length ?? 0) >= 6;
+}
 
 /**
  * Entities processed per `recomputeHotnessBatch` page when recomputing the
@@ -41,6 +107,18 @@ type MentionActivityRow = {
   mentioned_at: string;
   source_updated_at: string | null;
   source_created_at: string | null;
+};
+
+const HOTNESS_FLOOR = 1e-30;
+
+type TouchStatsMentionRow = MentionActivityRow & {
+  indexed_file_id: string;
+  source: string;
+};
+
+type LinkedinManifestTouchStats = {
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
 };
 
 function mentionActivityMs(row: MentionActivityRow): number | null {
@@ -87,6 +165,37 @@ function canonicalHotnessActivityPredicate() {
     AND ${nullableCanonicalTimestampPredicate(sourceCreatedAt)}
     AND ${canonicalTimestampPredicate(mentionedAt)}
   )`;
+}
+
+/**
+ * `entities.hotness` is a `real` column: values below float4's smallest
+ * normal (~1e-38) make Postgres reject the write, and the decay term reaches
+ * that after ~870 quiet days. Anything that small is zero for ranking anyway.
+ */
+function clampHotness(value: number): number {
+  return value < HOTNESS_FLOOR ? 0 : value;
+}
+
+function readLinkedinManifest(sourceMeta: string | null): LinkedinManifestTouchStats | null {
+  if (!sourceMeta) return null;
+  try {
+    const root = JSON.parse(sourceMeta) as {
+      linkedinAimfox?: {
+        segmentManifest?: {
+          lastInboundAt?: unknown;
+          lastOutboundAt?: unknown;
+        };
+      };
+    };
+    const manifest = root.linkedinAimfox?.segmentManifest;
+    if (!manifest) return null;
+    return {
+      lastInboundAt: typeof manifest.lastInboundAt === "string" ? manifest.lastInboundAt : null,
+      lastOutboundAt: typeof manifest.lastOutboundAt === "string" ? manifest.lastOutboundAt : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -223,6 +332,7 @@ export interface UpsertContactPointData {
   createdByUserId?: string | null;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  lastRepliedAt?: string | null;
   makePrimary?: boolean;
 }
 
@@ -921,7 +1031,34 @@ export function createEntityRepository(db: Kysely<DB>) {
       await insert.execute();
     },
 
-    async getMentionsForEntity(entityId: string, opts?: { limit?: number; since?: string }) {
+    async createMentionIfAbsent(data: CreateMentionData): Promise<boolean> {
+      const entityId = await resolveLiveEntityId(db, data.entityId);
+      const result = await db
+        .insertInto("entity_mentions")
+        .values({
+          id: randomUUID(),
+          entity_id: entityId,
+          indexed_file_id: data.indexedFileId,
+          chunk_index: data.chunkIndex ?? null,
+          context_snippet: data.contextSnippet ?? null,
+          confidence: data.confidence,
+          source: data.source,
+          relation: data.relation,
+          mentioned_at: new Date().toISOString(),
+        })
+        .onConflict((oc) => oc.columns(["entity_id", "indexed_file_id", "relation"]).doNothing())
+        .executeTakeFirst();
+      return Number(result.numInsertedOrUpdatedRows ?? 0) > 0;
+    },
+
+    async getMentionsForEntity(
+      entityId: string,
+      opts?: {
+        limit?: number;
+        since?: string;
+        visibility?: { principals: AccessPrincipal[]; slackEntitySyncEnabled: boolean };
+      },
+    ) {
       let query = db
         .selectFrom("entity_mentions")
         .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
@@ -946,6 +1083,16 @@ export function createEntityRepository(db: Kysely<DB>) {
           sql`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
           ">=",
           opts.since,
+        );
+      }
+      if (opts?.visibility) {
+        query = query.where(
+          fileVisibilityRuleSql({
+            principals: opts.visibility.principals,
+            slackEntitySyncEnabled: opts.visibility.slackEntitySyncEnabled,
+            archived: "exclude",
+            alias: "indexed_files",
+          }),
         );
       }
       if (opts?.limit) {
@@ -1028,6 +1175,7 @@ export function createEntityRepository(db: Kysely<DB>) {
             created_by_user_id: data.createdByUserId ?? null,
             verified_at: data.verifiedAt ?? null,
             last_contacted_at: data.lastContactedAt ?? null,
+            last_replied_at: data.lastRepliedAt ?? null,
             created_at: now,
             updated_at: now,
           })
@@ -1050,6 +1198,12 @@ export function createEntityRepository(db: Kysely<DB>) {
                 WHEN excluded.last_contacted_at IS NULL THEN entity_contact_points.last_contacted_at
                 WHEN excluded.last_contacted_at > entity_contact_points.last_contacted_at THEN excluded.last_contacted_at
                 ELSE entity_contact_points.last_contacted_at
+              END`,
+              last_replied_at: sql`CASE
+                WHEN entity_contact_points.last_replied_at IS NULL THEN excluded.last_replied_at
+                WHEN excluded.last_replied_at IS NULL THEN entity_contact_points.last_replied_at
+                WHEN excluded.last_replied_at > entity_contact_points.last_replied_at THEN excluded.last_replied_at
+                ELSE entity_contact_points.last_replied_at
               END`,
               updated_at: now,
             }),
@@ -1248,57 +1402,165 @@ export function createEntityRepository(db: Kysely<DB>) {
 
     // ── Search ──
 
+    /**
+     * Resolves entity text in stable semantic tiers: exact name, exact JSON alias,
+     * name-or-alias prefix, then substring. Hotness only breaks ties inside a
+     * tier because it is recency-dominated and can be inflated by CRM activity.
+     * Alias tiers use the compact JSON encoding written by every entity alias
+     * path. An alias containing an escaped double quote remains an accepted
+     * residual and can false-positive the portable quoted-element exact tier.
+     *
+     * The whole string always runs first. When `tokenFallback` is explicitly
+     * enabled, whitespace-delimited tokens run in at most one fallback query,
+     * only when the first result set has no tier 1–3 hit. Tokens shorter than
+     * three characters and common stop words are ignored. A row must match at
+     * least half of the usable tokens, and a single-token match counts only
+     * when that token is an exact or prefix hit on the name or an alias:
+     * "Capmob finance" keeps "Capmob Financial Services", while "onboarding
+     * automation" does not admit every company whose name merely contains
+     * "automation". "meeting", "call", and
+     * "email" are stop words because they frame user queries while naming nearly
+     * every entity from their respective source type. Email and phone-shaped
+     * input is never tokenized because a domain or phone fragment would resolve
+     * unrelated people and companies. Recency search returns the whole-string
+     * rows as-is because its LIMIT is activity-ordered, making the strong-hit
+     * fallback trigger meaningless and incompatible with appending
+     * relevance-ordered rows.
+     *
+     * These predicates retain the sequential scan over `entities` used before
+     * tiered ranking, which measures approximately 10–100 ms at 10k entities.
+     */
     async searchEntities(
       query: string,
-      opts?: { sourceTypes?: string[]; limit?: number; sortBy?: "relevance" | "recency" },
+      opts?: {
+        sourceTypes?: string[];
+        limit?: number;
+        sortBy?: "relevance" | "recency";
+        tokenFallback?: boolean;
+      },
     ) {
-      const pattern = `%${query.toLowerCase()}%`;
-      let q = db
-        .selectFrom("entities")
-        .selectAll()
-        .where(whereLiveEntity())
-        .where((eb) =>
-          eb.or([
-            eb(sql<string>`lower(entities.name)`, "like", pattern),
-            eb(sql<string>`lower(entities.aliases)`, "like", pattern),
-          ]),
-        );
+      const normalizedQuery = query.trim().toLowerCase();
+      if (!normalizedQuery) return [];
 
-      if (opts?.sourceTypes && opts.sourceTypes.length > 0) {
-        q = q.where("source_type", "in", opts.sourceTypes);
-      } else {
-        const hiddenTypes = Array.from(HIDDEN_ENTITY_SOURCE_TYPES);
-        if (hiddenTypes.length > 0) q = q.where("source_type", "not in", hiddenTypes);
-      }
+      const limit = opts?.limit ?? 50;
 
-      if (opts?.sortBy === "recency") {
-        // Most-recent activity per entity. LEFT JOIN against the aggregated
-        // derived table so entities with zero mentions still appear; coalesce
-        // the timestamp to '' so DESC ordering puts them last in both SQLite
-        // (NULLS-last default) and Postgres (NULLS-first default) without
-        // resorting to dialect-specific NULLS LAST syntax.
-        const lastActivityByEntity = db
-          .selectFrom("entity_mentions")
-          .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
-          .select((eb) => [
-            "entity_mentions.entity_id",
-            eb.fn
-              .max(
-                sql<string>`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
-              )
-              .as("last_activity"),
-          ])
-          .groupBy("entity_mentions.entity_id")
-          .as("la");
+      const runRankedQuery = async (
+        needles: string[],
+        tokenized: boolean,
+        queryLimit: number,
+        matchedTokenThreshold = 1,
+      ) => {
+        const expressions = needles.map(entitySearchExpressions);
+        const bestTier =
+          expressions.length === 1
+            ? expressions[0].tier
+            : sql<number>`CASE
+                WHEN (${sql.join(
+                  expressions.map((expression) => expression.exactName),
+                  sql` OR `,
+                )}) THEN 1
+                WHEN (${sql.join(
+                  expressions.map((expression) => expression.exactAlias),
+                  sql` OR `,
+                )}) THEN 2
+                WHEN (${sql.join(
+                  expressions.map((expression) => expression.prefix),
+                  sql` OR `,
+                )}) THEN 3
+                ELSE 4
+              END`;
+        const matchedTokenCount = sql<number>`${sql.join(
+          expressions.map((expression) => sql<number>`CASE WHEN ${expression.substring} THEN 1 ELSE 0 END`),
+          sql` + `,
+        )}`;
 
-        q = q
-          .leftJoin(lastActivityByEntity, "la.entity_id", "entities.id")
-          .orderBy(sql`COALESCE(la.last_activity, '')`, "desc")
-          .orderBy("entities.name", "asc");
-      }
+        let ranked = db
+          .selectFrom("entities")
+          .selectAll("entities")
+          .select(bestTier.as("entity_search_tier"))
+          .select(matchedTokenCount.as("entity_search_matched_tokens"))
+          .where(whereLiveEntity())
+          .where(
+            tokenized
+              ? sql<boolean>`(${matchedTokenCount} >= ${matchedTokenThreshold} AND (${matchedTokenCount} >= 2 OR ${bestTier} <= 3))`
+              : sql<boolean>`(${expressions[0].substring})`,
+          );
 
-      q = q.limit(opts?.limit ?? 50);
-      return q.execute();
+        if (opts?.sourceTypes && opts.sourceTypes.length > 0) {
+          ranked = ranked.where("source_type", "in", opts.sourceTypes);
+        } else {
+          const hiddenTypes = Array.from(HIDDEN_ENTITY_SOURCE_TYPES);
+          if (hiddenTypes.length > 0) ranked = ranked.where("source_type", "not in", hiddenTypes);
+        }
+
+        if (tokenized) {
+          ranked = ranked
+            .orderBy(sql.ref("entity_search_matched_tokens"), "desc")
+            .orderBy(sql.ref("entity_search_tier"), "asc")
+            .orderBy("entities.hotness", "desc")
+            .orderBy(sql`lower(entities.name)`, "asc")
+            .orderBy("entities.id", "asc");
+        } else if (opts?.sortBy === "recency") {
+          /**
+           * The derived table retains entities with no mentions. Coalescing to
+           * an empty string makes descending null placement agree across SQLite
+           * and Postgres without dialect-specific NULLS LAST syntax.
+           */
+          const lastActivityByEntity = db
+            .selectFrom("entity_mentions")
+            .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+            .select((eb) => [
+              "entity_mentions.entity_id",
+              eb.fn
+                .max(
+                  sql<string>`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
+                )
+                .as("last_activity"),
+            ])
+            .groupBy("entity_mentions.entity_id")
+            .as("la");
+
+          ranked = ranked
+            .leftJoin(lastActivityByEntity, "la.entity_id", "entities.id")
+            .orderBy(sql`COALESCE(la.last_activity, '')`, "desc")
+            .orderBy(sql.ref("entity_search_tier"), "asc")
+            .orderBy(sql`lower(entities.name)`, "asc")
+            .orderBy("entities.id", "asc");
+        } else {
+          ranked = ranked
+            .orderBy(sql.ref("entity_search_tier"), "asc")
+            .orderBy("entities.hotness", "desc")
+            .orderBy(sql`lower(entities.name)`, "asc")
+            .orderBy("entities.id", "asc");
+        }
+
+        const rows = await ranked.limit(queryLimit).execute();
+        return rows.map(({ entity_search_matched_tokens, entity_search_tier, ...row }) => ({
+          row,
+          tier: Number(entity_search_tier),
+        }));
+      };
+
+      const wholeString = await runRankedQuery([normalizedQuery], false, limit);
+      const tokens = [...new Set(normalizedQuery.split(/\s+/))];
+      const matchTokens = tokens.filter((token) => token.length >= 3 && !ENTITY_SEARCH_TOKEN_STOP_WORDS.has(token));
+      const shouldTokenize =
+        opts?.tokenFallback === true &&
+        opts.sortBy !== "recency" &&
+        /\s/.test(normalizedQuery) &&
+        matchTokens.length > 0 &&
+        !normalizedQuery.includes("@") &&
+        !isPhoneShapedEntityQuery(normalizedQuery) &&
+        !wholeString.some(({ tier }) => tier <= 3);
+      if (!shouldTokenize) return wholeString.map(({ row }) => row);
+
+      const matchedTokenThreshold = Math.ceil(matchTokens.length / 2);
+      const tokenMatches = await runRankedQuery(matchTokens, true, limit + wholeString.length, matchedTokenThreshold);
+      const seen = new Set(wholeString.map(({ row }) => row.id));
+      return [
+        ...wholeString.map(({ row }) => row),
+        ...tokenMatches.filter(({ row }) => !seen.has(row.id)).map(({ row }) => row),
+      ].slice(0, limit);
     },
 
     /**
@@ -1476,7 +1738,8 @@ export function createEntityRepository(db: Kysely<DB>) {
     },
 
     async updateHotness(entityId: string) {
-      const thirtyDaysAgoMs = Date.now() - HOTNESS_WINDOW_DAYS * DAY_MS;
+      const nowMs = Date.now();
+      const thirtyDaysAgoMs = nowMs - HOTNESS_WINDOW_DAYS * DAY_MS;
       const thirtyDaysAgo = new Date(thirtyDaysAgoMs).toISOString();
       const canonicalActivity = await db
         .selectFrom("entity_mentions")
@@ -1506,14 +1769,88 @@ export function createEntityRepository(db: Kysely<DB>) {
         if (activityMs >= thirtyDaysAgoMs) count++;
         if (latestActivityMs === null || activityMs > latestActivityMs) latestActivityMs = activityMs;
       }
-      const daysSince = latestActivityMs === null ? HOTNESS_WINDOW_DAYS : (Date.now() - latestActivityMs) / DAY_MS;
+      const daysSince = latestActivityMs === null ? HOTNESS_WINDOW_DAYS : (nowMs - latestActivityMs) / DAY_MS;
 
-      const hotness = (1 / (1 + Math.exp(-Math.log1p(count)))) * Math.exp(-0.1 * daysSince);
+      const hotness = clampHotness((1 / (1 + Math.exp(-Math.log1p(count)))) * Math.exp(-0.1 * daysSince));
+      const touchRows = await db
+        .selectFrom("entity_mentions")
+        .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+        .where("entity_id", "=", entityId)
+        .select([
+          "entity_mentions.mentioned_at",
+          "indexed_files.id as indexed_file_id",
+          "indexed_files.source",
+          "indexed_files.source_updated_at",
+          "indexed_files.source_created_at",
+        ])
+        .execute();
+      const linkedinRows = await db
+        .selectFrom("entity_mentions")
+        .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+        .where("entity_id", "=", entityId)
+        .where("indexed_files.file_type", "=", "linkedin_conversation")
+        .select(["indexed_files.id as indexed_file_id", "indexed_files.source_meta"])
+        .execute();
+
+      const ninetyDaysAgoMs = nowMs - 90 * DAY_MS;
+      let lastTouchAt: string | null = null;
+      let lastInboundAt: string | null = null;
+      let lastOutboundAt: string | null = null;
+      let touchCount30d = 0;
+      let touchCount90d = 0;
+      const sourceLastTouch = new Map<string, string>();
+      const files = new Map<string, TouchStatsMentionRow>();
+      for (const row of touchRows) {
+        if (!files.has(row.indexed_file_id)) files.set(row.indexed_file_id, row);
+      }
+      for (const file of files.values()) {
+        const activityMs = mentionActivityMs(file);
+        if (activityMs !== null) {
+          const activityAt = new Date(activityMs).toISOString();
+          lastTouchAt = maxIso(lastTouchAt, activityAt);
+          sourceLastTouch.set(file.source, maxIso(sourceLastTouch.get(file.source) ?? null, activityAt) ?? activityAt);
+          if (activityMs >= thirtyDaysAgoMs) touchCount30d++;
+          if (activityMs >= ninetyDaysAgoMs) touchCount90d++;
+        }
+      }
+      const linkedinFiles = new Map<string, string | null>();
+      for (const row of linkedinRows) linkedinFiles.set(row.indexed_file_id, row.source_meta);
+      for (const sourceMeta of linkedinFiles.values()) {
+        const manifest = readLinkedinManifest(sourceMeta);
+        if (!manifest) continue;
+        lastInboundAt = maxIso(lastInboundAt, manifest.lastInboundAt);
+        lastOutboundAt = maxIso(lastOutboundAt, manifest.lastOutboundAt);
+      }
+      const computedAt = new Date(nowMs).toISOString();
 
       await db
         .updateTable("entities")
         .set({ hotness, updated_at: new Date().toISOString() })
         .where("id", "=", entityId)
+        .execute();
+      await db
+        .insertInto("entity_touch_stats")
+        .values({
+          entity_id: entityId,
+          last_touch_at: lastTouchAt,
+          last_inbound_at: lastInboundAt,
+          last_outbound_at: lastOutboundAt,
+          touch_count_30d: touchCount30d,
+          touch_count_90d: touchCount90d,
+          source_last_touch: JSON.stringify(Object.fromEntries([...sourceLastTouch.entries()].sort())),
+          computed_at: computedAt,
+        })
+        .onConflict((oc) =>
+          oc.column("entity_id").doUpdateSet({
+            last_touch_at: lastTouchAt,
+            last_inbound_at: lastInboundAt,
+            last_outbound_at: lastOutboundAt,
+            touch_count_30d: touchCount30d,
+            touch_count_90d: touchCount90d,
+            source_last_touch: JSON.stringify(Object.fromEntries([...sourceLastTouch.entries()].sort())),
+            computed_at: computedAt,
+          }),
+        )
         .execute();
     },
 
@@ -1538,6 +1875,14 @@ export function createEntityRepository(db: Kysely<DB>) {
         cursor = nextCursor;
         await yieldToEventLoop();
       }
+      await db
+        .deleteFrom("entity_touch_stats")
+        .where(
+          "entity_id",
+          "not in",
+          db.selectFrom("entities").select("id").where("status", "!=", "archived").where(whereLiveEntity()),
+        )
+        .execute();
       return total;
     },
 

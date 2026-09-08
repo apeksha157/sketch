@@ -235,6 +235,190 @@ describe("ChatThread", () => {
     expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
   });
 
+  it("expands technical multiline detail and copies the displayed payload exactly", async () => {
+    const writeText = stubClipboardWriteText();
+    const detail = "first line\n  indented second line\nthird line";
+    render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "technical-progress",
+            role: "assistant",
+            progressItems: [
+              {
+                id: "call-1",
+                kind: "tool",
+                label: "Running command",
+                toolName: "Bash",
+                detail,
+                detailFormat: "command",
+                mode: "technical",
+                status: "running",
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Show details for Running command" }));
+    expect(document.querySelector("[data-progress-details]")?.textContent).toContain(detail);
+    fireEvent.click(screen.getByRole("button", { name: "Copy input request" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(detail));
+  });
+
+  it("uses lifecycle status instead of latest-row inference for completed calls", () => {
+    render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "completed-progress",
+            role: "assistant",
+            progressItems: [
+              {
+                id: "call-2",
+                kind: "tool",
+                label: "Finished command",
+                status: "succeeded",
+                detail: "done",
+                startedAt: 1_000,
+                endedAt: 3_000,
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    const line = screen.getByText("Finished command").closest("[data-progress-line]");
+    expect(line).not.toHaveClass("sketch-shimmer-progress");
+    expect(screen.getByLabelText("Succeeded")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show details for Finished command" }));
+    expect(screen.queryByText("Duration: 2s")).not.toBeInTheDocument();
+  });
+
+  it("keeps thinking visible between completed tools without reanimating the completed call", () => {
+    const { rerender } = render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "fast-call",
+            role: "assistant",
+            progressItems: [
+              { id: "call", kind: "tool", label: "Read task", status: "succeeded", startedAt: 1000, endedAt: 1009 },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText("Thinking…")).toHaveClass("sketch-shimmer-text");
+    expect(screen.getByText("Read task").closest("[data-progress-line]")).not.toHaveClass("sketch-shimmer-progress");
+    fireEvent.click(screen.getByRole("button", { name: "Show details for Read task" }));
+    expect(screen.getByText("Input request details unavailable for this tool call.")).toBeInTheDocument();
+    rerender(<ChatThread messages={[{ id: "finished", role: "assistant", text: "Finished." }]} />);
+    expect(screen.queryByText("Thinking…")).not.toBeInTheDocument();
+  });
+
+  it("summarizes concurrent active calls without completing either one", () => {
+    render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "concurrent-progress",
+            role: "assistant",
+            progressItems: [
+              { id: "call-a", kind: "tool", label: "Searching GitHub", status: "running" },
+              { id: "call-b", kind: "tool", label: "Reading notes", status: "running" },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("2 tools running")).toBeInTheDocument();
+    expect(screen.getByText("Searching GitHub").closest("[data-progress-line]")).toHaveClass("sketch-shimmer-progress");
+    expect(screen.getByText("Reading notes").closest("[data-progress-line]")).toHaveClass("sketch-shimmer-progress");
+  });
+
+  it("keeps Friendly inspection human-readable when technical detail is absent", () => {
+    render(
+      <ChatThread
+        messages={[
+          {
+            id: "friendly-complete",
+            role: "assistant",
+            progressItems: [
+              {
+                id: "friendly-call",
+                kind: "integration",
+                label: "Created GitHub issue",
+                mode: "friendly",
+                status: "succeeded",
+                startedAt: 1_000,
+                endedAt: 3_000,
+                integration: { appId: "github", name: "GitHub" },
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Activity timeline 1 tool call" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show details for Created GitHub issue" }));
+    expect(screen.getByText("Input request details unavailable for this tool call.")).toBeInTheDocument();
+    expect(screen.queryByText("Duration: 2s")).not.toBeInTheDocument();
+    expect(screen.queryByText("Technical detail unavailable")).not.toBeInTheDocument();
+  });
+
+  it("shows a disconnected running status without active animation", () => {
+    render(
+      <ChatThread
+        error="Connection lost"
+        messages={[
+          {
+            id: "disconnected-progress",
+            role: "assistant",
+            progressItems: [{ id: "call-disconnected", kind: "tool", label: "Searching", status: "running" }],
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Activity timeline 1 tool call/ }));
+    expect(screen.getByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("Searching").closest("[data-progress-line]")).not.toHaveClass("sketch-shimmer-progress");
+  });
+
+  it("keeps integration branding with an image fallback", () => {
+    render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "integration-progress",
+            role: "assistant",
+            progressItems: [
+              {
+                id: "call-3",
+                kind: "integration",
+                label: "Searching Acme",
+                integration: { appId: "acme", name: "Acme", icon: "/missing-acme.svg" },
+                status: "running",
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("A")).toBeInTheDocument();
+  });
+
   it("renders legacy progress lines without visible Slack emoji treatment", () => {
     render(<ChatThread busy messages={[{ id: "a1", role: "assistant", progressLines: ['📖 Reading "notes.md"'] }]} />);
 
@@ -477,6 +661,73 @@ describe("ChatThread", () => {
     expect(screen.getByText("Running tests")).toBeInTheDocument();
     expect(screen.getByText("Editing summary")).toBeInTheDocument();
     expect(screen.getByText("Writing response").closest("[data-progress-line]")).toHaveClass("sketch-shimmer-progress");
+  });
+
+  it("keeps older live activity reachable through the existing disclosure", () => {
+    const progressItems = Array.from({ length: 5 }, (_, index) => ({
+      id: `live-call-${index + 1}`,
+      kind: "tool",
+      label: `Live call ${index + 1}`,
+      toolName: "Read",
+      detail: `notes-${index + 1}.md`,
+    }));
+    render(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "live-history",
+            role: "assistant",
+            timeline: progressItems.map((item) => ({ type: "progress" as const, progressItems: [item] })),
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("Live call 1")).not.toBeInTheDocument();
+    const historyButton = screen.getByRole("button", { name: "Earlier activity 2 tool calls" });
+    fireEvent.click(historyButton);
+    expect(screen.getByText("Live call 1")).toBeInTheDocument();
+    expect(screen.getByText("Live call 2")).toBeInTheDocument();
+  });
+
+  it("keeps an expanded live invocation mounted when new rows append", () => {
+    const firstItems = Array.from({ length: 5 }, (_, index) => ({
+      id: `append-call-${index + 1}`,
+      kind: "tool",
+      label: `Append call ${index + 1}`,
+      toolName: "Read",
+      detail: `notes-${index + 1}.md`,
+      mode: "technical" as const,
+    }));
+    const timeline = firstItems.map((item) => ({ type: "progress" as const, progressItems: [item] }));
+    const { rerender } = render(<ChatThread busy messages={[{ id: "append-history", role: "assistant", timeline }]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show details for Append call 5" }));
+    expect(screen.getByRole("button", { name: "Hide details for Append call 5" })).toBeInTheDocument();
+
+    rerender(
+      <ChatThread
+        busy
+        messages={[
+          {
+            id: "append-history",
+            role: "assistant",
+            timeline: [
+              ...timeline,
+              {
+                type: "progress" as const,
+                progressItems: [{ id: "append-call-6", kind: "tool", label: "Append call 6", toolName: "Read" }],
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Hide details for Append call 5" })).toBeInTheDocument();
+    expect(screen.getByText("Append call 1")).toBeInTheDocument();
+    expect(screen.getByText("Append call 6")).toBeInTheDocument();
   });
 
   it("collapses completed timeline activity and reopens a scrollable full history", () => {

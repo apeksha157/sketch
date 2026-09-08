@@ -65,6 +65,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
         revokeShare: mocks.revokeShare,
       },
       webChat: {
+        progressSettings: vi.fn().mockResolvedValue({ toolProgress: "friendly" }),
+        updateProgressSettings: vi.fn((toolProgress: string) => Promise.resolve({ toolProgress })),
         messages: mocks.loadMessages,
         conversations: mocks.webChatConversations,
         interrupt: mocks.interruptChat,

@@ -7,6 +7,9 @@ import type {
 } from "@sketch/shared";
 import type { ProgressDisplaySettings } from "../progress-settings";
 import type { ProgressEvent } from "./runner";
+import { type ProgressDescriptor, describeProgressEvent } from "./tool-progress-descriptor";
+import type { ToolProgressIntegrationContext } from "./tool-progress-integration";
+import { sanitizeProgressDetail } from "./tool-progress-sanitization";
 
 export interface ProgressRenderer {
   renderEvent(event: ProgressEvent): void;
@@ -61,36 +64,6 @@ const TOOL_EMOJI: Record<string, string> = {
 };
 
 const FALLBACK_EMOJI = "⚙️";
-
-const TOOL_KIND: Record<string, WebProgressItemKind> = {
-  Read: "file",
-  Write: "file",
-  Edit: "file",
-  Bash: "shell",
-  Glob: "search",
-  Grep: "search",
-  WebSearch: "web",
-  WebFetch: "web",
-  Skill: "skill",
-  SendFileToChat: "attachment",
-  TranscribeAudio: "audio",
-  VisualAnalysis: "image",
-  ManageScheduledTasks: "schedule",
-  SearchDeliveryTargets: "delivery",
-  SearchEntities: "entity",
-  GetEntityContext: "entity",
-  ReadChatHistory: "chat",
-  local_run_command: "local",
-  local_claude_session: "local",
-  GetTeamDirectory: "chat",
-  SearchUsers: "search",
-  SendMessage: "delivery",
-  SendMessageToTarget: "delivery",
-  SendMessageToUsers: "delivery",
-  UpdateInboxWorkflow: "tool",
-  ResolveInboxWorkflow: "tool",
-  getProviderConfig: "integration",
-};
 
 const PRIMARY_ARG: Record<string, string> = {
   Read: "file_path",
@@ -158,27 +131,6 @@ const FRIENDLY_STATIC_LINES: Record<string, string> = {
   getProviderConfig: "Checking integration",
 };
 
-const FRIENDLY_WEB_LABELS: Record<string, string> = {
-  SendFileToChat: "Sending file",
-  TranscribeAudio: "Transcribing audio",
-  VisualAnalysis: "Analyzing image",
-  ManageScheduledTasks: "Managing scheduled tasks",
-  SearchDeliveryTargets: "Finding recipients",
-  SearchEntities: "Searching connected knowledge",
-  GetEntityContext: "Reading connected knowledge",
-  ReadChatHistory: "Reading chat history",
-  local_run_command: "Using local device",
-  local_claude_session: "Using local Claude Code",
-  GetTeamDirectory: "Reading team directory",
-  SearchUsers: "Finding teammates",
-  SendMessage: "Sending message",
-  SendMessageToTarget: "Sending message to a channel or group",
-  SendMessageToUsers: "Sending messages",
-  UpdateInboxWorkflow: "Updating inbox item",
-  ResolveInboxWorkflow: "Resolving inbox item",
-  getProviderConfig: "Checking integration",
-};
-
 const CANVAS_FRIENDLY_TARGET_PREFIX: Record<string, string> = {
   "direct-execute-action": "Canvas action:",
   "direct-execute-web-search": "Canvas web search:",
@@ -200,29 +152,6 @@ function parseMcpToolName(toolName: string): McpToolName | null {
   const serverName = match?.[1];
   const name = match?.[2];
   return serverName && name ? { serverName, toolName: name } : null;
-}
-
-function humanizeIdentifier(value: string): string {
-  return value
-    .replace(/^plugin_/, "")
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
-}
-
-function isInternalIntegrationName(value: string): boolean {
-  const normalized = value.toLowerCase().replace(/^plugin[_-]/, "");
-  return normalized === "canvas" || normalized === "sketch";
-}
-
-function friendlyIntegrationLabel(serverName?: string): string {
-  if (!serverName || isInternalIntegrationName(serverName)) return "Running integration";
-  return "Running integration";
-}
-
-function isIntegrationSkillName(value: string): boolean {
-  return /\bintegration\b/i.test(value.replace(/[-_]+/g, " "));
 }
 
 function stringifyValue(value: unknown): string | null {
@@ -349,96 +278,12 @@ function genericThinkingItem(): WebProgressItem {
   return progressItem("reasoning", "Thinking…", { type: "generic", name: "reasoning" }, null);
 }
 
-function friendlyLabelFromPrefix(prefix: string): string {
-  return prefix.replace(/:\s*$/, "").replace(/\s+(for|matching)$/, "");
-}
-
-function getCanvasStructuredItem(invocation: CanvasInvocation, technical: boolean): WebProgressItem {
-  const target = invocation.target ?? null;
-  const detail =
-    technical && invocation.subcommand ? [invocation.subcommand, target].filter(Boolean).join(" ") : target;
-
-  if (technical) {
-    return progressItem("canvas", "Canvas", canvasIcon(invocation), detail || invocation.subcommand, "Bash");
-  }
-
-  if (!invocation.subcommand) {
-    return progressItem("canvas", "Running Canvas", canvasIcon(invocation), null, "Bash");
-  }
-
-  const prefix = CANVAS_FRIENDLY_TARGET_PREFIX[invocation.subcommand] ?? `Canvas ${invocation.subcommand}:`;
-  const fallback = CANVAS_FRIENDLY_FALLBACK[invocation.subcommand] ?? `Canvas ${invocation.subcommand}`;
-  return progressItem(
-    "canvas",
-    target ? prefix.replace(/:\s*$/, "") : fallback,
-    canvasIcon(invocation),
-    target,
-    "Bash",
-  );
-}
-
-function getFriendlyWebCanvasItem(invocation: CanvasInvocation): WebProgressItem {
-  const label = invocation.subcommand
-    ? (CANVAS_FRIENDLY_FALLBACK[invocation.subcommand] ?? `Running Canvas ${humanizeIdentifier(invocation.subcommand)}`)
-    : "Running Canvas";
-  return progressItem("canvas", label, canvasIcon(invocation), null, "Bash");
-}
-
-function getTechnicalProgressItem(toolName: string, input: Record<string, unknown>): WebProgressItem {
+function iconForWebItem(descriptor: ProgressDescriptor, toolName: string): WebProgressIcon {
   const display = stripMcpPrefix(toolName);
-
-  if (display === "Bash") {
-    const command = findInputValue(input, ["command"]);
-    const canvasInvocation = command ? parseCanvasInvocation(command) : null;
-    if (canvasInvocation) return getCanvasStructuredItem(canvasInvocation, true);
-  }
-
-  const argKey = PRIMARY_ARG[display];
-  const rawValue = argKey ? stringifyValue(input[argKey]) : findFallbackInputValue(input);
-  return progressItem(
-    TOOL_KIND[display] ?? "tool",
-    display,
-    TOOL_EMOJI[display] ? toolIcon(display) : genericIcon(display),
-    rawValue,
-    display,
-  );
-}
-
-function getFriendlyProgressItem(toolName: string, input: Record<string, unknown>): WebProgressItem {
-  const display = stripMcpPrefix(toolName);
-
-  if (display === "Bash") {
-    const command = findInputValue(input, ["command"]);
-    const canvasInvocation = command ? parseCanvasInvocation(command) : null;
-    if (canvasInvocation) return getCanvasStructuredItem(canvasInvocation, false);
-    return progressItem("shell", command ? "Running" : "Running a shell command", toolIcon(display), command, display);
-  }
-
-  const targetLine = FRIENDLY_TARGET_LINES[display];
-  if (targetLine) {
-    const value = findInputValue(input, targetLine.keys);
-    return progressItem(
-      TOOL_KIND[display] ?? "tool",
-      value ? friendlyLabelFromPrefix(targetLine.prefix) : targetLine.fallback,
-      TOOL_EMOJI[display] ? toolIcon(display) : genericIcon(display),
-      value,
-      display,
-    );
-  }
-
-  const staticLine = FRIENDLY_STATIC_LINES[display];
-  if (staticLine) {
-    return progressItem(
-      TOOL_KIND[display] ?? "tool",
-      staticLine,
-      TOOL_EMOJI[display] ? toolIcon(display) : genericIcon(display),
-      null,
-      display,
-    );
-  }
-
-  const fallback = findFallbackInputValue(input);
-  return progressItem(TOOL_KIND[display] ?? "tool", display, genericIcon(display), fallback, display);
+  if (descriptor.kind === "canvas") return canvasIcon({ subcommand: null, target: null, componentKey: null });
+  if (display === "Skill") return { type: "skill", name: "Skill" };
+  if (descriptor.kind === "integration") return genericIcon("integration");
+  return TOOL_EMOJI[display] ? toolIcon(display) : genericIcon(descriptor.integration ? "integration" : display);
 }
 
 function isDetailedWebProgressMode(mode: WebChatProgressRendererMode): boolean {
@@ -449,85 +294,74 @@ function webProgressModeFromSettings(settings: ProgressDisplaySettings): WebChat
   return settings.toolProgress;
 }
 
-function getFriendlyWebProgressItem(toolName: string, input: Record<string, unknown>): WebProgressItem {
-  const mcpTool = parseMcpToolName(toolName);
-  const display = mcpTool?.toolName ?? toolName;
-  const safeToolName = clipValue((mcpTool ? display : toolName).trim()) || "tool";
-
-  if (display === "Skill") {
-    const skillName = findInputValue(input, ["skill", "name"]);
-    if (skillName && isIntegrationSkillName(skillName)) {
-      return progressItem("integration", "Running integration", genericIcon("integration"), null, safeToolName);
-    }
-    return progressItem("skill", "Running skill", { type: "skill", name: "Skill" }, null, safeToolName);
-  }
-
-  if (display === "Bash") {
-    const command = findInputValue(input, ["command"]);
-    const canvasInvocation = command ? parseCanvasInvocation(command) : null;
-    if (canvasInvocation) return getFriendlyWebCanvasItem(canvasInvocation);
-    return progressItem("shell", "Running command", toolIcon(display), null, safeToolName);
-  }
-
-  const targetLine = FRIENDLY_TARGET_LINES[display];
-  if (targetLine) {
-    return progressItem(
-      TOOL_KIND[display] ?? "tool",
-      friendlyLabelFromPrefix(targetLine.prefix),
-      TOOL_EMOJI[display] ? toolIcon(display) : genericIcon(display),
-      null,
-      safeToolName,
-    );
-  }
-
-  const label = FRIENDLY_WEB_LABELS[display];
-  if (label) {
-    return progressItem(
-      TOOL_KIND[display] ?? "tool",
-      label,
-      TOOL_EMOJI[display] ? toolIcon(display) : genericIcon(display),
-      null,
-      safeToolName,
-    );
-  }
-
-  if (mcpTool) {
-    return progressItem(
-      "integration",
-      friendlyIntegrationLabel(mcpTool.serverName),
-      genericIcon("integration"),
-      null,
-      safeToolName,
-    );
-  }
-
-  return progressItem(
-    TOOL_KIND[display] ?? "tool",
-    humanizeIdentifier(display),
-    genericIcon(display),
-    null,
-    safeToolName,
-  );
+function getFriendlyWebProgressItem(
+  toolName: string,
+  input: Record<string, unknown>,
+  context?: ToolProgressIntegrationContext,
+): WebProgressItem {
+  const descriptor = describeProgressEvent({ kind: "tool_use", toolName, input }, context);
+  const displayToolName = parseMcpToolName(toolName)?.toolName ?? toolName;
+  const safeToolName = clipValue(displayToolName.trim()) || "tool";
+  return {
+    kind: descriptor.kind,
+    label: descriptor.friendlyLabel,
+    icon: iconForWebItem(descriptor, toolName),
+    ...(descriptor.integration ? { integration: descriptor.integration } : {}),
+    toolName: safeToolName,
+  };
 }
 
 function progressLineFromItem(item: WebProgressItem): string {
   return item.detail ? `${item.label} ${item.detail}` : item.label;
 }
 
+function technicalWebLineFromItem(item: WebProgressItem): string {
+  const display = stripMcpPrefix(item.label);
+  const emoji = TOOL_EMOJI[display] ?? FALLBACK_EMOJI;
+  if (!item.detail) return `${emoji} ${item.label}...`;
+  if (item.detailFormat === "command") return `${emoji} ${item.label}: ${item.detail}`;
+  return `${emoji} ${item.label}: ${JSON.stringify(item.detail)}`;
+}
+
 export function createWebProgressItem(
   event: ProgressEvent,
   settings: ProgressDisplaySettings,
   mode: WebChatProgressRendererMode = webProgressModeFromSettings(settings),
+  context?: ToolProgressIntegrationContext,
 ): WebProgressItem | null {
   if (event.kind === "intermediate_text") {
     if (!settings.reasoningText && mode !== "off") return null;
-    if (!isDetailedWebProgressMode(mode)) return genericThinkingItem();
-    return progressItem("reasoning", "Thinking", { type: "generic", name: "reasoning" }, event.text);
+    if (mode === "off") return genericThinkingItem();
+    if (!isDetailedWebProgressMode(mode)) {
+      return { ...genericThinkingItem(), mode };
+    }
+    return { ...progressItem("reasoning", "Thinking", { type: "generic", name: "reasoning" }, event.text), mode };
   }
 
   if (mode === "off") return genericThinkingItem();
-  if (isDetailedWebProgressMode(mode)) return getTechnicalProgressItem(event.toolName, event.input);
-  return getFriendlyWebProgressItem(event.toolName, event.input);
+  if (isDetailedWebProgressMode(mode)) {
+    if (event.kind !== "tool_use") return genericThinkingItem();
+    const descriptor = describeProgressEvent(event, context);
+    const safeDetail = sanitizeProgressDetail(event.toolName, event.input);
+    return {
+      kind: descriptor.kind,
+      label: descriptor.technicalLabel,
+      icon: iconForWebItem(descriptor, event.toolName),
+      ...(descriptor.integration ? { integration: descriptor.integration } : {}),
+      detailFormat: safeDetail.detailFormat,
+      ...(safeDetail.detail ? { detail: safeDetail.detail } : {}),
+      ...(safeDetail.detailRedacted ? { detailRedacted: true } : {}),
+      ...(safeDetail.detailTruncated ? { detailTruncated: true } : {}),
+      ...(safeDetail.detailUnavailable ? { detailUnavailable: true } : {}),
+      toolName: event.toolName,
+      mode,
+    };
+  }
+  if (event.kind !== "tool_use") return genericThinkingItem();
+  return {
+    ...getFriendlyWebProgressItem(event.toolName, event.input, context),
+    mode,
+  };
 }
 
 export function createWebProgressData(
@@ -535,11 +369,15 @@ export function createWebProgressData(
   settings: ProgressDisplaySettings,
   mode: WebChatProgressRendererMode,
   renderedLines: string[] = [],
+  context?: ToolProgressIntegrationContext,
 ): WebChatProgressData | null {
-  const item = createWebProgressItem(event, settings, mode);
+  const item = createWebProgressItem(event, settings, mode, context);
   if (!item) return null;
-  const lines =
-    isDetailedWebProgressMode(mode) && renderedLines.length > 0 ? renderedLines : [progressLineFromItem(item)];
+  const lines = isDetailedWebProgressMode(mode)
+    ? event.kind === "intermediate_text" && renderedLines.length > 0
+      ? renderedLines
+      : [technicalWebLineFromItem(item)]
+    : [progressLineFromItem(item)];
   return { lines, items: [item] };
 }
 

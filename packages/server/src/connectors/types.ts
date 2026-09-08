@@ -9,6 +9,7 @@
 import type { PhoneCountryCode } from "@sketch/shared";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
+import type { Config } from "../config";
 import type { DB } from "../db/schema";
 import {
   normalizeSlackIdentityUserId,
@@ -16,7 +17,33 @@ import {
   normalizeWhatsAppIdentityPhone,
 } from "../identity-normalization";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
+import type { ChunkGenerate } from "./chunk-generate";
 import type { GeminiGenerator } from "./gemini-generate";
+
+export type SlackIndexingAppConfig = Pick<
+  Config,
+  | "SLACK_ENTITY_SYNC"
+  | "SLACK_CHUNK_WINDOW_MESSAGES"
+  | "SLACK_CHUNK_WINDOW_TOKENS"
+  | "SLACK_CHUNK_MIN_MESSAGES"
+  | "SLACK_CHUNK_TARGET_MESSAGES"
+  | "SLACK_CHUNK_MAX_MESSAGES"
+  | "SLACK_CHUNK_MAX_TOKENS"
+  | "SLACK_THREAD_MIN_MESSAGES"
+  | "SLACK_CHUNK_TICK_MINUTES"
+  | "SLACK_CHUNK_IDLE_CLOSE_HOURS"
+  | "SLACK_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+  | "SLACK_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
+  | "SLACK_CHUNK_MODEL"
+  | "SLACK_CHUNK_REASONING_EFFORT"
+  | "SLACK_CHUNK_BURST_THRESHOLD_MESSAGES"
+  | "SLACK_CHUNK_TOPIC_REGISTRY_CAP"
+  | "SLACK_CHUNK_CHANNEL_WORKER_POOL"
+  | "SLACK_CHUNK_MAX_WINDOWS_PER_RUN"
+  | "SLACK_DISCOVERY_PAGE_ROWS"
+  | "SLACK_DISCOVERY_MAX_PAGES"
+  | "SLACK_EMISSION_LEGACY_PER_RUN"
+>;
 
 export const CONNECTOR_TYPES = [
   "google_drive",
@@ -48,6 +75,8 @@ export type AuthType = "oauth" | "api_key" | "service_account" | "system";
 export type SyncStatus = "pending" | "active" | "syncing" | "paused" | "error" | "disabled";
 
 export type ContentCategory = "document" | "structured";
+
+export const CRM_ACTIVITY_FILE_TYPES = ["crm_task", "crm_note", "crm_call", "crm_event", "crm_meeting"] as const;
 
 export type AccessPrincipalType = "email" | "phone" | "slack_user" | "whatsapp_lid";
 
@@ -159,6 +188,7 @@ export interface SyncedItem {
   content: string | null;
   sourcePath: string | null;
   sourceMeta?: Record<string, unknown>;
+  enrichmentRefresh?: "full" | "embeddings_only";
   /**
    * Retrieval-only raw payload (e.g. a full meeting transcript). Persisted to
    * indexed_file_raw_contents, deliberately outside `content` so it never
@@ -197,7 +227,7 @@ export interface SyncedItem {
   /**
    * Per-file email access list. Used when access varies per file
    * (e.g., Google Drive My Drive files with individual sharing).
-   * null → no per-file restrictions.
+   * undefined/null → leave per-file grants untouched; [] → clear them.
    */
   accessPrincipals?: AccessPrincipal[] | null;
   /**
@@ -330,6 +360,7 @@ export interface ContactPointSeed {
   source: string;
   verifiedAt?: string | null;
   lastContactedAt?: string | null;
+  lastRepliedAt?: string | null;
   makePrimary?: boolean;
   phoneCountry?: PhoneCountryCode | null;
 }
@@ -407,7 +438,11 @@ export type IndexedFileFactRaw =
       sourceRefKey: string;
     }
   | { providerFileId: string; author: { name?: string; email?: string; sourceId?: string } }
-  | { providerFileId: string; parent: { source: string; sourceId: string; contextSnippet?: string } }
+  | {
+      providerFileId: string;
+      parent: { source: string; sourceId: string; contextSnippet?: string };
+      selfRecord?: boolean;
+    }
   | {
       indexedFileId: string;
       task: NonNullable<SyncedItem["task"]>;
@@ -581,6 +616,7 @@ export interface Connector {
         label?: string;
       },
     ) => Promise<string>;
+    slackChunkerGenerate?: ChunkGenerate;
     /**
      * Narrow Slack API facade injected from bootstrap for the slack-indexing
      * connector (rosters, member channels, user emails). Other connectors
@@ -588,7 +624,7 @@ export interface Connector {
      */
     slackIndexing?: SlackIndexingFacade | null;
     /** Optional application flags used by connectors with platform-specific policy switches. */
-    appConfig?: { SLACK_ENTITY_SYNC?: boolean };
+    appConfig?: Partial<SlackIndexingAppConfig>;
     onEntitySeed?: EntitySeedCallback;
     onPersonSeed?: PersonEntitySeedCallback;
     onContainerObservation?: ContainerObservationCallback;
@@ -602,6 +638,9 @@ export interface Connector {
   }): AsyncGenerator<SyncedItem>;
 
   onItemResult?(result: { item: SyncedItem; persisted: boolean; error?: string }): void | Promise<void>;
+
+  /** Optional counters emitted by connectors for the dispatcher sync log line. */
+  getSyncDiagnostics?(): Record<string, string | number | boolean | null>;
 
   /** Return the new sync cursor after a sync run. */
   getCursor(opts: {
