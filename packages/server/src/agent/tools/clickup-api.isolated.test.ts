@@ -353,6 +353,27 @@ describe("ClickUp API tool", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("explains that OAUTH_027 can be scoped to the requested ClickUp resource", async () => {
+    const getCanvasAccessToken = vi.fn().mockResolvedValue({ accessToken: "healthy-token" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ ECODE: "OAUTH_027" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    const result = await handleClickUpApi(
+      { method: "GET", path: "/task/not-a-clickup-task" },
+      deps(getCanvasAccessToken),
+    );
+
+    expect(result.content[0]?.text).toContain("requested resource or Workspace is not authorized");
+    expect(result.content[0]?.text).toContain("Verify the ClickUp ID and Workspace access before reconnecting");
+    expect(getCanvasAccessToken).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     { method: "POST" as const, path: "/team/team-1/webhook" },
     { method: "GET" as const, path: "/team/team-1/webhooks" },

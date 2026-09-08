@@ -65,7 +65,11 @@ export class ClickUpApiHttpError extends Error {
     readonly status: number,
     readonly code?: string,
   ) {
-    super(`ClickUp API request failed with HTTP ${status}${code ? ` (${code})` : ""}.`);
+    super(
+      status === 401 && code === "OAUTH_027"
+        ? "ClickUp API request failed with HTTP 401 (OAUTH_027): the requested resource or Workspace is not authorized for this connection. Verify the ClickUp ID and Workspace access before reconnecting the account."
+        : `ClickUp API request failed with HTTP ${status}${code ? ` (${code})` : ""}.`,
+    );
     this.name = "ClickUpApiHttpError";
   }
 }
