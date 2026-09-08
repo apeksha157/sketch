@@ -81,7 +81,14 @@ describe.each([
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
-          webhook: { id: "hook", team_id: "123", endpoint: callback, secret, events: ["taskStatusUpdated"] },
+          webhook: {
+            id: "hook",
+            team_id: "123",
+            endpoint: callback,
+            secret,
+            events: ["taskStatusUpdated"],
+            health: { status: "active", fail_count: 0 },
+          },
         }),
       ),
     );

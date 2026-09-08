@@ -285,9 +285,10 @@ export function AccessSettingsDialog({
   const changed =
     accessLevel !== (connection.accessLevel ?? "personal") ||
     JSON.stringify([...memberUserIds].sort()) !== JSON.stringify([...savedMembers].sort());
+  const canSave = mode === "personal" || changed;
   const valid = mode !== "members" || (selected.length > 0 && !membersQuery.isPending && !membersQuery.isError);
   const save = async () => {
-    if (!canManage || !changed || !valid || saving) return;
+    if (!canManage || !canSave || !valid || saving) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -371,7 +372,7 @@ export function AccessSettingsDialog({
               <Button
                 className="h-10 min-w-28 rounded-lg shadow-none focus-visible:ring-foreground/50 focus-visible:ring-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100"
                 onClick={save}
-                disabled={!changed || !valid || saving}
+                disabled={!canSave || !valid || saving}
               >
                 {saving && <SpinnerGapIcon size={14} className="animate-spin motion-reduce:animate-none" />}
                 {saving ? "Saving…" : "Save access"}

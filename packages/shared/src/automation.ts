@@ -16,6 +16,7 @@ export type CanvasWebhookEndpoint = z.infer<typeof canvasWebhookEndpointSchema>;
 export const webhookSourceBindingSchema = z.object({
   integration: z.string().min(1).max(256),
   accountId: z.string().min(1).max(256),
+  workspaceId: z.string().min(1).max(256).optional(),
   collectionPath: z.string().min(1).max(512),
   callbackUrl: z.string().url().max(2048),
   resourceId: z.string().min(1).max(256).nullable(),
@@ -25,8 +26,29 @@ export const webhookSourceBindingSchema = z.object({
       scope: z.object({ field: z.string().min(1).max(64), id: z.string().min(1).max(256) }).nullable(),
     })
     .optional(),
+  humanSummary: z.string().trim().min(1).max(500).optional(),
 });
 export type WebhookSourceBinding = z.infer<typeof webhookSourceBindingSchema>;
+
+export const clickupWebhookEventSchema = z.union([
+  z.literal("*"),
+  z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z][A-Za-z0-9]{0,99}$/),
+]);
+
+export type ClickupWebhookEvent = z.infer<typeof clickupWebhookEventSchema>;
+
+export const clickupWebhookScopeSchema = z
+  .object({
+    field: z.enum(["task_id", "list_id", "folder_id", "space_id"]),
+    id: z.string().trim().min(1).max(256),
+    name: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
+
+export type ClickupWebhookScope = z.infer<typeof clickupWebhookScopeSchema>;
 
 export const webhookDeliveryReceiptSchema = z.object({
   endpointId: z.string(),
@@ -37,6 +59,17 @@ export const webhookDeliveryReceiptSchema = z.object({
   status: z.string(),
 });
 export type WebhookDeliveryReceipt = z.infer<typeof webhookDeliveryReceiptSchema>;
+
+export const webhookEndpointMetadataSchema = z.object({
+  slot: z.string(),
+  endpointId: z.string(),
+  url: z.string().url(),
+  status: z.enum(["active", "revoked", "unavailable"]),
+  authentication: z.enum(["none", "hmac_sha256"]),
+  generation: z.number().int(),
+  binding: webhookSourceBindingSchema.optional(),
+  lastDelivery: webhookDeliveryReceiptSchema.optional(),
+});
 
 export const workflowTriggerConfigSchema = z
   .object({
@@ -54,6 +87,7 @@ export const workflowTriggerConfigSchema = z
     webhookContentType: z.literal("application/json").optional(),
     webhookAuthentication: z.enum(["none", "hmac_sha256"]).optional(),
     webhookBinding: webhookSourceBindingSchema.optional(),
+    webhookEndpoints: z.array(webhookEndpointMetadataSchema).max(32).optional(),
     webhookLastDelivery: webhookDeliveryReceiptSchema.optional(),
     webhookStatus: z.enum(["active", "revoked", "unavailable"]).optional(),
     canvasEndpoint: canvasWebhookEndpointSchema.optional(),
@@ -76,7 +110,14 @@ export const workflowTriggerConfigSchema = z
 
 export type WorkflowTriggerConfig = z.infer<typeof workflowTriggerConfigSchema>;
 
-export const automationSketchToolNameSchema = z.enum(["search", "searchEntities", "getEntityContext", "findTeammate"]);
+export const automationSketchToolNameSchema = z.enum([
+  "search",
+  "searchEntities",
+  "getEntityContext",
+  "findTeammate",
+  "clickup",
+  "clickup_api",
+]);
 
 export type AutomationSketchToolName = z.infer<typeof automationSketchToolNameSchema>;
 

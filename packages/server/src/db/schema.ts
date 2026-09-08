@@ -2032,6 +2032,7 @@ export interface QuestionInteractionDeliveriesTable {
 
 export interface WebhookEndpointsTable {
   id: string;
+  slot: Generated<string>;
   task_id: string;
   status: string;
   verification_json: Generated<string | null>;

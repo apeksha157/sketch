@@ -32,6 +32,7 @@ import { resolveWorkflowDelivery } from "../workflows/delivery";
 import {
   hasInvalidAutomationSketchToolNamespace,
   referencesAutomationIntegrationAction,
+  referencesCanvasClickUpAction,
   referencesRawCanvasCli,
   undeclaredAutomationSketchTools,
 } from "./action-script";
@@ -289,33 +290,61 @@ export function addWebhookEndpointMetadata(
   taskId: string,
   options: {
     endpoint?: WebhookEndpointRow | null;
+    endpoints?: { endpoint: WebhookEndpointRow; lastDelivery?: WebhookDeliveryReceipt }[];
     lastDelivery?: WebhookDeliveryReceipt;
     baseUrl?: string | null;
     port?: number;
   } = {},
 ): WorkflowTriggerConfig {
   if (config.type !== "webhook") return config;
-  if (options.endpoint) {
+  const { webhookEndpoints: _storedEndpoints, ...baseConfig } = config;
+  const replacement =
+    options.endpoint?.status === "revoked" && options.endpoint.source_binding === null
+      ? options.endpoints?.find(({ endpoint }) => endpoint.status !== "revoked" || endpoint.source_binding !== null)
+      : undefined;
+  const selected = replacement
+    ? { ...options, endpoint: replacement.endpoint, lastDelivery: replacement.lastDelivery }
+    : options;
+  const webhookEndpoints = options.endpoints?.map(({ endpoint, lastDelivery }) => {
+    const metadata = addWebhookEndpointMetadata({ type: "webhook" }, taskId, {
+      endpoint,
+      lastDelivery,
+      baseUrl: options.baseUrl,
+      port: options.port,
+    });
     return {
-      ...config,
-      webhookUrl: buildNativeWebhookUrl(options.endpoint.id, {
-        baseUrl: options.baseUrl,
-        port: options.port,
+      slot: endpoint.slot,
+      endpointId: endpoint.id,
+      url: metadata.webhookUrl as string,
+      status: metadata.webhookStatus ?? "unavailable",
+      authentication: metadata.webhookAuthentication ?? "none",
+      generation: endpoint.generation,
+      binding: metadata.webhookBinding,
+      lastDelivery: metadata.webhookLastDelivery,
+    };
+  });
+  if (selected.endpoint) {
+    return {
+      ...baseConfig,
+      ...(webhookEndpoints ? { webhookEndpoints } : {}),
+      webhookUrl: buildNativeWebhookUrl(selected.endpoint.id, {
+        baseUrl: selected.baseUrl,
+        port: selected.port,
       }),
-      webhookEndpointId: options.endpoint.id,
+      webhookEndpointId: selected.endpoint.id,
       webhookMethod: "POST",
       webhookContentType: "application/json",
-      webhookAuthentication: options.endpoint.verification_json ? "hmac_sha256" : "none",
-      webhookBinding: webhookBindingMetadata(options.endpoint),
+      webhookAuthentication: selected.endpoint.verification_json ? "hmac_sha256" : "none",
+      webhookBinding: webhookBindingMetadata(selected.endpoint),
       webhookLastDelivery:
-        options.lastDelivery?.endpointId === options.endpoint.id &&
-        options.lastDelivery.endpointGeneration === options.endpoint.generation
-          ? options.lastDelivery
+        selected.lastDelivery?.endpointId === selected.endpoint.id &&
+        selected.lastDelivery.endpointGeneration === selected.endpoint.generation
+          ? selected.lastDelivery
           : undefined,
       webhookStatus:
-        options.endpoint.status === "revoked"
+        selected.endpoint.status === "revoked"
           ? "revoked"
-          : options.endpoint.status === "pending"
+          : selected.endpoint.status === "pending"
             ? "unavailable"
             : "active",
     };
@@ -327,7 +356,7 @@ export function addWebhookEndpointMetadata(
     webhookBinding: _legacyWebhookBinding,
     webhookLastDelivery: _legacyWebhookLastDelivery,
     ...withoutLegacyEndpoint
-  } = config;
+  } = baseConfig;
   return {
     ...withoutLegacyEndpoint,
     webhookMethod: "POST",
@@ -347,6 +376,7 @@ export function buildAutomationDefinition(params: {
   webhookBaseUrl?: string | null;
   webhookPort?: number;
   webhookEndpoint?: WebhookEndpointRow | null;
+  webhookEndpoints?: { endpoint: WebhookEndpointRow; lastDelivery?: WebhookDeliveryReceipt }[];
   webhookLastDelivery?: WebhookDeliveryReceipt;
   includeWebhookMetadata?: boolean;
 }): AutomationDefinition {
@@ -357,6 +387,7 @@ export function buildAutomationDefinition(params: {
         ...step,
         triggerConfig: addWebhookEndpointMetadata(step.triggerConfig, params.row.id, {
           endpoint: params.webhookEndpoint,
+          endpoints: params.webhookEndpoints,
           lastDelivery: params.webhookLastDelivery,
           baseUrl: params.webhookBaseUrl,
           port: params.webhookPort,
@@ -368,6 +399,7 @@ export function buildAutomationDefinition(params: {
       ...step,
       triggerConfig: addWebhookEndpointMetadata(step.triggerConfig, params.row.id, {
         endpoint: params.webhookEndpoint,
+        endpoints: params.webhookEndpoints,
         lastDelivery: params.webhookLastDelivery,
         baseUrl: params.webhookBaseUrl,
         port: params.webhookPort,
@@ -603,6 +635,14 @@ function addIssue(issues: BuilderValidationIssue[], code: string, message: strin
   issues.push(issue);
 }
 
+function isClickUpValue(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "-");
+  return ["clickup", "click-up", "click_up"].some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`) || normalized.startsWith(`${prefix}_`),
+  );
+}
+
 export function validateAutomationBuilderSaveRequest(params: {
   request: AutomationBuilderSaveRequest;
   brokerCapable: boolean;
@@ -661,6 +701,14 @@ export function validateAutomationBuilderSaveRequest(params: {
         );
       }
       if (content?.contentType === "script") {
+        if (referencesCanvasClickUpAction(content.content)) {
+          addIssue(
+            issues,
+            "CANVAS_CLICKUP_ACTION_UNSUPPORTED",
+            `Action step "${step.label}" cannot call ClickUp through Canvas; use the managed ctx.tools.clickup capability`,
+            `stepContent.${step.id}`,
+          );
+        }
         if (step.actionCapabilities?.usesIntegrationActions === true && referencesRawCanvasCli(content.content)) {
           addIssue(
             issues,
@@ -701,18 +749,6 @@ export function validateAutomationBuilderSaveRequest(params: {
       }
       if (step.actionCapabilities) {
         const cliIntegrations = step.actionCapabilities.cliIntegrations ?? [];
-        if (
-          !step.actionCapabilities.usesIntegrationActions &&
-          step.actionCapabilities.sketchTools.length === 0 &&
-          cliIntegrations.length === 0
-        ) {
-          addIssue(
-            issues,
-            "ACTION_CAPABILITIES_REQUIRED",
-            `Action step "${step.label}" must declare a Sketch tool, CLI integration, or integration action capability`,
-            `steps.${step.id}.actionCapabilities`,
-          );
-        }
         const duplicateTools = [
           ...new Set(step.actionCapabilities.sketchTools.filter((tool, index, tools) => tools.indexOf(tool) !== index)),
         ];
@@ -761,11 +797,21 @@ export function validateAutomationBuilderSaveRequest(params: {
     issues,
   );
 
-  validateTriggerSchedule(
-    request,
-    request.steps.find((step) => step.type === "trigger"),
-    issues,
-  );
+  const trigger = request.steps.find((step) => step.type === "trigger");
+  const triggerConfig = trigger?.triggerConfig;
+  if (
+    triggerConfig?.type === "canvas" &&
+    (isClickUpValue(triggerConfig.app) || isClickUpValue(triggerConfig.componentKey))
+  ) {
+    addIssue(
+      issues,
+      "CANVAS_CLICKUP_TRIGGER_UNSUPPORTED",
+      "Canvas-managed ClickUp triggers are retired; use a managed ClickUp webhook plan or a schedule",
+      `steps.${trigger?.id ?? "trigger"}.triggerConfig`,
+    );
+  }
+
+  validateTriggerSchedule(request, trigger, issues);
   validateScheduleValue(request, issues, params.validateScheduleFuture ?? true);
 
   if (issues.length > 0) throw new AutomationValidationError(issues);

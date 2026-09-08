@@ -649,7 +649,7 @@ describe("CanvasProvider", () => {
     });
   });
 
-  it("executes a Canvas action through the configured REST endpoint", async () => {
+  it("executes an unrelated Canvas action through the configured REST endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { id: "task-1" } }), {
         status: 200,
@@ -662,7 +662,7 @@ describe("CanvasProvider", () => {
     await expect(
       provider.executeAction({
         userEmail: "priya@example.com",
-        componentKey: "clickup-create-task-with-attachment",
+        componentKey: "google-sheets-add-row",
         configuredProps: { name: "Bug report" },
       }),
     ).resolves.toEqual({ id: "task-1" });
@@ -676,12 +676,29 @@ describe("CanvasProvider", () => {
         "X-User-Email": "priya@example.com",
       },
       body: JSON.stringify({
-        componentKey: "clickup-create-task-with-attachment",
+        componentKey: "google-sheets-add-row",
         configuredProps: { name: "Bug report" },
       }),
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
+
+  it.each(["clickup-create-task", "click-up-create-task", "CLICK_UP_CREATE_TASK", "click up-create-task"])(
+    "rejects retired ClickUp Canvas action %s before network access",
+    async (componentKey) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new CanvasProvider("https://canvas.example.com", "sk-test", "provider-1");
+
+      await expect(
+        provider.executeAction({ userEmail: "priya@example.com", componentKey, configuredProps: {} }),
+      ).rejects.toMatchObject({ status: 409, code: "CLI_INTEGRATION" });
+      await expect(
+        provider.executeAction({ userEmail: "priya@example.com", componentKey, configuredProps: {} }),
+      ).rejects.toThrow(/managed ClickUp API/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("propagates caller cancellation to Canvas action requests", async () => {
     const fetchMock = vi.fn(
@@ -696,7 +713,7 @@ describe("CanvasProvider", () => {
     const request = provider.executeAction(
       {
         userEmail: "priya@example.com",
-        componentKey: "clickup-create-task",
+        componentKey: "google-sheets-add-row",
         configuredProps: {},
       },
       controller.signal,

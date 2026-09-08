@@ -10,6 +10,7 @@ import {
   WEBHOOK_EVENT_ID_MAX_LENGTH,
 } from "../automation/webhook-endpoints";
 import {
+  isWebhookEventAllowed,
   parseWebhookVerification,
   verifyWebhookRequest,
   webhookEventIdentity,
@@ -127,12 +128,16 @@ export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
       return errorResponse(c, "WEBHOOK_UNAVAILABLE", "Webhook endpoint is temporarily unavailable", 503);
     }
 
-    if (!endpoint || !isWebhookEndpointActive(endpoint.status)) {
+    if (!endpoint) {
       return errorResponse(c, "NOT_FOUND", "Webhook endpoint not found", 404);
     }
 
     const signed = endpoint.status === WEBHOOK_ENDPOINT_STATUS_SIGNED || hasSignedMetadata(endpoint);
-    if (signed && endpoint.status !== WEBHOOK_ENDPOINT_STATUS_SIGNED) {
+    const pendingSignedVerification = signed && endpoint.status === "pending";
+    if (!isWebhookEndpointActive(endpoint.status) && !pendingSignedVerification) {
+      return errorResponse(c, "NOT_FOUND", "Webhook endpoint not found", 404);
+    }
+    if (signed && endpoint.status !== WEBHOOK_ENDPOINT_STATUS_SIGNED && endpoint.status !== "pending") {
       return errorResponse(c, "WEBHOOK_VERIFICATION_UNAVAILABLE", "Webhook verification is unavailable", 503);
     }
 
@@ -199,6 +204,14 @@ export function automationWebhookRoutes(deps: AutomationWebhookRouteDeps) {
       const resourceId = data[verificationResult.verification.resourceIdField];
       if (resourceId !== verificationResult.sourceBinding.resourceId) {
         return errorResponse(c, "WEBHOOK_RESOURCE_MISMATCH", "Webhook resource is not bound to this endpoint", 400);
+      }
+      if (!isWebhookEventAllowed({ payload: data, sourceBinding: verificationResult.sourceBinding })) {
+        return errorResponse(
+          c,
+          "WEBHOOK_EVENT_UNSUBSCRIBED",
+          "The signed provider event is not part of this endpoint's admitted subscription",
+          400,
+        );
       }
       const identity = webhookEventIdentity(
         rawBody,
@@ -307,7 +320,8 @@ async function admitAndQueue(
       if (!taskUnchanged) return { kind: "state_changed" as const };
       if (
         params.signed &&
-        (currentEndpoint.status !== WEBHOOK_ENDPOINT_STATUS_SIGNED ||
+        ((currentEndpoint.status !== WEBHOOK_ENDPOINT_STATUS_SIGNED && currentEndpoint.status !== "pending") ||
+          (currentEndpoint.status === "pending" && currentTask.status !== "paused") ||
           (params.task.status === "paused" && currentTask.status === "active") ||
           currentTask.status === "completed")
       ) {

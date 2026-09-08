@@ -1,5 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { webhookSourceBindingSchema } from "@sketch/shared";
+import { clickupWebhookEventSchema, webhookSourceBindingSchema } from "@sketch/shared";
 import { z } from "zod";
 import { decrypt } from "../auth/encryption";
 
@@ -115,6 +115,26 @@ export function verifyWebhookRequest(
   }
 
   return { kind: "verified", verification, sourceBinding };
+}
+
+/**
+ * HMAC verification proves that ClickUp signed the request; it does not prove
+ * that the event was part of this automation's admitted subscription. Keep the
+ * provider event contract explicit and reject everything else before durable
+ * admission.
+ */
+export function isWebhookEventAllowed(params: {
+  payload: unknown;
+  sourceBinding: WebhookSourceBinding;
+}): boolean {
+  if (params.sourceBinding.integration !== "clickup") return true;
+  const subscription = params.sourceBinding.subscription;
+  if (!subscription || !isRecord(params.payload)) return false;
+  const event = params.payload.event;
+  if (!clickupWebhookEventSchema.safeParse(event).success) return false;
+  const eventName = event as string;
+  if (subscription.events.includes("*")) return true;
+  return subscription.events.includes(eventName);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
