@@ -14,7 +14,7 @@ import {
   listThreadFiles,
 } from "../../db/repositories/connectors";
 import type { DB } from "../../db/schema";
-import { contentPrincipalDeps } from "./entity-visibility";
+import { contentPrincipalDeps, viewerForPrincipals } from "./entity-visibility";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
 const EMAIL_SOURCES = new Set(["gmail", "outlook"]);
@@ -53,16 +53,6 @@ interface MessageOutput {
   url: string | null;
   content: string;
   contentTruncated: boolean;
-}
-
-function viewerForPrincipals(principals: AccessPrincipal[] | undefined, slackEntitySyncEnabled: boolean): FileViewer {
-  if (principals === undefined) return { email: null, emails: [], isAdmin: true, slackEntitySyncEnabled };
-  return {
-    email: null,
-    emails: principals.filter((principal) => principal.type === "email").map((principal) => principal.value),
-    isAdmin: false,
-    slackEntitySyncEnabled,
-  };
 }
 
 function notFound(): ToolResult {
