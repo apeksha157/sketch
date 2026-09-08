@@ -557,6 +557,15 @@ export interface Connector {
   readonly syncIsCompleteSnapshot?: boolean;
 
   /**
+   * Whether the connector row is provisioned automatically when its messaging
+   * channel is configured under Settings, rather than created through the
+   * connectors API. The Files page may sync such a connector but must not
+   * disconnect it or rotate its credentials: the channel owns that lifecycle,
+   * and a deleted row would just be re-provisioned on the next startup.
+   */
+  readonly channelProvisioned?: boolean;
+
+  /**
    * File types that should be promoted to entities during sync.
    * e.g. Linear returns ["project"] — synced Linear projects become entities.
    * Connectors that seed entities directly via onEntitySeed (e.g. Notion) leave this empty.
