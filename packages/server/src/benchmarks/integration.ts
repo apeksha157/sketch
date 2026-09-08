@@ -10,7 +10,7 @@ export async function executeIntegrationCase(params: {
   probe: ClickUpProbe;
   fixtures: Fixtures;
   request: OwnerRequest;
-  model: ReturnType<typeof createBenchmarkModel>;
+  model: Pick<ReturnType<typeof createBenchmarkModel>, "manifest" | "answer" | "generate">;
   signal: AbortSignal;
   save: () => Promise<void>;
   attachments: unknown[];

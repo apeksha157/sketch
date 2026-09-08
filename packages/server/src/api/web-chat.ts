@@ -51,7 +51,8 @@ import {
   type AutomationTaskConversationLockSummary,
   createAutomationTaskConversationService,
 } from "../automation/task-conversations";
-import { benchmarkReadEvidence } from "../benchmarks/tool-evidence";
+import { benchmarkExecutionProvider } from "../benchmarks/execution-binding";
+import { benchmarkReadEvidence, benchmarkToolFailed } from "../benchmarks/tool-evidence";
 import { TOOL_PROGRESS_OPTIONS, type ToolProgressCommand } from "../commands";
 import type { Config } from "../config";
 import { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -261,6 +262,18 @@ type AutomationBuilderContext = {
 } | null;
 
 type WebChatUiChunk =
+  | { type: "data-benchmark-tool"; data: { name: string; failed: boolean; at: string } }
+  | {
+      type: "data-benchmark-usage";
+      data: {
+        turns: number;
+        toolCalls: number;
+        inputTokens: number;
+        outputTokens: number;
+        costUsd: number;
+        stopReason: string | null;
+      };
+    }
   | { type: "data-benchmark-read"; data: { taskIds: string[] } }
   | { type: "start"; messageId: string; messageMetadata?: { createdAt: string } }
   | { type: "start-step" }
@@ -2712,6 +2725,20 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
       return c.json(badRequest("VALIDATION_ERROR", "Conversation id is invalid"), 400);
     }
 
+    const benchmarkContext = deps.config.BENCHMARKS_ENABLED
+      ? await deps.db
+          .selectFrom("benchmark_contexts")
+          .select("run_id")
+          .where("conversation_id", "=", conversationId)
+          .executeTakeFirst()
+      : undefined;
+    const benchmarkProvider = await benchmarkExecutionProvider({
+      db: deps.db,
+      enabled: deps.config.BENCHMARKS_ENABLED,
+      userId: currentUser.id,
+      conversationId,
+      loadProvider: deps.loadIntegrationProvider ?? (async () => null),
+    });
     const settingsRow = await deps.settings.get();
     const workspaceDir = await ensureWorkspace(deps.config, currentUser.id);
     let questionAnswer: WebChatQuestionAnswer | WebChatQuestionBatchAnswer | undefined;
@@ -3455,6 +3482,11 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
                 const evidence = benchmarkReadEvidence(event);
                 if (evidence) write({ type: "data-benchmark-read", data: evidence });
               }
+              if (benchmarkContext)
+                write({
+                  type: "data-benchmark-tool",
+                  data: { name: event.toolName, failed: benchmarkToolFailed(event), at: new Date().toISOString() },
+                });
               if (!activeBuilderContext) return;
               if (!event.isError) {
                 lastBuilderFailure = undefined;
@@ -3489,7 +3521,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             orgName: settingsRow?.org_name,
             botName: settingsRow?.bot_name,
             integrationMcpServers,
-            loadIntegrationProvider: deps.loadIntegrationProvider,
+            loadIntegrationProvider: benchmarkProvider,
             cliIntegrations: deps.cliIntegrations,
             agentEnv,
             scheduler: deps.scheduler,
@@ -3652,6 +3684,18 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           (fileParts.length === 0 && automationArtifacts.length === 0 && integrationCards.length === 0 && !questionPart
             ? EMPTY_WEB_CHAT_RESPONSE_TEXT
             : "");
+        if (benchmarkContext)
+          write({
+            type: "data-benchmark-usage",
+            data: {
+              turns: result.rawUsage.numTurns,
+              toolCalls: result.rawUsage.toolCalls.length,
+              inputTokens: result.rawUsage.inputTokens,
+              outputTokens: result.rawUsage.outputTokens,
+              costUsd: result.rawUsage.sdkCostUsd,
+              stopReason: result.rawUsage.stopReason,
+            },
+          });
         if (automationBuilderContext) {
           deps.logger.info(
             {

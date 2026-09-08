@@ -8,10 +8,13 @@ import { createUserRepository } from "../db/repositories/users";
 import { benchmarkSuites } from "./catalogue";
 import { BenchmarkBlockedError, hashBytes } from "./clickup";
 import { BENCHMARK_VERSION, type BenchmarkRun, batchSizeSchema, suiteIdSchema, summarize } from "./contracts";
+import { createBenchmarkEnvironment } from "./environment";
 import { createBenchmarkModel } from "./model";
 import { createBenchmarkRepository } from "./repository";
 import { type RunnerDeps, createBenchmarkRunner } from "./runner";
 import { createSetupLink } from "./setup";
+import { createBenchmarkWorkspaceRepository } from "./workspace-repository";
+import { benchmarkWorkspaceRoutes } from "./workspace-routes";
 
 export function benchmarkRoutes(
   deps: Pick<RunnerDeps, "db" | "config" | "provider"> & {
@@ -24,13 +27,16 @@ export function benchmarkRoutes(
   const users = createUserRepository(deps.db);
   const repository = createBenchmarkRepository(deps.db);
   const model = createBenchmarkModel(settings);
+  const environment = createBenchmarkEnvironment(deps.db, deps.provider);
+  const workspace = createBenchmarkWorkspaceRepository(deps.db);
   const runner = createBenchmarkRunner({
     ...deps,
     repository,
     model,
+    validateBinding: environment.validate,
     ownerRequest: async (enrollment) => {
       const current = await repository.enrollmentFor(enrollment.userId, enrollment.accountId);
-      if (!current || JSON.stringify(current) !== JSON.stringify(enrollment))
+      if (!enrollment.bindingFingerprint && (!current || JSON.stringify(current) !== JSON.stringify(enrollment)))
         throw new BenchmarkBlockedError("Benchmark enrollment changed.");
       const user = await users.findById(enrollment.userId);
       const row = await settings.get();
@@ -71,6 +77,18 @@ export function benchmarkRoutes(
       409,
     );
   });
+  routes.route(
+    "/",
+    benchmarkWorkspaceRoutes({
+      config: deps.config,
+      repository,
+      workspace,
+      environment,
+      model,
+      runner,
+      executionAvailable: deps.executionAvailable,
+    }),
+  );
   async function enrolled(profileId: string | undefined) {
     if (!profileId) throw new BenchmarkBlockedError("Select a test profile for this batch.");
     const enrollment = await repository.enrollmentById(z.string().uuid().parse(profileId));
