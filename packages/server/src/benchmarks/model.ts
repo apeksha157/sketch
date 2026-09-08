@@ -15,6 +15,7 @@ interface GenerateTextInput {
   abortSignal: AbortSignal;
   output?: ReturnType<typeof Output.object>;
   include?: { requestBody: false; requestMessages: false; responseBody: false };
+  providerOptions?: Parameters<typeof generateText>[0]["providerOptions"];
 }
 
 interface GenerateTextResultLike {
@@ -24,8 +25,21 @@ interface GenerateTextResultLike {
 
 type GenerateTextLike = (input: GenerateTextInput) => Promise<GenerateTextResultLike>;
 
-const designResponseSchema = z
-  .object({ message: z.string().trim().min(1).max(6000), cases: z.array(caseInputSchema).max(12) })
+const modelCaseSchema = z
+  .object({
+    ...caseInputSchema.shape,
+    facts: caseInputSchema.shape.facts.unwrap(),
+    tags: caseInputSchema.shape.tags.unwrap(),
+    selection: caseInputSchema.shape.selection.unwrap(),
+    openCount: caseInputSchema.shape.openCount.unwrap(),
+    closedCount: caseInputSchema.shape.closedCount.unwrap(),
+    expectedText: caseInputSchema.shape.expectedText.unwrap(),
+    webhookFamily: caseInputSchema.shape.webhookFamily.unwrap().nullable(),
+  })
+  .strict();
+
+const modelDesignResponseSchema = z
+  .object({ message: z.string().trim().min(1).max(6000), cases: z.array(modelCaseSchema).max(12) })
   .strict();
 
 export function createBenchmarkModel(
@@ -98,15 +112,24 @@ export function createBenchmarkModel(
             .slice(0, 8)
             .map(({ id, revision, source, updatedAt, ...input }) => input),
         }),
-        output: Output.object({ schema: designResponseSchema }),
+        output: Output.object({ schema: modelDesignResponseSchema }),
         maxOutputTokens: 8000,
         maxRetries: 0,
         abortSignal: AbortSignal.any([signal, AbortSignal.timeout(90_000)]),
         include: { requestBody: false, requestMessages: false, responseBody: false },
+        ...(provider.provider === "openrouter"
+          ? { providerOptions: { openrouter: { reasoning: { effort: "low" } } } }
+          : {}),
       });
       if ((await manifest()).fingerprint !== expected.fingerprint)
         throw new Error("Sketch model settings changed during the benchmark.");
-      const parsed = designResponseSchema.parse(result.output);
+      const generated = modelDesignResponseSchema.parse(result.output);
+      const parsed = {
+        message: generated.message,
+        cases: generated.cases.map(({ webhookFamily, ...input }) =>
+          caseInputSchema.parse({ ...input, ...(webhookFamily ? { webhookFamily } : {}) }),
+        ),
+      };
       if (parsed.cases.some((entry) => entry.integration !== conversation.integration))
         throw new Error("The designer returned cases for a different integration. Ask it to revise the proposal.");
       return parsed;
