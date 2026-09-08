@@ -333,6 +333,42 @@ describe.each(["github", "linear"] as const)("IntegrationsSection %s", (appId) =
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("allows explicitly saving an already-private account with no member grants", async () => {
+    const user = userEvent.setup();
+    let requestBody: unknown;
+    server.use(
+      http.patch("/api/mcp-servers/provider-1/connections/:connectionId/access", async ({ request }) => {
+        requestBody = await request.json();
+        return HttpResponse.json({ success: true, connection: null });
+      }),
+    );
+    renderSection([
+      {
+        ...baseConnection,
+        id: "private-account",
+        source: "canvas_user_secrets",
+        isOwnedByViewer: true,
+        canManageAccess: true,
+        accessLevel: "personal",
+        visibility: "private",
+        memberUserIds: [],
+        accessRevision: 4,
+      },
+    ]);
+    await user.click(screen.getByRole("button", { name: `Open settings for ${appName}` }));
+    const saveButton = screen.getByRole("button", { name: "Save access" });
+    expect(saveButton).toBeEnabled();
+    await user.click(saveButton);
+    await waitFor(() => {
+      expect(requestBody).toEqual({
+        accessLevel: "personal",
+        expectedRevision: 4,
+        visibility: "private",
+        granteeUserIds: [],
+      });
+    });
+  });
+
   it("loads saved selections, searches by email, and distinguishes empty search results", async () => {
     const user = userEvent.setup();
     server.use(

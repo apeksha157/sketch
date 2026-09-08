@@ -407,7 +407,11 @@ export class TaskScheduler {
       task,
       ...(runId ? { runId } : {}),
       ...(runMode !== "production" ? { runMode } : {}),
-      triggerData: trigger?.provided ? trigger.data : { scheduledAt: new Date().toISOString(), taskId: task.id },
+      triggerData: trigger?.provided
+        ? trigger.data
+        : runMode === "test"
+          ? { type: "test" }
+          : { scheduledAt: new Date().toISOString(), taskId: task.id },
       db: this.deps.db,
       logger,
       config,

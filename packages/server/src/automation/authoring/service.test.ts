@@ -236,6 +236,17 @@ describe("automation authoring service", () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
+  it("sends an explicitly requested ClickUp event through the normal authoring path", async () => {
+    const { service, generate } = createHarness([{ kind: "definition", definition: validAuthoringDefinition }]);
+
+    await expect(
+      service.create(createRequest("When a ClickUp task is created, summarize it in Slack")),
+    ).resolves.toMatchObject({ kind: "definition" });
+    expect(generate).toHaveBeenCalledOnce();
+    expect(generate.mock.calls[0]?.[0].instructions).toContain("tool-capable builder");
+    expect(generate.mock.calls[0]?.[0].instructions).toContain("trusted local file paths");
+  });
+
   it("rejects a nonexistent Gmail event trigger even when the request explicitly chooses polling", async () => {
     const { service, generate } = createHarness([
       { kind: "definition", definition: gmailCanvasTriggerDefinition() },

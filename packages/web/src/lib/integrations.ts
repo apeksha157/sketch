@@ -22,6 +22,7 @@ export type IntegrationType =
   | "otter"
   | "linkedin_aimfox"
   | "zoho_crm"
+  | "slack"
   | "whatsapp";
 
 export type AuthFieldType = "text" | "password" | "textarea" | "file";
@@ -150,6 +151,12 @@ export interface IntegrationDefinition {
   perUserAuth: boolean;
   /** true = admin must populate provider Client ID/Secret in settings before any user can authorize. */
   requiresOAuthClientSetup: boolean;
+  /**
+   * Provisioned automatically once the matching messaging channel is configured
+   * under Channels. The Files page can sync it but never connects, disconnects,
+   * or re-credentials it, and hides it until the channel is set up.
+   */
+  channelProvisioned?: boolean;
   /** OAuth-redirect connectors that pick a data center / region before authorizing. */
   regionOptions?: { value: string; label: string }[];
   /** Scope config key that holds `settingsFields` (for example `enrichment`). */
@@ -597,6 +604,23 @@ export const INTEGRATIONS: IntegrationDefinition[] = [
     ],
     perUserAuth: false,
     requiresOAuthClientSetup: false,
+  },
+  {
+    type: "slack",
+    name: "Slack",
+    description: "Channels Sketch has joined are indexed automatically",
+    category: "Communication",
+    color: "#4A154B",
+    authType: "system",
+    authFields: [],
+    scopeLabel: "channels",
+    scopeType: "none",
+    itemNoun: "slices",
+    credentialUrl: "",
+    connectSteps: ["Connect the Slack bot under Channels, then invite Sketch to the channels it should index."],
+    perUserAuth: false,
+    requiresOAuthClientSetup: false,
+    channelProvisioned: true,
   },
   {
     type: "whatsapp",

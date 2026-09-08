@@ -541,9 +541,16 @@ export function connectorRoutes(
     };
   }
 
+  /**
+   * Channel-provisioned connectors (Slack) keep every manage permission except
+   * disconnect and credential rotation: those belong to the channel settings,
+   * and deleting the row from here would drop every indexed file only for the
+   * next startup to provision an empty replacement.
+   */
   function permissionsForConfig(c: Context, config: ConfigForPermissions) {
     const meta = getConnector(config.connector_type as ConnectorType);
-    const permissions = connectorPermissions(c, config, meta.perUserAuth);
+    const base = connectorPermissions(c, config, meta.perUserAuth);
+    const permissions = meta.channelProvisioned ? { ...base, canDisconnect: false, canUpdateCredentials: false } : base;
     return { meta, permissions };
   }
 

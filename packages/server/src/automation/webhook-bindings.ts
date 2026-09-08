@@ -26,7 +26,7 @@ export class WebhookBindingError extends Error {
 
 export class WebhookNotReadyError extends WebhookBindingError {
   constructor() {
-    super("Complete or reconcile the signed webhook through its provider API before activating this automation.");
+    super("Complete or reconcile the signed webhook registration before activating this automation.");
     this.name = "WebhookNotReadyError";
   }
 }
@@ -55,29 +55,34 @@ export async function assertWebhookEndpointReady(
     scheduleValue: task.schedule_value,
   });
   if (!trigger || !isAutomationWebhookTrigger(trigger)) return;
-  const endpoint = await db
-    .selectFrom("webhook_endpoints")
-    .selectAll()
-    .where("task_id", "=", taskId)
-    .executeTakeFirst();
-  if (
-    !endpoint ||
-    (endpoint.verification_json === null &&
+  const endpoints = await db.selectFrom("webhook_endpoints").selectAll().where("task_id", "=", taskId).execute();
+  const intended = endpoints.filter(
+    (endpoint) =>
+      (endpoints.length === 1 && endpoint.slot === "default") ||
+      endpoint.status !== "revoked" ||
+      endpoint.source_binding !== null,
+  );
+  if (intended.length === 0) throw new WebhookNotReadyError();
+  for (const endpoint of intended) {
+    if (
+      intended.length === 1 &&
+      endpoint.slot === "default" &&
+      endpoint.verification_json === null &&
       endpoint.source_binding === null &&
       endpoint.signing_secret_encrypted === null &&
-      (endpoint.status === "active" || endpoint.status === "revoked"))
-  )
-    return;
-  if (
-    endpoint.status !== "active_signed" ||
-    !isWebhookVerificationReady({
-      verificationJson: endpoint.verification_json,
-      signingSecretEncrypted: endpoint.signing_secret_encrypted,
-      sourceBinding: endpoint.source_binding,
-      encryptionKey,
-    })
-  ) {
-    throw new WebhookNotReadyError();
+      (endpoint.status === "active" || endpoint.status === "revoked")
+    )
+      continue;
+    if (
+      endpoint.status !== "active_signed" ||
+      !isWebhookVerificationReady({
+        verificationJson: endpoint.verification_json,
+        signingSecretEncrypted: endpoint.signing_secret_encrypted,
+        sourceBinding: endpoint.source_binding,
+        encryptionKey,
+      })
+    )
+      throw new WebhookNotReadyError();
   }
 }
 

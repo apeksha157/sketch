@@ -264,7 +264,7 @@ async function buildTaskListItems(
   const runsRepo = createAutomationRunsRepository(db);
   const webhookEndpoints = createWebhookEndpointRepository(db, options.encryptionKey);
   const endpointEntries = await Promise.all(
-    rows.map(async (row) => [row.id, await webhookEndpoints.getByTaskId(row.id)] as const),
+    rows.map(async (row) => [row.id, await webhookEndpoints.listByTaskId(row.id)] as const),
   );
   const endpointByTaskId = new Map(endpointEntries);
 
@@ -372,7 +372,8 @@ async function buildTaskListItems(
         stepCount = JSON.parse(normalizedSteps).length;
       } catch {}
     }
-    const endpoint = endpointByTaskId.get(row.id);
+    const endpointRows = endpointByTaskId.get(row.id) ?? [];
+    const endpoint = endpointRows.find((row) => row.slot === "default");
     const triggerConfig = parseTriggerConfig(normalizedSteps ?? null, {
       scheduleType: row.schedule_type,
       scheduleValue: row.schedule_value,
@@ -380,6 +381,7 @@ async function buildTaskListItems(
     const metadataTriggerConfig = triggerConfig
       ? addWebhookEndpointMetadata(triggerConfig, row.id, {
           endpoint,
+          endpoints: endpointRows.map((endpoint) => ({ endpoint })),
           baseUrl: options.baseUrl,
           port: options.port,
         })
@@ -715,15 +717,21 @@ export function scheduledTaskRoutes(
   ) {
     const stepContentRepo = createAutomationStepContentRepository(db);
     const runsRepo = createAutomationRunsRepository(db);
-    const [stepContentRows, runRows, owner, editor, webhookEndpoint, lockRow, webhookLastDelivery] = await Promise.all([
+    const [stepContentRows, runRows, owner, editor, endpointRows, lockRow] = await Promise.all([
       stepContentRepo.getByTask(row.id),
       runsRepo.list(row.id),
       row.created_by ? users.findById(row.created_by) : Promise.resolve(undefined),
       row.last_edited_by ? users.findById(row.last_edited_by) : Promise.resolve(undefined),
-      createWebhookEndpointRepository(db, options.encryptionKey).getByTaskId(row.id),
+      createWebhookEndpointRepository(db, options.encryptionKey).listByTaskId(row.id),
       createAutomationLocksRepository(db).getByTaskId(row.id),
-      lastWebhookDeliveryMetadata(db, row.id),
     ]);
+    const webhookEndpoints = await Promise.all(
+      endpointRows.map(async (endpoint) => ({
+        endpoint,
+        lastDelivery: await lastWebhookDeliveryMetadata(db, row.id, endpoint.id),
+      })),
+    );
+    const primary = webhookEndpoints.find((value) => value.endpoint.slot === "default");
     const definition = await buildAutomationDefinition({
       row,
       stepContentRows,
@@ -732,8 +740,9 @@ export function scheduledTaskRoutes(
       lastEditedByName: editor?.name ?? null,
       webhookBaseUrl: options.baseUrl,
       webhookPort: options.port,
-      webhookEndpoint,
-      webhookLastDelivery,
+      webhookEndpoint: primary?.endpoint,
+      webhookLastDelivery: primary?.lastDelivery,
+      webhookEndpoints,
     });
     const isOwner = viewer.userId !== null && row.created_by === viewer.userId;
     const isAdmin = viewer.role === "admin";

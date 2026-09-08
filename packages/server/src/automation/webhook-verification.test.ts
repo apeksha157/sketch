@@ -1,7 +1,12 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { encrypt } from "../auth/encryption";
-import { parseWebhookVerification, verifyWebhookRequest, webhookEventIdentity } from "./webhook-verification";
+import {
+  isWebhookEventAllowed,
+  parseWebhookVerification,
+  verifyWebhookRequest,
+  webhookEventIdentity,
+} from "./webhook-verification";
 
 const ENCRYPTION_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const SECRET = "clickup-signing-secret";
@@ -18,6 +23,15 @@ const BINDING = JSON.stringify({
   callbackUrl: "https://sketch.example/api/webhooks/v1/endpoint-1",
   resourceId: "resource-1",
 });
+
+const CLICKUP_BINDING = {
+  integration: "clickup" as const,
+  accountId: "account-1",
+  collectionPath: "/team/team-1/webhook",
+  callbackUrl: "https://sketch.example/api/webhooks/v1/endpoint-1",
+  resourceId: "resource-1",
+  subscription: { events: ["taskCreated"], scope: { field: "list_id", id: "123" } },
+};
 
 describe("webhook verification", () => {
   it("parses the bounded top-level descriptor and rejects code-like field paths", () => {
@@ -120,5 +134,27 @@ describe("webhook verification", () => {
     expect(whitespaceRetry.payloadHash).not.toEqual(first.payloadHash);
     expect(otherEvent.eventId).not.toBe(first.eventId);
     expect(first.eventId).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("admits only the registered ClickUp event while accepting future names through the explicit contract", () => {
+    expect(isWebhookEventAllowed({ payload: { event: "taskCreated" }, sourceBinding: CLICKUP_BINDING })).toBe(true);
+    expect(isWebhookEventAllowed({ payload: { event: "taskStatusUpdated" }, sourceBinding: CLICKUP_BINDING })).toBe(
+      false,
+    );
+    expect(isWebhookEventAllowed({ payload: { event: "taskCommentPosted" }, sourceBinding: CLICKUP_BINDING })).toBe(
+      false,
+    );
+    expect(
+      isWebhookEventAllowed({
+        payload: { event: "futureProviderEvent" },
+        sourceBinding: { ...CLICKUP_BINDING, subscription: { events: ["futureProviderEvent"], scope: null } },
+      }),
+    ).toBe(true);
+    expect(
+      isWebhookEventAllowed({
+        payload: { event: "futureProviderEvent" },
+        sourceBinding: { ...CLICKUP_BINDING, subscription: { events: ["*"], scope: null } },
+      }),
+    ).toBe(true);
   });
 });

@@ -1606,7 +1606,7 @@ describe("AutomationBuilderPage", () => {
 
     await user.click(await screen.findByRole("button", { name: "Sketch webhook" }));
 
-    expect(await screen.findByDisplayValue("webhook")).toBeInTheDocument();
+    expect(await screen.findByTestId("native-webhook-details")).toHaveTextContent("Incoming events");
     expect(screen.queryByTestId("canvas-trigger-details")).not.toBeInTheDocument();
   });
 
@@ -1630,6 +1630,16 @@ describe("AutomationBuilderPage", () => {
             webhookContentType: "application/json",
             webhookAuthentication: "none",
             webhookStatus: "active",
+            webhookEndpoints: [
+              {
+                slot: "default",
+                endpointId: "endpoint-123",
+                url: "https://sketch.example/api/webhooks/v1/endpoint-123",
+                status: "active",
+                authentication: "none",
+                generation: 1,
+              },
+            ],
           } as WorkflowTriggerConfig,
         },
         ...automation.steps.slice(1),
@@ -1640,21 +1650,89 @@ describe("AutomationBuilderPage", () => {
     await user.click(await screen.findByRole("button", { name: "Sketch webhook" }));
 
     const panel = await screen.findByTestId("native-webhook-details");
-    expect(panel).toHaveTextContent("Active");
-    expect(panel).toHaveTextContent(
-      "Send POST requests with JSON to the canonical URL above; no authentication is required.",
-    );
-    expect(screen.getByDisplayValue("POST")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("application/json")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("None required")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("Any JSON value")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Ready");
+    expect(panel).toHaveTextContent("Incoming events will start this automation automatically.");
+    expect(screen.queryByText("Authentication")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Connection details" }));
+    expect(panel).toHaveTextContent("POST · application/json");
+    expect(panel).toHaveTextContent("None required");
+    expect(panel).toHaveTextContent("Incoming webhook");
+    expect(panel).not.toHaveTextContent("Unconfigured source");
+    expect(panel).toHaveTextContent("Any JSON value");
     expect(panel).not.toHaveTextContent("HMAC");
     expect(panel).not.toHaveTextContent("Bearer");
     expect(screen.queryByRole("button", { name: "Generate secret" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Revoke endpoint" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Copy canonical Sketch webhook URL" }));
+    await user.click(screen.getByRole("button", { name: "Copy webhook URL" }));
     expect(writeText).toHaveBeenCalledWith("https://sketch.example/api/webhooks/v1/endpoint-123");
+  });
+
+  it.each([false, true])("keeps scoped subscription details collapsed with allReady=%s", async (allReady) => {
+    const user = userEvent.setup();
+    mocks.getAutomation.mockResolvedValue({
+      ...automation,
+      status: "paused",
+      scheduleType: "external",
+      scheduleValue: "webhook",
+      steps: [
+        {
+          ...automation.steps[0],
+          label: "Scoped ClickUp events",
+          triggerConfig: {
+            type: "webhook",
+            webhookUrl: "https://sketch.example/api/webhooks/v1/first",
+            webhookEndpointId: "first",
+            webhookAuthentication: "hmac_sha256",
+            webhookStatus: "active",
+            webhookEndpoints: ["default", "list-second"].map((slot, index) => ({
+              slot,
+              endpointId: String(index),
+              url: `https://sketch.example/api/webhooks/v1/${index}`,
+              status: allReady || index === 0 ? "active" : "unavailable",
+              authentication: "hmac_sha256",
+              generation: 1,
+              binding: {
+                integration: "clickup",
+                accountId: "account",
+                workspaceId: "workspace",
+                collectionPath: "/team/workspace/webhook",
+                resourceId: `remote-${index}`,
+                callbackUrl: `https://sketch.example/api/webhooks/v1/${index}`,
+                subscription: { events: ["taskCreated"], scope: { field: "list_id", id: `list-${index}` } },
+              },
+            })),
+          } as WorkflowTriggerConfig,
+        },
+        ...automation.steps.slice(1),
+      ],
+    });
+    renderBuilder();
+    await user.click(await screen.findByRole("button", { name: "Scoped ClickUp events" }));
+    const panel = await screen.findByTestId("native-webhook-details");
+    expect(panel).toHaveTextContent("ClickUp events");
+    expect(panel).toHaveTextContent("2 lists · Task created");
+    expect(panel).toHaveTextContent(allReady ? "Ready" : "Needs setup");
+    expect(panel).toHaveTextContent(
+      allReady
+        ? "The trigger is ready. Resume the automation when you want it to run."
+        : "1 of 2 sources are connected. Ask Sketch in the automation chat to finish setup.",
+    );
+    expect(screen.queryByLabelText("Webhook subscriptions")).not.toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("list-second");
+    expect(panel).not.toHaveTextContent("HMAC");
+    expect(screen.queryByRole("button", { name: "Copy webhook URL" })).not.toBeInTheDocument();
+    const details = screen.getByRole("button", { name: "Connection details" });
+    expect(details).toHaveAttribute("aria-expanded", "false");
+    await user.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    expect(panel).toHaveTextContent("list-second");
+    expect(panel).toHaveTextContent("list: list-1");
+    expect(panel).toHaveTextContent("No events received yet");
+    expect(panel).toHaveTextContent("HMAC-SHA256 provider signature");
+    expect(panel).not.toHaveTextContent("None required");
+    await user.click(details);
+    expect(screen.queryByLabelText("Webhook subscriptions")).not.toBeInTheDocument();
   });
 
   it("shows setup pending when the native webhook endpoint is unavailable", async () => {
@@ -1677,9 +1755,10 @@ describe("AutomationBuilderPage", () => {
     await user.click(await screen.findByRole("button", { name: "Sketch webhook" }));
 
     const panel = await screen.findByTestId("native-webhook-details");
-    expect(panel).toHaveTextContent("Setup pending");
-    expect(panel).toHaveTextContent("Sketch is still setting up this trigger");
-    expect(screen.getByDisplayValue("Webhook endpoint is not available yet")).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Needs setup");
+    expect(panel).toHaveTextContent("Ask Sketch in the automation chat to finish connecting this trigger.");
+    await user.click(screen.getByRole("button", { name: "Connection details" }));
+    expect(screen.getByDisplayValue("Available after setup")).toBeInTheDocument();
   });
 
   it("opens the selected associated chat and sends the active automation id", async () => {

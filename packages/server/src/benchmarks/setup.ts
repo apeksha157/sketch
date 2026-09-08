@@ -8,6 +8,7 @@ import type { DB } from "../db/schema";
 import type { IntegrationProvider } from "../integrations/types";
 import { BenchmarkBlockedError, createClickUpProbe } from "./clickup";
 import { enrollmentSchema } from "./contracts";
+import { createBenchmarkEnvironment } from "./environment";
 import { createBenchmarkRepository } from "./repository";
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -48,6 +49,12 @@ export function benchmarkSetupRoutes(deps: {
       400,
     ),
   );
+  routes.post("/identity", async (c) => {
+    z.object({})
+      .strict()
+      .parse(await c.req.json());
+    return c.json(await createBenchmarkEnvironment(deps.db, deps.provider).establishIdentity(c.get("sub")));
+  });
   async function context(userId: string, token: string) {
     tokenSchema.parse(token);
     const grant = await deps.db
@@ -72,8 +79,7 @@ export function benchmarkSetupRoutes(deps: {
           (connection) =>
             ["clickup", "clickup/clickup"].includes(connection.appId) &&
             connection.status === "active" &&
-            connection.canUse !== false &&
-            connection.isOwnedByViewer !== false,
+            connection.canUse !== false,
         )
       : [];
     return { provider, accounts };
@@ -84,10 +90,17 @@ export function benchmarkSetupRoutes(deps: {
       .strict()
       .parse(await c.req.json());
     const user = await context(c.get("sub"), token);
-    const { accounts } = await connections(user).catch(() => ({ accounts: [] }));
+    const result = await connections(user)
+      .then((value) => ({ ...value, connectionError: undefined as string | undefined }))
+      .catch(() => ({
+        accounts: [],
+        connectionError:
+          "Connections could not be checked. Try again when the integration provider is available. Core setup is still available.",
+      }));
     return c.json({
       owner: { name: user.name, email: user.email },
-      connections: accounts.map((account) => ({ id: account.id, name: account.accountName ?? account.appName })),
+      connections: result.accounts.map((account) => ({ id: account.id, name: account.accountName ?? account.appName })),
+      connectionError: result.connectionError,
       connectUrl: "/integrations?connect=clickup",
     });
   });

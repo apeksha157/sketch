@@ -54,7 +54,7 @@ export async function executeCoreCase(params: {
   const workspace = await ensureWorkspace(deps.config, enrollment.userId);
   const filename = `benchmark-${randomUUID()}.${item.scenario.family === "core_csv" ? "csv" : "txt"}`;
   const file = resolve(workspace, filename);
-  const expected = coreContent[item.scenario.family];
+  const expected = item.scenario.definition?.expectedText ?? coreContent[item.scenario.family];
   if (!expected) throw new BenchmarkBlockedError("This core workflow has no independent verifier.");
   if (await stat(file).catch(() => null))
     throw new BenchmarkBlockedError("A fixture filename unexpectedly already exists.");
@@ -66,8 +66,9 @@ export async function executeCoreCase(params: {
     item,
     model: deps.model,
     manifest: run.model,
-    prompt: item.scenario.prompt.replaceAll("{file}", filename),
+    prompt: item.scenario.prompt.replaceAll("{file}", filename).replaceAll("{output}", filename),
     facts: [
+      ...(item.scenario.definition?.facts ?? []),
       "Enable it when ready.",
       "Use my normal timezone.",
       "Save the file in my workspace.",
@@ -194,5 +195,5 @@ export async function executeCoreCase(params: {
     resumed.length > 0 && (await fileMatches()),
     `Observed ${resumed.length} new successful scheduled executions after resuming, with the correct file recreated.`,
   );
-  item.verdict = verdictFor(item.scenario.family, item.assertions);
+  item.verdict = verdictFor(item.scenario.definition ? "core_note" : item.scenario.family, item.assertions);
 }

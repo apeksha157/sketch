@@ -1,104 +1,66 @@
+import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
-import { runEnrichment } from "./enrichment";
 import { startSyncScheduler } from "./sync";
 
-const mockConnectorSync = vi.fn();
+describe("startSyncScheduler enrichment cadence", () => {
+  let db: Kysely<DB>;
 
-vi.mock("./registry", () => ({
-  getConnector: vi.fn(() => ({
-    type: "google_drive",
-    promotableFileTypes: ["project"],
-    sync: (...args: unknown[]) => mockConnectorSync(...args),
-    getCursor: vi.fn().mockResolvedValue("cursor-v2"),
-    validateCredentials: vi.fn().mockResolvedValue(undefined),
-  })),
-}));
-
-describe("startSyncScheduler overlap guard", () => {
-  let db: Kysely<DB> | null = null;
-  const logger = createTestLogger();
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    db = await createTestDb();
+  });
 
   afterEach(async () => {
     vi.useRealTimers();
-    mockConnectorSync.mockReset();
-    if (db) {
-      await db.destroy();
-      db = null;
-    }
+    await db.destroy();
   });
 
-  it("runs scheduled sync while enrichment is active", async () => {
-    vi.useFakeTimers();
-    db = await createTestDb();
-
+  it("runs an enrichment slice on its own timer without waiting for a sync tick", async () => {
+    const fileId = randomUUID();
     await db
       .insertInto("connector_configs")
       .values({
-        id: "slow-sync",
+        id: "conn-1",
         connector_type: "google_drive",
-        auth_type: "api_key",
-        credentials: JSON.stringify({ type: "api_key", api_key: "test" }),
-        scope_config: "{}",
-        sync_status: "active",
-        last_synced_at: null,
+        auth_type: "oauth",
+        credentials: "{}",
         created_by: "admin",
       })
       .execute();
     await db
       .insertInto("indexed_files")
       .values({
-        id: "active-enrichment-file",
-        connector_config_id: "slow-sync",
-        provider_file_id: "active-enrichment-file",
-        file_name: "active.txt",
+        id: fileId,
+        connector_config_id: "conn-1",
+        provider_file_id: fileId,
+        file_name: "test.txt",
         file_type: "text",
         content_category: "document",
         source: "google_drive",
-        source_path: "/active.txt",
+        source_path: "My Drive",
         provider_url: null,
-        content: "Alpha beta gamma delta epsilon.",
-        content_hash: "active-hash",
+        content: "some content here",
+        summary: null,
+        context_note: null,
+        access_scope_id: null,
         source_updated_at: new Date().toISOString(),
         synced_at: new Date().toISOString(),
         embedding_status: "pending",
-        summary_status: "pending",
       })
       .execute();
 
-    async function* emptySync() {}
-    mockConnectorSync.mockReturnValue(emptySync());
+    const handle = startSyncScheduler(db, createTestLogger(), 60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 1000);
+    await handle.stop();
 
-    let releaseEmbedding: (() => void) | undefined;
-    const activeRun = runEnrichment({
-      db,
-      logger,
-      embeddingProvider: {
-        name: "test",
-        dimensions: 3,
-        supportsImages: false,
-        embedTexts: async (texts) =>
-          new Promise<number[][]>((resolve) => {
-            releaseEmbedding = () => resolve(texts.map(() => [0, 0, 0]));
-          }),
-      },
-      maxFilesPerRun: 1,
-    });
-    await vi.waitFor(() => expect(releaseEmbedding).toBeTypeOf("function"));
-
-    const handle = startSyncScheduler(db, logger, 5 * 60 * 1000);
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-      await vi.waitFor(() => expect(mockConnectorSync).toHaveBeenCalledTimes(1));
-
-      releaseEmbedding?.();
-      await vi.advanceTimersByTimeAsync(0);
-      await activeRun;
-    } finally {
-      await handle.stop();
-    }
+    const row = await db
+      .selectFrom("indexed_files")
+      .select("embedding_status")
+      .where("id", "=", fileId)
+      .executeTakeFirstOrThrow();
+    expect(row.embedding_status).toBe("done");
   });
 });

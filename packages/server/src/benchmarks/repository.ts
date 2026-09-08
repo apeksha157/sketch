@@ -100,11 +100,70 @@ export function createBenchmarkRepository(db: Kysely<DB>) {
         cancelRequested: row.cancel_requested === 1,
       }));
     },
+    async getAny(id: string): Promise<BenchmarkRun | null> {
+      const row = await db.selectFrom("benchmark_runs").selectAll().where("id", "=", id).executeTakeFirst();
+      return row
+        ? { ...JSON.parse(row.document_json), status: row.status, cancelRequested: row.cancel_requested === 1 }
+        : null;
+    },
+    async listAll(
+      cursor?: { createdAt: string; id: string },
+      limit = 30,
+      filters: { integration?: string; status?: string; q?: string } = {},
+    ) {
+      let query = db.selectFrom("benchmark_runs").selectAll();
+      if (filters.status) query = query.where("status", "=", filters.status);
+      if (filters.q)
+        query = query.where(
+          sql<boolean>`document_json LIKE ${`%${filters.q.replace(/[\\%_]/g, "\\$&")}%`} ESCAPE ${"\\"}`,
+        );
+      if (filters.integration) {
+        const match = `%"integration":"${filters.integration}"%`;
+        query = query.where((eb) =>
+          eb.or([
+            eb("document_json", "like", match),
+            ...(filters.integration === "none" ? [eb("document_json", "like", '%"suiteId":"automation_core"%')] : []),
+            ...(filters.integration === "clickup"
+              ? [
+                  eb.and([
+                    eb("document_json", "not like", '%"workspaceVersion"%'),
+                    eb("document_json", "not like", '%"suiteId":"automation_core"%'),
+                  ]),
+                ]
+              : []),
+          ]),
+        );
+      }
+      if (cursor)
+        query = query.where((eb) =>
+          eb.or([
+            eb("created_at", "<", cursor.createdAt),
+            eb.and([eb("created_at", "=", cursor.createdAt), eb("id", "<", cursor.id)]),
+          ]),
+        );
+      const rows = await query
+        .orderBy("created_at", "desc")
+        .orderBy("id", "desc")
+        .limit(limit + 1)
+        .execute();
+      const visible = rows.slice(0, limit);
+      const last = visible.at(-1);
+      return {
+        runs: visible.map(
+          (row): BenchmarkRun => ({
+            ...JSON.parse(row.document_json),
+            status: row.status,
+            cancelRequested: row.cancel_requested === 1,
+          }),
+        ),
+        nextCursor: rows.length > limit && last ? { createdAt: last.created_at, id: last.id } : null,
+      };
+    },
     async claim(id: string, enrollmentId: string): Promise<string> {
       return db.transaction().execute(async (trx) => {
         const profile = await trx
           .selectFrom("benchmark_enrollments")
-          .select("user_id")
+          .select(["user_id", "active_run_id"])
           .where("id", "=", enrollmentId)
           .executeTakeFirstOrThrow();
         if (!profile.user_id) throw new Error("The enrolled user was removed.");
@@ -114,20 +173,68 @@ export function createBenchmarkRepository(db: Kysely<DB>) {
           .where("id", "=", profile.user_id)
           .executeTakeFirst();
         if (!Number(owner.numUpdatedRows)) throw new Error("The enrolled user was removed.");
-        if (
+        const requestedRow = await trx
+          .selectFrom("benchmark_runs")
+          .select("document_json")
+          .where("id", "=", id)
+          .where("enrollment_id", "=", enrollmentId)
+          .executeTakeFirstOrThrow();
+        const requested: BenchmarkRun = JSON.parse(requestedRow.document_json);
+        if (requested.workspaceVersion) {
+          const unsettled = await trx
+            .selectFrom("benchmark_runs as r")
+            .innerJoin("benchmark_enrollments as e", "e.id", "r.enrollment_id")
+            .select(["r.id", "r.status", "r.document_json"])
+            .where("e.user_id", "=", profile.user_id)
+            .where("r.id", "!=", id)
+            .where((eb) =>
+              eb.or([
+                eb("r.status", "=", "running"),
+                eb("r.status", "=", "interrupted"),
+                eb("r.document_json", "like", '%"cleanup":"needs_attention"%'),
+              ]),
+            )
+            .execute();
+          for (const other of unsettled) {
+            if (other.status === "running")
+              throw new Error("The shared identity already has a running batch. Wait for it to finish or stop it.");
+            const previous: BenchmarkRun = JSON.parse(other.document_json);
+            const debt = previous.cases.filter(
+              (item) =>
+                item.cleanup !== "complete" &&
+                item.resources.some((resource) => resource.state !== "deleted" && resource.state !== "retained"),
+            );
+            if (
+              !previous.workspaceVersion ||
+              debt.some(
+                (item) =>
+                  !item.enrollment ||
+                  requested.cases.some(
+                    (candidate) =>
+                      candidate.enrollment?.integration === item.enrollment?.integration &&
+                      candidate.enrollment?.accountId === item.enrollment?.accountId,
+                  ),
+              )
+            )
+              throw new Error(
+                "A previous batch needs cleanup on this account. Other configured accounts and core cases remain available.",
+              );
+          }
+        } else if (
           await trx
             .selectFrom("benchmark_enrollments")
             .select("id")
             .where("user_id", "=", profile.user_id)
             .where("active_run_id", "is not", null)
             .executeTakeFirst()
-        )
+        ) {
           throw new Error("This Sketch test identity already has an active batch.");
+        }
         const locked = await trx
           .updateTable("benchmark_enrollments")
           .set({ active_run_id: id })
           .where("id", "=", enrollmentId)
-          .where("active_run_id", "is", null)
+          .where("active_run_id", profile.active_run_id ? "=" : "is", profile.active_run_id)
           .executeTakeFirst();
         if (!Number(locked.numUpdatedRows))
           throw new Error("This test account already has an active batch or needs cleanup.");
@@ -153,6 +260,20 @@ export function createBenchmarkRepository(db: Kysely<DB>) {
         .where("status", "=", "running")
         .executeTakeFirst();
       if (!Number(result.numUpdatedRows)) throw new Error("Benchmark worker ownership was lost.");
+      if (run.workspaceVersion)
+        for (const item of run.cases) {
+          if (!item.conversationId || !item.enrollment) continue;
+          await db
+            .insertInto("benchmark_contexts")
+            .values({
+              conversation_id: item.conversationId,
+              run_id: run.id,
+              task_id: item.automationId ?? null,
+              binding_json: JSON.stringify(item.enrollment),
+            })
+            .onConflict((oc) => oc.column("conversation_id").doUpdateSet({ task_id: item.automationId ?? null }))
+            .execute();
+        }
     },
     async heartbeat(id: string, workerId: string) {
       const result = await db
@@ -222,7 +343,7 @@ export function createBenchmarkRepository(db: Kysely<DB>) {
         const resource = item?.resources.find(
           (entry) => entry.key === resourceKey && entry.state === "intent" && entry.id === null,
         );
-        if (!item || !resource || !["list", "attachment"].includes(resource.kind))
+        if (!item || !resource || !["list", "attachment", "provider_item"].includes(resource.kind))
           throw new Error("This resource cannot be manually reconciled.");
         resource.state = "deleted";
         item.assertions.push({

@@ -23,17 +23,22 @@ import {
 } from "./clickup";
 import { type Assertion, type BenchmarkRun, type CaseResult, type Enrollment, verdictFor } from "./contracts";
 import { executeCoreCase } from "./core";
+import { captureExecutionEvidence } from "./evidence";
 import { executeIntegrationCase } from "./integration";
 import type { createBenchmarkModel } from "./model";
+import { createProviderProbe } from "./provider";
 import type { createBenchmarkRepository } from "./repository";
+import { executeWorkspaceCase, isBenchmarkWorkspaceOutput, reconcileProviderResources } from "./workspace-execution";
 
 export interface RunnerDeps {
   db: Kysely<DB>;
   config: Config;
   repository: ReturnType<typeof createBenchmarkRepository>;
-  model: ReturnType<typeof createBenchmarkModel>;
+  model: Pick<ReturnType<typeof createBenchmarkModel>, "manifest" | "answer" | "generate">;
   provider: () => Promise<IntegrationProvider | null>;
   ownerRequest: (enrollment: Enrollment) => Promise<OwnerRequest>;
+  validateBinding?: (enrollment: Enrollment) => Promise<void>;
+  providerProbe?: typeof createProviderProbe;
 }
 
 function check(item: CaseResult, id: string, label: string, passed: boolean, evidence: string) {
@@ -94,6 +99,7 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
     guard: () => Promise<void>,
   ) {
     item.stage = "cleaning";
+    await captureExecutionEvidence(deps.db, item);
     if (item.conversationId) {
       const authored = await deps.db
         .selectFrom("scheduled_tasks")
@@ -123,7 +129,7 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
     await save();
     const provider = enrollment.integration !== "none" ? await deps.provider().catch(() => null) : null;
     const probe =
-      provider && enrollment.integration !== "none"
+      provider && enrollment.integration === "clickup"
         ? createClickUpProbe(
             provider,
             enrollment.email,
@@ -133,13 +139,27 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
             guard,
           )
         : null;
+    const workspaceProbe =
+      provider && item.scenario.definition && enrollment.integration !== "none"
+        ? (deps.providerProbe ?? createProviderProbe)({
+            integration: enrollment.integration,
+            provider,
+            userId: enrollment.userId,
+            email: enrollment.email,
+            accountId: enrollment.accountId,
+            signal: AbortSignal.timeout(120_000),
+            guard,
+          })
+        : null;
     const rawRequest = await deps.ownerRequest(enrollment);
     const request: OwnerRequest = async (path, init) => {
       await guard();
       return rawRequest(path, init);
     };
     for (const resource of [...item.resources].reverse()) {
-      if (resource.state === "deleted") continue;
+      if (resource.state === "deleted" || resource.state === "retained") continue;
+      if (resource.kind === "provider_item" && !resource.id && workspaceProbe)
+        await reconcileProviderResources(item, workspaceProbe, save);
       if (!resource.id && resource.kind === "list" && resource.parentId && resource.name && resource.marker && probe) {
         const candidates = (await probe.lists(resource.parentId)).filter((list) => list.name === resource.name);
         const matches: string[] = [];
@@ -240,6 +260,17 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
               .catch(() => undefined);
           }
         }
+      } else if (resource.kind === "provider_item") {
+        if (!workspaceProbe || !item.providerFixture || resource.parentId !== item.providerFixture.target.id)
+          throw new BenchmarkBlockedError("The original integration is unavailable for fixture cleanup.");
+        resource.state = await workspaceProbe.retire(item.providerFixture.target, resource.id);
+        if (resource.state === "retained")
+          resource.retentionReason =
+            enrollment.integration === "github"
+              ? "Fixture issue closed; retained in the dedicated GitHub repository."
+              : "Fixture issue archived; retained in the dedicated Linear team.";
+        await save();
+        continue;
       } else if (resource.kind === "list") {
         if (!probe) throw new BenchmarkBlockedError("The connection is unavailable for fixture cleanup.");
         await probe.request("DELETE", `/list/${resource.id}`);
@@ -247,7 +278,7 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
         const workspace = await ensureWorkspace(deps.config, enrollment.userId);
         if (
           !(resource.kind === "workspace_file"
-            ? /^benchmark-[a-f0-9-]+\.(txt|csv)$/.test(resource.id)
+            ? isBenchmarkWorkspaceOutput(resource.id)
             : /^attachments\/[A-Za-z0-9._-]+$/.test(resource.id))
         )
           throw new Error("Invalid owned fixture path.");
@@ -303,7 +334,11 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
         taskConversationAssociation: { conversationId, transcriptUserId: user.id, kind: "builder" },
       });
     };
-    if (run.suiteId === "automation_core") {
+    if (item.scenario.definition && !["core_file", "clickup_webhook"].includes(item.scenario.definition.operation)) {
+      await executeWorkspaceCase({ deps, run, item, enrollment, request, signal, save, guard, createDraft });
+      return;
+    }
+    if (run.suiteId === "automation_core" || item.scenario.definition?.operation === "core_file") {
       await executeCoreCase({ deps, run, item, enrollment, request, signal, save, createDraft });
       return;
     }
@@ -343,7 +378,7 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
       attachments.push(attachment);
       await save();
     }
-    if (run.suiteId === "integrations") {
+    if (run.suiteId === "integrations" && !item.scenario.definition) {
       await executeIntegrationCase({
         run,
         item,
@@ -571,14 +606,15 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
     const save = () => deps.repository.save(run, workerId);
     const guard = () => deps.repository.assertWorker(run.id, workerId);
     try {
-      const provider = cleanupOnly || run.suiteId === "automation_core" ? null : await deps.provider();
-      if (!cleanupOnly && !provider && run.suiteId !== "automation_core")
+      const provider =
+        cleanupOnly || run.workspaceVersion || run.suiteId === "automation_core" ? null : await deps.provider();
+      if (!cleanupOnly && !run.workspaceVersion && !provider && run.suiteId !== "automation_core")
         throw new BenchmarkBlockedError("ClickUp is not connected.");
       const probe =
-        provider && enrollment.integration !== "none"
+        provider && enrollment.integration === "clickup"
           ? createClickUpProbe(provider, enrollment.email, enrollment.accountId, controller.signal, fetch, guard)
           : null;
-      if (!cleanupOnly) {
+      if (!cleanupOnly && !run.workspaceVersion) {
         if (
           (run.sketchVersion && run.sketchVersion !== (process.env.SKETCH_VERSION ?? "development")) ||
           (run.agentRuntime && run.agentRuntime !== deps.config.AGENT_RUNTIME)
@@ -599,11 +635,33 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
         if ((await deps.model.manifest()).fingerprint !== run.model.fingerprint)
           throw new BenchmarkBlockedError("Sketch model settings changed since this batch was drafted.");
       }
+      const unavailableAccounts = new Set<string>();
       for (const item of run.cases) {
-        if (!cleanupOnly && !controller.signal.aborted) {
+        const caseEnrollment = item.enrollment ?? enrollment;
+        const accountKey = `${caseEnrollment.integration}:${caseEnrollment.accountId}`;
+        const caseGuard = async () => {
+          await guard();
+          await deps.validateBinding?.(caseEnrollment);
+        };
+        if (!cleanupOnly && !controller.signal.aborted && !unavailableAccounts.has(accountKey)) {
           const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(12 * 60_000)]);
           try {
-            await executeCase(run, item, enrollment, probe, signal, save, guard);
+            const caseProvider =
+              run.workspaceVersion && caseEnrollment.integration === "clickup" ? await deps.provider() : null;
+            const caseProbe = caseProvider
+              ? createClickUpProbe(
+                  caseProvider,
+                  caseEnrollment.email,
+                  caseEnrollment.accountId,
+                  signal,
+                  fetch,
+                  caseGuard,
+                )
+              : probe;
+            await caseGuard();
+            if ((await deps.model.manifest()).fingerprint !== run.model.fingerprint)
+              throw new BenchmarkBlockedError("Sketch model settings changed. Create a repeat with the current model.");
+            await executeCase(run, item, caseEnrollment, caseProbe, signal, save, caseGuard);
             if ((await deps.model.manifest()).fingerprint !== run.model.fingerprint)
               throw new BenchmarkBlockedError("Sketch model settings changed during this workflow.");
           } catch (error) {
@@ -613,10 +671,27 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
                 ? "blocked"
                 : "failed";
             item.detail = error instanceof Error ? error.message : "The benchmark could not finish this case.";
+            item.failure = {
+              phase: item.stage,
+              category: controller.signal.aborted
+                ? "cancelled"
+                : error instanceof BenchmarkBlockedError
+                  ? "environment"
+                  : ["building", "using_integration", "exercising", "verifying"].includes(item.stage)
+                    ? "product"
+                    : "harness",
+              reason: item.detail,
+            };
+            if (item.failure.category === "product") item.verdict = "failed";
           }
-        } else if (item.verdict === "pending") item.verdict = cleanupOnly ? "unverified" : "cancelled";
+        } else if (item.verdict === "pending") {
+          item.verdict = unavailableAccounts.has(accountKey) ? "blocked" : cleanupOnly ? "unverified" : "cancelled";
+          if (unavailableAccounts.has(accountKey))
+            item.detail =
+              "An earlier case needs cleanup on this account. Other integrations and core cases remain independent.";
+        }
         try {
-          await cleanup(run, item, enrollment, save, guard);
+          await cleanup(run, item, caseEnrollment, save, guard);
         } catch (error) {
           item.cleanup = "needs_attention";
           item.detail = `${item.detail ? `${item.detail} ` : ""}Cleanup: ${error instanceof Error ? error.message : "needs attention"}`;
@@ -624,7 +699,8 @@ export function createBenchmarkRunner(deps: RunnerDeps) {
         item.completedAt = new Date().toISOString();
         await save();
         if (item.cleanup === "needs_attention") {
-          controller.abort();
+          if (run.workspaceVersion) unavailableAccounts.add(accountKey);
+          else controller.abort();
         }
       }
     } catch (error) {

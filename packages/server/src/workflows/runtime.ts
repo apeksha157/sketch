@@ -36,7 +36,11 @@ import { runAgentRuntimeCore } from "../agent/runtime/core";
 import { createAgentRuntimeWorkspaceToolScopePolicy } from "../agent/runtime/path-guard";
 import { createAgentRuntimeProvider } from "../agent/runtime/provider";
 import { createAgentRuntimeWorkspaceTools } from "../agent/runtime/workspace-tools";
-import { hasInvalidAutomationSketchToolNamespace, undeclaredAutomationSketchTools } from "../automation/action-script";
+import {
+  hasInvalidAutomationSketchToolNamespace,
+  referencesCanvasClickUpAction,
+  undeclaredAutomationSketchTools,
+} from "../automation/action-script";
 import {
   type AutomationCapabilityCallEvent,
   type AutomationCapabilityRegistry,
@@ -49,12 +53,14 @@ import {
   type ValidatedPersistedAutomationDefinition,
   validatePersistedAutomationDefinition,
 } from "../automation/definition";
+import { benchmarkExecutionProvider } from "../benchmarks/execution-binding";
 import type { AgentEnvironmentRuntimeContext } from "../db/repositories/agent-environment-variables";
 import type { createAutomationRunsRepository } from "../db/repositories/automation-runs";
 import type { StepContentRow, createAutomationStepContentRepository } from "../db/repositories/automation-step-content";
 import type { createInboxMessagesRepository } from "../db/repositories/inbox-messages";
 import type { ScheduledTaskRow } from "../db/repositories/scheduled-tasks";
 import type { DB } from "../db/schema";
+import { canvasBlockedIntegrationMessage, isCanvasBlockedComponentKey } from "../integrations/cli/policy";
 import type { IntegrationProvider } from "../integrations/types";
 import { cleanupIntegrationAccess, startIntegrationAccess } from "../integrations/wrapper";
 import type { Logger } from "../logger";
@@ -78,6 +84,7 @@ export interface ExecuteAutomationParams {
     PORT: number;
     CLAUDE_CONFIG_DIR: string;
     AGENT_RUNTIME?: "sdk" | "aisdk";
+    BENCHMARKS_ENABLED?: boolean;
   };
   runsRepo: ReturnType<typeof createAutomationRunsRepository>;
   stepContentRepo: ReturnType<typeof createAutomationStepContentRepository>;
@@ -223,7 +230,14 @@ export async function executeAutomation(params: ExecuteAutomationParams): Promis
   const runId =
     params.runId ?? (await params.runsRepo.create({ taskId: params.task.id, triggerData: params.triggerData }));
   try {
-    return await executeAutomationInternal({ ...params, runId });
+    const loadIntegrationProvider = await benchmarkExecutionProvider({
+      db: params.db,
+      enabled: params.config.BENCHMARKS_ENABLED === true,
+      userId: params.task.created_by,
+      taskId: params.task.id,
+      loadProvider: params.loadIntegrationProvider,
+    });
+    return await executeAutomationInternal({ ...params, loadIntegrationProvider, runId });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const aborted = error instanceof AutomationRunAbortedError;
@@ -569,12 +583,22 @@ export async function testAutomationStep(
     useLatestUpstreamOutput?: boolean;
   },
 ): Promise<AutomationExecutionResult> {
-  const { task, triggerData, logger, runsRepo, stepContentRepo, stepId } = params;
+  const scopedParams = {
+    ...params,
+    loadIntegrationProvider: await benchmarkExecutionProvider({
+      db: params.db,
+      enabled: params.config.BENCHMARKS_ENABLED === true,
+      userId: params.task.created_by,
+      taskId: params.task.id,
+      loadProvider: params.loadIntegrationProvider,
+    }),
+  };
+  const { task, triggerData, logger, runsRepo, stepContentRepo, stepId } = scopedParams;
   const creatorId = task.created_by;
   let creator: Awaited<ReturnType<NonNullable<RunAgentParams["userRepo"]>["findById"]>> | undefined;
   let creatorEmail: string | null = null;
   if (creatorId) {
-    creator = await params.userRepo.findById(creatorId);
+    creator = await scopedParams.userRepo.findById(creatorId);
     if (!creator) {
       const runId = await runsRepo.create({ taskId: task.id, triggerData: { type: "step_test", stepId } });
       await runsRepo.update(runId, {
@@ -594,7 +618,7 @@ export async function testAutomationStep(
 
   const runId = await runsRepo.create({ taskId: task.id, triggerData: { type: "step_test", stepId, triggerData } });
   const stepOutputs: Record<string, StepOutput> = {};
-  const workspaceDir = resolveAutomationWorkspaceDir(params.config.DATA_DIR, task);
+  const workspaceDir = resolveAutomationWorkspaceDir(scopedParams.config.DATA_DIR, task);
   await mkdir(workspaceDir, { recursive: true });
 
   let executionMode: AutomationExecutionMode = "hybrid";
@@ -635,11 +659,11 @@ export async function testAutomationStep(
 
   try {
     validateRuntimeAutomationExecutionMode(executionMode, [step]);
-    const input = params.useLatestUpstreamOutput
-      ? await resolveLatestUpstreamOutput({ params, stepId, edges, currentRunId: runId })
-      : (params.input ?? null);
+    const input = scopedParams.useLatestUpstreamOutput
+      ? await resolveLatestUpstreamOutput({ params: scopedParams, stepId, edges, currentRunId: runId })
+      : (scopedParams.input ?? null);
     const output = await executeWorkflowStep({
-      params,
+      params: scopedParams,
       step,
       content,
       input,
@@ -743,6 +767,7 @@ async function executeWorkflowStep(params: {
       logger: runtimeParams.logger,
       config: runtimeParams.config,
       workspaceDir,
+      trustedLocalFileRoot: runtimeParams.trustedLocalFileRoot,
       creator,
       creatorEmail,
       runAgent: runtimeParams.runAgent,
@@ -1036,6 +1061,11 @@ const MAX_INTEGRATION_ACTION_CALLS_PER_STEP = 25;
 
 async function executeActionStep(params: ActionStepParams): Promise<unknown> {
   const { script, step, input, runId, logger, creatorId, creatorEmail, workspaceDir, loadIntegrationProvider } = params;
+  if (referencesCanvasClickUpAction(script)) {
+    throw new Error(
+      "ClickUp actions are retired in Canvas. Use the managed ctx.tools.clickup capability with trusted local file paths.",
+    );
+  }
   const usesIntegrationActions = workflowStepUsesIntegrationActions(step);
   const sketchTools = step.actionCapabilities?.sketchTools ?? [];
   const cliIntegrationIds = step.actionCapabilities?.cliIntegrations ?? [];
@@ -1113,6 +1143,8 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
                 userRepo: params.userRepo,
                 logger,
                 signal: controller.signal,
+                trustedLocalFileRoot: params.trustedLocalFileRoot,
+                loadIntegrationProvider,
                 recordCall: params.recordAutomationCapabilityCall,
                 onFailure: (capability, error) => {
                   if (capabilityFailure) return;
@@ -1126,6 +1158,9 @@ async function executeActionStep(params: ActionStepParams): Promise<unknown> {
       executeIntegrationAction: async (request) => {
         if (!usesIntegrationActions || !integrationProvider?.executeAction || !creatorEmail) {
           throw new Error("The configured integration provider cannot execute server-owned actions");
+        }
+        if (isCanvasBlockedComponentKey(request.componentKey)) {
+          throw new Error(canvasBlockedIntegrationMessage(request.componentKey));
         }
         if (integrationActionCalls >= MAX_INTEGRATION_ACTION_CALLS_PER_STEP) {
           throw new Error(
@@ -1351,6 +1386,7 @@ interface AgentStepParams {
   logger: Logger;
   config: ExecuteAutomationParams["config"];
   workspaceDir: string;
+  trustedLocalFileRoot?: string;
   creator: Awaited<ReturnType<NonNullable<RunAgentParams["userRepo"]>["findById"]>> | undefined;
   creatorEmail: string | null;
   runAgent?: typeof runAgent;
@@ -1772,6 +1808,7 @@ async function executeSketchAgentStep(
       workspaceKey: resolveWorkspaceKey(task),
       userMessage,
       workspaceDir,
+      trustedLocalFileRoot: params.trustedLocalFileRoot,
       claudeConfigDir: params.config.CLAUDE_CONFIG_DIR,
       userName: creator?.name ?? "Automation",
       userEmail: creatorEmail,

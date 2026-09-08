@@ -205,12 +205,16 @@ export function ConnectorPicker({
       syncStatus: cur ? mergeStatus(cur.syncStatus, c.syncStatus) : c.syncStatus,
     });
   }
+  // Channel-backed integrations only appear once their channel is connected,
+  // or once the viewer already has a row or indexed files from that source.
+  const channelConnected: Partial<Record<IntegrationType, boolean | undefined>> = {
+    slack: setupStatusQuery.data?.slackConnected,
+    whatsapp: setupStatusQuery.data?.whatsappConnected,
+  };
   const visibleIntegrations = INTEGRATIONS.filter((def) => {
-    if (def.type !== "whatsapp") return true;
+    if (!(def.type in channelConnected)) return true;
     return (
-      setupStatusQuery.data?.whatsappConnected === true ||
-      connectedByType.has(def.type) ||
-      (sourceCounts.get(def.type) ?? 0) > 0
+      channelConnected[def.type] === true || connectedByType.has(def.type) || (sourceCounts.get(def.type) ?? 0) > 0
     );
   });
   const orgLevelIntegrations = visibleIntegrations.filter((def) => !def.perUserAuth);
@@ -304,7 +308,7 @@ export function ConnectorPicker({
 
         {isAdmin &&
           orgLevelIntegrations.map((def) => {
-            if (connectedByType.has(def.type)) return null;
+            if (connectedByType.has(def.type) || def.channelProvisioned) return null;
             return (
               <button
                 key={def.type}
@@ -829,6 +833,13 @@ function ConnectorRow({
               </Button>
             )}
           </div>
+        ) : definition.channelProvisioned ? (
+          <a
+            href="/channels"
+            className="self-end whitespace-nowrap text-xs text-muted-foreground underline-offset-2 hover:underline sm:self-auto sm:shrink-0"
+          >
+            Set up under Channels
+          </a>
         ) : canConnect ? (
           <div className="flex items-center justify-end gap-2 self-end sm:self-auto sm:shrink-0">
             <QuietAddButton className="whitespace-nowrap" onClick={onConnect}>

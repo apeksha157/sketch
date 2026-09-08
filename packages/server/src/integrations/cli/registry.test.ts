@@ -42,6 +42,16 @@ describe("CLI integration registry", () => {
     expect(isCanvasBlockedCliComponentKey("linear")).toBe(true);
   });
 
+  it("blocks ClickUp action aliases while preserving ClickUp OAuth and Files app IDs", () => {
+    expect(isCanvasBlockedCliAppId("clickup")).toBe(false);
+    expect(isCanvasBlockedCliAppId("clickup-api-key")).toBe(false);
+    expect(isCanvasBlockedCliComponentKey("clickup-create-task")).toBe(true);
+    expect(isCanvasBlockedCliComponentKey("click-up-create-task")).toBe(true);
+    expect(isCanvasBlockedCliComponentKey("CLICK_UP_CREATE_TASK")).toBe(true);
+    expect(isCanvasBlockedCliComponentKey("click up-create-task")).toBe(true);
+    expect(isCanvasBlockedConnectionId("secrets:owner-1:clickup:clickup")).toBe(false);
+  });
+
   it("recognizes managed aliases embedded in Canvas connection IDs", () => {
     expect(isCanvasBlockedConnectionId("secrets:owner-1:github:github")).toBe(true);
     expect(isCanvasBlockedConnectionId("apn_github_1")).toBe(true);
