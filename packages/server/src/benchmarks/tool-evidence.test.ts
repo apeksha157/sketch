@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { benchmarkReadEvidence } from "./tool-evidence";
+import { benchmarkReadEvidence, benchmarkToolFailed } from "./tool-evidence";
 
 describe("evaluated integration read evidence", () => {
   it("accepts completed managed read task identities without persisting provider content", () => {
@@ -23,6 +23,30 @@ describe("evaluated integration read evidence", () => {
         isError: false,
       }),
     ).toEqual({ taskIds: ["sdk-task"] });
+  });
+  it("recognizes managed-tool errors encoded in successful tool envelopes", () => {
+    const base = {
+      toolName: "github_cli",
+      input: {},
+      isError: false,
+      output: { content: [{ type: "text", text: '{"exitCode":1,"stdout":"","stderr":"failed"}' }] },
+    };
+    expect(benchmarkToolFailed(base)).toBe(true);
+    expect(benchmarkToolFailed({ ...base, output: { exitCode: 0 } })).toBe(false);
+    expect(
+      benchmarkToolFailed({
+        ...base,
+        toolName: "linear_api",
+        output: [{ type: "text", text: "Linear API failed: rate limit" }],
+      }),
+    ).toBe(true);
+    expect(
+      benchmarkToolFailed({
+        ...base,
+        toolName: "clickup_api",
+        output: '{"tasks":[{"name":"ClickUp API failed: example text"}]}',
+      }),
+    ).toBe(false);
   });
   it("rejects completion claims, tool failures and writes", () => {
     const base = { toolName: "clickup_api", input: { method: "GET" }, output: "3", isError: false };
