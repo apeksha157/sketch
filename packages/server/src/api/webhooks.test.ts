@@ -99,6 +99,7 @@ describe("automation webhook routes", () => {
           collectionPath: "list/123",
           callbackUrl: `https://sketch.example/api/webhooks/v1/${endpoint.id}`,
           resourceId: "resource-1",
+          subscription: { events: ["taskUpdated", "taskStatusUpdated"], scope: null },
         }),
       })
       .where("id", "=", endpoint.id)
@@ -270,8 +271,8 @@ describe("automation webhook routes", () => {
     expect(enqueueWebhookDelivery).not.toHaveBeenCalled();
   });
 
-  it("does not admit a pending signed endpoint", async () => {
-    const task = await addTask();
+  it("records pending signed receipts without validating a rejected registration", async () => {
+    const task = await addTask("paused");
     const endpoint = await signedEndpointForTask(task.id);
     await db.updateTable("webhook_endpoints").set({ status: "pending" }).where("id", "=", endpoint.id).execute();
 
@@ -282,9 +283,13 @@ describe("automation webhook routes", () => {
       body,
     });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ paused: true, ignored: true, duplicate: false });
+    await expect(createWebhookEndpointRepository(db).getById(endpoint.id)).resolves.toMatchObject({
+      status: "pending",
+    });
     expect(enqueueWebhookDelivery).not.toHaveBeenCalled();
-    await expect(createWebhookDeliveryRepository(db).list({ endpointId: endpoint.id })).resolves.toHaveLength(0);
+    await expect(createWebhookDeliveryRepository(db).list({ endpointId: endpoint.id })).resolves.toHaveLength(1);
   });
 
   it("deduplicates signed provider identity across header changes and JSON whitespace", async () => {

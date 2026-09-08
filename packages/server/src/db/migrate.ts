@@ -232,9 +232,11 @@ import * as m229 from "./migrations/229-external-mcp-tool-calls-access-bypass";
 import * as m230 from "./migrations/230-slack-chunk-engine-streams";
 import * as m231 from "./migrations/231-benchmarks";
 import * as m232 from "./migrations/232-benchmark-owner-history";
-import * as m233 from "./migrations/233-crm-field-history";
-import * as m234 from "./migrations/234-entity-touch-stats";
-import * as m235 from "./migrations/235-requeue-linkedin-conversation-summaries";
+import * as m233CrmFieldHistory from "./migrations/233-crm-field-history";
+import * as m233WebhookEndpointSlots from "./migrations/233-webhook-endpoint-slots";
+import * as m234EntityTouchStats from "./migrations/234-entity-touch-stats";
+import * as m235 from "./migrations/235-benchmark-workspace";
+import * as m236 from "./migrations/236-requeue-linkedin-conversation-summaries";
 import type { DB } from "./schema";
 
 /**
@@ -476,9 +478,11 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "230-slack-chunk-engine-streams": m230,
           "231-benchmarks": m231,
           "232-benchmark-owner-history": m232,
-          "233-crm-field-history": m233,
-          "234-entity-touch-stats": m234,
-          "235-requeue-linkedin-conversation-summaries": m235,
+          "233-crm-field-history": m233CrmFieldHistory,
+          "233-webhook-endpoint-slots": m233WebhookEndpointSlots,
+          "234-entity-touch-stats": m234EntityTouchStats,
+          "235-benchmark-workspace": m235,
+          "236-requeue-linkedin-conversation-summaries": m236,
         };
       },
     },

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as ownerHistoryMigration from "../db/migrations/232-benchmark-owner-history";
+import * as benchmarkWorkspaceMigration from "../db/migrations/235-benchmark-workspace";
 import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import { createTestPgDb } from "../test-utils";
@@ -47,8 +48,10 @@ describe("Postgres benchmark claims", () => {
     const other = { ...run, id: randomUUID(), enrollmentId: second.id };
     await repo.insert(run);
     await repo.insert(other);
+    await db.transaction().execute((trx) => benchmarkWorkspaceMigration.down<DB>(trx));
     await db.transaction().execute((trx) => ownerHistoryMigration.down<DB>(trx));
     await db.transaction().execute((trx) => ownerHistoryMigration.up<DB>(trx));
+    await db.transaction().execute((trx) => benchmarkWorkspaceMigration.up<DB>(trx));
     expect(await repo.get(run.id, first.id)).toEqual(run);
     const worker = await repo.claim(run.id, first.id);
     await expect(repo.claim(other.id, second.id)).rejects.toThrow("already has an active batch");

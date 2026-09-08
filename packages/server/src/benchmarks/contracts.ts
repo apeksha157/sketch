@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CaseDefinition } from "./cases";
 
 export const BENCHMARK_VERSION = "benchmarks.v1";
 export const batchSizeSchema = z.number().int().min(3).max(10);
@@ -16,6 +17,7 @@ export const familySchema = z.enum([
   "core_calculation",
   "core_checklist",
   "core_csv",
+  "workspace_case",
 ]);
 export const suiteIdSchema = z.enum(["automations", "integrations", "automation_core"]);
 export type SuiteId = z.infer<typeof suiteIdSchema>;
@@ -28,7 +30,7 @@ export type Family = z.infer<typeof familySchema>;
 
 export const enrollmentSchema = z
   .object({
-    integration: z.enum(["clickup", "none"]).default("clickup"),
+    integration: z.enum(["clickup", "github", "linear", "none"]).default("clickup"),
     accountId: z.string().trim().min(1).max(256),
     teamId: z.string().regex(/^\d+$/),
     spaceId: z.string().regex(/^\d+$/),
@@ -43,6 +45,8 @@ export interface Enrollment extends EnrollmentInput {
   id: string;
   userId: string;
   email: string;
+  target?: { id: string; name: string; teamId?: string };
+  bindingFingerprint?: string;
 }
 
 export const selectionSchema = z
@@ -56,6 +60,7 @@ export const selectionSchema = z
 
 /** Reviewed phrasing keeps generated batches comparable to fixed, independent assertions. */
 export const goals: Record<Family, { title: string; requests: readonly string[] }> = {
+  workspace_case: { title: "Workspace case", requests: [] },
   new_task: {
     title: "Follow up on new tasks",
     requests: [
@@ -169,6 +174,7 @@ export interface Scenario {
   title: string;
   prompt: string;
   version: string;
+  definition?: CaseDefinition;
 }
 export type Verdict = "pending" | "passed" | "failed" | "blocked" | "unverified" | "cancelled";
 export interface Assertion {
@@ -178,15 +184,59 @@ export interface Assertion {
   evidence: string;
 }
 export interface Resource {
-  kind: "list" | "automation" | "attachment" | "workspace_file";
+  kind: "list" | "automation" | "attachment" | "workspace_file" | "provider_item";
   key: string;
   id: string | null;
-  state: "intent" | "created" | "deleted";
+  state: "intent" | "created" | "deleted" | "retained";
   parentId?: string;
   name?: string;
   marker?: string;
+  retentionReason?: string;
+}
+export interface BenchmarkEvent {
+  id: string;
+  at: string;
+  phase: string;
+  name: string;
+  status: "started" | "completed" | "failed" | "skipped";
+  durationMs?: number;
+  reason?: string;
+  toolCallId?: string;
 }
 export interface CaseResult {
+  metrics?: {
+    turns: number;
+    toolCalls: number;
+    failedToolCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    durationMs: number;
+    stopReasons: string[];
+  };
+  enrollment?: Enrollment;
+  events?: BenchmarkEvent[];
+  executionEvidence?: {
+    id: string;
+    status: string;
+    startedAt: string;
+    completedAt: string | null;
+    steps: {
+      id: string;
+      status: string;
+      durationMs: number;
+      error?: string;
+      stopReason?: string | null;
+      turns?: number | null;
+    }[];
+  }[];
+  failure?: { phase: string; category: "product" | "environment" | "harness" | "cancelled"; reason: string };
+  providerFixture?: {
+    target: { id: string; name: string };
+    marker: string;
+    baselineIds: string[];
+    before: { id: string; title: string; body: string; state: "open" | "closed" }[];
+  };
   expectedOpenCount?: number;
   providerReadTaskIds?: string[];
   scenario: Scenario;
@@ -205,6 +255,8 @@ export interface CaseResult {
   detail?: string;
 }
 export interface BenchmarkRun {
+  name?: string;
+  workspaceVersion?: number;
   requestedBy?: string;
   id: string;
   enrollmentId: string;

@@ -2032,6 +2032,7 @@ export interface QuestionInteractionDeliveriesTable {
 
 export interface WebhookEndpointsTable {
   id: string;
+  slot: Generated<string>;
   task_id: string;
   status: string;
   verification_json: Generated<string | null>;
@@ -2127,6 +2128,17 @@ export interface FileFieldEmbeddingsTable {
 }
 
 export interface DB {
+  benchmark_environment: { id: string; user_id: string | null; revision: number; bindings_json: string };
+  benchmark_cases: { id: string; revision: number; document_json: string; updated_at: string };
+  benchmark_designs: {
+    id: string;
+    revision: number;
+    document_json: string;
+    lease_id: string | null;
+    lease_expires_at: string | null;
+    updated_at: string;
+  };
+  benchmark_contexts: { conversation_id: string; run_id: string; task_id: string | null; binding_json: string };
   benchmark_setup_links: { token_hash: string; expires_at: string; used_at: string | null };
   benchmark_enrollments: {
     id: string;

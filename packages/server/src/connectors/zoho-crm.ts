@@ -11,7 +11,15 @@ import type {
   SyncedItem,
 } from "./types";
 
-const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+/**
+ * Zoho access tokens live 60 minutes and are normally refreshed only at run
+ * start. A full module scan takes 20+ minutes on large CRMs, so a 5-minute
+ * buffer let tokens expire mid-run and surface as a misleading "reconnect
+ * required" failure. 30 minutes forces a fresh token before any long scan,
+ * and the 401 refresh-and-retry in zohoApiRequest covers runs that outlast
+ * even that.
+ */
+const TOKEN_REFRESH_BUFFER_MS = 30 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 6;
 const RETRY_BASE_MS = 1000;
@@ -100,6 +108,7 @@ export interface DiscoveredZohoModule {
 interface ZohoRequestOptions {
   headers?: Record<string, string>;
   attempt?: number;
+  retriedAfterRefresh?: boolean;
 }
 
 function requireOAuthCredentials(credentials: ConnectorCredentials): OAuthCredentials {
@@ -285,7 +294,27 @@ async function zohoApiRequest<T>(
   if (response.status === 204 || response.status === 304) {
     return {} as T;
   }
+  /**
+   * A 401 on a stale token usually means it expired during a long scan, not
+   * that the connection is broken. Refresh once and retry before giving up.
+   * The freshness gate matters: Zoho also returns 401 for non-expiry reasons
+   * (e.g. scope mismatch), and refreshing on those would burn the per-token
+   * refresh-grant rate limit — a young token that gets a 401 fails straight
+   * through. The refreshed token is copied back onto the shared credentials
+   * object so every later request in this run reuses it instead of
+   * re-minting per request; a genuinely revoked refresh token surfaces as
+   * the accurate "refresh token is invalid or revoked" error from
+   * refreshZohoCrmTokens.
+   */
   if (response.status === 401) {
+    if (!opts.retriedAfterRefresh && !isTokenFresh(credentials)) {
+      logger?.info({ path }, "Zoho CRM access token rejected, refreshing and retrying");
+      const refreshed = await refreshZohoCrmTokens({ ...credentials, expires_at: undefined });
+      if (refreshed) {
+        Object.assign(credentials, refreshed);
+        return zohoApiRequest(credentials, path, logger, { ...opts, retriedAfterRefresh: true, attempt: 1 });
+      }
+    }
     throw new Error("Zoho CRM token is invalid or revoked; reconnect required");
   }
   if (response.status === 429) {
@@ -963,6 +992,21 @@ function rollupRelationFields(moduleApiName: string): string[] {
   }
 }
 
+/**
+ * Zoho silently ignores If-Modified-Since values it cannot parse, and our
+ * stored cursors (ISO with milliseconds and a "Z" suffix) fall in that
+ * bucket — so every "incremental" sync was a full scan. Verified against the
+ * live API: the same instant sent as "2026-09-05T20:04:23.341Z" returned all
+ * records, while "2026-09-05T20:04:23+00:00" returned 304. Format to second
+ * precision with an explicit numeric offset; an unparseable cursor is passed
+ * through unchanged (Zoho ignores it, matching the old behaviour).
+ */
+export function toZohoModifiedSince(cursor: string): string {
+  const parsed = new Date(cursor);
+  if (Number.isNaN(parsed.getTime())) return cursor;
+  return parsed.toISOString().replace(/\.\d{3}Z$/, "+00:00");
+}
+
 async function* syncModule(
   credentials: OAuthCredentials,
   module: DiscoveredZohoModule,
@@ -973,7 +1017,7 @@ async function* syncModule(
   let page = 0;
   let pageToken: string | null = null;
   let moreRecords = true;
-  const headers = cursor ? { "If-Modified-Since": cursor } : undefined;
+  const headers = cursor ? { "If-Modified-Since": toZohoModifiedSince(cursor) } : undefined;
   const fields = await resolveModuleFields(credentials, module.apiName, logger);
 
   // Zoho v6 caps offset pagination at the first 2000 records; beyond that the

@@ -113,7 +113,7 @@ describe("automation trigger validation", () => {
     );
   });
 
-  it("continues to allow provider-specific Canvas triggers", () => {
+  it("rejects provider-specific Canvas ClickUp triggers", () => {
     const request = requestForAction({ sketchTools: ["searchEntities"], usesIntegrationActions: false });
     request.status = "active";
     request.scheduleType = "external";
@@ -128,11 +128,13 @@ describe("automation trigger validation", () => {
       },
     };
 
-    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).toThrowError(
+      expect.objectContaining({
+        issues: expect.arrayContaining([expect.objectContaining({ code: "CANVAS_CLICKUP_TRIGGER_UNSUPPORTED" })]),
+      }),
+    );
   });
-});
 
-describe("automation action capability validation", () => {
   it("allows a final delivery action to return structured output", () => {
     const request = requestForAction({ sketchTools: ["searchEntities"], usesIntegrationActions: false });
     request.status = "active";
@@ -199,17 +201,10 @@ describe("automation action capability validation", () => {
     );
   });
 
-  it("requires a capability when an action explicitly disables integrations", () => {
-    expect(() =>
-      validateAutomationBuilderSaveRequest({
-        request: requestForAction({ sketchTools: [], usesIntegrationActions: false }),
-        brokerCapable: false,
-      }),
-    ).toThrowError(
-      expect.objectContaining({
-        issues: expect.arrayContaining([expect.objectContaining({ code: "ACTION_CAPABILITIES_REQUIRED" })]),
-      }),
-    );
+  it("accepts a pure transform with no integration or Sketch capabilities", () => {
+    const request = requestForAction({ sketchTools: [], usesIntegrationActions: false });
+    request.stepContent.action.content = "return { taskId: input.data.task_id };";
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
   });
 
   it("rejects the legacy Sketch tool namespace", () => {
@@ -255,16 +250,38 @@ describe("automation action capability validation", () => {
     );
   });
 
-  it("allows Canvas integration actions through the runtime wrapper", () => {
+  it("rejects Canvas ClickUp integration actions", () => {
     const request = requestForAction({ sketchTools: [], usesIntegrationActions: true });
     request.stepContent.action.content =
       'return ctx.integrations.executeAction({ componentKey: "clickup-find-tasks", configuredProps: {} });';
 
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: true })).toThrowError(
+      expect.objectContaining({
+        issues: expect.arrayContaining([expect.objectContaining({ code: "CANVAS_CLICKUP_ACTION_UNSUPPORTED" })]),
+      }),
+    );
+  });
+
+  it("allows an API-first managed ClickUp action without a Canvas broker", () => {
+    const request = requestForAction({ sketchTools: ["clickup"], usesIntegrationActions: false });
+    request.stepContent.action.content =
+      'return ctx.tools.clickup({ method: "GET", path: "/team/team-1/time_entries", accountId: "opaque-account" });';
+
+    expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: false })).not.toThrow();
+  });
+
+  it("allows ordinary ClickUp data and other authorized integrations in the same recipe", () => {
+    const request = requestForAction({ sketchTools: ["clickup"], usesIntegrationActions: true });
+    request.stepContent.action.content = `
+      const task = await ctx.tools.clickup({ method: "POST", path: "/list/list-1/task", accountId: "opaque-account", body: { name: "Fix base64 parsing" } });
+      return ctx.integrations.executeAction({ componentKey: "slack-send-message", configuredProps: { text: task.id } });
+    `;
     expect(() => validateAutomationBuilderSaveRequest({ request, brokerCapable: true })).not.toThrow();
   });
 
   it("deduplicates identical validation issues from repeated persisted step ids", () => {
     const request = requestForAction({ sketchTools: [], usesIntegrationActions: false });
+    request.stepContent.action.content = "";
     request.steps.push({ ...request.steps[1] });
 
     let error: unknown;
@@ -276,7 +293,7 @@ describe("automation action capability validation", () => {
 
     expect(error).toBeInstanceOf(AutomationValidationError);
     const issues = (error as AutomationValidationError).issues.filter(
-      (issue) => issue.code === "ACTION_CAPABILITIES_REQUIRED",
+      (issue) => issue.code === "ACTION_SCRIPT_REQUIRED",
     );
     expect(issues).toHaveLength(1);
   });

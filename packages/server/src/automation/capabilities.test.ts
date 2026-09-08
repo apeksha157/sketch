@@ -1,5 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_AUTOMATION_OUTPUT_BYTES, createAutomationCapabilityRegistry } from "./capabilities";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createContext(overrides: Record<string, unknown> = {}) {
   return {
@@ -119,5 +123,60 @@ describe("automation Sketch capability registry", () => {
 
     await expect(tools.searchEntities?.({ queries: ["Acme"] })).rejects.toThrow("unavailable or invalid response");
     expect(onFailure).toHaveBeenCalledWith("searchEntities", expect.any(Error));
+  });
+
+  it("uses the same flexible managed ClickUp transport for an arbitrary API recipe", async () => {
+    const getCanvasAccessToken = vi.fn().mockResolvedValue({ accessToken: "capability-token" });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ data: [{ id: "entry-1" }] }), { status: 200 }));
+    const tools = createAutomationCapabilityRegistry().createTools({
+      context: createContext({ getCanvasAccessToken }) as never,
+      allowedTools: ["clickup"],
+    });
+
+    await expect(
+      tools.clickup?.({
+        method: "GET",
+        path: "/team/team-1/time_entries",
+        query: { start_date: "2026-09-01", end_date: "2026-09-07" },
+        accountId: "opaque-canvas-account",
+      }),
+    ).resolves.toEqual({ data: [{ id: "entry-1" }] });
+    expect(getCanvasAccessToken).toHaveBeenCalledWith({
+      integration: "clickup",
+      accountId: "opaque-canvas-account",
+      forceRefresh: false,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.clickup.com/api/v2/team/team-1/time_entries?start_date=2026-09-01&end_date=2026-09-07",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer capability-token" }) }),
+    );
+  });
+
+  it.each([401, 403])("keeps authorization failure %s fatal even when caught", async (status) => {
+    const onFailure = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("denied", { status }));
+    const tools = createAutomationCapabilityRegistry().createTools({
+      context: createContext({ onFailure, getCanvasAccessToken: async () => ({ accessToken: "token" }) }) as never,
+      allowedTools: ["clickup"],
+    });
+    await expect(tools.clickup?.({ method: "GET", path: "/team", accountId: "account-1" })).rejects.toThrow();
+    expect(onFailure).toHaveBeenCalledWith("clickup", expect.any(Error));
+  });
+
+  it("requires an exact account before invoking the managed ClickUp transport", async () => {
+    const getCanvasAccessToken = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const tools = createAutomationCapabilityRegistry().createTools({
+      context: createContext({ getCanvasAccessToken }) as never,
+      allowedTools: ["clickup_api"],
+    });
+
+    await expect(tools.clickup_api?.({ method: "GET", path: "/team" })).rejects.toThrow(
+      "exact admitted opaque accountId",
+    );
+    expect(getCanvasAccessToken).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

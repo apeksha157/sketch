@@ -15,6 +15,7 @@ const linkedin = getIntegration("linkedin_aimfox") ?? null;
 const googleCalendar = getIntegration("google_calendar") ?? null;
 const otter = getIntegration("otter") ?? null;
 const whatsapp = getIntegration("whatsapp") ?? null;
+const slack = getIntegration("slack") ?? null;
 
 function connector(overrides: Partial<ConnectorConfig> = {}): ConnectorConfig {
   return {
@@ -108,6 +109,39 @@ describe("ManageConnectorDialog connector capabilities", () => {
 
     expect(await screen.findByText("Disconnect Fireflies?")).toBeInTheDocument();
     await waitFor(() => expect(entityCountCalls).toBe(1));
+  });
+
+  it("offers Sync now for the Slack channel connector without disconnect or credential controls", async () => {
+    const user = userEvent.setup();
+    let syncCalls = 0;
+    server.use(
+      http.post("/api/connectors/:id/syncs", () => {
+        syncCalls++;
+        return HttpResponse.json({ sync: { connectorId: "slack-conn", status: "started" } }, { status: 201 });
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={slack}
+        connector={connector({
+          id: "slack-conn",
+          connectorType: "slack",
+          authType: "system",
+          canDisconnect: false,
+          canUpdateCredentials: false,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Sync now/i }));
+    await waitFor(() => expect(syncCalls).toBe(1));
+    expect(screen.queryByRole("button", { name: /Disconnect/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Update credentials/i })).not.toBeInTheDocument();
   });
 
   it("passes the disconnected connector back to the Files page", async () => {

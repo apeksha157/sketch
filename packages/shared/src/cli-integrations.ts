@@ -181,13 +181,8 @@ export function isCanvasBlockedCliAppId(value: string): boolean {
 }
 
 export function isCanvasBlockedCliComponentKey(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  return (
-    normalized === "github" ||
-    normalized.startsWith("github-") ||
-    normalized.startsWith("github_") ||
-    normalized === "linear" ||
-    normalized.startsWith("linear-") ||
-    normalized.startsWith("linear_")
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "-");
+  return ["github", "linear", "clickup", "click-up", "click_up"].some(
+    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}-`) || normalized.startsWith(`${prefix}_`),
   );
 }

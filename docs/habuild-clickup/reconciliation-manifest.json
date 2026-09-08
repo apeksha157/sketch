@@ -1,0 +1,173 @@
+{
+  "artifactVersion": 1,
+  "name": "habuild-clickup-cutover",
+  "purpose": "Reviewable preflight inventory for the Sketch-managed ClickUp replacement work",
+  "source": {
+    "observedAt": "2026-09-07",
+    "sketchCommit": "0e87347927b3bef1071ffab6aeab41eecef5f97d",
+    "habuildSourceCommit": "27d87e96269d5d91e10ee570e5b9fe14fad52807",
+    "canvasPullRequest": 818,
+    "canvasPullRequestHead": "aea6393e4acb86bcc8dfa4c920adb3049e0bd31c",
+    "liveExportObservedAt": "2026-09-07T07:14:27.672869+00:00",
+    "liveExportSha256": "0fe00c1daeb63a36c36c93997cdfc36916fd32e54bc2d36af4e99696a0e79f0c"
+  },
+  "safety": {
+    "mode": "preflight-only",
+    "dryRunDefault": true,
+    "expectedRevisionRequiredForKnownWorkflows": true,
+    "protectedBackupRequiredBeforeAnyApply": true,
+    "productionMutationPerformed": false,
+    "replacementDefinitions": "prepared from authorized read-only export; stored in protected local package"
+  },
+  "workflowInventory": [
+    {
+      "id": "6d02fee8-0f89-4e57-9a38-36cce2b4e8c4",
+      "expectedRevision": 18,
+      "expectedStatus": "active",
+      "sourceTrigger": "native Slack",
+      "replacement": "managed ClickUp action script",
+      "requiredVerification": ["task", "custom fields", "missing-member fallback", "attachments", "no duplicate task"]
+    },
+    {
+      "id": "54c1a727-960e-4ff7-9ad3-addc4a1a8763",
+      "expectedRevision": 1,
+      "expectedStatus": "active",
+      "sourceTrigger": "Canvas task-created",
+      "replacement": "scoped native ClickUp webhook",
+      "requiredVerification": ["prepare subtasks", "apply subtasks", "payload mapping", "duplicate protection"]
+    },
+    {
+      "id": "24d58c62-212d-4fc9-b965-dce0e3b6c425",
+      "expectedRevision": 0,
+      "expectedStatus": "active",
+      "sourceTrigger": "pending Canvas setup",
+      "replacement": "paused native ClickUp task-created binding",
+      "requiredVerification": ["wait and fetch", "enrich subtasks", "no invented Canvas node IDs"]
+    },
+    {
+      "id": "13098123-a67f-4fd4-873d-1663e8002d2c",
+      "expectedRevision": 2,
+      "expectedStatus": "active",
+      "sourceTrigger": "Canvas task-updated",
+      "replacement": "native ClickUp event binding",
+      "requiredVerification": ["record action input mapping", "internal-only capability", "feedback-loop protection"]
+    }
+  ],
+  "scheduledAgentIds": [
+    "90a1874f-4dfe-4770-81b0-602c4aa6f1a5",
+    "7d9dd44f-8b5a-4aa5-88b2-39099f980423",
+    "d19a3768-8138-412f-a339-30b9f5e13e9a",
+    "22916f96-a5a4-457e-b128-bc0389329d0c",
+    "e2b7e2d9-9631-4fb5-935f-266971ce2124",
+    "bf57e8a0-2069-4924-aad2-1d1ab0059d55",
+    "9096fff8-b690-4000-bd86-4f684a83dadb",
+    "0e2f9f98-31a8-4913-93b0-85d74c15815b"
+  ],
+  "inventorySummary": {
+    "clickupReferencingRecords": 43,
+    "activeRecords": 12,
+    "pausedRecords": 13,
+    "completedRecords": 18,
+    "canvasOAuthEligibleAccounts": 41,
+    "separateApiKeyFilesAccounts": 5
+  },
+  "deferredInputs": [
+    "Production-window backup and restore verification",
+    "Fresh revisions and provider permissions at apply time",
+    "Exact superseded remote subscription cleanup, queued/in-flight delivery inventory, and event-gap watermarks",
+    "Authentic live delivery and provider-side outcome verification after release"
+  ],
+  "preparedDefinitions": [
+    {
+      "taskId": "0e2f9f98-31a8-4913-93b0-85d74c15815b",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 2,
+      "sha256": "d7f464448a5db7b9b6e65627651e740598d2b18f4bddcb2a482604b20e96fc53"
+    },
+    {
+      "taskId": "13098123-a67f-4fd4-873d-1663e8002d2c",
+      "expectedRevision": 2,
+      "paused": true,
+      "steps": 2,
+      "sha256": "4a637b398f800d08372d6fa8af944499c58fd2732f518d7d8a92debfdbc8fecc"
+    },
+    {
+      "taskId": "22916f96-a5a4-457e-b128-bc0389329d0c",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 2,
+      "sha256": "8a9242c7f2e7ef3f380f6e0fdc1ff45b00b38d8c255275e50ce39d2bd625c17c"
+    },
+    {
+      "taskId": "24d58c62-212d-4fc9-b965-dce0e3b6c425",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 3,
+      "sha256": "1cf63b73051cdf456a90747facf9634f9d592aca72e67016a2ea9790e6454e7b"
+    },
+    {
+      "taskId": "54c1a727-960e-4ff7-9ad3-addc4a1a8763",
+      "expectedRevision": 1,
+      "paused": true,
+      "steps": 3,
+      "sha256": "1162eec9fd6acc78d237cd7f213a52ce7af39f75e40f14c1842166a34fd119cf"
+    },
+    {
+      "taskId": "6d02fee8-0f89-4e57-9a38-36cce2b4e8c4",
+      "expectedRevision": 18,
+      "paused": true,
+      "steps": 2,
+      "sha256": "74d8034f2a3d90582890418ef2a9460e8aa0395621bc541246da0d44fbaf2457"
+    },
+    {
+      "taskId": "7d9dd44f-8b5a-4aa5-88b2-39099f980423",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 2,
+      "sha256": "a1c5fefc8d9ab495796aeab499e3f0d243b6c7669129ecf706b44704636dc031"
+    },
+    {
+      "taskId": "9096fff8-b690-4000-bd86-4f684a83dadb",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 2,
+      "sha256": "592d01e4f3dff7790fa6868a32c5fea6733655fc52c3a5fb25ddf964173822b3"
+    },
+    {
+      "taskId": "90a1874f-4dfe-4770-81b0-602c4aa6f1a5",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 2,
+      "sha256": "1aed8d23c4e95df2f406840a705b1cca3ae5be04e3e0563d9905c500c67c71bd"
+    },
+    {
+      "taskId": "bf57e8a0-2069-4924-aad2-1d1ab0059d55",
+      "expectedRevision": 1,
+      "paused": true,
+      "steps": 2,
+      "sha256": "49fdbf592aa92c03b5bd240fb592ee40375032c7b6498673b4e6704db6a04415"
+    },
+    {
+      "taskId": "d19a3768-8138-412f-a339-30b9f5e13e9a",
+      "expectedRevision": 1,
+      "paused": true,
+      "steps": 2,
+      "sha256": "6ada20eda88df5628706e729687d73494ee0a82157aa9b3a6d0880231b99a763"
+    },
+    {
+      "taskId": "e2b7e2d9-9631-4fb5-935f-266971ce2124",
+      "expectedRevision": 0,
+      "paused": true,
+      "steps": 2,
+      "sha256": "8827c6b148eedce5f52ca48c8a6771ebba4f01fdcee469176ea30a5e62f16f19"
+    }
+  ],
+  "scopeVerification": {
+    "lists": 6,
+    "spaces": 2,
+    "replacementSubscriptions": 6,
+    "scope": "one exact list per stable native endpoint slot",
+    "requiresSketchMigration": 233
+  }
+}

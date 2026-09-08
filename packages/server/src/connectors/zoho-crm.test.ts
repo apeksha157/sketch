@@ -12,6 +12,7 @@ import {
   makeProviderFileId,
   moduleToFileType,
   recordToSyncedItem,
+  toZohoModifiedSince,
 } from "./zoho-crm";
 
 const logger = pino({ level: "silent" });
@@ -88,6 +89,72 @@ describe("Zoho CRM connector", () => {
       "https://accounts.zoho.in/oauth/v2/token",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("refreshTokens treats a token expiring within the 30-minute buffer as stale", async () => {
+    const connector = createZohoCrmConnector();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ access_token: "new-token", expires_in: 3600 }));
+
+    const result = await connector.refreshTokens?.(
+      credentials({ expires_at: new Date(Date.now() + 20 * 60 * 1000).toISOString() }),
+    );
+
+    expect(result?.access_token).toBe("new-token");
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "https://accounts.zoho.in/oauth/v2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("refreshes and retries once when the access token expires mid-run", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "minted-mid-run", expires_in: 3600 }))
+      .mockResolvedValueOnce(jsonResponse({ users: [{ id: "u1" }] }));
+    const connector = createZohoCrmConnector();
+    const creds = credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() });
+
+    await expect(connector.validateCredentials(creds)).resolves.toBeUndefined();
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      2,
+      "https://accounts.zoho.in/oauth/v2/token",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchSpy).toHaveBeenNthCalledWith(
+      3,
+      "https://www.zohoapis.in/crm/v6/users?type=CurrentUser",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Zoho-oauthtoken minted-mid-run" }),
+      }),
+    );
+    expect(creds.access_token).toBe("minted-mid-run");
+  });
+
+  it("gives up after one mid-run retry when the refreshed token is still rejected", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "still-bad", expires_in: 3600 }))
+      .mockResolvedValueOnce(new Response("token expired", { status: 401 }));
+    const connector = createZohoCrmConnector();
+
+    await expect(
+      connector.validateCredentials(credentials({ expires_at: new Date(Date.now() + 60 * 1000).toISOString() })),
+    ).rejects.toThrow(/token is invalid or revoked; reconnect required/i);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("formats If-Modified-Since cursors to second precision with a numeric offset", () => {
+    expect(toZohoModifiedSince("2026-09-05T13:42:32.482Z")).toBe("2026-09-05T13:42:32+00:00");
+    expect(toZohoModifiedSince("2026-09-05T13:42:32Z")).toBe("2026-09-05T13:42:32+00:00");
+  });
+
+  it("passes an unparseable cursor through unchanged instead of throwing", () => {
+    expect(toZohoModifiedSince("not-a-date")).toBe("not-a-date");
   });
 
   it("discovers standard modules, skips inactive modules, and keeps parent-like order", async () => {
@@ -382,7 +449,7 @@ describe("Zoho CRM connector", () => {
       }
       if (url.includes("/Accounts?")) {
         expect(url).toContain("fields=");
-        expect((init?.headers as Record<string, string>)["If-Modified-Since"]).toBe("2026-01-01T00:00:00.000Z");
+        expect((init?.headers as Record<string, string>)["If-Modified-Since"]).toBe("2026-01-01T00:00:00+00:00");
         // Second page (token-based) returns empty to end pagination.
         if (url.includes("page_token=")) {
           return Promise.resolve(jsonResponse({ data: [], info: { more_records: false } }));

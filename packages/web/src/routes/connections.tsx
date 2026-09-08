@@ -281,6 +281,23 @@ function DirectConnectPanel({
 export function ConnectionsPage() {
   const auth = useDashboardAuth();
   const queryClient = useQueryClient();
+  const [benchmarkSetup] = useState(() => new URLSearchParams(window.location.search).get("benchmark") === "1");
+  const benchmarkIdentity = useQuery({
+    queryKey: ["benchmark-identity", auth.userId],
+    enabled: benchmarkSetup,
+    retry: false,
+    queryFn: async () => {
+      const response = await fetch("/api/benchmark-setup/identity", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error ?? "The shared benchmark identity could not be checked.");
+      return value as { identity: { name: string; email: string } };
+    },
+  });
   const [activeTab, setActiveTab] = useState<IntegrationsTab>(() => {
     if (typeof window === "undefined") return "applications";
     const params = new URLSearchParams(window.location.search);
@@ -534,6 +551,7 @@ export function ConnectionsPage() {
       return;
     }
 
+    if (benchmarkSetup && !benchmarkIdentity.isSuccess) return;
     const requestKey = `${provider.id}:${requestedAppConnect}`;
     if (directConnectRequestRef.current === requestKey) return;
     directConnectRequestRef.current = requestKey;
@@ -577,7 +595,15 @@ export function ConnectionsPage() {
     return () => {
       cancelled = true;
     };
-  }, [provider, requestedAppConnect, serversQuery.isLoading, connectionsQuery.isLoading, connectionsQuery.data]);
+  }, [
+    provider,
+    requestedAppConnect,
+    serversQuery.isLoading,
+    connectionsQuery.isLoading,
+    connectionsQuery.data,
+    benchmarkSetup,
+    benchmarkIdentity.isSuccess,
+  ]);
 
   const invalidateAll = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
@@ -594,6 +620,18 @@ export function ConnectionsPage() {
         <p className="mt-1 text-[13px] text-muted-foreground">Connect apps and tools to extend your workspace.</p>
       </div>
 
+      {benchmarkSetup && (
+        <div className="mt-5 rounded-lg border p-4 text-sm">
+          {benchmarkIdentity.isPending && <p>Checking the shared benchmark identity…</p>}
+          {benchmarkIdentity.error && <p role="alert">{benchmarkIdentity.error.message}</p>}
+          {benchmarkIdentity.data && (
+            <p>
+              Benchmarks use {benchmarkIdentity.data.identity.email}. Manage the connections below, then return to
+              Platform. Its connection status refreshes automatically.
+            </p>
+          )}
+        </div>
+      )}
       <div className="mt-6 flex items-center gap-6 border-b border-border">
         <TabButton
           label="Applications"

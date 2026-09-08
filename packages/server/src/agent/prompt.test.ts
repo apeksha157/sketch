@@ -252,7 +252,8 @@ describe("buildSystemContext", () => {
       expect(result).toContain("Deterministic runs saved code and action steps exactly as written with no agent steps");
       expect(result).toContain("Hybrid combines deterministic steps with bounded agent steps");
       expect(result).toContain("Agent uses agent steps only and has no code or action steps");
-      expect(result).toContain("with Deterministic, Hybrid, and Agent as the choices");
+      expect(result).toContain("Choose the execution mode from the requested behavior");
+      expect(result).not.toContain("Execution mode must be the first question");
     });
 
     it("prefers deterministic action steps for fixed automation work", () => {

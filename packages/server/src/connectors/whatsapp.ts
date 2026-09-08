@@ -1,4 +1,5 @@
 import { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
+import { resolveChunkEngineKnobs } from "./config-default";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import type { BrowseResult, Connector, ConnectorCredentials, SyncedItem } from "./types";
 import {
@@ -130,6 +131,9 @@ export function createWhatsAppConnector(): Connector {
         provisionalRefreshMaxMinutes:
           positiveInteger(scopeConfig.chunkProvisionalRefreshMaxMinutes) ??
           DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES,
+        minMessages:
+          positiveInteger(scopeConfig.chunkMinMessages) ??
+          resolveChunkEngineKnobs("WHATSAPP_CHUNK", undefined).minMessages,
         onSkippedNoScope: () => {
           skippedNoScope += 1;
         },

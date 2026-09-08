@@ -792,18 +792,37 @@ describe("handleSendMessage", () => {
     });
   });
 
-  it("rejects sending to self", async () => {
+  it.each(["slack", "whatsapp"] as const)("sends a message to yourself on %s", async (platform) => {
+    const alice = makeUser({
+      id: "user-alice",
+      name: "Alice",
+      slack_user_id: platform === "slack" ? "S123" : null,
+      whatsapp_number: platform === "whatsapp" ? "+1234567890" : null,
+    });
+    const sendDm = vi.fn().mockResolvedValue({ channelId: "self-dm", messageRef: "message-1" });
+    const createInboxMessage = vi.fn().mockResolvedValue({ id: "inbox-1" });
     const result = await handleSendMessage(
-      { recipientUserId: "user-alice", message: "hi" },
+      { recipientUserId: "user-alice", message: "Test message" },
       {
-        inboxMessagesRepo: makeInboxMessagesRepoMock(),
-        userRepo: makeUserRepoMock(),
-        sendDm: vi.fn(),
+        inboxMessagesRepo: { ...makeInboxMessagesRepoMock(), create: createInboxMessage },
+        userRepo: makeUserRepoMock({ findById: async () => alice }),
+        sendDm,
         currentUserId: "user-alice",
       },
     );
 
-    expect(result.content[0].text).toBe("Error: cannot send a message to yourself.");
+    expect(result.isError).not.toBe(true);
+    expect(sendDm).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-alice", platform, message: "Test message" }),
+    );
+    expect(createInboxMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderUserId: "user-alice",
+        recipientUserId: "user-alice",
+        message: "Test message",
+        platform,
+      }),
+    );
   });
 
   it("rejects unknown recipients", async () => {

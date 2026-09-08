@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { BenchmarkRun, CaseResult } from "./contracts";
+import type { BenchmarkEvent, BenchmarkRun, CaseResult } from "./contracts";
 import type { createBenchmarkModel } from "./model";
 
 export type OwnerRequest = (path: string, init?: RequestInit) => Promise<Response>;
@@ -14,6 +14,23 @@ export interface BuilderTurn {
   text: string;
   question?: BuilderQuestion;
   batch?: { batchId: string; questions: BuilderQuestion[] };
+  events?: BenchmarkEvent[];
+  usage?: {
+    turns: number;
+    toolCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+    stopReason: string | null;
+  };
+}
+export class BuilderStreamError extends Error {
+  constructor(
+    message: string,
+    readonly turn: BuilderTurn,
+  ) {
+    super(message);
+  }
 }
 
 /** Consume the production UI stream completely; an HTTP 200 is only the start of a builder turn. */
@@ -42,6 +59,42 @@ export async function readBuilderTurn(response: Response): Promise<BuilderTurn> 
     }
     if (event.type === "data-question") result.question = event.data;
     if (event.type === "data-question-batch") result.batch = event.data;
+    if (event.type === "data-benchmark-tool") {
+      const tool = z
+        .object({ name: z.string().max(256), failed: z.boolean(), at: z.string().max(40) })
+        .parse(event.data);
+      result.events ??= [];
+      if (result.events.length < 300)
+        result.events.push({
+          id: randomUUID(),
+          at: tool.at,
+          phase: "agent",
+          name: tool.name,
+          status: tool.failed ? "failed" : "completed",
+        });
+    }
+    if (event.type === "data-benchmark-usage")
+      result.usage = z
+        .object({
+          turns: z.number().nonnegative(),
+          toolCalls: z.number().nonnegative(),
+          inputTokens: z.number().nonnegative(),
+          outputTokens: z.number().nonnegative(),
+          costUsd: z.number().nonnegative(),
+          stopReason: z.string().nullable(),
+        })
+        .parse(event.data);
+    if (event.type === "data-interruption") {
+      result.events ??= [];
+      result.events.push({
+        id: randomUUID(),
+        at: new Date().toISOString(),
+        phase: "builder",
+        name: "Builder interrupted",
+        status: "failed",
+        reason: typeof event.data?.reason === "string" ? event.data.reason.slice(0, 200) : "interrupted",
+      });
+    }
     if (event.type === "error" || event.type === "data-interruption") failure = true;
   }
   try {
@@ -59,13 +112,62 @@ export async function readBuilderTurn(response: Response): Promise<BuilderTurn> 
       }
     }
     if (buffer.trim()) line(buffer.trimEnd());
+  } catch (error) {
+    throw new BuilderStreamError(error instanceof Error ? error.message : "The builder stream failed.", result);
   } finally {
     if (!completed) await reader.cancel();
     reader.releaseLock();
   }
-  if (failure) throw new Error("The builder was interrupted or reported an error. Inspect its conversation in Sketch.");
-  if (!completed) throw new Error("The builder stream ended without a completion marker.");
+  if (failure)
+    throw new BuilderStreamError(
+      "The builder was interrupted or reported an error. Partial conversation and tool evidence were retained.",
+      result,
+    );
+  if (!completed) throw new BuilderStreamError("The builder stream ended without a completion marker.", result);
   return result;
+}
+
+async function consumeTurn(response: Response, item: CaseResult, save: () => Promise<void>): Promise<BuilderTurn> {
+  const started = Date.now();
+  function retain(turn: BuilderTurn) {
+    item.events = [...(item.events ?? []), ...(turn.events ?? [])].slice(-600);
+    const previous = item.metrics ?? {
+      turns: 0,
+      toolCalls: 0,
+      failedToolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0,
+      durationMs: 0,
+      stopReasons: [],
+    };
+    item.metrics = {
+      turns: previous.turns + (turn.usage?.turns ?? 0),
+      toolCalls:
+        previous.toolCalls +
+        (turn.usage?.toolCalls ?? turn.events?.filter((event) => event.phase === "agent").length ?? 0),
+      failedToolCalls:
+        previous.failedToolCalls +
+        (turn.events?.filter((event) => event.phase === "agent" && event.status === "failed").length ?? 0),
+      inputTokens: previous.inputTokens + (turn.usage?.inputTokens ?? 0),
+      outputTokens: previous.outputTokens + (turn.usage?.outputTokens ?? 0),
+      costUsd: previous.costUsd + (turn.usage?.costUsd ?? 0),
+      durationMs: previous.durationMs + Date.now() - started,
+      stopReasons: [...previous.stopReasons, ...(turn.usage?.stopReason ? [turn.usage.stopReason] : [])],
+    };
+  }
+  try {
+    const turn = await readBuilderTurn(response);
+    retain(turn);
+    return turn;
+  } catch (error) {
+    if (error instanceof BuilderStreamError) {
+      retain(error.turn);
+      if (error.turn.text) item.conversation.push({ role: "assistant", text: error.turn.text.slice(0, 20_000) });
+      await save();
+    }
+    throw error;
+  }
 }
 
 export async function ownerJson<T>(request: OwnerRequest, path: string, method = "GET", body?: unknown): Promise<T> {
@@ -85,7 +187,7 @@ export async function ownerJson<T>(request: OwnerRequest, path: string, method =
 export async function exerciseDirectChat(params: {
   request: OwnerRequest;
   item: CaseResult;
-  model: ReturnType<typeof createBenchmarkModel>;
+  model: Pick<ReturnType<typeof createBenchmarkModel>, "manifest" | "answer" | "generate">;
   manifest: BenchmarkRun["model"];
   prompt: string;
   facts: string[];
@@ -109,13 +211,15 @@ export async function exerciseDirectChat(params: {
         throw new Error("Sketch model settings changed during the benchmark.");
       if (typeof message === "string") item.conversation.push({ role: "user", text: message });
       await save();
-      const turn = await readBuilderTurn(
+      const turn = await consumeTurn(
         await request(`/api/web-chat?conversationId=${item.conversationId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message, ...(round === 0 ? { attachments: params.attachments } : {}) }),
           signal,
         }),
+        item,
+        save,
       );
       item.providerReadTaskIds = [
         ...new Set([...(item.providerReadTaskIds ?? []), ...(turn.providerReadTaskIds ?? [])]),
@@ -159,7 +263,7 @@ export async function exerciseDirectChat(params: {
 export async function exerciseBuilder(params: {
   request: OwnerRequest;
   item: CaseResult;
-  model: ReturnType<typeof createBenchmarkModel>;
+  model: Pick<ReturnType<typeof createBenchmarkModel>, "manifest" | "answer" | "generate">;
   manifest: BenchmarkRun["model"];
   prompt: string;
   facts: string[];
@@ -217,7 +321,7 @@ export async function exerciseBuilder(params: {
         }),
         signal,
       });
-      const turn = await readBuilderTurn(response);
+      const turn = await consumeTurn(response, item, save);
       item.providerReadTaskIds = [
         ...new Set([...(item.providerReadTaskIds ?? []), ...(turn.providerReadTaskIds ?? [])]),
       ].slice(0, 1000);

@@ -10,6 +10,7 @@ export const benchmarkSetupRoute = createRoute({
 });
 
 interface SetupContext {
+  connectionError?: string;
   owner: { name: string; email: string };
   connections: { id: string; name: string }[];
   connectUrl: string;
@@ -106,6 +107,11 @@ export function BenchmarkSetupPage() {
           </section>
           {context && (
             <section className="space-y-4 rounded-xl border p-5">
+              {context.connectionError && (
+                <p role="alert" className="text-sm">
+                  {context.connectionError}
+                </p>
+              )}
               <h2 className="font-medium">2. Choose what to test</h2>
               <label className="flex flex-col gap-2 text-sm">
                 Test profile

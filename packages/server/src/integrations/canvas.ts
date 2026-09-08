@@ -353,7 +353,11 @@ export class CanvasProvider implements IntegrationProvider {
 
   async executeAction(request: IntegrationActionRequest, signal?: AbortSignal): Promise<unknown> {
     if (isCanvasBlockedComponentKey(request.componentKey)) {
-      throw new CanvasProviderRequestError(409, "CLI_INTEGRATION", canvasBlockedIntegrationMessage());
+      throw new CanvasProviderRequestError(
+        409,
+        "CLI_INTEGRATION",
+        canvasBlockedIntegrationMessage(request.componentKey),
+      );
     }
     const url = new URL("/api/direct-executions/action", this.apiUrl);
     const requestSignal = AbortSignal.timeout(ACTION_REQUEST_TIMEOUT_MS);
@@ -415,11 +419,21 @@ export class CanvasProvider implements IntegrationProvider {
       },
       launcherEnvName: "CANVAS_CLI",
       argvPolicy: (argv) => {
+        const blockedClickUp = argv.some((value) => {
+          const normalized = value.trim().toLowerCase();
+          return (
+            isCanvasBlockedComponentKey(normalized) ||
+            normalized.includes("clickup") ||
+            normalized.includes("click-up") ||
+            normalized.includes("click_up")
+          );
+        });
         const blocked = argv.some((value) => {
           const normalized = value.trim().toLowerCase();
           if (isCanvasBlockedAppId(normalized) || isCanvasBlockedComponentKey(normalized)) return true;
-          return normalized.includes("github") || normalized.includes("linear") || normalized.includes("clickup");
+          return normalized.includes("github") || normalized.includes("linear");
         });
+        if (blockedClickUp) return { allowed: false, message: canvasBlockedIntegrationMessage("clickup") };
         return blocked ? { allowed: false, message: canvasBlockedIntegrationMessage() } : { allowed: true };
       },
     };

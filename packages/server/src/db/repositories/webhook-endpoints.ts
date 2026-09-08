@@ -55,8 +55,13 @@ export function createWebhookEndpointsRepository(
     return db.selectFrom("webhook_endpoints").selectAll().where("id", "=", id).executeTakeFirst();
   }
 
-  async function getByTaskId(taskId: string): Promise<WebhookEndpointRow | undefined> {
-    return db.selectFrom("webhook_endpoints").selectAll().where("task_id", "=", taskId).executeTakeFirst();
+  async function getByTaskId(taskId: string, slot = "default"): Promise<WebhookEndpointRow | undefined> {
+    return db
+      .selectFrom("webhook_endpoints")
+      .selectAll()
+      .where("task_id", "=", taskId)
+      .where("slot", "=", slot)
+      .executeTakeFirst();
   }
 
   async function activate(endpoint: WebhookEndpointRow): Promise<WebhookEndpointRow> {
@@ -65,7 +70,10 @@ export function createWebhookEndpointsRepository(
     await db
       .updateTable("webhook_endpoints")
       .set({
-        status: endpoint.verification_json ? WEBHOOK_ENDPOINT_STATUS_PENDING : WEBHOOK_ENDPOINT_STATUS_ACTIVE,
+        status:
+          endpoint.verification_json || endpoint.slot !== "default"
+            ? WEBHOOK_ENDPOINT_STATUS_PENDING
+            : WEBHOOK_ENDPOINT_STATUS_ACTIVE,
         generation: sql<number>`generation + 1`,
         updated_at: now(),
       })
@@ -77,8 +85,8 @@ export function createWebhookEndpointsRepository(
   }
 
   return {
-    async ensureForTask(taskId: string): Promise<WebhookEndpointProvisionResult> {
-      const existing = await getByTaskId(taskId);
+    async ensureForTask(taskId: string, slot = "default"): Promise<WebhookEndpointProvisionResult> {
+      const existing = await getByTaskId(taskId, slot);
       if (existing) return provisionResult(await activate(existing), false);
 
       const timestamp = now();
@@ -87,14 +95,15 @@ export function createWebhookEndpointsRepository(
         .values({
           id: idGenerator(),
           task_id: taskId,
-          status: WEBHOOK_ENDPOINT_STATUS_ACTIVE,
+          slot,
+          status: slot === "default" ? WEBHOOK_ENDPOINT_STATUS_ACTIVE : WEBHOOK_ENDPOINT_STATUS_PENDING,
           created_at: timestamp,
           updated_at: timestamp,
         })
-        .onConflict((oc) => oc.column("task_id").doNothing())
+        .onConflict((oc) => oc.columns(["task_id", "slot"]).doNothing())
         .executeTakeFirst();
       const created = Number(result.numInsertedOrUpdatedRows ?? 0) > 0;
-      const row = await getByTaskId(taskId);
+      const row = await getByTaskId(taskId, slot);
       if (!row) throw new Error(`Webhook endpoint could not be ensured for task ${taskId}`);
       return provisionResult(await activate(row), created);
     },
@@ -112,6 +121,10 @@ export function createWebhookEndpointsRepository(
       return getByTaskId(taskId);
     },
 
+    async listByTaskId(taskId: string): Promise<WebhookEndpointRow[]> {
+      return db.selectFrom("webhook_endpoints").selectAll().where("task_id", "=", taskId).orderBy("slot").execute();
+    },
+
     async getById(id: string): Promise<WebhookEndpointRow | undefined> {
       return getById(id);
     },
@@ -126,6 +139,7 @@ export function createWebhookEndpointsRepository(
           .selectFrom("webhook_endpoints")
           .select("source_binding")
           .where("task_id", "=", taskId)
+          .where("source_binding", "is not", null)
           .executeTakeFirst();
         if (endpoint?.source_binding != null) {
           throw new Error("Delete the remote webhook through its provider API before deleting this endpoint.");

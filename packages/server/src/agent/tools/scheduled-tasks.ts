@@ -33,6 +33,7 @@ import {
 } from "../../automation/persistence";
 import { webChatTaskConversationAssociation } from "../../automation/task-conversations";
 import { WebhookBindingError } from "../../automation/webhook-bindings";
+import { lastWebhookDeliveryMetadata, manageWebhookEndpointSlot } from "../../automation/webhook-endpoints";
 import { INT4_MAX } from "../../db/limits";
 import { createAutomationLocksRepository } from "../../db/repositories/automation-locks";
 import type { createAutomationRunsRepository } from "../../db/repositories/automation-runs";
@@ -79,6 +80,8 @@ const manageScheduledTasksSchema = {
       "getRun",
       "open",
       "share",
+      "ensureWebhookEndpoint",
+      "retireWebhookEndpoint",
       "updateStepContent",
       "lockStatus",
       "steal",
@@ -89,6 +92,8 @@ const manageScheduledTasksSchema = {
 - 'list': list automations in this context. Always use this before editing by name; inspect each returned task ID and title. Never ask setup questions or invoke create-automation before resolving the task ID.
 - 'update': modify an automation (requires task_id unless the current builder automation is implicit). Successful update emits the builder-opening artifact.
 - 'open': open an existing automation in its builder (requires task_id). This is a read-only routing action; it does not change the automation.
+- 'ensureWebhookEndpoint': create or retrieve a stable native webhook endpoint slot (task_id and webhook_slot), owner-only while paused. Register the returned endpoint with the existing provider API tool.
+- 'retireWebhookEndpoint': retire an unused endpoint slot after deleting its exact remote subscription, owner-only while paused. The default slot can be retired once another source is connected; preserve working subscriptions.
 - 'get': inspect one complete automation definition, including step content and run history (requires task_id)
 - 'remove': delete an automation (requires task_id)
 - 'pause': pause an automation (requires task_id)
@@ -101,6 +106,13 @@ const manageScheduledTasksSchema = {
 - 'updateStepContent': update a single step's prompt or script (requires task_id, step_id, step_content)
 - 'lockStatus': report who currently holds the edit lock on an automation and when it expires (requires task_id)
 - 'steal': request the edit lock on an automation another editor is holding (requires task_id)`,
+    ),
+  webhook_slot: z
+    .string()
+    .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/)
+    .optional()
+    .describe(
+      "Stable native endpoint slot; default retains the original endpoint. Use disjoint scopes for additional slots.",
     ),
   prompt: z
     .string()
@@ -215,6 +227,8 @@ const authoredScheduledTasksSchema = {
       "share",
       "lockStatus",
       "steal",
+      "ensureWebhookEndpoint",
+      "retireWebhookEndpoint",
     ])
     .describe(
       `Action to perform.
@@ -234,6 +248,7 @@ const authoredScheduledTasksSchema = {
 - 'lockStatus': report who currently holds the edit lock on an automation and when it expires (requires task_id)
 - 'steal': request the edit lock on an automation another editor is holding (requires task_id)`,
     ),
+  webhook_slot: manageScheduledTasksSchema.webhook_slot,
   request: z
     .string()
     .optional()
@@ -266,9 +281,12 @@ type ManageScheduledTasksParams = {
     | "getRun"
     | "open"
     | "share"
+    | "ensureWebhookEndpoint"
+    | "retireWebhookEndpoint"
     | "updateStepContent"
     | "lockStatus"
     | "steal";
+  webhook_slot?: string;
   request?: string;
   prompt?: string;
   execution_mode?: AutomationExecutionMode;
@@ -762,11 +780,18 @@ async function webhookResponseMetadata(
   triggerConfig: WorkflowStep["triggerConfig"] | undefined,
 ): Promise<Record<string, unknown> | null> {
   if (triggerConfig?.type !== "webhook") return null;
-  const endpoint = deps.db
-    ? await createWebhookEndpointRepository(deps.db, deps.encryptionKey).getByTaskId(taskId)
-    : undefined;
+  const rows = deps.db ? await createWebhookEndpointRepository(deps.db, deps.encryptionKey).listByTaskId(taskId) : [];
+  const endpoints = await Promise.all(
+    rows.map(async (endpoint) => ({
+      endpoint,
+      lastDelivery: deps.db ? await lastWebhookDeliveryMetadata(deps.db, taskId, endpoint.id) : undefined,
+    })),
+  );
+  const primary = endpoints.find((value) => value.endpoint.slot === "default");
   const metadata = addWebhookEndpointMetadata(triggerConfig, taskId, {
-    endpoint,
+    endpoint: primary?.endpoint,
+    lastDelivery: primary?.lastDelivery,
+    endpoints,
     baseUrl: deps.config?.BASE_URL,
     port: deps.config?.PORT,
   });
@@ -1094,6 +1119,8 @@ export async function handleManageScheduledTasks(
       "run",
       "share",
       "steal",
+      "ensureWebhookEndpoint",
+      "retireWebhookEndpoint",
       "updateStepContent",
     ].includes(action)
   ) {
@@ -1102,7 +1129,11 @@ export async function handleManageScheduledTasks(
 
   if (
     ctx.conversationKind === "web_chat" &&
-    (action === "add" || action === "update" || action === "updateStepContent")
+    (action === "add" ||
+      action === "update" ||
+      action === "updateStepContent" ||
+      action === "ensureWebhookEndpoint" ||
+      action === "retireWebhookEndpoint")
   ) {
     return text(
       "Automation setup and edits happen in the builder. In web chat, use list to resolve an existing automation, then use open with its task_id. No changes were made.",
@@ -1149,6 +1180,8 @@ export async function handleManageScheduledTasks(
   };
 
   const OWNERSHIP_GUARDED_ACTIONS = [
+    "ensureWebhookEndpoint",
+    "retireWebhookEndpoint",
     "update",
     "get",
     "remove",
@@ -1168,7 +1201,11 @@ export async function handleManageScheduledTasks(
   // guarded action passes for owner, grantee, or admin. Persistence still
   // enforces owner-or-grantee inside its own transactions, so admin mutations
   // of a foreign task are denied there (L5 admin restore resolves this).
-  const OWNER_ONLY_ACTIONS = new Set<ManageScheduledTasksParams["action"]>(["share"]);
+  const OWNER_ONLY_ACTIONS = new Set<ManageScheduledTasksParams["action"]>([
+    "share",
+    "ensureWebhookEndpoint",
+    "retireWebhookEndpoint",
+  ]);
   const OWNER_OR_ADMIN_ACTIONS = new Set<ManageScheduledTasksParams["action"]>(["remove", "mute", "unmute"]);
   let guardedTask: ScheduledTask | null = null;
   if (task_id && OWNERSHIP_GUARDED_ACTIONS.includes(action)) {
@@ -1629,6 +1666,47 @@ export async function handleManageScheduledTasks(
         return text("Error: task not found.");
       }
       return text(`- Open your automation - ${buildBuilderUrl(guardedTask.id, deps.config)}`);
+    }
+
+    case "ensureWebhookEndpoint":
+    case "retireWebhookEndpoint": {
+      if (!task_id || !params.webhook_slot || !ctx.createdBy || !deps.db)
+        return text("Error: task_id, webhook_slot, and an authenticated owner context are required.");
+      if (currentAutomation && currentAutomation.taskId !== task_id)
+        return text("Error: use the current automation's endpoint slots.");
+      const acquired = await acquireAgentLease(deps.db, task_id, ctx);
+      if (acquired.kind !== "held") return text("Error: the automation editing lease is unavailable.");
+      const lease = acquired.lease;
+      try {
+        const endpoint = await manageWebhookEndpointSlot({
+          db: deps.db,
+          taskId: task_id,
+          userId: ctx.createdBy,
+          slot: params.webhook_slot,
+          lease,
+          retire: action === "retireWebhookEndpoint",
+        });
+        return text(
+          JSON.stringify({
+            slot: endpoint.slot,
+            ...addWebhookEndpointMetadata({ type: "webhook" }, task_id, {
+              endpoint,
+              baseUrl: deps.config?.BASE_URL,
+              port: deps.config?.PORT,
+            }),
+          }),
+        );
+      } catch (error) {
+        return text(error instanceof WebhookBindingError ? error.message : "Error: endpoint slot could not be saved.");
+      } finally {
+        if (lease.releaseAfterMutation)
+          await releaseLock(deps.db, {
+            taskId: task_id,
+            userId: ctx.createdBy,
+            sessionId: lease.sessionId,
+            generation: lease.generation,
+          });
+      }
     }
 
     case "get": {

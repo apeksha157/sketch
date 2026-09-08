@@ -1479,6 +1479,7 @@ describe("executeTaskById() queueing", () => {
       await scheduler.executeTaskById(row.id, { preserveTaskState: true, runMode: "test" });
 
       expect(lastExecuteAutomationParams?.runMode).toBe("test");
+      expect(lastExecuteAutomationParams?.triggerData).toEqual({ type: "test" });
       expect(lastExecuteAutomationParams?.sendMessage).toBeUndefined();
       expect((deps._slack as ReturnType<typeof buildMockSlack>)?.postMessage).not.toHaveBeenCalled();
       expect((deps._slack as ReturnType<typeof buildMockSlack>)?.postThreadReply).not.toHaveBeenCalled();
