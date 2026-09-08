@@ -216,6 +216,8 @@ async function deleteMaterializedFactMentions(
     `${connectorType}_parent_entity`,
     "assignee",
     "parent_entity",
+    "zoho_crm_account_rollup",
+    "linkedin_company_rollup",
   ];
   await forEachChunk(indexedFileIds, async (batch) => {
     await db

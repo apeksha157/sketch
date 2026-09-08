@@ -21,8 +21,9 @@ export type MintStageKey = "neighbourhood" | "gatherContext" | "extractCandidate
  * The `Search` tool's stages, in run order. Disjoint from the other two key sets, so a
  * report always says which pipeline produced it.
  *
- * `rerank` is the tool's own post-sort, which happens after `search()` returns. It is a
- * stage in its own right because it, not `finalize`, decides the order the caller sees.
+ * `rerank` is retained for dev-tools compatibility and carries the settled positions
+ * after `search()` returns. Entity ranking is applied only inside fusion, so this stage
+ * is reported as skipped and never changes the order.
  */
 export type SearchStageKey =
   | "discoverEntities"
@@ -53,8 +54,8 @@ export type StageOutcome = {
  * One scored candidate's journey through hybrid search.
  *
  * The `StageOutcome` shape cannot carry a ranking, so search reports this instead. Emitted
- * once, on `rerank` — positions do not settle until the recency slice, the email collapse
- * and the tool's post-sort have all run.
+ * once, on `rerank` — positions do not settle until the recency slice and email collapse
+ * have both run.
  */
 export interface SearchCandidate {
   fileId: string;

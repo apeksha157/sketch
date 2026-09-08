@@ -5,15 +5,16 @@ import {
   KIND_TO_RULES,
   SEARCHABLE_SOURCES,
   SEARCH_KINDS,
-  filterAccessibleFileIds,
   getFileContent,
   kindsForSource,
+  normalizeDomainFilter,
   search,
   sourcesForKind,
 } from "../../connectors/search";
 import type { DevSearchTraceOrigin, DevSearchTraceStatus } from "../../db/repositories/dev-search-traces";
 import { createEntityRepository } from "../../db/repositories/entities";
 import { createRawContentRepository } from "../../db/repositories/raw-contents";
+import { contentPrincipalDeps, filterEntityRowsForPublic } from "./entity-visibility";
 import { createSearchTraceCapture } from "./search-trace";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
@@ -54,9 +55,23 @@ export const searchToolSchema = {
     .describe(
       "Semantic content kind. meeting=Teams/Fireflies/Otter meeting transcripts, " +
         "doc=Drive/Notion/ClickUp Docs/Linear projects, task=ClickUp tasks/Linear issues, " +
-        "message=conversation/WhatsApp/Slack chats, email=Outlook/Gmail emails.",
+        "message=conversation/WhatsApp/Slack/LinkedIn, email=Outlook/Gmail emails.",
     ),
   source: z.enum(SEARCHABLE_SOURCES).optional().describe("Filter to a specific source. Omit to search all."),
+  fileTypes: z.array(z.string()).optional().describe("Filter to indexed file_type values, ANDed with kind/source."),
+  threadId: z.string().optional().describe("Filter to a provider thread ID from a sketch_get_thread result."),
+  parentRecordId: z
+    .string()
+    .optional()
+    .describe("Filter to the providerId of a CRM record from a search result, e.g. Contacts:4684061000037194128."),
+  participantEmail: z
+    .string()
+    .optional()
+    .describe("Filter to files with an attendee or correspondent fact for this email address."),
+  domain: z
+    .string()
+    .optional()
+    .describe("Filter to files with an attendee or correspondent fact under this email domain."),
   sortBy: z
     .enum(["relevance", "recency"])
     .optional()
@@ -82,9 +97,12 @@ export const searchEntitiesToolSchema = {
     ),
 };
 
-export const getEntityContextToolDescription = `Get cross-source context for an entity — all recent mentions across meetings, tasks, docs, and other indexed content. Returns a formatted timeline showing where and when this entity was referenced.
-
-Use this after SearchEntities to dive deeper into a specific entity. The response is a human-readable summary, not raw data.`;
+export const getEntityContextToolDescription = [
+  "Legacy human-readable entity timeline.",
+  "Prefer sketch_get_entity for structured JSON with identity, relations, file IDs, pagination, " +
+    "company/person rollups, and optional inline timeline content.",
+  "Use this only when a brief formatted summary is better than raw data.",
+].join("\n\n");
 
 export const getEntityContextToolSchema = {
   entityId: z.string().describe("The entity ID from SearchEntities results."),
@@ -125,42 +143,6 @@ export type SearchEntitiesArgs = z.infer<z.ZodObject<typeof searchEntitiesToolSc
 export type GetEntityContextArgs = z.infer<z.ZodObject<typeof getEntityContextToolSchema>>;
 export type GetFileContentArgs = z.infer<z.ZodObject<typeof getFileContentToolSchema>>;
 
-function contentPrincipalDeps(deps: SketchMcpDeps) {
-  return { ...deps, adminBypass: { enabled: deps.adminReadAllEnabled === true } };
-}
-
-async function filterEntityRowsForPublic<
-  T extends { id: string; source_type: string; subtype: string | null; aliases: string | null },
->(deps: SketchMcpDeps, rows: T[]): Promise<T[]> {
-  if (!deps.publicMcp?.filterEntityMetadata || !deps.db || rows.length === 0) return rows;
-
-  const userPrincipals = await resolveContentPrincipals(contentPrincipalDeps(deps));
-  if (userPrincipals === undefined) return rows;
-  if (userPrincipals.length === 0) return [];
-
-  const mentions = await deps.db
-    .selectFrom("entity_mentions")
-    .select(["entity_id", "indexed_file_id"])
-    .where(
-      "entity_id",
-      "in",
-      rows.map((row) => row.id),
-    )
-    .execute();
-
-  const accessibleIds = await filterAccessibleFileIds(
-    deps.db,
-    mentions.map((mention) => mention.indexed_file_id),
-    userPrincipals,
-    deps.slackEntitySyncEnabled ?? true,
-  );
-  const visibleEntityIds = new Set(
-    mentions.filter((mention) => accessibleIds.has(mention.indexed_file_id)).map((mention) => mention.entity_id),
-  );
-
-  return rows.filter((row) => visibleEntityIds.has(row.id));
-}
-
 function parseAliases(value: string | null): string[] {
   return value ? (JSON.parse(value) as string[]) : [];
 }
@@ -178,6 +160,11 @@ export async function handleSearch(
     entityIdsMode,
     kind,
     source,
+    fileTypes,
+    threadId,
+    parentRecordId,
+    participantEmail,
+    domain,
     sortBy,
     after,
     before,
@@ -189,6 +176,7 @@ export async function handleSearch(
   if (!deps.db) {
     return { content: [{ type: "text", text: "Search not available." }] };
   }
+  const normalizedDomain = normalizeDomainFilter(domain);
 
   const trace = createSearchTraceCapture({
     deps,
@@ -201,6 +189,11 @@ export async function handleSearch(
       entityIdsMode,
       kind,
       source,
+      fileTypes,
+      threadId,
+      parentRecordId,
+      participantEmail,
+      domain: normalizedDomain,
       sortBy,
       after,
       before,
@@ -234,6 +227,16 @@ export async function handleSearch(
     );
   }
 
+  if (participantEmail && normalizedDomain) {
+    return done(
+      "empty",
+      "participantEmail and domain cannot both be provided. " +
+        "Use participantEmail for an exact address or domain for any attendee/correspondent at that domain.",
+      0,
+      "participantEmail combined with domain",
+    );
+  }
+
   /**
    * A kind whose rules never reach the given source compiles to an empty
    * intersection — the query cannot match anything regardless of the query
@@ -256,12 +259,23 @@ export async function handleSearch(
 
   const trimmedQuery = (searchQuery ?? "").trim();
   const callerProvidedEntityIds = !!(entityId || (entityIds && entityIds.length > 0));
-  const hasFilter = !!kind || !!source || callerProvidedEntityIds || !!after || !!before;
+  const hasFilter =
+    !!kind ||
+    !!source ||
+    callerProvidedEntityIds ||
+    !!fileTypes?.length ||
+    !!threadId ||
+    !!parentRecordId ||
+    !!participantEmail ||
+    !!normalizedDomain ||
+    !!after ||
+    !!before;
 
   if (!trimmedQuery && !hasFilter) {
     return done(
       "empty",
-      "Need a query or at least one filter (kind, source, entityIds, after, before).",
+      "Need a query or at least one filter " +
+        "(kind, source, entityIds, fileTypes, threadId, parentRecordId, participantEmail, domain, after, before).",
       0,
       "no query and no filter",
     );
@@ -274,7 +288,7 @@ export async function handleSearch(
   let entityMatches: EntityRow[] = [];
   const skipAutoEntityBoost = callerProvidedEntityIds || trimmedQuery === "";
   if (!skipAutoEntityBoost) {
-    entityMatches = await entityRepo.searchEntities(trimmedQuery, { limit: 5 });
+    entityMatches = await entityRepo.searchEntities(trimmedQuery, { limit: 10, tokenFallback: true });
   } else if (callerProvidedEntityIds) {
     const ids = entityIds && entityIds.length > 0 ? entityIds : entityId ? [entityId] : [];
     entityMatches = await entityRepo.getEntities(ids);
@@ -282,7 +296,7 @@ export async function handleSearch(
   entityMatches = await filterEntityRowsForPublic(deps, entityMatches);
 
   if (entityMatches.length > 0) {
-    const entityParts = entityMatches.map((e) => {
+    const entityParts = entityMatches.slice(0, 5).map((e) => {
       const aliases = parseAliases(e.aliases);
       const aliasStr = aliases.length > 0 ? `, aliases: ${aliases.join(", ")}` : "";
       const subtype = displayEntitySubtype(e.source_type, e.subtype);
@@ -293,27 +307,27 @@ export async function handleSearch(
     lines.push("");
   }
 
-  let entityFileIds: Set<string> | undefined;
-  if (!skipAutoEntityBoost && entityMatches.length > 0) {
-    const matchIds = entityMatches.map((e) => e.id);
-    const mentions = await deps.db
-      .selectFrom("entity_mentions")
-      .select("indexed_file_id")
-      .where("entity_id", "in", matchIds)
-      .execute();
-    entityFileIds = new Set(mentions.map((m) => m.indexed_file_id));
-  }
-
   const effectiveLimit = resultLimit ?? (sortBy === "recency" ? 3 : 10);
   const userPrincipals = await resolveContentPrincipals(contentPrincipalDeps(deps));
   if (deps.publicMcp && userPrincipals !== undefined && userPrincipals.length === 0) {
     const label = trimmedQuery ? `"${trimmedQuery}"` : "the given filters";
     return done("empty", `No results found for ${label}.`, 0, "public MCP caller resolved to no principals");
   }
+  /**
+   * Public filtering cannot hide a file that would otherwise receive this
+   * boost. An entity filtered from this set has no visible mentioning file, so
+   * none of its entity links can occur in the caller's result set.
+   */
+  const boostEntityIds = !skipAutoEntityBoost ? entityMatches.map((entity) => entity.id) : undefined;
   const results = await search(deps.db, trimmedQuery, {
     stageReport,
     kindRules: kind ? KIND_TO_RULES[kind] : undefined,
     source,
+    fileTypes,
+    threadId,
+    parentRecordId,
+    participantEmail,
+    domain: normalizedDomain,
     limit: effectiveLimit,
     after,
     before,
@@ -325,6 +339,7 @@ export async function handleSearch(
     ...(userPrincipals === undefined ? { accessBypassReason: "admin" as const } : {}),
     slackEntitySyncEnabled: deps.slackEntitySyncEnabled,
     skipAutoEntityBoost,
+    ...(boostEntityIds !== undefined ? { boostEntityIds } : {}),
     geminiMaxRpm: deps.geminiConfig?.maxRpm,
     geminiMaxRetries: deps.geminiConfig?.maxRetries,
     openRouterApiKey: deps.openRouterApiKey,
@@ -332,18 +347,12 @@ export async function handleSearch(
     logger: deps.logger,
   });
 
-  const effectiveSortBy = sortBy ?? "relevance";
-  const rerankApplied =
-    effectiveSortBy === "relevance" && !callerProvidedEntityIds && !!entityFileIds && entityFileIds.size > 0;
-  if (rerankApplied) {
-    results.sort((a, b) => {
-      const aLinked = entityFileIds?.has(a.id) ? 1 : 0;
-      const bLinked = entityFileIds?.has(b.id) ? 1 : 0;
-      if (aLinked !== bLinked) return bLinked - aLinked;
-      return b.score - a.score;
-    });
-  }
-  trace?.rerank(results, rerankApplied, entityFileIds?.size ?? 0);
+  /**
+   * Dev search-trace consumers still use the rerank stage to receive settled
+   * candidate positions. The tool no longer partitions results after search(),
+   * so the compatibility stage is always emitted as an unapplied zero-size set.
+   */
+  trace?.rerank(results, false, 0);
 
   /**
    * On zero file results, tell the model which filters were in force and how
@@ -356,6 +365,11 @@ export async function handleSearch(
     if (kind) applied.push(`kind=${kind}`);
     if (source) applied.push(`source=${source}`);
     if (callerProvidedEntityIds) applied.push(`entityIds(${entityIdsMode ?? "and"})`);
+    if (fileTypes?.length) applied.push(`fileTypes=${fileTypes.join(",")}`);
+    if (threadId) applied.push(`threadId=${threadId}`);
+    if (parentRecordId) applied.push(`parentRecordId=${parentRecordId}`);
+    if (participantEmail) applied.push(`participantEmail=${participantEmail}`);
+    if (normalizedDomain) applied.push(`domain=${normalizedDomain}`);
     if (after) applied.push(`after=${after}`);
     if (before) applied.push(`before=${before}`);
     if (applied.length === 0) return "";
@@ -363,6 +377,11 @@ export async function handleSearch(
     if (callerProvidedEntityIds && (entityIdsMode ?? "and") === "and") relax.push(`retry with entityIdsMode: "or"`);
     if (callerProvidedEntityIds) relax.push("drop entityIds (entity linkage on files can be sparse)");
     if (kind || source) relax.push(`drop '${kind && source ? "kind' or 'source" : kind ? "kind" : "source"}'`);
+    if (fileTypes?.length) relax.push("drop fileTypes");
+    if (threadId) relax.push("drop threadId");
+    if (parentRecordId) relax.push("drop parentRecordId");
+    if (participantEmail) relax.push("drop participantEmail");
+    if (normalizedDomain) relax.push("drop domain");
     if (after || before) relax.push("widen the date range");
     const queryAdvice = trimmedQuery
       ? "Try broader query terms, or relax a filter"
@@ -392,6 +411,8 @@ export async function handleSearch(
     rendered.push(`**${r.fileName}** (${sourceLabel}${date ? `, ${date}` : ""})`);
     rendered.push(`  sketchId: ${r.id}`);
     rendered.push(`  providerId: ${r.providerFileId} (source=${r.source})`);
+    if (r.threadId) rendered.push(`  threadId: ${r.threadId}`);
+    if (r.rollupGroupId) rendered.push(`  rollupGroupId: ${r.rollupGroupId}`);
     if (r.providerUrl) rendered.push(`  url: ${r.providerUrl}`);
     if (r.summary) {
       rendered.push(`> ${r.summary.slice(0, 200)}${r.summary.length > 200 ? "..." : ""}`);
@@ -423,6 +444,7 @@ export async function handleSearchEntities(
       await entityRepo.searchEntities(query, {
         sourceTypes: types,
         limit: 20,
+        tokenFallback: true,
       }),
     );
     for (const entity of matches) {
@@ -487,22 +509,14 @@ export async function handleGetEntityContext(
   if (userPrincipals !== undefined && userPrincipals.length === 0) {
     return { content: [{ type: "text", text: "No mentions found for this entity." }] };
   }
-  const rawMentions = await entityRepo.getMentionsForEntity(entityId, {
-    limit: Math.max(requestedLimit * 5, 100),
+  const mentions = await entityRepo.getMentionsForEntity(entityId, {
+    limit: requestedLimit,
     since,
+    visibility:
+      userPrincipals === undefined
+        ? undefined
+        : { principals: userPrincipals, slackEntitySyncEnabled: deps.slackEntitySyncEnabled ?? true },
   });
-
-  const accessibleIds =
-    userPrincipals === undefined
-      ? new Set(rawMentions.map((m) => m.indexed_file_id))
-      : await filterAccessibleFileIds(
-          deps.db,
-          rawMentions.map((m) => m.indexed_file_id),
-          userPrincipals,
-          deps.slackEntitySyncEnabled ?? true,
-        );
-
-  const mentions = rawMentions.filter((m) => accessibleIds.has(m.indexed_file_id)).slice(0, requestedLimit);
 
   if (deps.publicMcp?.filterEntityMetadata && mentions.length === 0) {
     return { content: [{ type: "text", text: `Entity ${entityId} not found.` }] };

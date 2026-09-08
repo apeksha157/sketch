@@ -66,6 +66,7 @@ export function mountPublicMcpServer(params: {
   getSlack?: () => SlackBot | null;
   whatsappRuntime?: WhatsAppRuntime;
   sendTargetMessage?: SendTargetMessage;
+  isAdminReadAllEnabled?: () => Promise<boolean>;
 }) {
   mountMcpServer({
     app: params.app,
@@ -82,6 +83,7 @@ export function mountPublicMcpServer(params: {
         tokenId: authContext.tokenId,
         workspaceDir: params.workspaceDir,
         auditRepo,
+        isAdminReadAllEnabled: params.isAdminReadAllEnabled,
         getSlack: params.getSlack,
         whatsappRuntime: params.whatsappRuntime,
         sendTargetMessage: params.sendTargetMessage,

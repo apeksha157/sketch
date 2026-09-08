@@ -1,7 +1,8 @@
 import pino from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OAuthCredentials } from "./types";
+import { CRM_ACTIVITY_FILE_TYPES, type OAuthCredentials } from "./types";
 import {
+  ACTIVITY_MODULES,
   createZohoCrmConnector,
   discoverStandardModules,
   extractAccountDomainsFromRecord,
@@ -10,6 +11,7 @@ import {
   formatCrmRecordContent,
   makeProviderFileId,
   moduleToFileType,
+  recordToSyncedItem,
 } from "./zoho-crm";
 
 const logger = pino({ level: "silent" });
@@ -42,6 +44,12 @@ describe("Zoho CRM connector", () => {
     expect(makeProviderFileId("Contacts", "123")).toBe("Contacts:123");
     expect(moduleToFileType("Contacts")).toBe("crm_contact");
     expect(moduleToFileType("Custom_Module")).toBe("crm_custom_module");
+  });
+
+  it("keeps bodyless activity file types pinned to the Zoho activity module set", () => {
+    const mappedActivityFileTypes = [...ACTIVITY_MODULES].map((moduleName) => moduleToFileType(moduleName)).sort();
+
+    expect(mappedActivityFileTypes).toEqual([...CRM_ACTIVITY_FILE_TYPES].sort());
   });
 
   it("validateCredentials succeeds on current user response and fails on revoked token", async () => {
@@ -307,6 +315,93 @@ describe("Zoho CRM connector", () => {
         sourceId: "Contacts:c1",
       },
     ]);
+  });
+
+  it("writes structured Zoho source meta from raw deal, task, and account records", () => {
+    const deal = recordToSyncedItem(
+      { logicalName: "Deals", apiName: "Deals", label: "Deals" },
+      {
+        id: "d1",
+        Deal_Name: "Acme renewal",
+        Stage: "Negotiation",
+        Amount: 12500,
+        Closing_Date: "2026-10-01",
+        Probability: 70,
+        Account_Name: { id: "a1", name: "Acme Corp" },
+        Owner: { id: "u1", name: "Owner One" },
+        Created_Time: "2026-01-01T00:00:00+05:30",
+        Modified_Time: "2026-01-02T00:00:00+05:30",
+      },
+    );
+    const task = recordToSyncedItem(
+      { logicalName: "Tasks", apiName: "Tasks", label: "Tasks" },
+      {
+        id: "t1",
+        Subject: "Follow up",
+        Status: "In Progress",
+        Priority: "High",
+        Due_Date: "2026-01-10",
+        $se_module: "Deals",
+        What_Id: { id: "d1", name: "Acme renewal" },
+        Who_Id: { id: "c1", name: "Jane Buyer" },
+        Owner: { id: "u1", name: "Owner One" },
+        Created_Time: "2026-01-03T00:00:00+05:30",
+        Modified_Time: "2026-01-04T00:00:00+05:30",
+      },
+    );
+    const account = recordToSyncedItem(
+      { logicalName: "Accounts", apiName: "Accounts", label: "Accounts" },
+      {
+        id: "a1",
+        Account_Name: "Acme Corp",
+        Website: "https://acme.test",
+        Industry: "Financial Services",
+        Employees: 250,
+        Tag: [{ name: "Tier 1" }, { name: "Strategic" }],
+        Last_Activity_Time: "2026-02-01T00:00:00+05:30",
+        Created_Time: "2026-01-01T00:00:00+05:30",
+        Modified_Time: "2026-01-05T00:00:00+05:30",
+      },
+    );
+
+    expect(deal?.sourceMeta?.zohoCrm).toEqual({
+      module: "Deals",
+      recordId: "d1",
+      owner: "Owner One",
+      createdTime: "2026-01-01T00:00:00+05:30",
+      modifiedTime: "2026-01-02T00:00:00+05:30",
+      stage: "Negotiation",
+      amount: "12500",
+      closingDate: "2026-10-01",
+      probability: "70",
+    });
+    expect(task?.sourceMeta?.zohoCrm).toEqual({
+      module: "Tasks",
+      recordId: "t1",
+      related: [
+        { role: "what", module: "Deals", id: "d1" },
+        { role: "who", module: "Contacts", id: "c1" },
+      ],
+      owner: "Owner One",
+      createdTime: "2026-01-03T00:00:00+05:30",
+      modifiedTime: "2026-01-04T00:00:00+05:30",
+      status: "In Progress",
+      priority: "High",
+      dueDate: "2026-01-10",
+    });
+    expect(account?.sourceMeta?.zohoCrm).toEqual({
+      module: "Accounts",
+      recordId: "a1",
+      createdTime: "2026-01-01T00:00:00+05:30",
+      modifiedTime: "2026-01-05T00:00:00+05:30",
+      industry: "Financial Services",
+      website: "https://acme.test",
+      companySize: "250",
+      tag: "Tier 1, Strategic",
+      lastActivityTime: "2026-02-01T00:00:00+05:30",
+    });
+    expect(task?.sourceMeta?.zohoCrm).not.toHaveProperty("amount");
+    expect(account?.sourceMeta?.zohoCrm).not.toHaveProperty("stage");
   });
 
   it("syncs paginated standard modules with If-Modified-Since and CRM graph hints", async () => {

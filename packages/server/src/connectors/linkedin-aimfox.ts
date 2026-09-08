@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import { normalizePhoneCountryCode } from "../identity-normalization";
+import { maxIso } from "../timestamps";
 import {
   AimfoxClient,
   type AimfoxConversation,
@@ -8,7 +9,12 @@ import {
   type AimfoxLead,
   type AimfoxMessage,
 } from "./aimfox-client";
-import { type LinkedinEnrichmentScope, normalizeLinkedinEnrichmentScopeConfig } from "./enrichment/scope";
+import {
+  type LinkedinEnrichmentScope,
+  type LinkedinVisibilityMode,
+  normalizeLinkedinEnrichmentScopeConfig,
+  parseLinkedinVisibilityScopeConfig,
+} from "./enrichment/scope";
 import { type LinkedinAimfoxPersonSeed, buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { extractErrorMessage, runWithConcurrency, truncateErrorMessage } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
@@ -51,6 +57,7 @@ export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   segmentMaxTokens?: number;
   segmentGapHours?: number;
   contactPointDefaultRegion?: string;
+  visibility?: LinkedinVisibilityMode;
   enrichment?: LinkedinEnrichmentScope;
 }
 
@@ -68,6 +75,7 @@ interface LinkedinAimfoxCursorAccountState {
   backfillBefore: string | null;
   backfillDone: boolean;
   backfillStalls: number;
+  directionVersion: number;
 }
 
 interface LinkedinAimfoxCursor {
@@ -81,6 +89,10 @@ export interface LinkedinAimfoxSegmentManifest {
   messageCount: number;
   algorithmVersion: number;
   sealed: boolean;
+  inboundCount?: number;
+  outboundCount?: number;
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
 }
 
 export interface OrderedMessage {
@@ -109,6 +121,34 @@ interface AccountRunState {
   backfill: Map<string, ConversationCompletion>;
   backfillAttempted: boolean;
   backfillPageShort: boolean;
+  accountsWalked: number;
+  threadsListed: number;
+  threadsEmitted: number;
+  threadsSkippedNoReply: number;
+  threadsSkippedNoSeed: number;
+  leadDetailFailures: number;
+  buildFailures: number;
+  pageCapHit: boolean;
+}
+
+interface LinkedinAimfoxMeta {
+  linkedinAimfox?: {
+    accountId?: unknown;
+    conversationUrn?: unknown;
+    segmentManifest?: LinkedinAimfoxRawSegmentManifest;
+  };
+}
+
+interface LinkedinAimfoxRawSegmentManifest {
+  segmentIndex?: unknown;
+  terminalMessageId?: unknown;
+  messageCount?: unknown;
+  algorithmVersion?: unknown;
+  sealed?: unknown;
+  inboundCount?: unknown;
+  outboundCount?: unknown;
+  lastInboundAt?: unknown;
+  lastOutboundAt?: unknown;
 }
 
 interface ParsedLinkedinAimfoxScopeConfig {
@@ -121,6 +161,7 @@ interface ParsedLinkedinAimfoxScopeConfig {
   segmentMaxTokens: number;
   segmentGapMs: number;
   contactPointDefaultRegion?: string;
+  visibility: LinkedinVisibilityMode;
 }
 
 interface IngestContext {
@@ -208,6 +249,14 @@ export function createLinkedinAimfoxConnector(): Connector {
           backfill: new Map(),
           backfillAttempted: false,
           backfillPageShort: false,
+          accountsWalked: 1,
+          threadsListed: 0,
+          threadsEmitted: 0,
+          threadsSkippedNoReply: 0,
+          threadsSkippedNoSeed: 0,
+          leadDetailFailures: 0,
+          buildFailures: 0,
+          pageCapHit: false,
         };
         runState.set(accountId, state);
         const client = new AimfoxClient(api_key, { accountId, maxRpm: scopeConfig.maxRpm });
@@ -221,22 +270,36 @@ export function createLinkedinAimfoxConnector(): Connector {
           getExistingItemState: opts.getExistingItemState,
         };
         const handled = new Set<string>();
+        const refreshDirection = existing.directionVersion < 1;
 
-        if (existing.highWatermark) {
-          const changed = await listChangedConversations(client, existing.highWatermark, runAnchorMs, opts.logger);
+        if (existing.highWatermark && !refreshDirection) {
+          const changedResult = await listChangedConversations(
+            client,
+            existing.highWatermark,
+            runAnchorMs,
+            opts.logger,
+          );
+          const changed = changedResult.conversations;
+          state.threadsListed += changedResult.threadsListed;
+          state.pageCapHit ||= changedResult.pageCapHit;
           for (const conversation of changed) handled.add(conversation.conversation_urn);
           yield* ingestConversations(context, changed, state.incremental);
         }
 
-        if (!existing.backfillDone) {
-          const before = existing.backfillBefore ? Date.parse(existing.backfillBefore) : runAnchorMs;
+        if (!existing.backfillDone || refreshDirection) {
+          const before = refreshDirection
+            ? runAnchorMs
+            : existing.backfillBefore
+              ? Date.parse(existing.backfillBefore)
+              : runAnchorMs;
           const page = await listBackfillPage(client, {
             before,
-            budget: scopeConfig.backfillBudget,
-            sinceMs: scopeConfig.backfillSinceMs,
+            budget: refreshDirection ? Number.MAX_SAFE_INTEGER : scopeConfig.backfillBudget,
+            sinceMs: refreshDirection ? null : scopeConfig.backfillSinceMs,
           });
           state.backfillAttempted = true;
           state.backfillPageShort = page.short;
+          state.threadsListed += page.threadsListed;
           const fresh = page.conversations.filter((conversation) => !handled.has(conversation.conversation_urn));
           yield* ingestConversations(context, fresh, state.backfill);
         }
@@ -261,6 +324,10 @@ export function createLinkedinAimfoxConnector(): Connector {
       }
       return JSON.stringify(next);
     },
+
+    getSyncDiagnostics() {
+      return linkedinSyncDiagnostics(runState);
+    },
   };
 }
 
@@ -278,12 +345,15 @@ async function listChangedConversations(
   highWatermark: string,
   runAnchorMs: number,
   logger: Logger,
-): Promise<AimfoxConversationListItem[]> {
+): Promise<{ conversations: AimfoxConversationListItem[]; threadsListed: number; pageCapHit: boolean }> {
   const changed: AimfoxConversationListItem[] = [];
   const seen = new Set<string>();
   let before = runAnchorMs;
+  let threadsListed = 0;
+  let pageCapHit = false;
   for (let pageIndex = 0; pageIndex < MAX_INCREMENTAL_PAGES; pageIndex++) {
     const page = await client.listConversationsPage({ before, count: 100 });
+    threadsListed += page.length;
     for (const conversation of page) {
       if (seen.has(conversation.conversation_urn)) continue;
       seen.add(conversation.conversation_urn);
@@ -294,10 +364,11 @@ async function listChangedConversations(
     if (new Date(oldest).toISOString() < highWatermark) break;
     before = oldest;
     if (pageIndex === MAX_INCREMENTAL_PAGES - 1) {
+      pageCapHit = true;
       logger.warn({ pages: MAX_INCREMENTAL_PAGES }, "LinkedIn incremental listing hit the page cap");
     }
   }
-  return changed;
+  return { conversations: changed, threadsListed, pageCapHit };
 }
 
 /**
@@ -308,14 +379,16 @@ async function listChangedConversations(
 async function listBackfillPage(
   client: AimfoxClient,
   input: { before: number; budget: number; sinceMs: number | null },
-): Promise<{ conversations: AimfoxConversationListItem[]; short: boolean }> {
+): Promise<{ conversations: AimfoxConversationListItem[]; short: boolean; threadsListed: number }> {
   const conversations: AimfoxConversationListItem[] = [];
   const seen = new Set<string>();
   let before = input.before;
   let short = false;
+  let threadsListed = 0;
   while (conversations.length < input.budget) {
     const count = Math.min(100, input.budget - conversations.length);
     const page = await client.listConversationsPage({ before, count });
+    threadsListed += page.length;
     for (const conversation of page) {
       if (seen.has(conversation.conversation_urn)) continue;
       seen.add(conversation.conversation_urn);
@@ -334,7 +407,7 @@ async function listBackfillPage(
     if (short) break;
     before = oldest;
   }
-  return { conversations, short };
+  return { conversations, short, threadsListed };
 }
 
 async function resolveConversationLeads(
@@ -380,6 +453,7 @@ async function* ingestConversations(
 
     if (!("lead" in result)) {
       completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: true });
+      state.leadDetailFailures++;
       logger.warn(
         { leadId: result.leadId, conversationUrn, err: result.error },
         "Failed to fetch LinkedIn Aimfox lead detail",
@@ -390,6 +464,8 @@ async function* ingestConversations(
     const seed = buildPersonSeed(result.lead);
     if (!seed) {
       completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: false });
+      state.threadsSkippedNoSeed++;
+      logger.debug({ leadId: result.leadId, conversationUrn }, "LinkedIn thread has no usable lead seed; skipped");
       continue;
     }
 
@@ -407,15 +483,19 @@ async function* ingestConversations(
         },
         contactPointDefaultRegion: scopeConfig.contactPointDefaultRegion,
         getExistingItemState: context.getExistingItemState,
+        visibility: scopeConfig.visibility,
       });
       completions.set(conversationUrn, { activity, expectedItems: items.length, persistedItems: 0, failed: false });
       if (items.length === 0) {
+        state.threadsSkippedNoReply++;
         logger.debug({ leadId: result.leadId, conversationUrn }, "LinkedIn thread has no reply yet; skipped");
       }
+      if (items.length > 0) state.threadsEmitted++;
       for (const item of items) yield item;
     } catch (err) {
       const error = truncateErrorMessage(extractErrorMessage(err));
       completions.set(conversationUrn, { activity, expectedItems: 0, persistedItems: 0, failed: true });
+      state.buildFailures++;
       logger.warn({ leadId: result.leadId, conversationUrn, err: error }, "Failed to ingest Aimfox thread");
     }
   }
@@ -462,6 +542,7 @@ async function buildLinkedinSyncedItems(
     seed: LinkedinAimfoxPersonSeed;
     segmentLimits: LinkedinSegmentLimits;
     contactPointDefaultRegion?: string;
+    visibility: LinkedinVisibilityMode;
     getExistingItemState?: (providerFileId: string) => {
       sourceMeta: Record<string, unknown> | null;
       threadId: string | null;
@@ -472,9 +553,13 @@ async function buildLinkedinSyncedItems(
   const messages = orderLinkedinMessages(input.conversation.conversation_urn, detail.messages);
   const hasReply = messages.some(({ message }) => message.sender.id !== input.accountId);
   if (!hasReply) return [];
-  const profileItem = buildLinkedinProfileSyncedItem({ ...input, engaged: hasReply });
+  const profileItem = buildLinkedinProfileSyncedItem({
+    ...input,
+    engaged: hasReply,
+    lastRepliedAt: conversationLastRepliedAt(messages, input.accountId),
+  });
   const manifests = loadExistingSealedManifests(input);
-  const segments = buildLinkedinSegments(messages, manifests, input.segmentLimits);
+  const segments = buildLinkedinSegments(messages, manifests, input.segmentLimits, input.accountId);
   return [
     profileItem,
     ...segments.map((segment) =>
@@ -486,6 +571,7 @@ async function buildLinkedinSyncedItems(
         profileProviderFileId: profileItem.providerFileId,
         seed: input.seed,
         segment,
+        visibility: input.visibility,
       }),
     ),
   ];
@@ -526,6 +612,7 @@ export function buildLinkedinSegments(
   orderedMessages: OrderedMessage[],
   existingSealedManifests: LinkedinAimfoxSegmentManifest[],
   limits: LinkedinSegmentLimits,
+  accountId?: string,
 ): LinkedinAimfoxSegment[] {
   const segments: LinkedinAimfoxSegment[] = [];
   let offset = 0;
@@ -535,7 +622,8 @@ export function buildLinkedinSegments(
       (message, index) => index >= offset && message.identity === manifest.terminalMessageId,
     );
     if (terminalIndex < offset) throw new Error("LinkedIn sealed segment terminal message is missing");
-    segments.push({ manifest, messages: orderedMessages.slice(offset, terminalIndex + 1) });
+    const messages = orderedMessages.slice(offset, terminalIndex + 1);
+    segments.push({ manifest: fillSegmentDirection(manifest, messages, accountId), messages });
     offset = terminalIndex + 1;
   }
 
@@ -562,18 +650,57 @@ export function buildLinkedinSegments(
     if (!terminal) throw new Error("LinkedIn segmenter made no progress");
     const sealed =
       messages.length >= limits.maxMessages || tokenCount >= limits.maxTokens || offset < orderedMessages.length;
-    segments.push({
-      messages,
-      manifest: {
-        segmentIndex,
-        terminalMessageId: terminal.identity,
-        messageCount: messages.length,
-        algorithmVersion: SEGMENT_ALGORITHM_VERSION,
-        sealed,
-      },
-    });
+    const manifest = {
+      segmentIndex,
+      terminalMessageId: terminal.identity,
+      messageCount: messages.length,
+      algorithmVersion: SEGMENT_ALGORITHM_VERSION,
+      sealed,
+    };
+    segments.push({ messages, manifest: fillSegmentDirection(manifest, messages, accountId) });
   }
   return segments;
+}
+
+function fillSegmentDirection(
+  manifest: LinkedinAimfoxSegmentManifest,
+  messages: OrderedMessage[],
+  accountId: string | undefined,
+): LinkedinAimfoxSegmentManifest {
+  if (!accountId) return manifest;
+  if (
+    manifest.inboundCount !== undefined &&
+    manifest.outboundCount !== undefined &&
+    manifest.lastInboundAt !== undefined &&
+    manifest.lastOutboundAt !== undefined
+  ) {
+    return manifest;
+  }
+  const direction = segmentDirectionStats(messages, accountId);
+  return {
+    ...manifest,
+    inboundCount: manifest.inboundCount ?? direction.inboundCount,
+    outboundCount: manifest.outboundCount ?? direction.outboundCount,
+    lastInboundAt: manifest.lastInboundAt ?? direction.lastInboundAt,
+    lastOutboundAt: manifest.lastOutboundAt ?? direction.lastOutboundAt,
+  };
+}
+
+function segmentDirectionStats(messages: OrderedMessage[], accountId: string) {
+  let inboundCount = 0;
+  let outboundCount = 0;
+  let lastInboundAt: string | null = null;
+  let lastOutboundAt: string | null = null;
+  for (const { message, timestamp } of messages) {
+    if (message.sender.id !== accountId) {
+      inboundCount++;
+      lastInboundAt = maxIso(lastInboundAt, timestamp);
+    } else {
+      outboundCount++;
+      lastOutboundAt = maxIso(lastOutboundAt, timestamp);
+    }
+  }
+  return { inboundCount, outboundCount, lastInboundAt, lastOutboundAt };
 }
 
 function buildLinkedinProfileSyncedItem(input: {
@@ -582,12 +709,15 @@ function buildLinkedinProfileSyncedItem(input: {
   ownerEmail: string;
   seed: LinkedinAimfoxPersonSeed;
   engaged: boolean;
+  lastRepliedAt?: string | null;
   contactPointDefaultRegion?: string;
+  visibility: LinkedinVisibilityMode;
 }): SyncedItem {
   const providerFileId = linkedinProfileProviderFileId(input.accountId, input.seed.leadId);
   const contactPoints = buildProfileContactPoints(
     input.seed,
     conversationLastContactedAt(input.conversation),
+    input.lastRepliedAt ?? null,
     input.contactPointDefaultRegion,
   );
   const personSeed = {
@@ -627,8 +757,15 @@ function buildLinkedinProfileSyncedItem(input: {
     sourceCreatedAt: null,
     sourceUpdatedAt: conversationLastContactedAt(input.conversation),
     mimeType: "application/json",
-    accessPrincipals: toEmailPrincipals([input.ownerEmail]),
+    accessPrincipals: linkedinAccessPrincipals(input.visibility, input.ownerEmail),
     personSeeds: [personSeed],
+    parentEntities: [
+      {
+        source: "aimfox",
+        sourceId: input.seed.leadId,
+        contextSnippet: `LinkedIn profile of ${input.seed.name}`,
+      },
+    ],
     contactPoints,
   };
 }
@@ -641,6 +778,7 @@ function buildLinkedinConversationSyncedItem(input: {
   profileProviderFileId: string;
   seed: LinkedinAimfoxPersonSeed;
   segment: LinkedinAimfoxSegment;
+  visibility: LinkedinVisibilityMode;
 }): SyncedItem {
   const content = renderConversationSegment({
     ownerName: input.ownerName,
@@ -675,7 +813,7 @@ function buildLinkedinConversationSyncedItem(input: {
     sourceCreatedAt: firstTimestamp,
     sourceUpdatedAt: lastTimestamp,
     mimeType: "text/plain",
-    accessPrincipals: toEmailPrincipals([input.ownerEmail]),
+    accessPrincipals: linkedinAccessPrincipals(input.visibility, input.ownerEmail),
     parentEntities: [
       {
         source: "aimfox",
@@ -686,9 +824,19 @@ function buildLinkedinConversationSyncedItem(input: {
   };
 }
 
+/**
+ * Workspace visibility emits an explicit empty grant list so each touched file
+ * clears stale owner stamps through syncItemAccess. Legacy and owner mode keep
+ * the creator's Sketch email as the only per-file principal.
+ */
+function linkedinAccessPrincipals(visibility: LinkedinVisibilityMode, ownerEmail: string) {
+  return visibility === "workspace" ? [] : toEmailPrincipals([ownerEmail]);
+}
+
 function buildProfileContactPoints(
   seed: LinkedinAimfoxPersonSeed,
   lastContactedAt: string | null,
+  lastRepliedAt: string | null,
   defaultRegion?: string,
 ): ContactPointSeed[] {
   const points: ContactPointSeed[] = [
@@ -702,6 +850,7 @@ function buildProfileContactPoints(
       displayValue: seed.profileUrl,
       source: "aimfox",
       lastContactedAt,
+      lastRepliedAt,
       makePrimary: true,
     },
   ];
@@ -853,19 +1002,15 @@ function readCheckpoint(sourceMeta: Record<string, unknown> | undefined): {
   accountId: string;
   conversationUrn: string;
 } | null {
-  const value = sourceMeta?.linkedinAimfox;
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const accountId = (value as Record<string, unknown>).accountId;
-  const conversationUrn = (value as Record<string, unknown>).conversationUrn;
+  const value = (sourceMeta as LinkedinAimfoxMeta | undefined)?.linkedinAimfox;
+  const accountId = value?.accountId;
+  const conversationUrn = value?.conversationUrn;
   return typeof accountId === "string" && typeof conversationUrn === "string" ? { accountId, conversationUrn } : null;
 }
 
 function readSegmentManifest(sourceMeta: Record<string, unknown> | null): LinkedinAimfoxSegmentManifest | null {
-  const root = sourceMeta?.linkedinAimfox;
-  if (!root || typeof root !== "object" || Array.isArray(root)) return null;
-  const raw = (root as Record<string, unknown>).segmentManifest;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const value = raw as Record<string, unknown>;
+  const value = (sourceMeta as LinkedinAimfoxMeta | null)?.linkedinAimfox?.segmentManifest;
+  if (!value) return null;
   if (
     typeof value.segmentIndex !== "number" ||
     typeof value.terminalMessageId !== "string" ||
@@ -875,7 +1020,19 @@ function readSegmentManifest(sourceMeta: Record<string, unknown> | null): Linked
   ) {
     return null;
   }
-  return value as unknown as LinkedinAimfoxSegmentManifest;
+  return {
+    segmentIndex: value.segmentIndex,
+    terminalMessageId: value.terminalMessageId,
+    messageCount: value.messageCount,
+    algorithmVersion: value.algorithmVersion,
+    sealed: value.sealed,
+    inboundCount: typeof value.inboundCount === "number" ? value.inboundCount : undefined,
+    outboundCount: typeof value.outboundCount === "number" ? value.outboundCount : undefined,
+    lastInboundAt:
+      typeof value.lastInboundAt === "string" || value.lastInboundAt === null ? value.lastInboundAt : undefined,
+    lastOutboundAt:
+      typeof value.lastOutboundAt === "string" || value.lastOutboundAt === null ? value.lastOutboundAt : undefined,
+  };
 }
 
 function parseScopeConfig(value: Record<string, unknown>): ParsedLinkedinAimfoxScopeConfig {
@@ -894,6 +1051,7 @@ function parseScopeConfig(value: Record<string, unknown>): ParsedLinkedinAimfoxS
     segmentGapMs: positiveInteger(value.segmentGapHours, DEFAULT_SEGMENT_GAP_HOURS) * HOUR_MS,
     contactPointDefaultRegion:
       typeof value.contactPointDefaultRegion === "string" ? value.contactPointDefaultRegion : undefined,
+    visibility: parseLinkedinVisibilityScopeConfig(value),
   };
 }
 
@@ -941,6 +1099,7 @@ function parseLinkedinAimfoxCursor(value: string | null): LinkedinAimfoxCursor {
         backfillBefore: typeof state.backfillBefore === "string" ? state.backfillBefore : null,
         backfillDone: state.backfillDone === true,
         backfillStalls: typeof state.backfillStalls === "number" ? state.backfillStalls : 0,
+        directionVersion: typeof state.directionVersion === "number" ? state.directionVersion : 0,
       };
     }
     return { version: LINKEDIN_AIMFOX_CURSOR_VERSION, accounts };
@@ -954,7 +1113,14 @@ function emptyLinkedinAimfoxCursor(): LinkedinAimfoxCursor {
 }
 
 function emptyAccountCursor(): LinkedinAimfoxCursorAccountState {
-  return { highWatermark: null, watermarkStalls: 0, backfillBefore: null, backfillDone: false, backfillStalls: 0 };
+  return {
+    highWatermark: null,
+    watermarkStalls: 0,
+    backfillBefore: null,
+    backfillDone: false,
+    backfillStalls: 0,
+    directionVersion: 1,
+  };
 }
 
 function cloneLinkedinAimfoxCursor(cursor: LinkedinAimfoxCursor): LinkedinAimfoxCursor {
@@ -964,6 +1130,30 @@ function cloneLinkedinAimfoxCursor(cursor: LinkedinAimfoxCursor): LinkedinAimfox
       Object.entries(cursor.accounts).map(([accountId, state]) => [accountId, { ...state }]),
     ),
   };
+}
+
+function linkedinSyncDiagnostics(runState: Map<string, AccountRunState>) {
+  const totals = {
+    accountsWalked: 0,
+    threadsListed: 0,
+    threadsEmitted: 0,
+    threadsSkippedNoReply: 0,
+    threadsSkippedNoSeed: 0,
+    leadDetailFailures: 0,
+    buildFailures: 0,
+    pageCapHit: false,
+  };
+  for (const state of runState.values()) {
+    totals.accountsWalked += state.accountsWalked;
+    totals.threadsListed += state.threadsListed;
+    totals.threadsEmitted += state.threadsEmitted;
+    totals.threadsSkippedNoReply += state.threadsSkippedNoReply;
+    totals.threadsSkippedNoSeed += state.threadsSkippedNoSeed;
+    totals.leadDetailFailures += state.leadDetailFailures;
+    totals.buildFailures += state.buildFailures;
+    totals.pageCapHit ||= state.pageCapHit;
+  }
+  return totals;
 }
 
 function isComplete(conversation: ConversationCompletion): boolean {
@@ -1058,7 +1248,9 @@ function nextAccountCursor(
   const highWatermark =
     capped && (!existing.highWatermark || capped > existing.highWatermark) ? capped : existing.highWatermark;
 
-  if (existing.backfillDone || !state.backfillAttempted) return { ...existing, highWatermark, watermarkStalls };
+  if (existing.backfillDone || !state.backfillAttempted) {
+    return { ...existing, highWatermark, watermarkStalls, directionVersion: 1 };
+  }
 
   const entries = [...state.backfill.entries()];
   const incomplete = entries.filter(([, conversation]) => !isComplete(conversation));
@@ -1086,7 +1278,7 @@ function nextAccountCursor(
     backfillBefore = pageMin ?? existing.backfillBefore;
     backfillDone = state.backfillPageShort;
   }
-  return { highWatermark, watermarkStalls, backfillBefore, backfillDone, backfillStalls };
+  return { highWatermark, watermarkStalls, backfillBefore, backfillDone, backfillStalls, directionVersion: 1 };
 }
 
 function conversationChangedSince(conversation: AimfoxConversationListItem, highWatermark: string): boolean {
@@ -1100,6 +1292,14 @@ function conversationCounterpart(conversation: AimfoxConversationListItem) {
 
 function conversationLastContactedAt(conversation: AimfoxConversationListItem): string | null {
   return aimfoxTimestampToIso(conversation.last_activity_at ?? conversation.last_message?.created_at ?? null);
+}
+
+function conversationLastRepliedAt(messages: OrderedMessage[], accountId: string): string | null {
+  let lastRepliedAt: string | null = null;
+  for (const { message, timestamp } of messages) {
+    if (message.sender.id !== accountId) lastRepliedAt = maxIso(lastRepliedAt, timestamp);
+  }
+  return lastRepliedAt;
 }
 
 function aimfoxTimestampToIso(value: number | null | undefined): string | null {

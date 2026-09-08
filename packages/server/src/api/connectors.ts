@@ -42,7 +42,15 @@ import {
   createEnrichmentGenerator,
   resolveOpenRouterEnrichmentConfig,
 } from "../connectors/enrichment-providers";
-import { normalizeLinkedinEnrichmentScopeConfig } from "../connectors/enrichment/scope";
+import {
+  LINKEDIN_VISIBILITY_MODES,
+  type LinkedinVisibilityMode,
+  LinkedinVisibilityScopeValidationError,
+  normalizeLinkedinEnrichmentScopeConfig,
+  normalizeLinkedinVisibilityScopeConfig,
+  parseLinkedinEnrichmentScope,
+  parseLinkedinVisibilityScopeConfig,
+} from "../connectors/enrichment/scope";
 import { buildCredentialHint } from "../connectors/fireflies";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { ensureValidToken, listFolderContents, listMyDriveFolders, listSharedDrives } from "../connectors/google-drive";
@@ -294,13 +302,29 @@ function withoutWhatsAppGroupSelection(scopeConfig: Record<string, unknown>): Re
 function normalizeConnectorScopeConfig(
   connectorType: ConnectorType,
   scopeConfig: Record<string, unknown> | undefined,
+  opts: { linkedinVisibility?: "allowed" | "required" | "forbidden" } = {},
 ): Record<string, unknown> | undefined {
-  if (!scopeConfig) return undefined;
-  if (connectorType === "linkedin_aimfox") return normalizeLinkedinEnrichmentScopeConfig(scopeConfig);
+  if (!scopeConfig) {
+    if (connectorType === "linkedin_aimfox" && opts.linkedinVisibility === "required") {
+      throw new LinkedinVisibilityScopeValidationError("LinkedIn visibility is required");
+    }
+    return undefined;
+  }
+  if (connectorType === "linkedin_aimfox") {
+    return normalizeLinkedinEnrichmentScopeConfig(
+      normalizeLinkedinVisibilityScopeConfig(scopeConfig, {
+        required: opts.linkedinVisibility === "required",
+        forbidden: opts.linkedinVisibility === "forbidden",
+      }),
+    );
+  }
   return scopeConfig;
 }
 
 function scopeValidationError(c: Context, err: unknown) {
+  if (err instanceof LinkedinVisibilityScopeValidationError) {
+    return c.json({ error: { code: "VALIDATION_ERROR", message: err.message } }, 400);
+  }
   if (err instanceof z.ZodError) {
     return c.json(
       { error: { code: "VALIDATION_ERROR", message: err.issues[0]?.message ?? "Invalid scope config" } },
@@ -377,6 +401,16 @@ const browseClickUpSchema = z.object({
 
 const updateScopeSchema = z.object({
   scopeConfig: z.record(z.string(), z.unknown()),
+});
+
+const updateVisibilitySchema = z.object({
+  visibility: z.enum(LINKEDIN_VISIBILITY_MODES),
+});
+
+const updateEnrichmentSchema = z.object({
+  enabled: z.boolean(),
+  dailyCap: z.number().int().min(0, "Daily lookups must be 0 or more"),
+  autoMerge: z.boolean(),
 });
 
 const CANVAS_APP_BY_CONNECTOR: Partial<Record<ConnectorType, string>> = {
@@ -520,6 +554,12 @@ export function connectorRoutes(
       createdByName: owner?.name ?? null,
       createdByEmail: owner?.email ?? null,
     };
+  }
+
+  function connectorVisibilityField(config: { connector_type: string; scope_config: string | null }) {
+    if (config.connector_type !== "linkedin_aimfox") return {};
+    const scopeConfig = config.scope_config ? (JSON.parse(config.scope_config) as Record<string, unknown>) : {};
+    return { visibility: parseLinkedinVisibilityScopeConfig(scopeConfig) };
   }
 
   function configVisible(config: { connector_type: string }): boolean {
@@ -677,6 +717,7 @@ export function connectorRoutes(
           authType: cfg.auth_type,
           credentialSource: cfg.credential_source,
           scopeConfig: JSON.parse(cfg.scope_config),
+          ...connectorVisibilityField(cfg),
           syncStatus: cfg.sync_status,
           lastSyncedAt: cfg.last_synced_at,
           errorMessage: cfg.error_message,
@@ -1002,7 +1043,9 @@ export function connectorRoutes(
 
     let normalizedParsedScope: Record<string, unknown> | undefined;
     try {
-      normalizedParsedScope = normalizeConnectorScopeConfig(connectorType, parsed.data.scopeConfig);
+      normalizedParsedScope = normalizeConnectorScopeConfig(connectorType, parsed.data.scopeConfig, {
+        linkedinVisibility: connectorType === "linkedin_aimfox" ? "required" : "allowed",
+      });
     } catch (err) {
       return scopeValidationError(c, err);
     }
@@ -1115,6 +1158,8 @@ export function connectorRoutes(
           connectorType: config.connector_type,
           createdBy: config.created_by,
           ...metadata,
+          ...connectorVisibilityField(config),
+          ...(config.connector_type === "linkedin_aimfox" ? { scopeConfig: JSON.parse(config.scope_config) } : {}),
           syncStatus: config.sync_status,
           lastSyncedAt: config.last_synced_at,
           errorMessage: config.error_message,
@@ -2128,6 +2173,7 @@ export function connectorRoutes(
         authType: config.auth_type,
         credentialSource: config.credential_source,
         scopeConfig: JSON.parse(config.scope_config),
+        ...connectorVisibilityField(config),
         syncStatus: config.sync_status,
         lastSyncedAt: config.last_synced_at,
         errorMessage: config.error_message,
@@ -2510,6 +2556,138 @@ export function connectorRoutes(
     return c.json({ ok: true });
   });
 
+  /**
+   * Flip LinkedIn Aimfox visibility without forcing a replay. A running sync is
+   * refused so the authoritative grant rewrite does not interleave with the
+   * common case; a sync that starts after this check can leave a small bounded
+   * residue until the next self-healing sync touches those files.
+   */
+  routes.put("/:id/visibility", async (c) => {
+    const config = await connectorRepo.findConfigById(c.req.param("id"));
+    if (!config || !configVisible(config)) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    if (config.connector_type !== "linkedin_aimfox") {
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: "Connector visibility is only supported for LinkedIn" } },
+        400,
+      );
+    }
+
+    const { permissions } = permissionsForConfig(c, config);
+    const denied = denyUnless(c, permissions.canManage);
+    if (denied) return denied;
+
+    if (config.sync_status === "syncing") {
+      return c.json({ error: { code: "SYNC_IN_PROGRESS", message: "Sync in progress, try again in a moment" } }, 409);
+    }
+
+    const parsed = updateVisibilitySchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
+
+    const ownerEmail = await getOwnerEmail(config.created_by);
+    if (!ownerEmail?.trim()) {
+      return c.json(
+        {
+          error: {
+            code: "OWNER_EMAIL_UNAVAILABLE",
+            message: "The connector creator does not have an email address available.",
+          },
+        },
+        409,
+      );
+    }
+
+    const visibility: LinkedinVisibilityMode = parsed.data.visibility;
+    const updated = await db.transaction().execute(async (trx) => {
+      const txConnectorRepo = createConnectorRepository(trx, appConfig?.ENCRYPTION_KEY);
+      const currentScope =
+        config.scope_config && typeof config.scope_config === "string"
+          ? (JSON.parse(config.scope_config) as Record<string, unknown>)
+          : {};
+      const nextScope = normalizeLinkedinVisibilityScopeConfig({ ...currentScope, visibility });
+      await txConnectorRepo.updateConfig(config.id, {
+        scopeConfig: JSON.stringify(nextScope),
+        errorMessage: null,
+      });
+      await txConnectorRepo.reapplyLinkedinVisibility(config.id, visibility, ownerEmail);
+      return txConnectorRepo.findConfigById(config.id);
+    });
+
+    if (!updated) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found after update" } }, 404);
+    }
+    return c.json({
+      connector: {
+        id: updated.id,
+        connectorType: updated.connector_type,
+        scopeConfig: JSON.parse(updated.scope_config),
+        ...connectorVisibilityField(updated),
+        syncStatus: updated.sync_status,
+      },
+    });
+  });
+
+  /**
+   * Update the SalesQL enrichment block of a LinkedIn connector's scope config.
+   *
+   * Deliberately not the scope PATCH: that route nulls the sync cursor and kicks a
+   * full resync, and it shallow-merges the top level so a partial enrichment object
+   * would reset sibling fields to defaults. This writes only `enrichment`, keeps the
+   * server-side `batch` knob, and leaves the cursor alone.
+   */
+  routes.put("/:id/enrichment", async (c) => {
+    const config = await connectorRepo.findConfigById(c.req.param("id"));
+    if (!config || !configVisible(config)) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    if (config.connector_type !== "linkedin_aimfox") {
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: "Enrichment settings are only supported for LinkedIn" } },
+        400,
+      );
+    }
+
+    const { permissions } = permissionsForConfig(c, config);
+    const denied = denyUnless(c, permissions.canChangeScope);
+    if (denied) return denied;
+
+    const parsed = updateEnrichmentSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
+
+    const currentScope =
+      config.scope_config && typeof config.scope_config === "string"
+        ? (JSON.parse(config.scope_config) as Record<string, unknown>)
+        : {};
+    const currentEnrichment =
+      currentScope.enrichment && typeof currentScope.enrichment === "object"
+        ? (currentScope.enrichment as Record<string, unknown>)
+        : {};
+    const enrichment = parseLinkedinEnrichmentScope({ enrichment: { ...currentEnrichment, ...parsed.data } });
+    await connectorRepo.updateConfig(config.id, {
+      scopeConfig: JSON.stringify({ ...currentScope, enrichment }),
+    });
+    const updated = await connectorRepo.findConfigById(config.id);
+    if (!updated) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found after update" } }, 404);
+    }
+    return c.json({
+      connector: {
+        id: updated.id,
+        connectorType: updated.connector_type,
+        scopeConfig: JSON.parse(updated.scope_config),
+        ...connectorVisibilityField(updated),
+        syncStatus: updated.sync_status,
+      },
+    });
+  });
+
   /** Update connector scope config (add/remove drives, folders, etc.). */
   routes.patch("/:id/scope", async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));
@@ -2533,15 +2711,18 @@ export function connectorRoutes(
     try {
       requestedScope = await db.transaction().execute(async (trx) => {
         const txConnectorRepo = createConnectorRepository(trx, appConfig?.ENCRYPTION_KEY);
+        const normalizedScope =
+          normalizeConnectorScopeConfig(config.connector_type as ConnectorType, parsed.data.scopeConfig, {
+            linkedinVisibility: config.connector_type === "linkedin_aimfox" ? "forbidden" : "allowed",
+          }) ?? {};
         const scope =
           config.connector_type === "whatsapp"
             ? await applyWhatsAppGroupScope({
                 db: trx,
-                scopeConfig:
-                  normalizeConnectorScopeConfig(config.connector_type as ConnectorType, parsed.data.scopeConfig) ?? {},
+                scopeConfig: normalizedScope,
                 newlyEnabled: newlyEnabledWhatsAppGroups,
               })
-            : (normalizeConnectorScopeConfig(config.connector_type as ConnectorType, parsed.data.scopeConfig) ?? {});
+            : normalizedScope;
         const existingScope =
           config.scope_config && typeof config.scope_config === "string"
             ? (JSON.parse(config.scope_config) as Record<string, unknown>)
@@ -2568,7 +2749,9 @@ export function connectorRoutes(
       if (err instanceof WhatsAppGroupScopeValidationError) {
         return c.json({ error: { code: "VALIDATION_ERROR", message: err.message } }, 400);
       }
-      if (err instanceof z.ZodError) return scopeValidationError(c, err);
+      if (err instanceof z.ZodError || err instanceof LinkedinVisibilityScopeValidationError) {
+        return scopeValidationError(c, err);
+      }
       throw err;
     }
 

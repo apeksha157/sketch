@@ -1,23 +1,49 @@
 import type { Kysely } from "kysely";
 import pino from "pino";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createConnectorRepository } from "../db/repositories/connectors";
+import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
 import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { createConversationRepository } from "../db/repositories/conversations";
+import { createEntityRepository } from "../db/repositories/entities";
 import type { DB } from "../db/schema";
 import type { SlackIndexingFacade } from "../slack/indexing-facade";
 import { createTestDb, createTestPgDb } from "../test-utils";
-import { ensureSlackConnectorConfig } from "./slack-provisioning";
+import type { ChunkEngineKnobs } from "./chunk-engine";
+import { runEnrichment } from "./enrichment";
+import type { GeminiGenerator } from "./gemini-generate";
+import { repairSlackChunkStreamsOnStartup } from "./slack-chunk-adapters";
+import { runSlackChunkEngine } from "./slack-chunk-engine-runner";
 import {
+  type SlackEmissionRunSummary,
   archiveAllSlackChannelFiles,
   emitSlackSyncedItems,
-  processSlackSalience,
   reconcileSlackChannelAcls,
-} from "./slack-salience";
+} from "./slack-emission";
+import { createSlackIndexingConnector } from "./slack-indexing";
+import { ensureSlackConnectorConfig } from "./slack-provisioning";
+import { runConnectorSync } from "./sync";
 import { loadExistingContentHashes, processSyncedItem } from "./sync-item";
 import { toEmailPrincipals } from "./types";
 
 const logger = pino({ level: "silent" });
+
+const pipelineKnobs: ChunkEngineKnobs = {
+  windowMessages: 20,
+  windowTokens: 7_500,
+  minMessages: 1,
+  targetMessages: 10,
+  maxMessages: 80,
+  maxTokens: 1_500,
+  tickMinutes: 30,
+  idleCloseHours: 96,
+  provisionalRefreshMessages: 3,
+  model: null,
+  reasoningEffort: "high",
+  burstThresholdMessages: null,
+  topicRegistryCap: 30,
+  groupWorkerPool: 2,
+  maxWindowsPerRun: 8,
+};
 
 function fakeFacade(overrides: Partial<SlackIndexingFacade> = {}): SlackIndexingFacade {
   return {
@@ -38,6 +64,63 @@ function fakeFacade(overrides: Partial<SlackIndexingFacade> = {}): SlackIndexing
     listChannels: async () => [],
     ...overrides,
   };
+}
+
+async function insertEmittableSlackSlice(
+  db: Kysely<DB>,
+  input: {
+    channelId: string;
+    startedAt: string;
+    messageCount?: number;
+    status?: "open" | "closed";
+    providerThreadId?: string | null;
+    legacy?: boolean;
+  },
+) {
+  const conversations = createConversationRepository(db);
+  const conversation = await conversations.getOrCreate(
+    { platform: "slack", kind: "channel", providerConversationId: input.channelId },
+    input.channelId.toLowerCase(),
+  );
+  const messageCount = input.messageCount ?? 1;
+  const messageIds: number[] = [];
+  for (let index = 0; index < messageCount; index += 1) {
+    const timestamp = new Date(Date.parse(input.startedAt) + index * 1000).toISOString();
+    const message = await conversations.insertMessage({
+      conversationId: conversation.id,
+      providerMessageId: `${input.channelId}-${input.startedAt}-${index}`,
+      senderJid: "U0TEAM",
+      senderName: "Roopak",
+      text: `message ${input.channelId} ${index}`,
+      providerThreadId: input.providerThreadId,
+      isThreadReply: input.providerThreadId !== null && input.providerThreadId !== undefined,
+      providerTimestamp: timestamp,
+      receivedAt: timestamp,
+    });
+    messageIds.push(message.row.id);
+  }
+  const slice = await createConversationSlicesRepository(db).insertIfAbsent({
+    conversationId: conversation.id,
+    firstMessageId: messageIds[0] as number,
+    lastMessageId: messageIds[messageIds.length - 1] as number,
+    startedAt: input.startedAt,
+    endedAt: new Date(Date.parse(input.startedAt) + (messageCount - 1) * 1000).toISOString(),
+    messageCount,
+    denoisedMessageIds: messageIds,
+    flushReason: "gap",
+    rosterSnapshot: "[]",
+    salienceVerdict: "kept",
+    providerThreadId: input.providerThreadId,
+    status: input.status,
+  });
+  if (input.legacy) {
+    await db
+      .updateTable("conversation_slices")
+      .set({ legacy_unjudged_at: "2026-09-01T00:00:00.000Z" })
+      .where("id", "=", slice.row.id)
+      .execute();
+  }
+  return slice.row;
 }
 
 function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
@@ -103,7 +186,70 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(configs.some((config) => config.connector_type === "slack")).toBe(true);
     });
 
-    it("salience fails closed on a slice without explicit membership", async () => {
+    it("chunks and emits kept slices without running the legacy salience judge", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await createConnectorRepository(db)
+        .findSyncableConfigs({ staleAfterMs: 60_000 })
+        .then((configs) => configs.find((config) => config.connector_type === "slack"));
+      const conversations = createConversationRepository(db);
+      const conversation = await conversations.getOrCreate(
+        { platform: "slack", kind: "channel", providerConversationId: "C1" },
+        "general",
+      );
+      for (let index = 0; index < 2; index += 1) {
+        await conversations.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `engine-${index}`,
+          senderJid: "U0TEAM",
+          senderName: "Roopak",
+          text: `Engine message ${index}`,
+          providerThreadId: `engine-${index}`,
+          providerTimestamp: new Date(Date.parse("2026-09-05T00:00:00.000Z") + index * 60_000).toISOString(),
+          receivedAt: new Date(Date.parse("2026-09-05T00:00:00.000Z") + index * 60_000).toISOString(),
+        });
+      }
+      let legacyJudgeCalls = 0;
+      const connector = createSlackIndexingConnector();
+      const items = [];
+      for await (const item of connector.sync({
+        db,
+        connectorConfigId: config?.id,
+        credentials: { type: "system" },
+        scopeConfig: {},
+        cursor: null,
+        logger,
+        slackIndexing: fakeFacade(),
+        salienceGenerator: {
+          generateJSON: async () => {
+            legacyJudgeCalls += 1;
+            throw new Error("legacy salience judge must not run");
+          },
+        } as never,
+        appConfig: {
+          SLACK_CHUNK_MODEL: "openai/test-boundary",
+          SLACK_CHUNK_REASONING_EFFORT: "low",
+          SLACK_CHUNK_MIN_MESSAGES: 2,
+        },
+        slackChunkerGenerate: async (_prompt, opts) => {
+          expect(opts.model).toBe("openai/test-boundary");
+          expect(opts.reasoningEffort).toBe("low");
+          return JSON.stringify({ segments: [{ start: 1, end: 2, threads: ["engine"] }] });
+        },
+      })) {
+        items.push(item);
+      }
+
+      const slices = await db
+        .selectFrom("conversation_slices")
+        .select(["status", "salience_verdict"])
+        .where("conversation_id", "=", conversation.id)
+        .execute();
+      expect(legacyJudgeCalls).toBe(0);
+      expect(slices).toEqual([{ status: "open", salience_verdict: "kept" }]);
+      expect(items).toHaveLength(1);
+    });
+
+    it("dead-letters a slice without explicit membership", async () => {
       const conversations = createConversationRepository(db);
       const conversation = await conversations.getOrCreate({
         platform: "slack",
@@ -120,149 +266,22 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         denoisedMessageIds: null,
         flushReason: "gap",
         rosterSnapshot: "[]",
+        salienceVerdict: "kept",
       });
 
-      const generator = {
-        generateJSON: async () => ({ salient: true, signals: [], entities: [] }),
-      } as unknown as Parameters<typeof processSlackSalience>[0]["generator"];
-
-      const summary = await processSlackSalience({ db, logger, facade: fakeFacade(), generator });
-      expect(summary.failures).toBe(1);
-      expect(summary.judged).toBe(0);
+      const items = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade() })) items.push(item);
 
       const slice = await db
         .selectFrom("conversation_slices")
-        .select(["salience_verdict", "salience_claim_token", "salience_claimed_at"])
+        .select(["salience_verdict", "salience_signals", "salience_claim_token", "salience_claimed_at"])
         .where("conversation_id", "=", conversation.id)
         .executeTakeFirstOrThrow();
-      expect(slice.salience_verdict).toBeNull();
-      expect(slice.salience_claim_token).not.toBeNull();
-      expect(slice.salience_claimed_at).not.toBeNull();
-    });
-
-    it("dead-letters slices from channels the bot can no longer access", async () => {
-      const conversations = createConversationRepository(db);
-      const conversation = await conversations.getOrCreate({
-        platform: "slack",
-        kind: "channel",
-        providerConversationId: "C_GONE",
-      });
-      await createConversationSlicesRepository(db).insertIfAbsent({
-        conversationId: conversation.id,
-        firstMessageId: 1,
-        lastMessageId: 2,
-        startedAt: "2026-07-17T00:00:00.000Z",
-        endedAt: "2026-07-17T01:00:00.000Z",
-        messageCount: 2,
-        denoisedMessageIds: [1, 2],
-        flushReason: "gap",
-        rosterSnapshot: "[]",
-      });
-
-      const facade = fakeFacade({
-        listChannelMembers: async () => {
-          throw Object.assign(new Error("An API error occurred: channel_not_found"), {
-            data: { error: "channel_not_found" },
-          });
-        },
-      });
-      const generator = {
-        generateJSON: async () => {
-          throw new Error("generator must not be called for an inaccessible channel");
-        },
-      } as unknown as Parameters<typeof processSlackSalience>[0]["generator"];
-
-      const summary = await processSlackSalience({ db, logger, facade, generator });
-      expect(summary.dropped).toBe(1);
-      expect(summary.failures).toBe(0);
-
-      const slice = await db
-        .selectFrom("conversation_slices")
-        .select(["salience_verdict", "salience_signals"])
-        .where("conversation_id", "=", conversation.id)
-        .executeTakeFirstOrThrow();
+      expect(items).toHaveLength(0);
       expect(slice.salience_verdict).toBe("dropped");
-      expect(slice.salience_signals).toContain("channel_inaccessible");
-    });
-
-    it("failed slices back off and stop monopolizing the salience batch", async () => {
-      const conversations = createConversationRepository(db);
-      const failing = await conversations.getOrCreate({
-        platform: "slack",
-        kind: "channel",
-        providerConversationId: "C_FAILING",
-      });
-      const healthy = await conversations.getOrCreate({
-        platform: "slack",
-        kind: "channel",
-        providerConversationId: "C_HEALTHY",
-      });
-      const slices = createConversationSlicesRepository(db);
-      await slices.insertIfAbsent({
-        conversationId: failing.id,
-        firstMessageId: 1,
-        lastMessageId: 2,
-        startedAt: "2026-07-17T00:00:00.000Z",
-        endedAt: "2026-07-17T01:00:00.000Z",
-        messageCount: 2,
-        denoisedMessageIds: [1, 2],
-        flushReason: "gap",
-        rosterSnapshot: "[]",
-      });
-      await slices.insertIfAbsent({
-        conversationId: healthy.id,
-        firstMessageId: 3,
-        lastMessageId: 4,
-        startedAt: "2026-07-17T02:00:00.000Z",
-        endedAt: "2026-07-17T03:00:00.000Z",
-        messageCount: 2,
-        denoisedMessageIds: [3, 4],
-        flushReason: "gap",
-        rosterSnapshot: "[]",
-      });
-      await db
-        .insertInto("conversation_messages")
-        .values(
-          [3, 4].map((id) => ({
-            id,
-            conversation_id: healthy.id,
-            provider_message_id: `msg-${id}`,
-            sender_jid: "U0TEAM",
-            sender_name: "Roopak",
-            is_bot: 0,
-            addressed_to_sketch: 0,
-            text: `message ${id}`,
-            received_at: "2026-07-17T02:30:00.000Z",
-            provider_timestamp: "2026-07-17T02:30:00.000Z",
-          })),
-        )
-        .execute();
-
-      const facade = fakeFacade({
-        listChannelMembers: async (channelId: string) => {
-          if (channelId === "C_FAILING") throw new Error("transient Slack outage");
-          return ["U0TEAM"];
-        },
-      });
-      const generator = {
-        generateJSON: async () => ({ salient: true, signals: ["decision"], entities: [] }),
-      } as unknown as Parameters<typeof processSlackSalience>[0]["generator"];
-
-      const first = await processSlackSalience({ db, logger, facade, generator, batchLimit: 1 });
-      expect(first.failures).toBe(1);
-      expect(first.judged).toBe(0);
-
-      const second = await processSlackSalience({ db, logger, facade, generator, batchLimit: 1 });
-      expect(second.judged).toBe(1);
-      expect(second.kept).toBe(1);
-
-      const verdicts = await db
-        .selectFrom("conversation_slices")
-        .select(["conversation_id", "salience_verdict"])
-        .orderBy("conversation_id")
-        .execute();
-      expect(verdicts.find((v) => v.conversation_id === failing.id)?.salience_verdict).toBeNull();
-      expect(verdicts.find((v) => v.conversation_id === healthy.id)?.salience_verdict).toBe("kept");
+      expect(slice.salience_signals).toContain("invalid_membership");
+      expect(slice.salience_claim_token).toBeNull();
+      expect(slice.salience_claimed_at).toBeNull();
     });
 
     it("rename refresh unlinks kept slices so they re-emit under the new channel name", async () => {
@@ -314,7 +333,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         .where("id", "=", inserted.row.id)
         .execute();
 
-      const { refreshSlackChannelName } = await import("./slack-salience");
+      const { refreshSlackChannelName } = await import("./slack-emission");
       const refreshed = await refreshSlackChannelName({
         db,
         logger,
@@ -343,6 +362,52 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         channelName: "new-name",
       });
       expect(unchanged).toBe(false);
+    });
+
+    it("startup repair requeues a linked orphaned open slice", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const orphan = await insertEmittableSlackSlice(db, {
+        channelId: "C_REPAIR",
+        startedAt: "2026-09-01T08:00:00.000Z",
+        status: "open",
+      });
+      await insertEmittableSlackSlice(db, {
+        channelId: "C_REPAIR",
+        startedAt: "2026-09-01T09:00:00.000Z",
+        status: "closed",
+      });
+      await db
+        .insertInto("indexed_files")
+        .values({
+          id: "file-orphaned-open",
+          connector_config_id: config.id,
+          provider_file_id: orphan.id,
+          file_name: "Slack orphan",
+          file_type: "slack_conversation_slice",
+          content_category: "document",
+          source: "slack",
+          synced_at: "2026-09-01T08:00:00.000Z",
+        })
+        .execute();
+      await db
+        .updateTable("conversation_slices")
+        .set({ indexed_file_id: "file-orphaned-open" })
+        .where("id", "=", orphan.id)
+        .execute();
+
+      await repairSlackChunkStreamsOnStartup(db, logger);
+      const repaired = await db
+        .selectFrom("conversation_slices")
+        .select(["status", "indexed_file_id"])
+        .where("id", "=", orphan.id)
+        .executeTakeFirstOrThrow();
+
+      expect(repaired).toEqual({ status: "closed", indexed_file_id: null });
     });
 
     it("migration 154 reclassifies mpdm-named channel conversations as mpim", async () => {
@@ -605,7 +670,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       ]);
     });
 
-    it("renders the thread root header and resolves mention tokens into the salience prompt", async () => {
+    it("renders the thread root header and resolves mention tokens in emitted content", async () => {
       const conversations = createConversationRepository(db);
       const conversation = await conversations.getOrCreate({
         platform: "slack",
@@ -648,21 +713,15 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         flushReason: "gap",
         rosterSnapshot: "[]",
         providerThreadId: rootTs,
+        salienceVerdict: "kept",
       });
 
-      const prompts: string[] = [];
-      const generator = {
-        generateJSON: async (prompt: string) => {
-          prompts.push(prompt);
-          return { salient: false, signals: [], entities: [] };
-        },
-      } as unknown as Parameters<typeof processSlackSalience>[0]["generator"];
-
-      const summary = await processSlackSalience({ db, logger, facade: fakeFacade(), generator });
-      expect(summary.judged).toBe(1);
-      expect(prompts[0]).toContain("Thread root by Guest: Kicking off the pricing thread");
-      expect(prompts[0]).toContain("@Roopak, let's finalize by Friday");
-      expect(prompts[0]).not.toContain("<@U0TEAM>");
+      const items = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade() })) items.push(item);
+      expect(items).toHaveLength(1);
+      expect(items[0]?.content).toContain("Thread root by Guest: Kicking off the pricing thread");
+      expect(items[0]?.content).toContain("@Roopak, let's finalize by Friday");
+      expect(items[0]?.content).not.toContain("<@U0TEAM>");
     });
 
     it("emitted content is transcript-only: channel header without the participant roster", async () => {
@@ -677,18 +736,35 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         providerMessageId: "1900.1",
         senderJid: "U0TEAM",
         senderName: "Roopak",
-        text: "Decision: we ship the pricing change on Monday",
+        text: "see attached files.",
+        attachments: [
+          {
+            originalName: "pricing-plan.pdf",
+            mimeType: "application/pdf",
+            localPath: "/tmp/pricing-plan.pdf",
+            sizeBytes: 1,
+          },
+        ],
         providerTimestamp: "2026-07-17T11:00:00.000Z",
         receivedAt: "2026-07-17T11:00:00.000Z",
+      });
+      const plainMessage = await conversations.insertMessage({
+        conversationId: conversation.id,
+        providerMessageId: "1900.2",
+        senderJid: "U0TEAM",
+        senderName: "Roopak",
+        text: "Decision: we ship the pricing change on Monday",
+        providerTimestamp: "2026-07-17T11:01:00.000Z",
+        receivedAt: "2026-07-17T11:01:00.000Z",
       });
       await createConversationSlicesRepository(db).insertIfAbsent({
         conversationId: conversation.id,
         firstMessageId: message.row.id,
-        lastMessageId: message.row.id,
+        lastMessageId: plainMessage.row.id,
         startedAt: "2026-07-17T11:00:00.000Z",
-        endedAt: "2026-07-17T11:00:00.000Z",
-        messageCount: 1,
-        denoisedMessageIds: [message.row.id],
+        endedAt: "2026-07-17T11:01:00.000Z",
+        messageCount: 2,
+        denoisedMessageIds: [message.row.id, plainMessage.row.id],
         flushReason: "gap",
         rosterSnapshot: "[]",
         salienceVerdict: "kept",
@@ -701,7 +777,9 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
 
       expect(items).toHaveLength(1);
       expect(items[0]?.content).toContain("Channel: #general");
+      expect(items[0]?.content).toContain("Roopak: [shared file: pricing-plan.pdf]");
       expect(items[0]?.content).toContain("Roopak: Decision: we ship the pricing change on Monday");
+      expect(items[0]?.content).not.toContain("see attached files.");
       expect(items[0]?.content).not.toContain("Participants:");
       expect(items[0]?.content).not.toContain("(teammate)");
     });
@@ -1194,6 +1272,694 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         .where("id", "=", slice.row.id)
         .executeTakeFirstOrThrow();
       expect(goneSlice.indexed_file_id).toBeNull();
+    });
+
+    it("keeps differential Slack facts unique and live across tier one, tier one, tier two growth", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const conversation = await createConversationRepository(db).getOrCreate(
+        { platform: "slack", kind: "channel", providerConversationId: "C_PIPELINE" },
+        "pipeline",
+      );
+      const messages = createConversationRepository(db);
+      const addMessage = async (index: number) =>
+        messages.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `pipeline-${index}`,
+          senderJid: "U0TEAM",
+          senderName: "Roopak",
+          text: `Project Atlas launch decision remains approved, growth update ${index}.`,
+          providerTimestamp: new Date(Date.parse("2026-09-05T09:00:00.000Z") + index * 60_000).toISOString(),
+          receivedAt: new Date(Date.parse("2026-09-05T09:00:00.000Z") + index * 60_000).toISOString(),
+        });
+      const generateBoundary = async (prompt: string) => {
+        const count = [...prompt.matchAll(/^\d+\. /gmu)].length;
+        return JSON.stringify({ segments: [{ start: 1, end: count, threads: ["Project Atlas"] }] });
+      };
+      const project = await createEntityRepository(db).upsertEntityFromTool({
+        name: "Project Atlas",
+        sourceType: "project",
+        source: "manual",
+        sourceId: "manual:project-atlas-slack-pipeline",
+      });
+      let factCalls = 0;
+      const enrichmentGenerator = {
+        generate: async () => "Project Atlas launch remains approved.",
+        generateJSON: async <T>(_prompt: string, options?: { label?: string }) => {
+          if (options?.label?.startsWith("extractEntities")) {
+            return {
+              mentions: [{ mention: "Project Atlas", type: "project", variations: [], matchesKnown: "Project Atlas" }],
+              relations: [],
+            } as T;
+          }
+          if (options?.label?.startsWith("extractEntityFacts")) {
+            factCalls += 1;
+            return (
+              factCalls === 1
+                ? { facts: { [project.id]: [{ fact: "Launch decision is approved" }] }, retractions: [] }
+                : { facts: {}, retractions: [] }
+            ) as T;
+          }
+          return {} as T;
+        },
+      } as GeminiGenerator;
+      const persistEmission = async (now: Date) => {
+        const emitted = [];
+        for await (const item of emitSlackSyncedItems({
+          db,
+          logger,
+          facade: fakeFacade(),
+          minMessages: 1,
+          provisionalRefreshMessages: 3,
+          provisionalRefreshMaxMinutes: 10_000,
+          now,
+        })) {
+          emitted.push(item);
+          const result = await processSyncedItem({
+            db,
+            repo: createConnectorRepository(db),
+            connectorConfigId: config.id,
+            connectorType: "slack",
+            item,
+            existingHashes: await loadExistingContentHashes(db, "slack", config.id),
+          });
+          if (result.kind === "skipped_empty") throw new Error("Expected persisted Slack emission");
+          await db
+            .updateTable("conversation_slices")
+            .set({ indexed_file_id: result.indexedFileId })
+            .where("id", "=", item.providerFileId)
+            .execute();
+          await runEnrichment({
+            db,
+            logger,
+            embeddingProvider: null,
+            generator: enrichmentGenerator,
+            fileIds: [result.indexedFileId],
+          });
+        }
+        return emitted;
+      };
+
+      await addMessage(0);
+      await runSlackChunkEngine({
+        db,
+        logger,
+        generate: generateBoundary,
+        channelKnobs: pipelineKnobs,
+        threadKnobs: pipelineKnobs,
+        discoveryPageRows: 100,
+        discoveryMaxPages: 10,
+        now: new Date("2026-09-05T09:30:00.000Z"),
+      });
+      await persistEmission(new Date("2026-09-05T09:30:00.000Z"));
+
+      const tiers = [];
+      for (let tick = 1; tick <= 3; tick += 1) {
+        await addMessage(tick);
+        const now = new Date(Date.parse("2026-09-05T09:30:00.000Z") + tick * 31 * 60_000);
+        await runSlackChunkEngine({
+          db,
+          logger,
+          generate: generateBoundary,
+          channelKnobs: pipelineKnobs,
+          threadKnobs: pipelineKnobs,
+          discoveryPageRows: 100,
+          discoveryMaxPages: 10,
+          now,
+        });
+        const emitted = await persistEmission(now);
+        expect(emitted).toHaveLength(1);
+        tiers.push(emitted[0]?.enrichmentRefresh);
+      }
+
+      const slice = await db
+        .selectFrom("conversation_slices")
+        .select("indexed_file_id")
+        .where("conversation_id", "=", conversation.id)
+        .where("status", "=", "open")
+        .executeTakeFirstOrThrow();
+      const facts = await db
+        .selectFrom("indexed_file_facts")
+        .select(["fact_key", "deleted_at"])
+        .where("indexed_file_id", "=", slice.indexed_file_id)
+        .execute();
+      expect(tiers).toEqual(["embeddings_only", "embeddings_only", "full"]);
+      expect(facts).toHaveLength(1);
+      expect(new Set(facts.map((fact) => fact.fact_key)).size).toBe(1);
+      expect(facts.filter((fact) => fact.deleted_at !== null)).toHaveLength(0);
+      expect(factCalls).toBe(2);
+    });
+
+    it("re-emits a ten-day-old linked open slice at tier two after a boundary cut trims it", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const conversation = await createConversationRepository(db).getOrCreate(
+        { platform: "slack", kind: "channel", providerConversationId: "C_BOUNDARY_CUT" },
+        "boundary-cut",
+      );
+      const messages = createConversationRepository(db);
+      const ids: number[] = [];
+      for (let index = 1; index <= 3; index += 1) {
+        const inserted = await messages.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `old-${index}`,
+          senderJid: "U0TEAM",
+          senderName: "Roopak",
+          text: `old boundary message ${index}`,
+          providerTimestamp: `2026-08-2${index}T09:00:00.000Z`,
+          receivedAt: `2026-08-2${index}T09:00:00.000Z`,
+        });
+        ids.push(inserted.row.id);
+      }
+      const oneSegment = async () => JSON.stringify({ segments: [{ start: 1, end: 3, threads: ["old"] }] });
+      await runSlackChunkEngine({
+        db,
+        logger,
+        generate: oneSegment,
+        channelKnobs: pipelineKnobs,
+        threadKnobs: pipelineKnobs,
+        discoveryPageRows: 100,
+        discoveryMaxPages: 10,
+        now: new Date("2026-08-26T09:00:00.000Z"),
+      });
+      const initial = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade(), minMessages: 1 }))
+        initial.push(item);
+      const firstItem = initial[0];
+      if (!firstItem) throw new Error("Expected initial open slice emission");
+      const persisted = await processSyncedItem({
+        db,
+        repo: createConnectorRepository(db),
+        connectorConfigId: config.id,
+        connectorType: "slack",
+        item: firstItem,
+        existingHashes: new Map(),
+      });
+      if (persisted.kind === "skipped_empty") throw new Error("Expected persisted Slack boundary slice");
+      await db
+        .updateTable("conversation_slices")
+        .set({ indexed_file_id: persisted.indexedFileId })
+        .where("id", "=", firstItem.providerFileId)
+        .execute();
+
+      for (let index = 4; index <= 5; index += 1) {
+        const inserted = await messages.insertMessage({
+          conversationId: conversation.id,
+          providerMessageId: `new-${index}`,
+          senderJid: "U0TEAM",
+          senderName: "Roopak",
+          text: `new boundary message ${index}`,
+          providerTimestamp: `2026-09-05T0${index}:00:00.000Z`,
+          receivedAt: `2026-09-05T0${index}:00:00.000Z`,
+        });
+        ids.push(inserted.row.id);
+      }
+      const cutBoundary = async () =>
+        JSON.stringify({
+          segments: [
+            { start: 1, end: 2, threads: ["old"] },
+            { start: 3, end: 5, threads: ["new"] },
+          ],
+        });
+      await runSlackChunkEngine({
+        db,
+        logger,
+        generate: cutBoundary,
+        channelKnobs: pipelineKnobs,
+        threadKnobs: pipelineKnobs,
+        discoveryPageRows: 100,
+        discoveryMaxPages: 10,
+        now: new Date("2026-09-05T10:00:00.000Z"),
+      });
+      const trimmed = await db
+        .selectFrom("conversation_slices")
+        .select(["id", "indexed_file_id", "message_count"])
+        .where("id", "=", firstItem.providerFileId)
+        .executeTakeFirstOrThrow();
+      expect(trimmed).toMatchObject({ indexed_file_id: null, message_count: 2 });
+
+      const reemitted = [];
+      for await (const item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade(),
+        minMessages: 1,
+        now: new Date("2026-09-05T10:01:00.000Z"),
+      })) {
+        reemitted.push(item);
+      }
+      const trimmedItem = reemitted.find((item) => item.providerFileId === trimmed.id);
+      expect(trimmedItem?.enrichmentRefresh).toBe("full");
+      expect(trimmedItem?.content).toContain("old boundary message 1");
+      expect(trimmedItem?.content).toContain("old boundary message 2");
+      expect(trimmedItem?.content).not.toContain("old boundary message 3");
+    });
+
+    it("re-emits a linked open slice at tier two when a shrink moves it below the floor", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const slice = await insertEmittableSlackSlice(db, {
+        channelId: "C_SHRINK_FLOOR",
+        startedAt: "2026-09-05T10:00:00.000Z",
+        messageCount: 3,
+        status: "open",
+      });
+      const initialItems = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade(), minMessages: 3 })) {
+        initialItems.push(item);
+      }
+      const initial = initialItems[0];
+      if (!initial) throw new Error("Expected initial Slack emission");
+      const persisted = await processSyncedItem({
+        db,
+        repo: createConnectorRepository(db),
+        connectorConfigId: config.id,
+        connectorType: "slack",
+        item: initial,
+        existingHashes: new Map(),
+      });
+      if (persisted.kind === "skipped_empty") throw new Error("Expected persisted Slack emission");
+      const membership = JSON.parse(slice.denoised_message_ids ?? "[]") as number[];
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          indexed_file_id: null,
+          last_message_id: membership[0],
+          ended_at: new Date(Date.parse(slice.ended_at) + 60_000).toISOString(),
+          message_count: 1,
+          denoised_message_ids: JSON.stringify([membership[0]]),
+        })
+        .where("id", "=", slice.id)
+        .execute();
+
+      const refreshed = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade(), minMessages: 3 })) {
+        refreshed.push(item);
+      }
+
+      expect(refreshed).toHaveLength(1);
+      expect(refreshed[0]?.providerFileId).toBe(slice.id);
+      expect(refreshed[0]?.enrichmentRefresh).toBe("full");
+    });
+
+    it("caches a channel roster failure for the page and reports every skipped slice", async () => {
+      await insertEmittableSlackSlice(db, { channelId: "C_FAIL", startedAt: "2026-09-05T08:00:00.000Z" });
+      await insertEmittableSlackSlice(db, { channelId: "C_FAIL", startedAt: "2026-09-05T09:00:00.000Z" });
+      const healthy = await insertEmittableSlackSlice(db, {
+        channelId: "C_OK",
+        startedAt: "2026-09-05T10:00:00.000Z",
+      });
+      let failedRosterCalls = 0;
+      let summary: SlackEmissionRunSummary | undefined;
+      const items = [];
+      for await (const item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade({
+          listChannelMembers: async (channelId) => {
+            if (channelId === "C_FAIL") {
+              failedRosterCalls += 1;
+              throw new Error("transient Slack outage");
+            }
+            return ["U0TEAM"];
+          },
+        }),
+        onSummary: (value) => {
+          summary = value;
+        },
+      })) {
+        items.push(item);
+      }
+      expect(items.map((item) => item.providerFileId)).toEqual([healthy.id]);
+      expect(failedRosterCalls).toBe(1);
+      expect(summary).toMatchObject({ rosterFailures: 2, tier2Emits: 1 });
+    });
+
+    it.each(["channel_not_found", "not_in_channel"])(
+      "dead-letters every listed slice when Slack reports %s",
+      async (errorCode) => {
+        const first = await insertEmittableSlackSlice(db, {
+          channelId: "C_GONE",
+          startedAt: "2026-09-05T08:00:00.000Z",
+        });
+        const second = await insertEmittableSlackSlice(db, {
+          channelId: "C_GONE",
+          startedAt: "2026-09-05T09:00:00.000Z",
+        });
+        let rosterCalls = 0;
+        const facade = fakeFacade({
+          listChannelMembers: async () => {
+            rosterCalls += 1;
+            throw { data: { error: errorCode } };
+          },
+        });
+
+        const firstRun = [];
+        for await (const item of emitSlackSyncedItems({ db, logger, facade })) firstRun.push(item);
+        const dropped = await db
+          .selectFrom("conversation_slices")
+          .select(["id", "salience_verdict", "salience_signals"])
+          .where("id", "in", [first.id, second.id])
+          .orderBy("id")
+          .execute();
+
+        const secondRun = [];
+        for await (const item of emitSlackSyncedItems({ db, logger, facade })) secondRun.push(item);
+
+        expect(firstRun).toHaveLength(0);
+        expect(secondRun).toHaveLength(0);
+        expect(rosterCalls).toBe(1);
+        expect(dropped).toEqual([
+          expect.objectContaining({ salience_verdict: "dropped" }),
+          expect.objectContaining({ salience_verdict: "dropped" }),
+        ]);
+        expect(dropped.map((row) => JSON.parse(row.salience_signals ?? "{}"))).toEqual([
+          { droppedReason: "channel_inaccessible" },
+          { droppedReason: "channel_inaccessible" },
+        ]);
+      },
+    );
+
+    it.each([
+      { name: "an ordinary outage", error: new Error("transient Slack outage") },
+      { name: "is_archived", error: { data: { error: "is_archived" } } },
+    ])("keeps $name roster failures eligible for the next run", async ({ error }) => {
+      const first = await insertEmittableSlackSlice(db, {
+        channelId: "C_RETRY",
+        startedAt: "2026-09-05T08:00:00.000Z",
+      });
+      const second = await insertEmittableSlackSlice(db, {
+        channelId: "C_RETRY",
+        startedAt: "2026-09-05T09:00:00.000Z",
+      });
+      let rosterCalls = 0;
+      const facade = fakeFacade({
+        listChannelMembers: async () => {
+          rosterCalls += 1;
+          throw error;
+        },
+      });
+
+      for await (const _item of emitSlackSyncedItems({ db, logger, facade })) {
+      }
+      for await (const _item of emitSlackSyncedItems({ db, logger, facade })) {
+      }
+      const verdicts = await db
+        .selectFrom("conversation_slices")
+        .select(["id", "salience_verdict"])
+        .where("id", "in", [first.id, second.id])
+        .orderBy("id")
+        .execute();
+
+      expect(rosterCalls).toBe(2);
+      expect(verdicts.map((row) => row.salience_verdict)).toEqual(["kept", "kept"]);
+    });
+
+    it("emits current slices before capped legacy slices newest-first", async () => {
+      const oldest = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-01T10:00:00.000Z",
+        legacy: true,
+      });
+      const newest = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-03T10:00:00.000Z",
+        legacy: true,
+      });
+      const middle = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-02T10:00:00.000Z",
+        legacy: true,
+      });
+      const current = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-04T10:00:00.000Z",
+      });
+      let summary: SlackEmissionRunSummary | undefined;
+      const items = [];
+      for await (const item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade(),
+        legacyPerRun: 2,
+        onSummary: (value) => {
+          summary = value;
+        },
+      })) {
+        items.push(item);
+      }
+      expect(items.map((item) => item.providerFileId)).toEqual([current.id, newest.id, middle.id]);
+      expect(items.map((item) => item.providerFileId)).not.toContain(oldest.id);
+      expect(summary).toMatchObject({ legacyDrained: 2, legacyRemaining: 1 });
+    });
+
+    it("moves a successfully persisted legacy slice into the current refresh lane", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const legacy = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        legacy: true,
+      });
+      const facade = fakeFacade({ listMemberChannels: async () => [{ id: "C1", name: "c1" }] });
+
+      const syncResult = await runConnectorSync(
+        db,
+        config.id,
+        logger,
+        { SLACK_EMISSION_LEGACY_PER_RUN: 1 },
+        { slackIndexingFacade: facade },
+      );
+      const persisted = await db
+        .selectFrom("conversation_slices")
+        .select(["indexed_file_id", "legacy_unjudged_at"])
+        .where("id", "=", legacy.id)
+        .executeTakeFirstOrThrow();
+      const refreshed = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade })) refreshed.push(item);
+
+      expect(syncResult.errors).toEqual([]);
+      expect(syncResult.itemsProcessed).toBe(1);
+      expect(persisted.indexed_file_id).not.toBeNull();
+      expect(persisted.legacy_unjudged_at).toBeNull();
+      expect(refreshed.map((item) => item.providerFileId)).toContain(legacy.id);
+    });
+
+    it("re-emits a growing linked open slice as tier one without advancing its enrichment anchor", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const slice = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-05T10:00:00.000Z",
+        messageCount: 10,
+        status: "open",
+      });
+      const firstItems = [];
+      for await (const item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade(),
+        now: new Date("2026-09-05T10:30:00.000Z"),
+      })) {
+        firstItems.push(item);
+      }
+      const firstItem = firstItems[0];
+      if (!firstItem) throw new Error("Expected initial Slack emission");
+      await processSyncedItem({
+        db,
+        repo: createConnectorRepository(db),
+        connectorConfigId: config.id,
+        connectorType: "slack",
+        item: firstItem,
+        existingHashes: new Map(),
+      });
+
+      const conversations = createConversationRepository(db);
+      const next = await conversations.insertMessage({
+        conversationId: slice.conversation_id,
+        providerMessageId: "growth-11",
+        senderJid: "U0TEAM",
+        senderName: "Roopak",
+        text: "a newly searchable update",
+        providerTimestamp: "2026-09-05T10:01:00.000Z",
+        receivedAt: "2026-09-05T10:01:00.000Z",
+      });
+      const membership = JSON.parse(slice.denoised_message_ids ?? "[]") as number[];
+      await db
+        .updateTable("conversation_slices")
+        .set({
+          last_message_id: next.row.id,
+          ended_at: "2026-09-05T10:01:00.000Z",
+          message_count: 11,
+          denoised_message_ids: JSON.stringify([...membership, next.row.id]),
+        })
+        .where("id", "=", slice.id)
+        .execute();
+
+      const secondItems = [];
+      for await (const item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade(),
+        now: new Date("2026-09-05T11:00:00.000Z"),
+      })) {
+        secondItems.push(item);
+      }
+      expect(secondItems).toHaveLength(1);
+      expect(secondItems[0]?.enrichmentRefresh).toBe("embeddings_only");
+      expect(secondItems[0]?.sourceMeta).toEqual({
+        firstMessageId: slice.first_message_id,
+        messageCount: 11,
+        emittedAt: "2026-09-05T11:00:00.000Z",
+        enrichedMessageCount: 10,
+        enrichedAt: "2026-09-05T10:30:00.000Z",
+      });
+    });
+
+    it("uses separate open floors for channels and threads and round-trips source metadata", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const channel = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-05T09:00:00.000Z",
+        status: "open",
+      });
+      const thread = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-05T10:00:00.000Z",
+        status: "open",
+        providerThreadId: "thread-1",
+      });
+      const items = [];
+      for await (const item of emitSlackSyncedItems({ db, logger, facade: fakeFacade() })) items.push(item);
+      expect(items.map((item) => item.providerFileId)).toEqual([thread.id]);
+      expect(items.map((item) => item.providerFileId)).not.toContain(channel.id);
+
+      const item = items[0];
+      if (!item) throw new Error("Expected thread emission");
+      await processSyncedItem({
+        db,
+        repo: createConnectorRepository(db),
+        connectorConfigId: config.id,
+        connectorType: "slack",
+        item,
+        existingHashes: new Map(),
+      });
+      const file = await db
+        .selectFrom("indexed_files")
+        .select("source_meta")
+        .where("provider_file_id", "=", thread.id)
+        .executeTakeFirstOrThrow();
+      expect(readSourceMeta(file)).toEqual(item.sourceMeta);
+    });
+
+    it("does not resolve a roster or render an unchanged linked open slice", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      const slice = await insertEmittableSlackSlice(db, {
+        channelId: "C1",
+        startedAt: "2026-09-05T10:00:00.000Z",
+        messageCount: 10,
+        status: "open",
+      });
+      await db
+        .insertInto("indexed_files")
+        .values({
+          id: "unchanged-open-file",
+          connector_config_id: config.id,
+          provider_file_id: slice.id,
+          file_name: "Slack open slice",
+          file_type: "slack_conversation_slice",
+          content_category: "document",
+          source: "slack",
+          source_updated_at: slice.ended_at,
+          synced_at: slice.ended_at,
+        })
+        .execute();
+      await db
+        .updateTable("conversation_slices")
+        .set({ indexed_file_id: "unchanged-open-file", denoised_message_ids: null })
+        .where("id", "=", slice.id)
+        .execute();
+      let rosterCalls = 0;
+      const listedSliceCounts: number[] = [];
+      const items = [];
+      for await (const item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade({
+          listChannelMembers: async () => {
+            rosterCalls += 1;
+            return ["U0TEAM"];
+          },
+        }),
+        onPageListedSliceCount: (count) => listedSliceCounts.push(count),
+      })) {
+        items.push(item);
+      }
+      expect(items).toHaveLength(0);
+      expect(rosterCalls).toBe(0);
+      expect(listedSliceCounts).toEqual([0, 0]);
+      const verdict = await db
+        .selectFrom("conversation_slices")
+        .select("salience_verdict")
+        .where("id", "=", slice.id)
+        .executeTakeFirstOrThrow();
+      expect(verdict.salience_verdict).toBe("kept");
+    });
+
+    it("scopes the roster cache to each 200-row page", async () => {
+      for (let index = 0; index < 201; index += 1) {
+        await insertEmittableSlackSlice(db, {
+          channelId: "C1",
+          startedAt: new Date(Date.parse("2026-08-01T00:00:00.000Z") + index * 60_000).toISOString(),
+        });
+      }
+      const cacheSizes: number[] = [];
+      let rosterCalls = 0;
+      for await (const _item of emitSlackSyncedItems({
+        db,
+        logger,
+        facade: fakeFacade({
+          listChannelMembers: async () => {
+            rosterCalls += 1;
+            return ["U0TEAM"];
+          },
+        }),
+        emissionRefreshDays: 60,
+        onPageRosterCacheSize: (size) => cacheSizes.push(size),
+      })) {
+      }
+      expect(cacheSizes).toEqual([1, 1]);
+      expect(rosterCalls).toBe(2);
     });
 
     it("archives all channel files on disconnect so stale ACLs stop granting reads", async () => {

@@ -52,7 +52,7 @@ export const SEARCH_STAGES: StageDefinition[] = [
   { stage: "filter", label: "Metadata filters", kind: "code" },
   { stage: "rbac", label: "Access filter", kind: "code" },
   { stage: "finalize", label: "Collapse and slice", kind: "code" },
-  { stage: "rerank", label: "Entity re-sort", kind: "code" },
+  { stage: "rerank", label: "Settled positions", kind: "code" },
   { stage: "finalOutput", label: "Final output", kind: "code" },
 ];
 

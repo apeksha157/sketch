@@ -95,7 +95,7 @@ describe("LinkedIn Aimfox connector API", () => {
         connectorType: "linkedin_aimfox",
         authType: "api_key",
         credentials: { api_key: "aimfox-key" },
-        scopeConfig: { maxConversations: 12 },
+        scopeConfig: { maxConversations: 12, visibility: "workspace" },
       }),
     });
 
@@ -103,11 +103,15 @@ describe("LinkedIn Aimfox connector API", () => {
     const configs = await createConnectorRepository(db).findConfigsByType("linkedin_aimfox");
     expect(configs).toHaveLength(1);
     expect(JSON.parse(configs[0].credentials)).toEqual({ type: "api_key", api_key: "aimfox-key" });
-    expect(JSON.parse(configs[0].scope_config)).toEqual({ accountIds: ["acct-1", "acct-2"], maxConversations: 12 });
+    expect(JSON.parse(configs[0].scope_config)).toEqual({
+      accountIds: ["acct-1", "acct-2"],
+      maxConversations: 12,
+      visibility: "workspace",
+    });
   });
 
-  it("rejects Aimfox keys with no connected LinkedIn accounts", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(aimfoxAccountsResponse([]));
+  it("rejects LinkedIn Aimfox create without a visibility choice", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(aimfoxAccountsResponse([{ id: "acct-1" }]));
     const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
     const cookie = await login(app);
 
@@ -123,17 +127,57 @@ describe("LinkedIn Aimfox connector API", () => {
     const body = await res.json();
 
     expect(res.status).toBe(400);
+    expect(body.error.message).toBe("LinkedIn visibility is required");
+  });
+
+  it("rejects invalid LinkedIn Aimfox visibility on create", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(aimfoxAccountsResponse([{ id: "acct-1" }]));
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/connectors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        connectorType: "linkedin_aimfox",
+        authType: "api_key",
+        credentials: { api_key: "aimfox-key" },
+        scopeConfig: { visibility: "team" },
+      }),
+    });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects Aimfox keys with no connected LinkedIn accounts", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(aimfoxAccountsResponse([]));
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/connectors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({
+        connectorType: "linkedin_aimfox",
+        authType: "api_key",
+        credentials: { api_key: "aimfox-key" },
+        scopeConfig: { visibility: "workspace" },
+      }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
     expect(body.error.code).toBe("NO_ACCOUNTS");
   });
 
-  it("rediscovers account scope when rotating the key", async () => {
+  it("rediscovers account scope when rotating the key and preserves visibility", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(aimfoxAccountsResponse([{ id: "acct-2" }, { id: "acct-3" }]));
     const repo = createConnectorRepository(db);
     const config = await repo.createConfig({
       connectorType: "linkedin_aimfox",
       authType: "api_key",
       credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
-      scopeConfig: JSON.stringify({ accountIds: ["acct-2"] }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-2"], visibility: "workspace" }),
       createdBy: userId,
     });
     const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
@@ -147,7 +191,10 @@ describe("LinkedIn Aimfox connector API", () => {
 
     expect(res.status).toBe(200);
     const updated = await repo.findConfigById(config.id);
-    expect(JSON.parse(updated?.scope_config ?? "{}")).toEqual({ accountIds: ["acct-2", "acct-3"] });
+    expect(JSON.parse(updated?.scope_config ?? "{}")).toEqual({
+      accountIds: ["acct-2", "acct-3"],
+      visibility: "workspace",
+    });
     expect(JSON.parse(updated?.credentials ?? "{}")).toEqual({ type: "api_key", api_key: "rotated-key" });
   });
 
@@ -159,6 +206,7 @@ describe("LinkedIn Aimfox connector API", () => {
       connectorType: "linkedin_aimfox",
       authType: "api_key",
       credentials: { api_key: "aimfox-key" },
+      scopeConfig: { visibility: "workspace" },
     });
 
     const first = await app.request("/api/connectors", {
@@ -180,6 +228,251 @@ describe("LinkedIn Aimfox connector API", () => {
     expect(first.status).toBe(201);
     expect(disconnected.status).toBe(200);
     expect(second.status).toBe(201);
+  });
+
+  it("rejects visibility changes through the scope PATCH", async () => {
+    const repo = createConnectorRepository(db);
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], visibility: "owner" }),
+      createdBy: userId,
+    });
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request(`/api/connectors/${config.id}/scope`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ scopeConfig: { visibility: "workspace" } }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.message).toBe("LinkedIn visibility must be changed with PUT /api/connectors/:id/visibility");
+  });
+
+  it("flips LinkedIn visibility in both directions and reconciles grants without touching the cursor", async () => {
+    const repo = createConnectorRepository(db);
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], visibility: "owner" }),
+      syncStatus: "active",
+      createdBy: userId,
+    });
+    await repo.updateConfig(config.id, { syncCursor: "cursor-v1" });
+    await seedLinkedinFiles(db, config.id, ["member@example.com"]);
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const workspace = await app.request(`/api/connectors/${config.id}/visibility`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ visibility: "workspace" }),
+    });
+    const owner = await app.request(`/api/connectors/${config.id}/visibility`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ visibility: "owner" }),
+    });
+
+    expect(workspace.status).toBe(200);
+    expect(owner.status).toBe(200);
+    expect(await linkedinGrantValues(db, config.id)).toEqual(["member@example.com", "member@example.com"]);
+    const updated = await repo.findConfigById(config.id);
+    expect(JSON.parse(updated?.scope_config ?? "{}")).toMatchObject({ visibility: "owner" });
+    expect(updated?.sync_cursor).toBe("cursor-v1");
+  });
+
+  it("same-mode LinkedIn visibility flip removes stale principals and stray access scopes", async () => {
+    const repo = createConnectorRepository(db);
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], visibility: "owner" }),
+      createdBy: userId,
+    });
+    await seedLinkedinFiles(db, config.id, ["member@example.com", "other@example.com"], "linkedin-stray-scope");
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request(`/api/connectors/${config.id}/visibility`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ visibility: "owner" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(await linkedinGrantValues(db, config.id)).toEqual(["member@example.com", "member@example.com"]);
+    const scoped = await db
+      .selectFrom("indexed_files")
+      .select("access_scope_id")
+      .where("connector_config_id", "=", config.id)
+      .execute();
+    expect(scoped.map((file) => file.access_scope_id)).toEqual([null, null]);
+  });
+
+  it("returns 409 and leaves rows unchanged when owner email is unavailable", async () => {
+    await db.insertInto("users").values({ id: "missing-owner-email", name: "No Email", email: null }).execute();
+    const repo = createConnectorRepository(db);
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], visibility: "owner" }),
+      createdBy: "missing-owner-email",
+    });
+    await seedLinkedinFiles(db, config.id, ["member@example.com"]);
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request(`/api/connectors/${config.id}/visibility`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ visibility: "workspace" }),
+    });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe("OWNER_EMAIL_UNAVAILABLE");
+    expect(JSON.parse((await repo.findConfigById(config.id))?.scope_config ?? "{}")).toMatchObject({
+      visibility: "owner",
+    });
+    expect(await linkedinGrantValues(db, config.id)).toEqual(["member@example.com", "member@example.com"]);
+  });
+
+  it("returns 409 and leaves rows unchanged while LinkedIn is syncing", async () => {
+    const repo = createConnectorRepository(db);
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], visibility: "owner" }),
+      syncStatus: "syncing",
+      createdBy: userId,
+    });
+    await seedLinkedinFiles(db, config.id, ["member@example.com"]);
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request(`/api/connectors/${config.id}/visibility`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ visibility: "workspace" }),
+    });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.code).toBe("SYNC_IN_PROGRESS");
+    expect(JSON.parse((await repo.findConfigById(config.id))?.scope_config ?? "{}")).toMatchObject({
+      visibility: "owner",
+    });
+    expect(await linkedinGrantValues(db, config.id)).toEqual(["member@example.com", "member@example.com"]);
+  });
+
+  it("updates only the enrichment block and leaves the sync cursor alone", async () => {
+    const repo = createConnectorRepository(db);
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({
+        accountIds: ["acct-1"],
+        visibility: "workspace",
+        maxConversations: 12,
+        enrichment: { enabled: true, batch: 20 },
+      }),
+      syncStatus: "active",
+      createdBy: userId,
+    });
+    await repo.updateConfig(config.id, { syncCursor: "cursor-v1" });
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request(`/api/connectors/${config.id}/enrichment`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ enabled: false, dailyCap: 10, autoMerge: true }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.connector.scopeConfig).toEqual({
+      accountIds: ["acct-1"],
+      visibility: "workspace",
+      maxConversations: 12,
+      enrichment: { enabled: false, dailyCap: 10, batch: 20, autoMerge: true },
+    });
+    const updated = await repo.findConfigById(config.id);
+    expect(JSON.parse(updated?.scope_config ?? "{}")).toEqual(body.connector.scopeConfig);
+    expect(updated?.sync_cursor).toBe("cursor-v1");
+  });
+
+  it("rejects a negative daily cap and keeps the stored enrichment block", async () => {
+    const repo = createConnectorRepository(db);
+    const stored = { accountIds: ["acct-1"], visibility: "owner", enrichment: { enabled: true, dailyCap: 25 } };
+    const config = await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify(stored),
+      syncStatus: "active",
+      createdBy: userId,
+    });
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request(`/api/connectors/${config.id}/enrichment`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: cookie },
+      body: JSON.stringify({ enabled: true, dailyCap: -1, autoMerge: false }),
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    const updated = await repo.findConfigById(config.id);
+    expect(JSON.parse(updated?.scope_config ?? "{}")).toEqual(stored);
+  });
+
+  it("returns scopeConfig on /mine for LinkedIn rows only", async () => {
+    const repo = createConnectorRepository(db);
+    const admin = await createUserRepository(db).findByEmail(ADMIN_EMAIL);
+    if (!admin) throw new Error("admin user missing");
+    await repo.createConfig({
+      connectorType: "linkedin_aimfox",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "stored-key" }),
+      scopeConfig: JSON.stringify({ accountIds: ["acct-1"], visibility: "owner", enrichment: { enabled: true } }),
+      syncStatus: "active",
+      createdBy: admin.id,
+    });
+    await repo.createConfig({
+      connectorType: "fireflies",
+      authType: "api_key",
+      credentials: JSON.stringify({ type: "api_key", api_key: "ff-key" }),
+      scopeConfig: JSON.stringify({ initialDays: 30 }),
+      syncStatus: "active",
+      createdBy: admin.id,
+    });
+    const app = createApp(db, createTestConfig(), { logger: createTestLogger() });
+    const cookie = await login(app);
+
+    const res = await app.request("/api/connectors/mine", { headers: { Cookie: cookie } });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const byType = Object.fromEntries(
+      body.connectors.map((row: { connectorType: string; scopeConfig?: unknown }) => [row.connectorType, row]),
+    );
+    expect(byType.linkedin_aimfox.scopeConfig).toEqual({
+      accountIds: ["acct-1"],
+      visibility: "owner",
+      enrichment: { enabled: true },
+    });
+    expect(byType.fireflies).not.toHaveProperty("scopeConfig");
   });
 
   it("conversation sync completes active with no conversations", async () => {
@@ -404,4 +697,85 @@ function aimfoxLead(id: string, fullName: string, publicIdentifier: string, emai
     lead_of: [],
     origins: [],
   };
+}
+
+async function seedLinkedinFiles(
+  db: Kysely<DB>,
+  connectorConfigId: string,
+  grantEmails: string[],
+  accessScopeId?: string,
+): Promise<void> {
+  if (accessScopeId) {
+    await db
+      .insertInto("access_scopes")
+      .values({
+        id: accessScopeId,
+        connector_config_id: connectorConfigId,
+        scope_type: "linkedin",
+        provider_scope_id: accessScopeId,
+        label: "LinkedIn stray scope",
+      })
+      .execute();
+  }
+  const now = new Date().toISOString();
+  const files = [
+    {
+      id: `${connectorConfigId}-profile`,
+      provider_file_id: "linkedin:acct-1:profile:lead-1",
+      file_name: "LinkedIn profile - Lead One",
+      file_type: "linkedin_profile",
+      content_category: "structured",
+      content: "{}",
+    },
+    {
+      id: `${connectorConfigId}-segment`,
+      provider_file_id: "linkedin:acct-1:urn:conversation:one:segment-0",
+      file_name: "LinkedIn: Owner <> Lead One",
+      file_type: "linkedin_conversation",
+      content_category: "document",
+      content: "LinkedIn visibility sentinel",
+    },
+  ];
+  await db
+    .insertInto("indexed_files")
+    .values(
+      files.map((file) => ({
+        ...file,
+        connector_config_id: connectorConfigId,
+        source: "linkedin_aimfox",
+        content_category: file.content_category as "document" | "structured",
+        content_hash: `hash-${file.id}`,
+        source_updated_at: now,
+        synced_at: now,
+        access_scope_id: accessScopeId ?? null,
+      })),
+    )
+    .execute();
+
+  if (grantEmails.length === 0) return;
+  await db
+    .insertInto("file_access")
+    .values(
+      files.flatMap((file) =>
+        grantEmails.map((email) => ({
+          indexed_file_id: file.id,
+          principal_type: "email" as const,
+          principal_value: email,
+        })),
+      ),
+    )
+    .execute();
+}
+
+async function linkedinGrantValues(db: Kysely<DB>, connectorConfigId: string): Promise<string[]> {
+  const rows = await db
+    .selectFrom("indexed_files")
+    .innerJoin("file_access", "file_access.indexed_file_id", "indexed_files.id")
+    .select("file_access.principal_value")
+    .where("indexed_files.connector_config_id", "=", connectorConfigId)
+    .where("indexed_files.source", "=", "linkedin_aimfox")
+    .orderBy("file_access.principal_value")
+    .orderBy("indexed_files.id")
+    .execute();
+  return rows.map((row) => row.principal_value);
 }

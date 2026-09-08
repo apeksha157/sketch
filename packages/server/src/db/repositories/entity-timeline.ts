@@ -5,8 +5,11 @@
  */
 import type { Kysely } from "kysely";
 import { sql } from "kysely";
+import { idInList } from "../../connectors/id-in-list";
+import type { AccessPrincipal } from "../../connectors/types";
 import type { DB } from "../schema";
-import { type FileViewer, fileVisibilityPredicate } from "./connectors";
+import { type FileViewer, readSourceMeta, readZohoCrmMeta, viewerPrincipals } from "./connectors";
+import { fileVisibilityRuleSql } from "./file-visibility-rule";
 
 export interface TimelineItem {
   fileId: string;
@@ -17,16 +20,32 @@ export interface TimelineItem {
   occurredAt: string;
   mentionConfidence: "EXTRACTED" | "INFERRED" | "AMBIGUOUS";
   mentionCount: number;
+  relations: string[];
   contextSnippet: string | null;
   url: string | null;
   rollupGroupId: string | null;
   crmActivity: CrmTimelineActivity | null;
+  crmFields?: {
+    stage?: string;
+    status?: string;
+    leadStatus?: string;
+    priority?: string;
+    dueDate?: string;
+    leadSource?: string;
+  };
 }
 
 export interface TimelineGroup {
-  month: string; // "YYYY-MM"
+  month: string;
   items: TimelineItem[];
 }
+
+export interface TimelineCursor {
+  occurredAt: string;
+  fileId: string;
+}
+
+export type TimelinePageItem = TimelineItem & { viaEntityIds: string[] };
 
 export interface CrmTimelineActivity {
   activityType: "task" | "call" | "event" | "meeting" | "note";
@@ -75,87 +94,177 @@ function crmActivityFor(fileType: string | null, contentCategory: string): CrmTi
 }
 
 export function createEntityTimelineRepository(db: Kysely<DB>) {
+  async function listTimelinePage(opts: {
+    entityIds: string[];
+    limit: number;
+    cursor?: TimelineCursor;
+    after?: string;
+    before?: string;
+    sources?: string[];
+    fileTypes?: string[];
+    visibility?: { principals: AccessPrincipal[]; slackEntitySyncEnabled: boolean; archived?: "include" | "exclude" };
+  }): Promise<{ items: TimelinePageItem[]; nextCursor: TimelineCursor | null }> {
+    const entityIds = [...new Set(opts.entityIds)].filter(Boolean);
+    if (entityIds.length === 0 || opts.limit <= 0) return { items: [], nextCursor: null };
+
+    const occurredAtExpr = sql<string>`COALESCE(
+      indexed_files.source_updated_at,
+      indexed_files.source_created_at,
+      MAX(entity_mentions.mentioned_at)
+    )`;
+    let groupedFilesQuery = db
+      .selectFrom("entity_mentions")
+      .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+      .select(["indexed_files.id as file_id", occurredAtExpr.as("occurred_at")])
+      .where(idInList(db, sql.ref("entity_mentions.entity_id"), entityIds))
+      .groupBy(["indexed_files.id", "indexed_files.source_updated_at", "indexed_files.source_created_at"]);
+
+    if (opts.sources && opts.sources.length > 0) {
+      groupedFilesQuery = groupedFilesQuery.where("indexed_files.source", "in", opts.sources);
+    }
+    if (opts.fileTypes && opts.fileTypes.length > 0) {
+      groupedFilesQuery = groupedFilesQuery.where("indexed_files.file_type", "in", opts.fileTypes);
+    } else {
+      groupedFilesQuery = groupedFilesQuery.where((eb) =>
+        eb.or([eb("indexed_files.file_type", "is", null), eb("indexed_files.file_type", "not in", RECORD_FILE_TYPES)]),
+      );
+    }
+    if (opts.visibility) {
+      groupedFilesQuery = groupedFilesQuery.where(
+        fileVisibilityRuleSql({
+          principals: opts.visibility.principals,
+          slackEntitySyncEnabled: opts.visibility.slackEntitySyncEnabled,
+          archived: opts.visibility.archived ?? "exclude",
+          alias: "indexed_files",
+        }),
+      );
+    }
+
+    const groupedFiles = groupedFilesQuery.as("timeline_files");
+    let pageQuery = db.selectFrom(groupedFiles).select(["file_id", "occurred_at"]);
+    if (opts.after) pageQuery = pageQuery.where("occurred_at", ">=", opts.after);
+    if (opts.before) pageQuery = pageQuery.where("occurred_at", "<", opts.before);
+    if (opts.cursor) {
+      pageQuery = pageQuery.where((eb) =>
+        eb.or([
+          eb("occurred_at", "<", opts.cursor?.occurredAt ?? ""),
+          eb.and([
+            eb("occurred_at", "=", opts.cursor?.occurredAt ?? ""),
+            eb("file_id", "<", opts.cursor?.fileId ?? ""),
+          ]),
+        ]),
+      );
+    }
+
+    const fileRows = await pageQuery
+      .orderBy("occurred_at", "desc")
+      .orderBy("file_id", "desc")
+      .limit(opts.limit + 1)
+      .execute();
+    const pageFileRows = fileRows.slice(0, opts.limit);
+    const fileIds = pageFileRows.map((row) => row.file_id);
+    if (fileIds.length === 0) return { items: [], nextCursor: null };
+
+    const mentionRows = await db
+      .selectFrom("entity_mentions")
+      .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
+      .select([
+        "indexed_files.id as file_id",
+        "indexed_files.file_name",
+        "indexed_files.file_type",
+        "indexed_files.content_category",
+        "indexed_files.source as file_source",
+        "indexed_files.provider_url",
+        "indexed_files.rollup_group_id",
+        "indexed_files.source_meta",
+        "entity_mentions.entity_id",
+        "entity_mentions.confidence",
+        "entity_mentions.relation",
+        "entity_mentions.context_snippet",
+      ])
+      .where(idInList(db, sql.ref("indexed_files.id"), fileIds))
+      .where(idInList(db, sql.ref("entity_mentions.entity_id"), entityIds))
+      .execute();
+
+    const occurredAtByFile = new Map(pageFileRows.map((row) => [row.file_id, row.occurred_at]));
+    const byFile = new Map<string, TimelinePageItem>();
+    for (const row of mentionRows) {
+      const occurredAt = occurredAtByFile.get(row.file_id);
+      if (!occurredAt) continue;
+      const existing = byFile.get(row.file_id);
+      if (existing) {
+        existing.mentionCount += 1;
+        addTimelineRelation(existing, row.relation);
+        if (!existing.viaEntityIds.includes(row.entity_id)) existing.viaEntityIds.push(row.entity_id);
+        const inboundRank = CONFIDENCE_ORDER[row.confidence] ?? 3;
+        const existingRank = CONFIDENCE_ORDER[existing.mentionConfidence] ?? 3;
+        if (inboundRank < existingRank) existing.mentionConfidence = normalizeConfidence(row.confidence);
+        if (!existing.contextSnippet && row.context_snippet) existing.contextSnippet = row.context_snippet;
+        continue;
+      }
+      byFile.set(row.file_id, {
+        fileId: row.file_id,
+        fileName: row.file_name,
+        fileType: row.file_type,
+        contentCategory: row.content_category,
+        sourceType: row.file_source,
+        occurredAt,
+        mentionConfidence: normalizeConfidence(row.confidence),
+        mentionCount: 1,
+        relations: relationListFor(row.relation),
+        contextSnippet: row.context_snippet ?? null,
+        url: row.provider_url ?? null,
+        rollupGroupId: row.rollup_group_id ?? null,
+        crmActivity: crmActivityFor(row.file_type, row.content_category),
+        crmFields: crmFieldsFor(readZohoCrmMeta(readSourceMeta({ source_meta: row.source_meta }))),
+        viaEntityIds: [row.entity_id],
+      });
+    }
+
+    const items = fileIds.flatMap((fileId) => {
+      const item = byFile.get(fileId);
+      if (!item) return [];
+      item.viaEntityIds.sort();
+      return [item];
+    });
+    const lastReturned = pageFileRows.at(-1);
+    return {
+      items,
+      nextCursor:
+        fileRows.length > opts.limit && lastReturned
+          ? { occurredAt: lastReturned.occurred_at, fileId: lastReturned.file_id }
+          : null,
+    };
+  }
+
   return {
+    listTimelinePage,
+
     /**
      * List timeline rows for an entity, with file RBAC. Collapses per-file
      * mentions into one TimelineItem per file (mentionCount = count of
-     * mentions on that file). Sorted newest-first.
+     * mentions on that file). Sorted newest-first. Keeps archived files
+     * visible, as the web drawer always has; the public MCP page excludes them.
      */
     async listTimelineForEntity(
       entityId: string,
       opts: { limit: number; viewer: FileViewer },
     ): Promise<{ groups: TimelineGroup[]; truncated: boolean; totalCount: number }> {
       const { limit, viewer } = opts;
-
-      let rowsQuery = db
-        .selectFrom("entity_mentions")
-        .innerJoin("indexed_files", "indexed_files.id", "entity_mentions.indexed_file_id")
-        .select([
-          "indexed_files.id as file_id",
-          "indexed_files.file_name",
-          "indexed_files.file_type",
-          "indexed_files.content_category",
-          "indexed_files.source as file_source",
-          "indexed_files.source_updated_at",
-          "indexed_files.source_created_at",
-          "indexed_files.provider_url",
-          "indexed_files.rollup_group_id",
-          "entity_mentions.confidence",
-          "entity_mentions.context_snippet",
-          "entity_mentions.mentioned_at",
-        ])
-        .where("entity_mentions.entity_id", "=", entityId)
-        .where((eb) =>
-          eb.or([
-            eb("indexed_files.file_type", "is", null),
-            eb("indexed_files.file_type", "not in", RECORD_FILE_TYPES),
-          ]),
-        )
-        .orderBy(
-          sql`COALESCE(indexed_files.source_updated_at, indexed_files.source_created_at, entity_mentions.mentioned_at)`,
-          "desc",
-        )
-        // Pull a bigger window so per-file collapse can still hit `limit` items
-        // even when files have multiple mentions. Worst-case bounded at limit*5.
-        .limit(limit * 5);
-      if (!viewer.isAdmin) rowsQuery = rowsQuery.where(fileVisibilityPredicate(viewer));
-      const rows = await rowsQuery.execute();
-
-      const byFile = new Map<string, TimelineItem>();
-      for (const row of rows) {
-        const occurredAt = row.source_updated_at ?? row.source_created_at ?? row.mentioned_at;
-        const existing = byFile.get(row.file_id);
-        if (existing) {
-          existing.mentionCount += 1;
-          // Keep the strongest confidence seen for this file (EXTRACTED beats INFERRED beats AMBIGUOUS).
-          const inboundRank = CONFIDENCE_ORDER[row.confidence] ?? 3;
-          const existingRank = CONFIDENCE_ORDER[existing.mentionConfidence] ?? 3;
-          if (inboundRank < existingRank) existing.mentionConfidence = normalizeConfidence(row.confidence);
-          if (!existing.contextSnippet && row.context_snippet) existing.contextSnippet = row.context_snippet;
-          continue;
-        }
-        byFile.set(row.file_id, {
-          fileId: row.file_id,
-          fileName: row.file_name,
-          fileType: row.file_type,
-          contentCategory: row.content_category,
-          sourceType: row.file_source,
-          occurredAt,
-          mentionConfidence: normalizeConfidence(row.confidence),
-          mentionCount: 1,
-          contextSnippet: row.context_snippet ?? null,
-          url: row.provider_url ?? null,
-          rollupGroupId: row.rollup_group_id ?? null,
-          crmActivity: crmActivityFor(row.file_type, row.content_category),
-        });
-      }
-
-      const ordered = Array.from(byFile.values()).sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
-      const truncated = ordered.length > limit;
-      const capped = ordered.slice(0, limit);
+      const page = await listTimelinePage({
+        entityIds: [entityId],
+        limit,
+        visibility: viewer.isAdmin
+          ? undefined
+          : {
+              principals: viewerPrincipals(viewer),
+              slackEntitySyncEnabled: viewer.slackEntitySyncEnabled ?? true,
+              archived: "include",
+            },
+      });
 
       const groupsMap = new Map<string, TimelineItem[]>();
-      for (const item of capped) {
+      for (const item of page.items) {
         const key = monthKey(item.occurredAt);
         const bucket = groupsMap.get(key);
         if (bucket) bucket.push(item);
@@ -165,7 +274,33 @@ export function createEntityTimelineRepository(db: Kysely<DB>) {
         .sort(([a], [b]) => b.localeCompare(a))
         .map(([month, items]) => ({ month, items }));
 
-      return { groups, truncated, totalCount: capped.length };
+      return { groups, truncated: page.nextCursor !== null, totalCount: page.items.length };
     },
   };
+}
+
+function crmFieldsFor(meta: ReturnType<typeof readZohoCrmMeta>): TimelineItem["crmFields"] {
+  if (!meta) return undefined;
+  const fields = {
+    stage: meta.stage,
+    status: meta.status,
+    leadStatus: meta.leadStatus,
+    priority: meta.priority,
+    dueDate: meta.dueDate,
+    leadSource: meta.leadSource,
+  };
+  return Object.values(fields).some(Boolean) ? fields : undefined;
+}
+
+function relationListFor(relation: string): string[] {
+  return relation === "mentioned" ? ["mentioned"] : [relation];
+}
+
+function addTimelineRelation(item: TimelineItem, relation: string): void {
+  if (item.relations.includes(relation)) return;
+  if (relation === "mentioned") item.relations.push(relation);
+  else {
+    const insertionIndex = item.relations.includes("mentioned") ? item.relations.length - 1 : item.relations.length;
+    item.relations.splice(insertionIndex, 0, relation);
+  }
 }

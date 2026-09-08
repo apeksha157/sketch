@@ -126,6 +126,65 @@ describe("agent runtime core", () => {
     ]);
   });
 
+  it("correlates concurrent same-name tools by their actual IDs", async () => {
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [
+            { type: "tool-call", toolCallId: "same-a", toolName: "Echo", input: '{"label":"a"}' },
+            { type: "tool-call", toolCallId: "same-b", toolName: "Echo", input: '{"label":"b"}' },
+            {
+              type: "finish",
+              finishReason: { unified: "tool-calls", raw: undefined },
+              usage: usage(10, 2),
+            },
+          ],
+        }),
+      },
+    });
+    const starts: string[] = [];
+    const ends: Array<{ id: string; output: unknown }> = [];
+    let markBStarted: () => void = () => {};
+    const bStarted = new Promise<void>((resolve) => {
+      markBStarted = resolve;
+    });
+
+    const result = await runAgentRuntimeCore({
+      provider: mockProvider(model),
+      prompt: "run both",
+      systemPrompt: "system",
+      maxTurns: 1,
+      persistSession: false,
+      tools: {
+        Echo: tool({
+          inputSchema: z.object({ label: z.string() }),
+          execute: async ({ label }) => {
+            if (label === "a") await bStarted;
+            if (label === "b") markBStarted();
+            return label;
+          },
+        }),
+      },
+      events: {
+        onToolStart: (event) => {
+          starts.push(`${event.toolCallId}:${event.input.label}`);
+        },
+        onToolEnd: (event) => {
+          ends.push({ id: event.toolCallId ?? "missing", output: event.result });
+        },
+      },
+    });
+
+    expect(result.stopReason).toBe("tool_use");
+    expect(starts).toEqual(["same-a:a", "same-b:b"]);
+    expect(ends).toEqual([
+      { id: "same-b", output: "b" },
+      { id: "same-a", output: "a" },
+    ]);
+  });
+
   it("lets the model recover when a terminal tool returns an MCP error", async () => {
     const output = { isError: true, content: [{ type: "text", text: "Correct the missing input before retrying." }] };
     const model = new MockLanguageModelV4({

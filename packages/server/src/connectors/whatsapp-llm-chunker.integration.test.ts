@@ -22,6 +22,7 @@ const knobs = {
   burstThresholdMessages: null,
   topicRegistryCap: 30,
   groupWorkerPool: 4,
+  maxWindowsPerRun: 4,
 };
 
 describe("WhatsApp LLM boundary engine", () => {
@@ -266,7 +267,7 @@ describe("WhatsApp LLM boundary engine", () => {
 
     const result = await runLlmChunkingPass(deps, { conversationId, groupJid, knobs, mode: "backfill" });
 
-    expect(result).toMatchObject({ windowsProcessed: 0, skippedReason: "claim_lost" });
+    expect(result).toMatchObject({ windowsProcessed: 0, pendingRemaining: true, skippedReason: "claim_lost" });
     await expect(db.selectFrom("conversation_slices").selectAll().execute()).resolves.toHaveLength(0);
   });
 
@@ -298,15 +299,21 @@ describe("WhatsApp LLM boundary engine", () => {
       db.selectFrom("conversation_slices").select("status").where("id", "=", liveSlice.row.id).executeTakeFirst(),
     ).resolves.toMatchObject({ status: "closed" });
 
-    const backfill = await seedConversation(db, 2, "2026-07-01T09:00:00.000Z");
+    const backfill = await seedConversation(db, 3, "2026-07-01T09:00:00.000Z");
+    await db
+      .updateTable("conversation_messages")
+      .set({ source: "history", effective_at: "2026-07-01T09:02:00.000Z" })
+      .where("conversation_id", "=", backfill.conversationId)
+      .where("provider_message_id", "=", "m-1")
+      .execute();
     await createConversationSlicesRepository(db).insertIfAbsent({
       conversationId: backfill.conversationId,
-      firstMessageId: 3,
-      lastMessageId: 4,
-      startedAt: "2026-07-01T09:00:00.000Z",
-      endedAt: "2026-07-01T09:01:00.000Z",
+      firstMessageId: 4,
+      lastMessageId: 5,
+      startedAt: "2026-07-01T09:01:00.000Z",
+      endedAt: "2026-07-01T09:02:00.000Z",
       messageCount: 2,
-      denoisedMessageIds: [3, 4],
+      denoisedMessageIds: [4, 5],
       flushReason: "llm_boundary",
       rosterSnapshot: "[]",
       salienceVerdict: "kept",
@@ -314,20 +321,19 @@ describe("WhatsApp LLM boundary engine", () => {
     });
     await createConversationSlicesRepository(db).advanceCursor({
       conversationId: backfill.conversationId,
-      lastEffectiveAt: "2026-07-01T09:01:00.000Z",
-      lastMessageId: 4,
+      lastEffectiveAt: "2026-07-01T09:02:00.000Z",
+      lastMessageId: 5,
     });
     const backfillDeps = createDeps(db, async () => "", "2026-07-05T10:00:00.000Z");
     await expect(
       evaluateIdleClose(backfillDeps, { conversationId: backfill.conversationId, knobs, mode: "backfill" }),
     ).resolves.toBe(false);
-    await createConversationRepository(db).insertMessage({
-      conversationId: backfill.conversationId,
-      providerMessageId: "backfill-frontier",
-      senderName: "Asha",
-      text: "next historical message",
-      receivedAt: "2026-07-05T10:02:00.000Z",
-    });
+    await db
+      .updateTable("conversation_messages")
+      .set({ effective_at: "2026-07-05T10:02:00.000Z" })
+      .where("conversation_id", "=", backfill.conversationId)
+      .where("provider_message_id", "=", "m-1")
+      .execute();
     await expect(
       evaluateIdleClose(backfillDeps, { conversationId: backfill.conversationId, knobs, mode: "backfill" }),
     ).resolves.toBe(true);

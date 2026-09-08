@@ -4,6 +4,8 @@ import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { z } from "zod/v4";
 import { handleSearchDeliveryTargets } from "../../agent/tools/delivery-targets";
+import { getEntityToolDescription, getEntityToolSchema, handleGetEntity } from "../../agent/tools/get-entity";
+import { getThreadToolDescription, getThreadToolSchema, handleGetThread } from "../../agent/tools/get-thread";
 import { handleSendMessageToTarget } from "../../agent/tools/messaging";
 import {
   getEntityContextToolDescription,
@@ -128,12 +130,18 @@ export async function createPublicSketchMcpServer(params: {
   tokenId: string;
   workspaceDir: string;
   auditRepo: AuditRepo;
+  isAdminReadAllEnabled?: () => Promise<boolean>;
   getSlack?: () => SlackBot | null;
   whatsappRuntime?: WhatsAppRuntime;
   sendTargetMessage?: SendTargetMessage;
   logger?: Logger;
 }): Promise<McpServer> {
+  const user = await params.userRepo.findById(params.userId);
   const userPrincipals = toEmailPrincipals(await params.userRepo.getVerifiedEmailsForUser(params.userId));
+  const bypass = user?.auth_role === "admin" && (await params.isAdminReadAllEnabled?.()) === true;
+  if (bypass) {
+    params.logger?.info({ userId: params.userId, tokenId: params.tokenId }, "Public MCP admin read-all active");
+  }
   const messagingPrincipals = await resolveFullMessagingPrincipals(params);
   const deps: SketchMcpDeps = {
     uploadCollector: new UploadCollector(),
@@ -147,8 +155,10 @@ export async function createPublicSketchMcpServer(params: {
       ? () => ({ isConnected: params.whatsappRuntime?.isConnected === true })
       : undefined,
     sendTargetMessage: params.sendTargetMessage,
+    adminReadAllEnabled: bypass,
     publicMcp: {
-      userPrincipals,
+      userPrincipals: bypass ? undefined : userPrincipals,
+      adminReadAll: bypass,
       filterEntityMetadata: true,
       maxFileContentChars: MAX_FILE_CONTENT_CHARS,
     },
@@ -186,6 +196,7 @@ export async function createPublicSketchMcpServer(params: {
             toolName: name,
             success,
             durationMs,
+            accessBypass: bypass ? "admin" : null,
           })
           .catch(() => undefined);
       }
@@ -196,6 +207,8 @@ export async function createPublicSketchMcpServer(params: {
     handleSearch(args, deps, "public_mcp"),
   );
   register("sketch_search_entities", searchEntitiesToolDescription, searchEntitiesToolSchema, handleSearchEntities);
+  register("sketch_get_entity", getEntityToolDescription, getEntityToolSchema, handleGetEntity);
+  register("sketch_get_thread", getThreadToolDescription, getThreadToolSchema, handleGetThread);
   register(
     "sketch_get_entity_context",
     getEntityContextToolDescription,

@@ -1,10 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { createConnectorRepository } from "../db/repositories/connectors";
 import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { type WhatsAppGroupIndexingConfig, createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
-import { createWhatsAppIdentityCandidateRepository } from "../db/repositories/whatsapp-identity-candidates";
 import type { DB } from "../db/schema";
 import {
   type WhatsAppRosterParticipantSnapshot,
@@ -16,8 +14,19 @@ import {
   stableWhatsAppParticipantJidRef,
 } from "../whatsapp/identity-resolution";
 import { sanitizeWhatsAppDisplayText } from "../whatsapp/privacy";
-import { phoneE164ToWhatsAppJid } from "../whatsapp/provider";
-import type { GeminiGenerator } from "./gemini-generate";
+import {
+  type ConversationSliceEmissionAnchor,
+  buildEmissionAnchor,
+  emissionRefreshTier,
+  parseEmissionAnchor,
+} from "./emission-refresh-tier";
+import {
+  type SliceKeysetCursor,
+  buildSliceSourcePath,
+  formatSliceTimeRange,
+  sliceKeysetAfter,
+  stableContentHash,
+} from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
 import {
   type AccessPrincipal,
@@ -30,48 +39,13 @@ import {
   DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES,
 } from "./whatsapp-chunker";
 
-export const DEFAULT_WHATSAPP_SALIENCE_BATCH_LIMIT = 50;
+export const DEFAULT_WHATSAPP_PROVISIONAL_REFRESH_MAX_MINUTES = 120;
 export const WHATSAPP_EMISSION_REFRESH_DAYS = 7;
+export const WHATSAPP_EMISSION_PAGE_SIZE = 200;
 
-const PROMPT_VERSION = "whatsapp-emission-v1";
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SALIENCE_CLAIM_STALE_MS = 10 * 60 * 1000;
-const SALIENCE_SIGNALS = new Set(["decision", "commitment", "question", "named_entity"]);
 const RAW_WHATSAPP_JID_PATTERN = /[^\s"'<>()[\]{}]+@(?:s\.whatsapp\.net|lid)\b/iu;
 const RAW_CONTIGUOUS_PHONE_PATTERN = /\+?[1-9]\d{9,14}\b/u;
-
-export type WhatsAppSalienceSignal = "decision" | "commitment" | "question" | "named_entity";
-
-export interface WhatsAppSalienceEntity {
-  name: string;
-  type: string;
-}
-
-export interface WhatsAppSalienceVerdict {
-  salient: boolean;
-  signals: WhatsAppSalienceSignal[];
-  entities: WhatsAppSalienceEntity[];
-}
-
-export interface WhatsAppSalienceRunSummary {
-  pendingConsidered: number;
-  judged: number;
-  kept: number;
-  dropped: number;
-  failures: number;
-  skippedNoScope: number;
-  emitted: number;
-  candidateObservations: number;
-  batchLimit: number;
-}
-
-export interface WhatsAppSalienceOptions {
-  db: Kysely<DB>;
-  groups: WhatsAppGroupIndexingConfig[];
-  logger: Logger;
-  generator?: GeminiGenerator | null;
-  batchLimit?: number;
-}
 
 export interface WhatsAppTranscriptMessage {
   id: number;
@@ -90,39 +64,9 @@ interface SliceContext {
 }
 
 interface RenderedSlice {
-  rosterSnapshot: WhatsAppRosterSnapshot;
   serializedRosterSnapshot: string;
-  rosterBlock: string;
-  transcript: string;
   content: string;
   accessPrincipals: AccessPrincipal[];
-}
-
-interface PendingProcessResult {
-  status: "kept" | "dropped" | "failed" | "lost";
-  candidateObservations: number;
-}
-
-function emptySummary(batchLimit: number): WhatsAppSalienceRunSummary {
-  return {
-    pendingConsidered: 0,
-    judged: 0,
-    kept: 0,
-    dropped: 0,
-    failures: 0,
-    skippedNoScope: 0,
-    emitted: 0,
-    candidateObservations: 0,
-    batchLimit,
-  };
-}
-
-function stableContentHash(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
-function normalizeBatchLimit(value: number | undefined): number {
-  return Number.isInteger(value) && value && value > 0 ? value : DEFAULT_WHATSAPP_SALIENCE_BATCH_LIMIT;
 }
 
 function normalizeEmissionRefreshDays(value: number | undefined): number {
@@ -216,130 +160,22 @@ export function renderWhatsAppTranscript(
   return transcript;
 }
 
-export function renderWhatsAppRosterBlock(snapshot: WhatsAppRosterSnapshot): string {
-  const lines = snapshot.participants.map((participant) => {
-    const details = [participant.resolutionKind, participant.adminRole].filter((value) => Boolean(value));
-    const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
-    return `- ${participant.displayName}${suffix}`;
-  });
-  const block = ["WhatsApp roster:", ...(lines.length > 0 ? lines : ["- No roster participants captured"])].join("\n");
-  assertNoRawWhatsAppIdentifiers(block);
-  return block;
-}
-
-function renderPrompt(input: { rosterBlock: string; transcript: string }): string {
-  return `Judge whether this frozen WhatsApp group slice should be indexed into a business context graph.
-
-Use only the roster and transcript below. Do not summarize the slice and do not create tasks.
-
-A slice is salient when it contains a business-relevant decision, commitment, open question, or named entity that may be useful later. Casual banter, greetings, acknowledgements, emojis, and logistics with no durable context are not salient.
-
-Return exactly one JSON object:
-{
-  "salient": boolean,
-  "signals": ["decision" | "commitment" | "question" | "named_entity"],
-  "entities": [{ "name": string, "type": string }]
-}
-
-Allowed signals are decision, commitment, question, named_entity. Entities are mentions grounded in the transcript.
-
-${input.rosterBlock}
-
-Transcript:
-${input.transcript}`;
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
-  throw new Error("WhatsApp salience response must be a JSON object");
-}
-
-export function parseWhatsAppSalienceResponse(value: unknown): WhatsAppSalienceVerdict {
-  const record = requireRecord(value);
-  if (typeof record.salient !== "boolean") {
-    throw new Error("WhatsApp salience response missing boolean salient");
-  }
-  if (!Array.isArray(record.signals)) {
-    throw new Error("WhatsApp salience response missing signals array");
-  }
-  const signals: WhatsAppSalienceSignal[] = [];
-  for (const signal of record.signals) {
-    if (typeof signal !== "string" || !SALIENCE_SIGNALS.has(signal)) {
-      throw new Error("WhatsApp salience response contains an invalid signal");
-    }
-    signals.push(signal as WhatsAppSalienceSignal);
-  }
-  if (!Array.isArray(record.entities)) {
-    throw new Error("WhatsApp salience response missing entities array");
-  }
-  const entities = record.entities.map((entity) => {
-    const entityRecord = requireRecord(entity);
-    if (typeof entityRecord.name !== "string" || typeof entityRecord.type !== "string") {
-      throw new Error("WhatsApp salience entity must include name and type");
-    }
-    const name = sanitizeWhatsAppDisplayText(entityRecord.name);
-    const type = entityRecord.type.trim().toLowerCase();
-    if (!name || !type) throw new Error("WhatsApp salience entity name and type must be non-empty");
-    return { name, type };
-  });
-  return { salient: record.salient, signals: uniqueStrings(signals) as WhatsAppSalienceSignal[], entities };
-}
-
-async function listPendingSliceContexts(
-  db: Kysely<DB>,
-  groups: WhatsAppGroupIndexingConfig[],
-  limit: number,
-): Promise<SliceContext[]> {
-  if (groups.length === 0) return [];
-  const groupByJid = new Map(groups.map((group) => [group.jid, group]));
-  const rows = await db
-    .selectFrom("conversation_slices")
-    .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
-    .innerJoin("whatsapp_groups", "whatsapp_groups.jid", "conversations.provider_conversation_id")
-    .selectAll("conversation_slices")
-    .select(["conversations.provider_conversation_id as group_jid"])
-    .where("conversations.platform", "=", "whatsapp")
-    .where("conversations.kind", "=", "group")
-    .where("whatsapp_groups.index_enabled", "=", 1)
-    .where(
-      "conversations.provider_conversation_id",
-      "in",
-      groups.map((group) => group.jid),
-    )
-    .where("conversation_slices.salience_verdict", "is", null)
-    .orderBy("conversation_slices.created_at", "asc")
-    .orderBy("conversation_slices.id", "asc")
-    .limit(limit)
-    .execute();
-
-  return rows.flatMap((row) => {
-    const group = groupByJid.get(row.group_jid);
-    if (!group) return [];
-    return [
-      {
-        slice: row,
-        conversationId: row.conversation_id,
-        groupJid: row.group_jid,
-        groupName: group.name,
-      },
-    ];
-  });
-}
-
 /**
  * Re-emits unlinked slices plus recent linked slices. Recent linked slices refresh
  * indexed content when roster improvements add labels or CRM matches; older linked
  * slices are stable.
+ *
+ * Paged by a (started_at, id) keyset so a group with a long kept-slice history
+ * never loads the whole set into memory; the ordering is the page key, so
+ * emission order is deterministic across pages and runs.
  */
-async function listKeptSliceContexts(
+async function listKeptSliceContextPage(
   db: Kysely<DB>,
-  emissionRefreshDays = WHATSAPP_EMISSION_REFRESH_DAYS,
-  now = new Date(),
+  refreshCutoff: string,
+  cursor: SliceKeysetCursor | null,
+  limit: number,
 ): Promise<SliceContext[]> {
-  const refreshCutoff = new Date(
-    now.getTime() - normalizeEmissionRefreshDays(emissionRefreshDays) * DAY_MS,
-  ).toISOString();
-  const rows = await db
+  let query = db
     .selectFrom("conversation_slices")
     .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
     .innerJoin("whatsapp_groups", "whatsapp_groups.jid", "conversations.provider_conversation_id")
@@ -363,8 +199,9 @@ async function listKeptSliceContexts(
       ]),
     )
     .orderBy("conversation_slices.started_at", "asc")
-    .orderBy("conversation_slices.id", "asc")
-    .execute();
+    .orderBy("conversation_slices.id", "asc");
+  if (cursor) query = query.where(sliceKeysetAfter("conversation_slices.started_at", cursor, "asc"));
+  const rows = await query.limit(limit).execute();
 
   return rows.map((row) => ({
     slice: row,
@@ -421,136 +258,58 @@ async function renderSlice(db: Kysely<DB>, context: SliceContext, logger: Logger
     enrichEntityAliases: true,
   });
   const messages = await listSliceMessages(db, context.slice);
-  const rosterBlock = renderWhatsAppRosterBlock(roster.snapshot);
   const transcript = renderWhatsAppTranscript(roster.snapshot, messages);
   /**
    * Stored content is transcript-only (plus the group header), matching the
    * email/Fireflies convention: participant rosters stay out of the body so
-   * they never pollute embeddings or the entity extractor. The roster block
-   * still feeds the salience prompt, and ACLs come from the roster snapshot.
+   * they never pollute embeddings or the entity extractor. ACLs come from the
+   * roster snapshot.
    */
   const titleGroup = sanitizeWhatsAppDisplayText(context.groupName) || "WhatsApp group";
   const content = `Group: ${titleGroup}\n\nTranscript:\n${transcript}`;
   assertNoRawWhatsAppIdentifiers(content);
   return {
-    rosterSnapshot: roster.snapshot,
     serializedRosterSnapshot: roster.serializedSnapshot,
-    rosterBlock,
-    transcript,
     content,
     accessPrincipals: await loadWhatsAppAccessPrincipals(db, context.groupJid, roster.snapshot),
   };
 }
 
-function serializedSignals(verdict: WhatsAppSalienceVerdict): string {
-  return JSON.stringify({
-    promptVersion: PROMPT_VERSION,
-    signals: verdict.signals,
-    entities: verdict.entities,
-  });
-}
-
-async function recordUnresolvedNumberCandidates(
-  db: Kysely<DB>,
-  context: SliceContext,
-  snapshot: WhatsAppRosterSnapshot,
-): Promise<number> {
-  const participants = await db
-    .selectFrom("whatsapp_group_participants")
-    .select(["participant_jid", "phone_e164"])
-    .where("group_jid", "=", context.groupJid)
-    .where("phone_e164", "is not", null)
-    .execute();
-  const snapshotByParticipantRef = new Map(
-    snapshot.participants.map((participant) => [participant.participantJidRef, participant]),
-  );
-  const repo = createWhatsAppIdentityCandidateRepository(db);
-  let recorded = 0;
-
-  for (const participant of participants) {
-    const phone = normalizeWhatsAppIdentityPhone(participant.phone_e164);
-    if (!phone) continue;
-    const participantRef = stableWhatsAppParticipantJidRef(participant.participant_jid);
-    const snapshotParticipant = snapshotByParticipantRef.get(participantRef);
-    if (!snapshotParticipant || snapshotParticipant.resolutionKind !== "unresolved") continue;
-    const candidateRef = stableWhatsAppParticipantJidRef(phoneE164ToWhatsAppJid(phone));
-    await repo.recordObservation({
-      groupJid: context.groupJid,
-      candidateRef,
-      participantJidRef: participantRef,
-      displayName: snapshotParticipant.displayName,
-      sliceId: context.slice.id,
-      seenAt: context.slice.ended_at,
-    });
-    recorded += 1;
-  }
-
-  return recorded;
-}
-
-async function processPendingSlice(
-  options: WhatsAppSalienceOptions,
-  context: SliceContext,
-): Promise<PendingProcessResult> {
-  const claimToken = randomUUID();
-  const now = new Date();
-  const claimed = await createConversationSlicesRepository(options.db).claimSalienceIfPending(context.slice.id, {
-    claimToken,
-    now: now.toISOString(),
-    staleBefore: new Date(now.getTime() - SALIENCE_CLAIM_STALE_MS).toISOString(),
-  });
-  if (!claimed) return { status: "lost", candidateObservations: 0 };
-
-  try {
-    const rendered = await renderSlice(options.db, context, options.logger);
-    if (!options.generator) {
-      throw new Error("WhatsApp salience gate requires an enrichment generator");
-    }
-    const parsed = await options.generator.generateJSON<unknown>(
-      renderPrompt({ rosterBlock: rendered.rosterBlock, transcript: rendered.transcript }),
-      { maxTokens: 1024, label: `whatsappSalience:${context.slice.id}` },
-    );
-    const verdict = parseWhatsAppSalienceResponse(parsed);
-    return await options.db.transaction().execute(async (trx) => {
-      const repo = createConversationSlicesRepository(trx);
-      const updated = await repo.updateSalienceVerdictIfClaimed(context.slice.id, claimToken, {
-        verdict: verdict.salient ? "kept" : "dropped",
-        signals: serializedSignals(verdict),
-        rosterSnapshot: rendered.serializedRosterSnapshot,
-      });
-      if (!updated) return { status: "lost", candidateObservations: 0 };
-      if (!verdict.salient) return { status: "dropped", candidateObservations: 0 };
-      const candidateObservations = await recordUnresolvedNumberCandidates(trx, context, rendered.rosterSnapshot);
-      return { status: "kept", candidateObservations };
-    });
-  } catch (err) {
-    await createConversationSlicesRepository(options.db).clearSalienceClaim(context.slice.id, claimToken);
-    throw err;
-  }
-}
-
-function formatTimeRange(slice: ConversationSliceRow): string {
-  const start = new Date(slice.started_at);
-  const end = new Date(slice.ended_at);
-  const startText = Number.isNaN(start.getTime()) ? slice.started_at : start.toISOString();
-  const endText = Number.isNaN(end.getTime()) ? slice.ended_at : end.toISOString();
-  return startText === endText ? startText : `${startText} to ${endText}`;
-}
-
 function sourcePathForSlice(context: SliceContext): string {
-  const params = new URLSearchParams({
+  return buildSliceSourcePath("whatsapp", context.slice.id, {
     conversationId: String(context.conversationId),
     firstMessageId: String(context.slice.first_message_id),
     lastMessageId: String(context.slice.last_message_id),
     startedAt: context.slice.started_at,
     endedAt: context.slice.ended_at,
   });
-  return `whatsapp://slice/${context.slice.id}?${params.toString()}`;
 }
 
 function renderedMessageCount(content: string | null): number {
   const transcript = content?.split("\n\nTranscript:\n")[1] ?? "";
   return transcript ? transcript.split("\n").length : 0;
+}
+
+/**
+ * Files created before emission anchors existed bootstrap at tier one when the
+ * rendered message count is unchanged, avoiding a rollout-wide LLM refresh.
+ * Synthesizing the anchor the shared tier rule would have read is what keeps
+ * that legacy allowance WhatsApp-only: Slack has no such files and keeps
+ * treating a missing anchor as a full refresh.
+ */
+function bootstrapEmissionAnchor(
+  slice: ConversationSliceRow,
+  existingContent: string | null,
+  emittedAt: string,
+): ConversationSliceEmissionAnchor | null {
+  if (slice.message_count !== renderedMessageCount(existingContent)) return null;
+  return {
+    firstMessageId: slice.first_message_id,
+    messageCount: slice.message_count,
+    emittedAt,
+    enrichedMessageCount: slice.message_count,
+    enrichedAt: emittedAt,
+  };
 }
 
 /**
@@ -561,16 +320,14 @@ function renderedMessageCount(content: string | null): number {
  * to do". Debugging a pipeline that looks dead always asks "why not", and a
  * count alone cannot answer it.
  */
-export type WhatsAppEmissionSkipReason =
-  | "no_access_scope"
-  | "below_min_messages"
-  | "unchanged_content"
-  | "below_refresh_threshold";
+export type WhatsAppEmissionSkipReason = "no_access_scope" | "below_min_messages" | "unchanged_content";
 
 async function syncedItemForKeptSlice(
   db: Kysely<DB>,
   context: SliceContext,
   logger: Logger,
+  now: Date,
+  provisionalRefreshMaxMinutes: number,
 ): Promise<{ item: SyncedItem | null; skippedNoScope: boolean; skipReason: WhatsAppEmissionSkipReason | null }> {
   const rendered = await renderSlice(db, context, logger);
   if (rendered.serializedRosterSnapshot !== context.slice.roster_snapshot) {
@@ -581,7 +338,10 @@ async function syncedItemForKeptSlice(
       .execute();
   }
   if (rendered.accessPrincipals.length === 0) {
-    await archiveLinkedSliceFileIfPresent(db, context);
+    await createConversationSlicesRepository(db).archiveSliceFile(
+      context.slice.id,
+      WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
+    );
     logger.warn(
       { sliceId: context.slice.id, conversationId: context.conversationId, groupJid: context.groupJid },
       "Skipped WhatsApp slice indexing because no teammate access scope resolved",
@@ -591,6 +351,9 @@ async function syncedItemForKeptSlice(
   const titleGroup = sanitizeWhatsAppDisplayText(context.groupName) || "WhatsApp group";
   const content = rendered.content;
   const contentHash = stableContentHash(content);
+  const emittedAt = now.toISOString();
+  let enrichmentRefresh: "full" | "embeddings_only" = "full";
+  let previousEmission: ConversationSliceEmissionAnchor | null = null;
   if (context.slice.status === "open") {
     const minMessages = context.chunkMinMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_MIN_MESSAGES;
     if (context.slice.message_count < minMessages) {
@@ -605,37 +368,56 @@ async function syncedItemForKeptSlice(
       );
       return { item: null, skippedNoScope: false, skipReason: "below_min_messages" };
     }
-    const indexedFileId = context.slice.indexed_file_id ?? (await findSliceFileId(db, context.slice.id));
+    const indexedFileId =
+      context.slice.indexed_file_id ??
+      (await createConversationSlicesRepository(db).findLiveSliceFile(
+        context.slice.id,
+        WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
+      ));
     if (indexedFileId) {
       const existing = await db
         .selectFrom("indexed_files")
-        .select(["content_hash", "content"])
+        .select(["content_hash", "content", "source_meta"])
         .where("id", "=", indexedFileId)
         .executeTakeFirst();
       if (existing?.content_hash === contentHash)
         return { item: null, skippedNoScope: false, skipReason: "unchanged_content" };
-      const previousMessageCount = renderedMessageCount(existing?.content ?? null);
       const refreshMessages =
         context.chunkProvisionalRefreshMessages ?? DEFAULT_WHATSAPP_LLM_CHUNK_PROVISIONAL_REFRESH_MESSAGES;
-      if (
-        context.slice.message_count >= previousMessageCount &&
-        context.slice.message_count - previousMessageCount < refreshMessages
-      ) {
-        return { item: null, skippedNoScope: false, skipReason: "below_refresh_threshold" };
-      }
+      previousEmission =
+        parseEmissionAnchor(existing?.source_meta ?? null) ??
+        bootstrapEmissionAnchor(context.slice, existing?.content ?? null, emittedAt);
+      enrichmentRefresh = emissionRefreshTier({
+        status: context.slice.status,
+        firstMessageId: context.slice.first_message_id,
+        messageCount: context.slice.message_count,
+        previous: previousEmission,
+        refreshMessages,
+        refreshMaxMinutes: provisionalRefreshMaxMinutes,
+        now,
+      });
     }
   }
+  const sourceMeta = buildEmissionAnchor({
+    firstMessageId: context.slice.first_message_id,
+    messageCount: context.slice.message_count,
+    emittedAt,
+    refreshTier: enrichmentRefresh,
+    previous: previousEmission,
+  });
   return {
     skippedNoScope: false,
     skipReason: null,
     item: {
       providerFileId: context.slice.id,
       providerUrl: null,
-      fileName: `WhatsApp: ${titleGroup} - ${formatTimeRange(context.slice)}`,
+      fileName: `WhatsApp: ${titleGroup} - ${formatSliceTimeRange(context.slice)}`,
       fileType: WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
       contentCategory: "document",
       content,
       sourcePath: sourcePathForSlice(context),
+      sourceMeta,
+      enrichmentRefresh,
       contentHash,
       sourceCreatedAt: context.slice.started_at,
       sourceUpdatedAt: context.slice.ended_at,
@@ -650,86 +432,11 @@ async function syncedItemForKeptSlice(
   };
 }
 
-/**
- * Requeued slices (migration 155 cleared their indexed_file_id) still own a
- * live file row keyed by provider_file_id = slice id. Without the fallback
- * lookup, a slice whose group no longer resolves any teammate would leave
- * that old file active under stale ACLs forever.
- */
-async function findSliceFileId(db: Kysely<DB>, sliceId: string): Promise<string | null> {
-  const row = await db
-    .selectFrom("indexed_files")
-    .select("id")
-    .where("provider_file_id", "=", sliceId)
-    .where("file_type", "=", WHATSAPP_CONVERSATION_SLICE_FILE_TYPE)
-    .where("is_archived", "=", 0)
-    .executeTakeFirst();
-  return row?.id ?? null;
-}
-
-async function archiveLinkedSliceFileIfPresent(db: Kysely<DB>, context: SliceContext): Promise<void> {
-  const indexedFileId = context.slice.indexed_file_id ?? (await findSliceFileId(db, context.slice.id));
-  if (!indexedFileId) return;
-  await db.transaction().execute(async (trx) => {
-    await trx.deleteFrom("file_access").where("indexed_file_id", "=", indexedFileId).execute();
-    await trx
-      .updateTable("indexed_files")
-      .set({ is_archived: 1, access_scope_id: null })
-      .where("id", "=", indexedFileId)
-      .execute();
-    await trx
-      .updateTable("conversation_slices")
-      .set({ indexed_file_id: null })
-      .where("id", "=", context.slice.id)
-      .execute();
-  });
-}
-
-export async function processWhatsAppSalience(options: WhatsAppSalienceOptions): Promise<WhatsAppSalienceRunSummary> {
-  const batchLimit = normalizeBatchLimit(options.batchLimit);
-  const summary = emptySummary(batchLimit);
-  const pending = await listPendingSliceContexts(options.db, options.groups, batchLimit);
-  summary.pendingConsidered = pending.length;
-
-  /**
-   * Without a generator every slice would be claimed, fail, and release —
-   * batchLimit wasted claim cycles and error logs per sync. One warning and an
-   * early return keeps the slices pending for the next configured run.
-   */
-  if (!options.generator && pending.length > 0) {
-    summary.failures = pending.length;
-    options.logger.warn(
-      { pendingSlices: pending.length },
-      "WhatsApp salience gate skipped: no enrichment generator configured; slices remain pending",
-    );
-    return summary;
-  }
-
-  for (const context of pending) {
-    try {
-      const result = await processPendingSlice(options, context);
-      if (result.status === "lost") continue;
-      summary.judged += 1;
-      if (result.status === "kept") summary.kept += 1;
-      if (result.status === "dropped") summary.dropped += 1;
-      summary.candidateObservations += result.candidateObservations;
-    } catch (err) {
-      summary.failures += 1;
-      options.logger.warn(
-        { err, sliceId: context.slice.id, conversationId: context.conversationId },
-        "WhatsApp salience gate failed; slice remains pending",
-      );
-    }
-  }
-
-  options.logger.info(summary, "Completed WhatsApp salience gate run");
-  return summary;
-}
-
 export async function* emitWhatsAppSyncedItems(options: {
   db: Kysely<DB>;
   logger: Logger;
   emissionRefreshDays?: number;
+  provisionalRefreshMaxMinutes: number;
   now?: Date;
   onSkippedNoScope?: () => void;
   /**
@@ -738,13 +445,34 @@ export async function* emitWhatsAppSyncedItems(options: {
    * skips many slices per sync, and per-slice lines would bury the signal.
    */
   onSkipReason?: (reason: WhatsAppEmissionSkipReason) => void;
+  /** One call per listed keyset page, mirroring the Slack emitter, so callers can see the loop stays bounded. */
+  onPageListedSliceCount?: (count: number) => void;
 }): AsyncGenerator<SyncedItem> {
-  const kept = await listKeptSliceContexts(options.db, options.emissionRefreshDays, options.now);
-  for (const context of kept) {
-    const { item, skippedNoScope, skipReason } = await syncedItemForKeptSlice(options.db, context, options.logger);
-    if (skippedNoScope) options.onSkippedNoScope?.();
-    if (skipReason) options.onSkipReason?.(skipReason);
-    if (item) yield item;
+  const now = options.now ?? new Date();
+  const refreshCutoff = new Date(
+    now.getTime() - normalizeEmissionRefreshDays(options.emissionRefreshDays) * DAY_MS,
+  ).toISOString();
+  let cursor: SliceKeysetCursor | null = null;
+  for (;;) {
+    const page = await listKeptSliceContextPage(options.db, refreshCutoff, cursor, WHATSAPP_EMISSION_PAGE_SIZE);
+    options.onPageListedSliceCount?.(page.length);
+    if (page.length === 0) break;
+    const last = page[page.length - 1];
+    if (!last) break;
+    cursor = { timestamp: last.slice.started_at, id: last.slice.id };
+    for (const context of page) {
+      const { item, skippedNoScope, skipReason } = await syncedItemForKeptSlice(
+        options.db,
+        context,
+        options.logger,
+        now,
+        options.provisionalRefreshMaxMinutes,
+      );
+      if (skippedNoScope) options.onSkippedNoScope?.();
+      if (skipReason) options.onSkipReason?.(skipReason);
+      if (item) yield item;
+    }
+    if (page.length < WHATSAPP_EMISSION_PAGE_SIZE) break;
   }
 }
 

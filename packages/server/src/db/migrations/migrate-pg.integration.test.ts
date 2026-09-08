@@ -23,7 +23,7 @@ import * as slackRosterEvidenceMigration from "./161-slack-roster-evidence";
 import * as slackFileAccessBackfillCleanupMigration from "./163-slack-file-access-backfill-cleanup";
 import * as typedAccessPrincipalsMigration from "./165-typed-access-principals";
 
-const EXPECTED_MIGRATION_COUNT = 223;
+const EXPECTED_MIGRATION_COUNT = 230;
 
 describe("runMigrations on Postgres — full sequence", () => {
   let db!: Kysely<DB>;
@@ -253,6 +253,11 @@ describe("runMigrations on Postgres — full sequence", () => {
     expect(names[217]).toBe("222-webhook-verification");
     expect(names[221]).toBe("226-linkedin-company-review-continuations");
     expect(names[222]).toBe("227-person-enrichment-attempts");
+    expect(names[223]).toBe("228-indexed-files-public-visibility-index");
+    expect(names[224]).toBe("229-external-mcp-tool-calls-access-bypass");
+    expect(names[225]).toBe("230-slack-chunk-engine-streams");
+    expect(names[228]).toBe("233-crm-field-history");
+    expect(names[229]).toBe("234-entity-touch-stats");
   });
   it("keeps the automation-sharing migration ledger in order", async () => {
     await runMigrations(db, { quiet: true });
@@ -856,7 +861,7 @@ describe("runMigrations on Postgres — full sequence", () => {
       ]);
       await expect(
         legacyDb.selectFrom("external_mcp_tool_calls").selectAll().where("id", "=", "audit-row").executeTakeFirst(),
-      ).resolves.toMatchObject({ token_id: "live-pat", user_id: "pat-user" });
+      ).resolves.toMatchObject({ token_id: "live-pat", user_id: "pat-user", access_bypass: null });
     } finally {
       await legacyDb.destroy();
     }

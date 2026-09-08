@@ -7,12 +7,18 @@ import {
   WEB_CHAT_RECONCILE_INTERVAL_MS,
   WEB_CHAT_RECONNECT_NOTICE_MS,
   type WebChatReconciliationResult,
+  mergeProgressMessageSnapshots,
   useWebChatReconciliation,
 } from "./use-web-chat-reconciliation";
 
 type TestMessage = {
   id: string;
   role: string;
+  parts?: Array<{
+    id: string;
+    type: string;
+    data?: { items?: Array<{ id: string; revision: number; status: string }> };
+  }>;
 };
 
 type TestParams = UseWebChatReconciliationParams<TestMessage>;
@@ -108,6 +114,111 @@ describe("useWebChatReconciliation", () => {
     expect(WEB_CHAT_RECONCILE_INTERVAL_MS).toBe(1500);
     expect(WEB_CHAT_RECONNECT_NOTICE_MS).toBe(2000);
     expect(WEB_CHAT_PERSISTENT_ERROR_MS).toBe(15000);
+  });
+
+  it("merges progress revisions independently while preserving incoming message and part order", () => {
+    const current: TestMessage[] = [
+      {
+        id: "assistant-run",
+        role: "assistant",
+        parts: [
+          {
+            id: "progress-a",
+            type: "data-progress",
+            data: { items: [{ id: "call-a", revision: 5, status: "succeeded" }] },
+          },
+          {
+            id: "progress-b",
+            type: "data-progress",
+            data: { items: [{ id: "call-b", revision: 2, status: "running" }] },
+          },
+        ],
+      },
+    ];
+    const incoming: TestMessage[] = [
+      {
+        id: "assistant-run",
+        role: "assistant",
+        parts: [
+          {
+            id: "progress-a",
+            type: "data-progress",
+            data: { items: [{ id: "call-a", revision: 4, status: "running" }] },
+          },
+          {
+            id: "progress-b",
+            type: "data-progress",
+            data: { items: [{ id: "call-b", revision: 3, status: "succeeded" }] },
+          },
+        ],
+      },
+    ];
+
+    expect(mergeProgressMessageSnapshots(current, incoming)[0]?.parts).toEqual([
+      {
+        id: "progress-a",
+        type: "data-progress",
+        data: { items: [{ id: "call-a", revision: 5, status: "succeeded" }] },
+      },
+      {
+        id: "progress-b",
+        type: "data-progress",
+        data: { items: [{ id: "call-b", revision: 3, status: "succeeded" }] },
+      },
+    ]);
+  });
+
+  it("does not regress a terminal invocation when reconciliation replays an older snapshot", async () => {
+    const currentMessages: TestMessage[] = [
+      latestUserMessage,
+      {
+        id: "assistant-pending",
+        role: "assistant",
+        parts: [
+          {
+            id: "progress-a",
+            type: "data-progress",
+            data: { items: [{ id: "call-a", revision: 3, status: "succeeded" }] },
+          },
+        ],
+      },
+    ];
+    const setMessages = vi.fn();
+    const loadMessages = vi.fn().mockResolvedValue({
+      messages: [
+        latestUserMessage,
+        {
+          id: "assistant-pending",
+          role: "assistant",
+          parts: [
+            {
+              id: "progress-a",
+              type: "data-progress",
+              data: { items: [{ id: "call-a", revision: 2, status: "running" }] },
+            },
+          ],
+        },
+      ],
+      updatedAt: "2026-07-13T07:30:00.000Z",
+    });
+
+    renderReconciliation(
+      createParams({
+        status: "error",
+        messages: currentMessages,
+        loadMessages,
+        setMessages,
+        mergeMessages: mergeProgressMessageSnapshots,
+      }),
+    );
+    await flushAsyncWork();
+
+    const adopted = setMessages.mock.calls[0]?.[0] as TestMessage[] | undefined;
+    expect(adopted?.[1]?.parts?.[0]?.data?.items?.[0]).toEqual({
+      id: "call-a",
+      revision: 3,
+      status: "succeeded",
+    });
   });
 
   it("immediately adopts a valid persisted transcript while recovering", async () => {

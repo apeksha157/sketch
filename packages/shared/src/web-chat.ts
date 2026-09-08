@@ -162,6 +162,17 @@ export interface WebProgressIcon {
 }
 
 export interface WebProgressItem {
+  id?: string;
+  revision?: number;
+  status?: "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
+  startedAt?: number;
+  endedAt?: number;
+  mode?: WebChatProgressRendererMode;
+  integration?: { providerId?: string; appId: string; name: string; icon?: string };
+  detailFormat?: "text" | "command" | "json";
+  detailRedacted?: boolean;
+  detailTruncated?: boolean;
+  detailUnavailable?: boolean;
   kind: WebProgressItemKind;
   label: string;
   icon: WebProgressIcon;
