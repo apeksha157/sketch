@@ -87,6 +87,7 @@ import type { CurrentAutomation, ScheduledTask, TaskContext } from "../scheduler
 import type { SlackBot } from "../slack/bot";
 import { transcribeAudioFile } from "../transcription/service";
 import type { WhatsAppTemplateRequest } from "../whatsapp/templates";
+import { hasAutomationCreateIntent, hasAutomationUpdateIntent } from "./automation-intent";
 import { maintainBuilderRunLease } from "./builder-run-lease";
 import { type ActivityPart, WebChatActivity } from "./web-chat-activity";
 import { createActivityCatalog } from "./web-chat-activity-catalog";
@@ -450,20 +451,6 @@ function hasSuccessfulCreateAutomationSkill(result: RunAgentResult): boolean {
   return (result.rawUsage?.toolCalls ?? []).some(
     (toolCall) => toolCall.skillName?.trim() === "create-automation" && toolCall.success === true,
   );
-}
-
-const AUTOMATION_CREATE_INTENT_PATTERN =
-  /\b(?:create|make|set up|set-up|build|add|start|write|design)\b[^.!?\n]{0,80}\b(?:a|an|another|new)\b[^.!?\n]{0,80}\b(?:automation|workflow|scheduled task|recurring task)\b|\b(?:want|need)\b[^.!?\n]{0,40}\b(?:a|an|new)\b[^.!?\n]{0,40}\b(?:automation|workflow|scheduled task)\b|\b(?:remind me to|set a reminder|create a reminder|make a reminder)\b/i;
-
-const AUTOMATION_UPDATE_INTENT_PATTERN =
-  /\b(?:update|edit|change|modify|adjust|fix|improve|remove|delete|pause|resume|stop|disable|enable|rename|alter)\b[^.!?\n]{0,180}\b(?:automation|workflow|scheduled task)\b|\badd\b[^.!?\n]{0,120}\b(?:my|our|the|this|that|their)\b[^.!?\n]{0,60}\b(?:automation|workflow|scheduled task)\b/i;
-
-function hasAutomationCreateIntent(message: string): boolean {
-  return AUTOMATION_CREATE_INTENT_PATTERN.test(message) && !AUTOMATION_UPDATE_INTENT_PATTERN.test(message);
-}
-
-function hasAutomationUpdateIntent(message: string): boolean {
-  return AUTOMATION_UPDATE_INTENT_PATTERN.test(message);
 }
 
 function normalizedAutomationReference(value: string): string {
