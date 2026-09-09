@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.9] -- 2026-09-09
+
+- Refactors benchmark orchestration to be owned by Platform, removing Sketch's benchmark routes, setup UI, enrollment/runtime services, and execution-provider overrides while preserving historical database migrations and tables.
+- Fixes automation intent detection so negated requests like “Do not create an automation” no longer open a placeholder draft before the agent runs, ensuring only positive creation and update routing is triggered.
+- Keeps ordinary chat, automation builder, and integration connection paths intact as the interface for Platform to exercise backend conversations, skills, and provider behaviors.
+
 ## [1.7.8] -- 2026-09-09
 
 - Adds budget-driven, recency-fair enrichment on its own 10-minute cadence, replacing the fixed 50-file-per-tick cap with a time-budgeted loop that drains batches newest-first (with periodic oldest-first fairness slices), roughly an order of magnitude more throughput on large tenants.
