@@ -199,6 +199,46 @@ describe("web chat API", () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
+  it("streams and retains ordinary usage without changing the integration provider", async () => {
+    await seedAdmin(db);
+    const loadIntegrationProvider = vi.fn().mockResolvedValue(null);
+    const result = makeAgentResult();
+    result.auxCostUsd = 0.02;
+    result.rawUsage.numTurns = 3;
+    result.rawUsage.inputTokens = 120;
+    const runAgent = vi.fn().mockResolvedValue(result);
+    const app = createApp(db, createTestConfig({ DATA_DIR: dataDir }), {
+      logger: createTestLogger(),
+      runAgent,
+      loadIntegrationProvider,
+    });
+    const cookie = await login(app);
+    const response = await app.request("/api/web-chat?conversationId=normal-usage", {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "Summarize my notes" }),
+    });
+    const chunks = webChatStreamChunks(await response.text());
+    const usage = chunks.find((chunk) => chunk.type === "data-usage");
+    expect(usage).toMatchObject({
+      data: {
+        turns: 3,
+        inputTokens: 120,
+        costUsd: 0.01,
+        auxCostUsd: 0.02,
+        totalCostUsd: 0.03,
+        stopReason: null,
+      },
+    });
+    expect(runAgent.mock.calls[0][0].loadIntegrationProvider).toBe(loadIntegrationProvider);
+    expect(chunks.some((chunk) => chunk.type?.startsWith("data-benchmark"))).toBe(false);
+    const history = await app.request("/api/web-chat/messages?conversationId=normal-usage", {
+      headers: { Cookie: cookie },
+    });
+    const stored = await history.json();
+    expect(stored.messages.flatMap((message: { parts: unknown[] }) => message.parts)).toContainEqual(usage);
+  });
+
   it("runs the current user's agent from an AI SDK message payload", async () => {
     const admin = await seedAdmin(db);
     const runAgent = vi.fn().mockImplementation(async (params: RunAgentParams) => {
@@ -294,7 +334,7 @@ describe("web chat API", () => {
     ) as { messages: Array<{ role: string; parts: unknown[] }> };
     expect(transcript.messages.at(-1)).toMatchObject({
       role: "assistant",
-      parts: [{ type: "text", text: recoveryText }],
+      parts: [{ type: "text", text: recoveryText }, expect.objectContaining({ type: "data-usage" })],
     });
   });
 
@@ -2274,6 +2314,12 @@ describe("web chat API", () => {
     const streamText = await res.text();
     expect(runAgent).toHaveBeenCalledTimes(2);
     expect(streamText).toContain('"reason":"step_limit"');
+    expect(webChatStreamChunks(streamText)).toContainEqual(
+      expect.objectContaining({
+        type: "data-usage",
+        data: expect.objectContaining({ stopReason: "step_limit", turns: 144 }),
+      }),
+    );
     expect(streamText).toContain("Tell me to continue");
     expect(runAgent.mock.calls[1]?.[0].abortController?.signal.aborted).toBe(true);
   });
@@ -2369,7 +2415,10 @@ describe("web chat API", () => {
     const transcript = JSON.parse(await readFile(webChatTranscriptPath(dataDir, admin.id, "builder-empty"), "utf-8"));
     expect(transcript.messages.at(-1)).toMatchObject({
       role: "assistant",
-      parts: [expect.objectContaining({ type: "text", text: expect.stringContaining("tell me to continue") })],
+      parts: [
+        expect.objectContaining({ type: "text", text: expect.stringContaining("tell me to continue") }),
+        expect.objectContaining({ type: "data-usage" }),
+      ],
     });
   });
 
@@ -4055,6 +4104,7 @@ describe("web chat API", () => {
               sizeBytes: 9,
             },
           },
+          expect.objectContaining({ type: "data-usage" }),
         ],
       },
     ]);
@@ -4099,7 +4149,10 @@ describe("web chat API", () => {
         role: "assistant",
         pending: false,
         createdAt: expect.any(String),
-        parts: [{ type: "text", text: "Conversation-specific reply." }],
+        parts: [
+          { type: "text", text: "Conversation-specific reply." },
+          expect.objectContaining({ type: "data-usage" }),
+        ],
       },
     ]);
 
@@ -4149,7 +4202,7 @@ describe("web chat API", () => {
           id: expect.any(String),
           role: "assistant",
           createdAt: expect.any(String),
-          parts: [{ type: "text", text: "Private web reply." }],
+          parts: [{ type: "text", text: "Private web reply." }, expect.objectContaining({ type: "data-usage" })],
         },
       ],
     });
@@ -4223,7 +4276,7 @@ describe("web chat API", () => {
         role: "assistant",
         pending: false,
         createdAt: expect.any(String),
-        parts: [{ type: "text", text: "Finished in the background." }],
+        parts: [{ type: "text", text: "Finished in the background." }, expect.objectContaining({ type: "data-usage" })],
       },
     ]);
   });
@@ -4403,6 +4456,7 @@ describe("web chat API", () => {
           parts: [
             { type: "data-progress", id: "assistant-progress-user-msg-progress:progress-0" },
             { type: "text", text: "Finished in the background." },
+            expect.objectContaining({ type: "data-usage" }),
           ],
         },
       ],
@@ -5246,7 +5300,8 @@ describe("web chat API", () => {
       { id: "assistant-progress-activity-user:b", status: "failed", endedAt: 200 },
     ]);
     expect(finalParts[0]).toEqual({ type: "text", text: "I will check the files first." });
-    expect(finalParts.at(-1)).toEqual({ type: "text", text: "Finished checking." });
+    expect(finalParts.at(-2)).toEqual({ type: "text", text: "Finished checking." });
+    expect(finalParts.at(-1)).toMatchObject({ type: "data-usage" });
   });
 
   it("settles an unresolved invocation as interrupted when the run fails", async () => {
