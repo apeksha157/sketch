@@ -865,8 +865,13 @@ export class SlackBot {
 
   async listChannels(): Promise<Array<{ id: string; name: string; type: string; isMember: boolean }>> {
     const channels: Array<{ id: string; name: string; type: string; isMember: boolean }> = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new Error("Repeated Slack channel pagination cursor");
+        seenCursors.add(cursor);
+      }
       const result = await this.app.client.conversations.list({
         exclude_archived: true,
         limit: 200,
@@ -903,13 +908,21 @@ export class SlackBot {
 
   async listChannelMembers(channelId: string): Promise<string[]> {
     const members: string[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
     do {
+      if (cursor) {
+        if (seenCursors.has(cursor)) throw new Error("Repeated Slack member pagination cursor");
+        seenCursors.add(cursor);
+      }
       const result = await this.app.client.conversations.members({
         channel: channelId,
         limit: 1000,
         ...(cursor ? { cursor } : {}),
       });
+      if (result.ok === false) {
+        throw new Error(`Slack member pagination failed: ${result.error ?? "unknown_error"}`);
+      }
       members.push(...(result.members ?? []));
       cursor = result.response_metadata?.next_cursor || undefined;
     } while (cursor);

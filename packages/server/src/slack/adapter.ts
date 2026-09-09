@@ -213,6 +213,7 @@ export interface SlackAdapterDeps {
   slackEntitySync?: SlackEntitySyncService;
   isInternalSlackUser?: (slackUserId: string, email: string | null) => Promise<boolean>;
   onSlackChannelDiscovered?: () => void;
+  refreshSlackChannelMembership?: (channelId: string) => Promise<void>;
   recordSlackChannelParticipantJoined?: (channelId: string, slackUserId: string) => Promise<void>;
   recordSlackChannelParticipantObserved?: (channelId: string, slackUserId: string) => Promise<void>;
   recordSlackChannelParticipantLeft?: (channelId: string, slackUserId: string) => Promise<void>;
@@ -386,7 +387,15 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
     ((channelId: string, slackUserId: string) => slackChannelParticipants.remove(channelId, slackUserId));
 
   slackBot.onMemberJoinedChannel(async ({ channelId, slackUserId, isBot, teamId }) => {
-    await recordSlackChannelParticipantJoined(channelId, slackUserId);
+    try {
+      await recordSlackChannelParticipantJoined(channelId, slackUserId);
+    } finally {
+      if (isBot && deps.refreshSlackChannelMembership) {
+        void deps.refreshSlackChannelMembership(channelId).catch((err) => {
+          logger.warn({ err, channelId }, "Slack membership refresh failed after bot join");
+        });
+      }
+    }
     if (deps.slackEntitySync) {
       const refresh = isBot
         ? deps.slackEntitySync.handleBotJoinedChannel({

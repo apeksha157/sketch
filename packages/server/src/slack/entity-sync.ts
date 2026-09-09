@@ -671,12 +671,12 @@ export function createSlackEntitySync(deps: SlackEntitySyncDeps): SlackEntitySyn
           await syncImmediateChannelRoster(connection, event.channelId, facadeForConnection(connection));
           deps.logger.info(
             { teamId: connection.teamId, channelId: event.channelId },
-            "Completed Slack channel roster refresh after bot join",
+            "Completed Slack user profile refresh after bot join",
           );
         } catch (error) {
           deps.logger.warn(
             { error, teamId: connection.teamId, channelId: event.channelId },
-            "Slack channel roster refresh after bot join failed",
+            "Slack user profile refresh after bot join failed",
           );
         }
       },

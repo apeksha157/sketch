@@ -1178,6 +1178,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
       slackMembershipReconciler.recordParticipantObserved(channelId, slackUserId),
     recordSlackChannelParticipantLeft: (channelId: string, slackUserId: string) =>
       slackMembershipReconciler.recordParticipantLeft(channelId, slackUserId),
+    refreshSlackChannelMembership: (channelId: string) => slackMembershipReconciler.refreshChannel(channelId),
     onSlackChannelDiscovered: () => {
       void slackMembershipReconciler.wake().catch((err) => {
         logger.warn({ err }, "Slack membership reconciliation failed after channel discovery");

@@ -10,7 +10,8 @@ export const SLACK_MEMBERSHIP_FRESHNESS_MS = 48 * 60 * 60 * 1000;
 export class SlackMembershipReconciler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private pending: Promise<void> | null = null;
-  private rerunRequested = false;
+  private sweepRequested = false;
+  private readonly requestedChannels = new Set<string>();
   private readonly channelMutations = new Map<string, Promise<void>>();
   private readonly channelVersions = new Map<string, number>();
   private readonly activeSnapshotStartedAt = new Map<string, number>();
@@ -21,7 +22,7 @@ export class SlackMembershipReconciler {
     private readonly deps: {
       db: Kysely<DB>;
       logger: Pick<Logger, "info" | "warn">;
-      getSlack: () => Pick<SlackBot, "listChannelMembers"> | null;
+      getSlack: () => Pick<SlackBot, "listChannelMembers" | "listChannels"> | null;
       intervalMs?: number;
     },
   ) {
@@ -41,15 +42,25 @@ export class SlackMembershipReconciler {
   }
 
   wake(): Promise<void> {
-    if (this.pending) {
-      this.rerunRequested = true;
-      return this.pending;
-    }
+    this.sweepRequested = true;
+    return this.drain();
+  }
+
+  refreshChannel(channelId: string): Promise<void> {
+    this.requestedChannels.add(channelId);
+    return this.drain();
+  }
+
+  private drain(): Promise<void> {
+    if (this.pending) return this.pending;
     this.pending = (async () => {
-      do {
-        this.rerunRequested = false;
-        await this.run();
-      } while (this.rerunRequested);
+      while (this.sweepRequested || this.requestedChannels.size > 0) {
+        const discover = this.sweepRequested;
+        this.sweepRequested = false;
+        const channelIds = new Set(this.requestedChannels);
+        this.requestedChannels.clear();
+        await this.run(channelIds, discover);
+      }
     })().finally(() => {
       this.pending = null;
     });
@@ -81,65 +92,74 @@ export class SlackMembershipReconciler {
 
   async clearAllParticipants(): Promise<void> {
     this.connectionVersion += 1;
+    this.sweepRequested = false;
+    this.requestedChannels.clear();
     await Promise.allSettled(this.channelMutations.values());
     await this.participants.clearAll();
   }
 
-  private async run(): Promise<void> {
+  private async run(channelIds: Set<string>, discover: boolean): Promise<void> {
     const slack = this.deps.getSlack();
     if (!slack) return;
-    const rows = await this.deps.db
-      .selectFrom("conversations")
-      .select("provider_conversation_id")
-      .distinct()
-      .where("platform", "=", "slack")
-      .where("kind", "=", "channel")
-      .orderBy("provider_conversation_id", "asc")
-      .execute();
-    let refreshed = 0;
-    for (const row of rows) {
-      const snapshotStartedAtMs = Date.now();
-      this.activeSnapshotStartedAt.set(row.provider_conversation_id, snapshotStartedAtMs);
+    const connectionVersion = this.connectionVersion;
+    const isCurrentConnection = () => this.connectionVersion === connectionVersion && this.deps.getSlack() === slack;
+    if (discover) {
+      const rows = await this.deps.db
+        .selectFrom("conversations")
+        .select("provider_conversation_id")
+        .distinct()
+        .where("platform", "=", "slack")
+        .where("kind", "=", "channel")
+        .execute();
+      for (const row of rows) channelIds.add(row.provider_conversation_id);
       try {
-        const connectionVersion = this.connectionVersion;
-        const version = this.channelVersions.get(row.provider_conversation_id) ?? 0;
-        const members = await slack.listChannelMembers(row.provider_conversation_id);
+        for (const channel of await slack.listChannels()) {
+          if (channel.isMember) channelIds.add(channel.id);
+        }
+      } catch (err) {
+        this.deps.logger.warn({ err }, "Slack membership channel discovery failed");
+      }
+    }
+    let refreshed = 0;
+    for (const channelId of [...channelIds].sort()) {
+      if (!isCurrentConnection()) return;
+      const snapshotStartedAtMs = Date.now();
+      this.activeSnapshotStartedAt.set(channelId, snapshotStartedAtMs);
+      try {
+        const version = this.channelVersions.get(channelId) ?? 0;
+        const members = await slack.listChannelMembers(channelId);
         if (members.length === 0) {
-          this.deps.logger.warn(
-            { channelId: row.provider_conversation_id },
-            "Skipped empty Slack channel participant refresh",
-          );
+          this.deps.logger.warn({ channelId }, "Skipped empty Slack channel participant refresh");
           continue;
         }
-        await this.enqueueChannelMutation(row.provider_conversation_id, async () => {
-          if (
-            this.connectionVersion !== connectionVersion ||
-            (this.channelVersions.get(row.provider_conversation_id) ?? 0) !== version
-          ) {
-            this.rerunRequested = true;
+        await this.enqueueChannelMutation(channelId, async () => {
+          if (!isCurrentConnection()) return;
+          if ((this.channelVersions.get(channelId) ?? 0) !== version) {
+            this.requestedChannels.add(channelId);
             return;
           }
           await this.participants.replaceChannelRoster(
-            row.provider_conversation_id,
+            channelId,
             members,
             new Date(Math.max(Date.now(), snapshotStartedAtMs + 1)).toISOString(),
             new Date(snapshotStartedAtMs).toISOString(),
           );
           refreshed += 1;
+          this.deps.logger.info(
+            { channelId, memberCount: members.length, trigger: discover ? "sweep" : "targeted" },
+            "Slack channel membership roster refreshed",
+          );
         });
       } catch (err) {
-        this.deps.logger.warn(
-          { err, channelId: row.provider_conversation_id },
-          "Slack channel participant refresh failed",
-        );
+        this.deps.logger.warn({ err, channelId }, "Slack channel participant refresh failed");
       } finally {
-        if (this.activeSnapshotStartedAt.get(row.provider_conversation_id) === snapshotStartedAtMs) {
-          this.activeSnapshotStartedAt.delete(row.provider_conversation_id);
+        if (this.activeSnapshotStartedAt.get(channelId) === snapshotStartedAtMs) {
+          this.activeSnapshotStartedAt.delete(channelId);
         }
       }
     }
     this.deps.logger.info(
-      { eligibleChannels: rows.length, refreshedChannels: refreshed },
+      { eligibleChannels: channelIds.size, refreshedChannels: refreshed },
       "Slack membership reconciled",
     );
   }

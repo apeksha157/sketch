@@ -12,6 +12,7 @@ import { createTestConfig, createTestDb, flush } from "../test-utils";
 import { transcribeEagerAttachments } from "../transcription/service";
 import type { SlackAdapterDeps } from "./adapter";
 import { createConfiguredSlackBot, validateSlackTokens } from "./adapter";
+import { SlackMembershipReconciler } from "./membership-reconciler";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -401,6 +402,81 @@ describe("slack/adapter", () => {
       expect(recordSlackChannelParticipantLeft).toHaveBeenCalledWith("C1", "U1");
     });
 
+    it("requests channel membership refresh on bot joins independently of entity sync", async () => {
+      const refreshSlackChannelMembership = vi.fn().mockResolvedValue(undefined);
+      const deps = makeDeps({ refreshSlackChannelMembership });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+      const joined = mockBotInstance.onMemberJoinedChannel.mock.calls[0]?.[0];
+      await joined({ channelId: "CQUIET", slackUserId: "UBOT", isBot: true });
+      await joined({ channelId: "CQUIET", slackUserId: "U1", isBot: false });
+      expect(refreshSlackChannelMembership).toHaveBeenCalledExactlyOnceWith("CQUIET");
+    });
+
+    it("requests a bot roster refresh even when the incremental join write fails", async () => {
+      const error = new Error("participant write failed");
+      const refreshSlackChannelMembership = vi.fn().mockResolvedValue(undefined);
+      const deps = makeDeps({
+        recordSlackChannelParticipantJoined: vi.fn().mockRejectedValue(error),
+        refreshSlackChannelMembership,
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+      const joined = mockBotInstance.onMemberJoinedChannel.mock.calls[0]?.[0];
+
+      await expect(joined({ channelId: "CQUIET", slackUserId: "UBOT", isBot: true })).rejects.toBe(error);
+      expect(refreshSlackChannelMembership).toHaveBeenCalledExactlyOnceWith("CQUIET");
+      await expect(joined({ channelId: "CQUIET", slackUserId: "U1", isBot: false })).rejects.toBe(error);
+      expect(refreshSlackChannelMembership).toHaveBeenCalledOnce();
+    });
+
+    it("persists the complete access roster from a bot join before a conversation exists", async () => {
+      const db = await createTestDb();
+      const deps = makeDeps({ db });
+      const slack = { listChannels: async () => [], listChannelMembers: async () => ["UBOT", "U1", "U2"] };
+      const reconciler = new SlackMembershipReconciler({ db, logger: deps.logger, getSlack: () => slack });
+      deps.recordSlackChannelParticipantJoined = (channelId, userId) =>
+        reconciler.recordParticipantJoined(channelId, userId);
+      deps.refreshSlackChannelMembership = (channelId) => reconciler.refreshChannel(channelId);
+      try {
+        createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+        const joined = mockBotInstance.onMemberJoinedChannel.mock.calls[0]?.[0];
+        await joined({ channelId: "CQUIET", slackUserId: "UBOT", isBot: true });
+        await vi.waitFor(async () => {
+          expect(
+            await db
+              .selectFrom("slack_channel_participants")
+              .select("slack_user_id")
+              .where("channel_id", "=", "CQUIET")
+              .orderBy("slack_user_id")
+              .execute(),
+          ).toEqual([{ slack_user_id: "U1" }, { slack_user_id: "U2" }, { slack_user_id: "UBOT" }]);
+        });
+        expect(await db.selectFrom("conversations").select("id").execute()).toEqual([]);
+      } finally {
+        await reconciler.stop();
+        await db.destroy();
+      }
+    });
+
+    it("does not await a membership crawl and handles its failure", async () => {
+      const crawl = deferred<void>();
+      const refreshSlackChannelMembership = vi.fn(() => crawl.promise);
+      const deps = makeDeps({ refreshSlackChannelMembership });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+      const joined = mockBotInstance.onMemberJoinedChannel.mock.calls[0]?.[0];
+      await joined({ channelId: "CQUIET", slackUserId: "UBOT", isBot: true });
+      expect(refreshSlackChannelMembership).toHaveBeenCalledOnce();
+      crawl.resolve();
+      const error = new Error("provider failed");
+      refreshSlackChannelMembership.mockRejectedValueOnce(error);
+      await joined({ channelId: "CQUIET", slackUserId: "UBOT", isBot: true });
+      await vi.waitFor(() =>
+        expect(deps.logger.warn).toHaveBeenCalledWith(
+          { err: error, channelId: "CQUIET" },
+          "Slack membership refresh failed after bot join",
+        ),
+      );
+    });
+
     it("routes user lifecycle events and bot channel joins to entity sync", async () => {
       const entitySync = {
         handleUserEvent: vi.fn().mockResolvedValue(undefined),
@@ -468,7 +544,11 @@ describe("slack/adapter", () => {
         handleMemberLeftChannel: vi.fn().mockResolvedValue(undefined),
         observeMessage: vi.fn().mockResolvedValue(undefined),
       };
-      const deps = { ...makeDeps(), slackEntitySync: entitySync } as unknown as SlackAdapterDeps;
+      const refreshSlackChannelMembership = vi.fn().mockResolvedValue(undefined);
+      const deps = {
+        ...makeDeps({ refreshSlackChannelMembership }),
+        slackEntitySync: entitySync,
+      } as unknown as SlackAdapterDeps;
       createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
 
       const joined = mockBotInstance.onMemberJoinedChannel.mock.calls[0]?.[0] as (event: {
@@ -484,6 +564,7 @@ describe("slack/adapter", () => {
 
       await vi.waitFor(() => expect(entitySync.handleBotJoinedChannel).toHaveBeenCalledOnce());
       expect(returned).toBe(true);
+      expect(refreshSlackChannelMembership).toHaveBeenCalledExactlyOnceWith("C1");
       release();
       await result;
     });
