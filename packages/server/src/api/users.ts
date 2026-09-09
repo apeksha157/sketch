@@ -22,7 +22,7 @@ import type { createChannelRepository } from "../db/repositories/channels";
 import { createConnectorRepository } from "../db/repositories/connectors";
 import { type createSettingsRepository, invalidateSettingsCache } from "../db/repositories/settings";
 import { isUniqueConstraintError } from "../db/repositories/sub-entities";
-import { BenchmarkUserRemovalBlockedError, createUserRepository, lockUserForRemoval } from "../db/repositories/users";
+import { createUserRepository, lockUserForRemoval } from "../db/repositories/users";
 import type { createWhatsAppGroupRepository } from "../db/repositories/whatsapp-groups";
 import type { DB } from "../db/schema";
 import { createEmailTransport, sendVerificationEmail } from "../email";
@@ -916,8 +916,6 @@ export function userRoutes(users: UserRepo, deps: UserRoutesDeps) {
       });
       invalidateSettingsCache(deps.db);
     } catch (error) {
-      if (error instanceof BenchmarkUserRemovalBlockedError)
-        return c.json({ error: { code: "CONFLICT", message: error.message } }, 409);
       if (error instanceof Error && "managedRemovalResponse" in error) {
         const response = error.managedRemovalResponse as ReturnType<typeof managedRegistrationResponse>;
         return c.json(response.body, response.status as 400);

@@ -53,7 +53,6 @@ import {
   type ValidatedPersistedAutomationDefinition,
   validatePersistedAutomationDefinition,
 } from "../automation/definition";
-import { benchmarkExecutionProvider } from "../benchmarks/execution-binding";
 import type { AgentEnvironmentRuntimeContext } from "../db/repositories/agent-environment-variables";
 import type { createAutomationRunsRepository } from "../db/repositories/automation-runs";
 import type { StepContentRow, createAutomationStepContentRepository } from "../db/repositories/automation-step-content";
@@ -84,7 +83,6 @@ export interface ExecuteAutomationParams {
     PORT: number;
     CLAUDE_CONFIG_DIR: string;
     AGENT_RUNTIME?: "sdk" | "aisdk";
-    BENCHMARKS_ENABLED?: boolean;
   };
   runsRepo: ReturnType<typeof createAutomationRunsRepository>;
   stepContentRepo: ReturnType<typeof createAutomationStepContentRepository>;
@@ -230,14 +228,7 @@ export async function executeAutomation(params: ExecuteAutomationParams): Promis
   const runId =
     params.runId ?? (await params.runsRepo.create({ taskId: params.task.id, triggerData: params.triggerData }));
   try {
-    const loadIntegrationProvider = await benchmarkExecutionProvider({
-      db: params.db,
-      enabled: params.config.BENCHMARKS_ENABLED === true,
-      userId: params.task.created_by,
-      taskId: params.task.id,
-      loadProvider: params.loadIntegrationProvider,
-    });
-    return await executeAutomationInternal({ ...params, loadIntegrationProvider, runId });
+    return await executeAutomationInternal({ ...params, runId });
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     const aborted = error instanceof AutomationRunAbortedError;
@@ -583,22 +574,12 @@ export async function testAutomationStep(
     useLatestUpstreamOutput?: boolean;
   },
 ): Promise<AutomationExecutionResult> {
-  const scopedParams = {
-    ...params,
-    loadIntegrationProvider: await benchmarkExecutionProvider({
-      db: params.db,
-      enabled: params.config.BENCHMARKS_ENABLED === true,
-      userId: params.task.created_by,
-      taskId: params.task.id,
-      loadProvider: params.loadIntegrationProvider,
-    }),
-  };
-  const { task, triggerData, logger, runsRepo, stepContentRepo, stepId } = scopedParams;
+  const { task, triggerData, logger, runsRepo, stepContentRepo, stepId } = params;
   const creatorId = task.created_by;
   let creator: Awaited<ReturnType<NonNullable<RunAgentParams["userRepo"]>["findById"]>> | undefined;
   let creatorEmail: string | null = null;
   if (creatorId) {
-    creator = await scopedParams.userRepo.findById(creatorId);
+    creator = await params.userRepo.findById(creatorId);
     if (!creator) {
       const runId = await runsRepo.create({ taskId: task.id, triggerData: { type: "step_test", stepId } });
       await runsRepo.update(runId, {
@@ -618,7 +599,7 @@ export async function testAutomationStep(
 
   const runId = await runsRepo.create({ taskId: task.id, triggerData: { type: "step_test", stepId, triggerData } });
   const stepOutputs: Record<string, StepOutput> = {};
-  const workspaceDir = resolveAutomationWorkspaceDir(scopedParams.config.DATA_DIR, task);
+  const workspaceDir = resolveAutomationWorkspaceDir(params.config.DATA_DIR, task);
   await mkdir(workspaceDir, { recursive: true });
 
   let executionMode: AutomationExecutionMode = "hybrid";
@@ -659,11 +640,11 @@ export async function testAutomationStep(
 
   try {
     validateRuntimeAutomationExecutionMode(executionMode, [step]);
-    const input = scopedParams.useLatestUpstreamOutput
-      ? await resolveLatestUpstreamOutput({ params: scopedParams, stepId, edges, currentRunId: runId })
-      : (scopedParams.input ?? null);
+    const input = params.useLatestUpstreamOutput
+      ? await resolveLatestUpstreamOutput({ params: params, stepId, edges, currentRunId: runId })
+      : (params.input ?? null);
     const output = await executeWorkflowStep({
-      params: scopedParams,
+      params: params,
       step,
       content,
       input,

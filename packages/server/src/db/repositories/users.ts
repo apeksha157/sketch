@@ -109,21 +109,9 @@ async function runUserMutation<T>(db: UserDb, callback: (trx: UserDb) => Promise
   return db.transaction().execute((trx) => callback(trx));
 }
 
-export class BenchmarkUserRemovalBlockedError extends Error {}
-
-/** Hold the same owner lock as benchmark execution until user removal commits. */
+/** Lock the user row until removal and related cleanup commit. */
 export async function lockUserForRemoval(db: UserDb, id: string): Promise<void> {
   await db.updateTable("users").set({ name: sql`name` }).where("id", "=", id).execute();
-  const active = await db
-    .selectFrom("benchmark_enrollments")
-    .select("id")
-    .where("user_id", "=", id)
-    .where("active_run_id", "is not", null)
-    .executeTakeFirst();
-  if (active)
-    throw new BenchmarkUserRemovalBlockedError(
-      "Finish the user's benchmark batches and cleanup before deleting this user.",
-    );
 }
 
 export function createUserRepository(db: UserDb, options: UserRepositoryOptions = {}): UserRepository {

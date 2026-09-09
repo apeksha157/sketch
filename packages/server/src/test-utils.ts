@@ -195,7 +195,6 @@ export function flush() {
 export function createTestConfig(overrides: Partial<Config> = {}): Config {
   return {
     DB_TYPE: "sqlite",
-    BENCHMARKS_ENABLED: false,
     SQLITE_PATH: ":memory:",
     SLACK_CHANNEL_HISTORY_LIMIT: 5,
     SLACK_THREAD_HISTORY_LIMIT: 50,
