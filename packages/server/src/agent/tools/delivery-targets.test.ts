@@ -8,7 +8,8 @@ import {
 } from "../../db/repositories/whatsapp-groups";
 import type { DB } from "../../db/schema";
 import type { SlackBot } from "../../slack/bot";
-import { createTestDb } from "../../test-utils";
+import { SlackMembershipReconciler } from "../../slack/membership-reconciler";
+import { createTestDb, createTestLogger } from "../../test-utils";
 import { handleSearchDeliveryTargets } from "./delivery-targets";
 
 let db: Kysely<DB>;
@@ -250,6 +251,69 @@ describe("handleSearchDeliveryTargets", () => {
 
     expect(matches.map((match) => match.targetId)).toEqual(["C-MEMBER"]);
   });
+
+  it.each(["refreshChannel", "wake"] as const)(
+    "makes a quiet private Slack channel discoverable through %s",
+    async (reconciliationTrigger) => {
+      const channelId = "C-QUIET-PRIVATE";
+      const humans = [
+        { id: "user-alice", name: "Alice", email: "alice@test.com", slackUserId: "UALICE" },
+        { id: "user-bob", name: "Bob", email: "bob@test.com", slackUserId: "UBOB" },
+        { id: "user-carol", name: "Carol", email: "carol@test.com", slackUserId: "UCAROL" },
+      ];
+      const nonmember = { id: "user-outsider", name: "Outsider", email: "outsider@test.com", slackUserId: "UOUTSIDER" };
+      const botUserId = "UBOT";
+      const users = createUserRepository(db);
+      for (const user of [...humans, nonmember]) await users.create(user);
+
+      const slack = {
+        listChannels: async () => [{ id: channelId, name: "quiet-private", type: "private_channel", isMember: true }],
+        listChannelMembers: async (requestedChannelId: string) =>
+          requestedChannelId === channelId ? [botUserId, ...humans.map((user) => user.slackUserId)] : [],
+      } as SlackBot;
+      const reconciler = new SlackMembershipReconciler({
+        db,
+        logger: createTestLogger(),
+        getSlack: () => slack,
+      });
+      await reconciler.recordParticipantJoined(channelId, botUserId);
+
+      const searchFor = (currentUserId: string) =>
+        handleSearchDeliveryTargets(
+          { platform: "slack", targetType: "channel" },
+          { db, getSlack: () => slack, currentUserId, userRepo: users },
+        );
+      const channelMatch = {
+        platform: "slack",
+        targetType: "channel",
+        targetId: channelId,
+        label: "#quiet-private",
+        canDeliver: true,
+      };
+
+      for (const user of humans) expect(parseMatches(await searchFor(user.id))).toEqual([]);
+      expect(parseMatches(await searchFor(nonmember.id))).toEqual([]);
+
+      if (reconciliationTrigger === "refreshChannel") await reconciler.refreshChannel(channelId);
+      else await reconciler.wake();
+
+      for (const user of humans) expect(parseMatches(await searchFor(user.id))).toEqual([channelMatch]);
+      expect(parseMatches(await searchFor(nonmember.id))).toEqual([]);
+
+      await reconciler.recordParticipantLeft(channelId, humans[2].slackUserId);
+      expect(parseMatches(await searchFor(humans[2].id))).toEqual([]);
+      expect(
+        await db
+          .selectFrom("slack_channel_participants")
+          .select("slack_user_id")
+          .where("channel_id", "=", channelId)
+          .orderBy("slack_user_id", "asc")
+          .execute(),
+      ).toEqual([{ slack_user_id: "UALICE" }, { slack_user_id: "UBOB" }, { slack_user_id: "UBOT" }]);
+      expect(await db.selectFrom("conversations").select("id").execute()).toEqual([]);
+      expect(await db.selectFrom("conversation_messages").select("id").execute()).toEqual([]);
+    },
+  );
 
   it("does not return cached Slack channels when live Slack is unavailable", async () => {
     const channels = createChannelRepository(db);

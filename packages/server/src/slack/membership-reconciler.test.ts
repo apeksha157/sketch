@@ -14,6 +14,11 @@ function deferred<T = void>() {
   return { promise, resolve };
 }
 
+function connectedSlack(listChannelMembers: (channelId: string) => Promise<string[]>) {
+  const slack = { listChannelMembers, listChannels: async () => [] };
+  return () => slack;
+}
+
 describe("SlackMembershipReconciler", () => {
   let db: Kysely<DB>;
 
@@ -54,7 +59,7 @@ describe("SlackMembershipReconciler", () => {
     const reconciler = new SlackMembershipReconciler({
       db,
       logger: createTestLogger(),
-      getSlack: () => ({ listChannelMembers }),
+      getSlack: connectedSlack(listChannelMembers),
     });
 
     await reconciler.wake();
@@ -87,7 +92,7 @@ describe("SlackMembershipReconciler", () => {
     const reconciler = new SlackMembershipReconciler({
       db,
       logger: createTestLogger(),
-      getSlack: () => ({ listChannelMembers: async () => [] }),
+      getSlack: connectedSlack(async () => []),
     });
 
     await reconciler.wake();
@@ -119,7 +124,7 @@ describe("SlackMembershipReconciler", () => {
     const reconciler = new SlackMembershipReconciler({
       db,
       logger: createTestLogger(),
-      getSlack: () => ({ listChannelMembers }),
+      getSlack: connectedSlack(listChannelMembers),
     });
 
     const wake = reconciler.wake();
@@ -167,7 +172,7 @@ describe("SlackMembershipReconciler", () => {
     const reconciler = new SlackMembershipReconciler({
       db,
       logger: createTestLogger(),
-      getSlack: () => ({ listChannelMembers }),
+      getSlack: connectedSlack(listChannelMembers),
     });
 
     const wake = reconciler.wake();
@@ -209,7 +214,7 @@ describe("SlackMembershipReconciler", () => {
     const reconciler = new SlackMembershipReconciler({
       db,
       logger: createTestLogger(),
-      getSlack: () => ({ listChannelMembers }),
+      getSlack: connectedSlack(listChannelMembers),
     });
 
     const wake = reconciler.wake();
@@ -221,6 +226,126 @@ describe("SlackMembershipReconciler", () => {
     await expect(
       db.selectFrom("slack_channel_participants").selectAll().where("channel_id", "=", "C1").execute(),
     ).resolves.toEqual([]);
+  });
+
+  it("refreshes a targeted quiet channel without discovering unrelated channels", async () => {
+    const slack = { listChannelMembers: vi.fn(async () => ["UBOT", "U1", "U2"]), listChannels: vi.fn(async () => []) };
+    const reconciler = new SlackMembershipReconciler({ db, logger: createTestLogger(), getSlack: () => slack });
+    await reconciler.recordParticipantJoined("CQUIET", "UBOT");
+
+    await reconciler.refreshChannel("CQUIET");
+
+    expect(slack.listChannels).not.toHaveBeenCalled();
+    expect(slack.listChannelMembers).toHaveBeenCalledWith("CQUIET");
+    expect(
+      await db
+        .selectFrom("slack_channel_participants")
+        .select("slack_user_id")
+        .where("channel_id", "=", "CQUIET")
+        .orderBy("slack_user_id")
+        .execute(),
+    ).toEqual([{ slack_user_id: "U1" }, { slack_user_id: "U2" }, { slack_user_id: "UBOT" }]);
+    expect(await db.selectFrom("conversations").select("id").execute()).toEqual([]);
+  });
+
+  it("discovers joined channels without conversations and deduplicates known channels", async () => {
+    await createConversationRepository(db).getOrCreate({
+      platform: "slack",
+      kind: "channel",
+      providerConversationId: "CKNOWN",
+    });
+    const slack = {
+      listChannels: async () => [
+        { id: "CKNOWN", name: "known", type: "public_channel", isMember: true },
+        { id: "CQUIET", name: "quiet", type: "private_channel", isMember: true },
+        { id: "COTHER", name: "other", type: "public_channel", isMember: false },
+      ],
+      listChannelMembers: vi.fn(async () => ["U1"]),
+    };
+    const reconciler = new SlackMembershipReconciler({ db, logger: createTestLogger(), getSlack: () => slack });
+    await reconciler.wake();
+    expect(slack.listChannelMembers.mock.calls).toEqual([["CKNOWN"], ["CQUIET"]]);
+  });
+
+  it("refreshes known channels even when discovery fails", async () => {
+    await createConversationRepository(db).getOrCreate({
+      platform: "slack",
+      kind: "channel",
+      providerConversationId: "CKNOWN",
+    });
+    const slack = {
+      listChannels: vi.fn().mockRejectedValue(new Error("rate limited")),
+      listChannelMembers: vi.fn(async () => ["U1"]),
+    };
+    const reconciler = new SlackMembershipReconciler({ db, logger: createTestLogger(), getSlack: () => slack });
+    await reconciler.wake();
+    expect(slack.listChannelMembers).toHaveBeenCalledWith("CKNOWN");
+  });
+
+  it("retains targeted requests arriving during a refresh and coalesces queued duplicates", async () => {
+    const started = deferred();
+    const resume = deferred();
+    const slack = {
+      listChannels: vi.fn(async () => []),
+      listChannelMembers: vi.fn(async (id: string) => {
+        if (id === "C1") {
+          started.resolve();
+          await resume.promise;
+        }
+        return ["U1"];
+      }),
+    };
+    const reconciler = new SlackMembershipReconciler({ db, logger: createTestLogger(), getSlack: () => slack });
+    const first = reconciler.refreshChannel("C1");
+    await started.promise;
+    const second = reconciler.refreshChannel("C2");
+    const duplicate = reconciler.refreshChannel("C2");
+    resume.resolve();
+    await Promise.all([first, second, duplicate]);
+    expect(slack.listChannelMembers.mock.calls).toEqual([["C1"], ["C2"]]);
+  });
+
+  it("discards discovery and queued work from a disconnected client", async () => {
+    const started = deferred();
+    const resume = deferred();
+    const slack = {
+      listChannels: async () => {
+        started.resolve();
+        await resume.promise;
+        return [{ id: "COLD", name: "old", type: "private_channel", isMember: true }];
+      },
+      listChannelMembers: vi.fn(async () => ["UOLD"]),
+    };
+    const reconciler = new SlackMembershipReconciler({ db, logger: createTestLogger(), getSlack: () => slack });
+    const sweep = reconciler.wake();
+    await started.promise;
+    const queued = reconciler.refreshChannel("CQUEUED");
+    await reconciler.clearAllParticipants();
+    resume.resolve();
+    await Promise.all([sweep, queued]);
+    expect(slack.listChannelMembers).not.toHaveBeenCalled();
+    expect(await db.selectFrom("slack_channel_participants").selectAll().execute()).toEqual([]);
+  });
+
+  it("discards a roster when the Slack client changes during its fetch", async () => {
+    const started = deferred();
+    const resume = deferred();
+    const oldSlack = {
+      listChannels: async () => [],
+      listChannelMembers: async () => {
+        started.resolve();
+        await resume.promise;
+        return ["UOLD"];
+      },
+    };
+    let slack = oldSlack;
+    const reconciler = new SlackMembershipReconciler({ db, logger: createTestLogger(), getSlack: () => slack });
+    const refresh = reconciler.refreshChannel("C1");
+    await started.promise;
+    slack = { listChannels: async () => [], listChannelMembers: async () => ["UNEW"] };
+    resume.resolve();
+    await refresh;
+    expect(await db.selectFrom("slack_channel_participants").selectAll().execute()).toEqual([]);
   });
 
   it("does no work while Slack is disconnected", async () => {
