@@ -196,7 +196,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         { platform: "slack", kind: "channel", providerConversationId: "C1" },
         "general",
       );
-      const firstMessageAt = Date.now() - 60_000;
+      const recentMessageTime = Date.now() - 2 * 60_000;
       for (let index = 0; index < 2; index += 1) {
         await conversations.insertMessage({
           conversationId: conversation.id,
@@ -205,8 +205,8 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
           senderName: "Roopak",
           text: `Engine message ${index}`,
           providerThreadId: `engine-${index}`,
-          providerTimestamp: new Date(firstMessageAt + index * 60_000).toISOString(),
-          receivedAt: new Date(firstMessageAt + index * 60_000).toISOString(),
+          providerTimestamp: new Date(recentMessageTime + index * 60_000).toISOString(),
+          receivedAt: new Date(recentMessageTime + index * 60_000).toISOString(),
         });
       }
       let legacyJudgeCalls = 0;

@@ -440,3 +440,37 @@ describe("remove()", () => {
     await expect(users.remove("nonexistent-id")).resolves.not.toThrow();
   });
 });
+
+describe("legacy benchmark owner history", () => {
+  it("retains history without letting a retired run prevent user removal", async () => {
+    const user = await users.create({ name: "Legacy owner", skipEntityLinking: true });
+    await db
+      .insertInto("benchmark_enrollments")
+      .values({
+        id: "legacy-enrollment",
+        user_id: user.id,
+        account_id: "test-account",
+        config_json: "{}",
+        active_run_id: "legacy-run",
+      })
+      .execute();
+    await db
+      .insertInto("benchmark_runs")
+      .values({
+        id: "legacy-run",
+        enrollment_id: "legacy-enrollment",
+        status: "running",
+        document_json: "{}",
+        created_at: "2026-01-01T00:00:00.000Z",
+      })
+      .execute();
+    await users.remove(user.id);
+    expect(await users.findById(user.id)).toBeUndefined();
+    expect(
+      await db.selectFrom("benchmark_enrollments").selectAll().where("id", "=", "legacy-enrollment").executeTakeFirst(),
+    ).toMatchObject({ user_id: null });
+    expect(
+      await db.selectFrom("benchmark_runs").selectAll().where("id", "=", "legacy-run").executeTakeFirst(),
+    ).toMatchObject({ document_json: "{}" });
+  });
+});

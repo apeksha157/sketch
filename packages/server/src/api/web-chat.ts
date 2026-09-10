@@ -26,6 +26,7 @@ import {
 } from "@sketch/shared";
 import { Hono } from "hono";
 import type { Kysely } from "kysely";
+import { z } from "zod";
 import {
   builderWebChatRunKey,
   interruptActiveBuilderWebChatRun,
@@ -51,8 +52,6 @@ import {
   type AutomationTaskConversationLockSummary,
   createAutomationTaskConversationService,
 } from "../automation/task-conversations";
-import { benchmarkExecutionProvider } from "../benchmarks/execution-binding";
-import { benchmarkReadEvidence, benchmarkToolFailed } from "../benchmarks/tool-evidence";
 import { TOOL_PROGRESS_OPTIONS, type ToolProgressCommand } from "../commands";
 import type { Config } from "../config";
 import { createAutomationRunsRepository } from "../db/repositories/automation-runs";
@@ -88,6 +87,7 @@ import type { CurrentAutomation, ScheduledTask, TaskContext } from "../scheduler
 import type { SlackBot } from "../slack/bot";
 import { transcribeAudioFile } from "../transcription/service";
 import type { WhatsAppTemplateRequest } from "../whatsapp/templates";
+import { hasAutomationCreateIntent, hasAutomationUpdateIntent } from "./automation-intent";
 import { maintainBuilderRunLease } from "./builder-run-lease";
 import { type ActivityPart, WebChatActivity } from "./web-chat-activity";
 import { createActivityCatalog } from "./web-chat-activity-catalog";
@@ -191,7 +191,21 @@ const WEB_CHAT_INTERRUPTION_DATA = {
   label: "What should Sketch do differently?",
 } satisfies WebChatInterruptionData;
 
+const webChatUsageSchema = z.object({
+  turns: z.number().nonnegative(),
+  toolCalls: z.number().nonnegative(),
+  inputTokens: z.number().nonnegative(),
+  outputTokens: z.number().nonnegative(),
+  costUsd: z.number().nonnegative(),
+  auxCostUsd: z.number().nonnegative(),
+  totalCostUsd: z.number().nonnegative(),
+  stopReason: z.string().nullable(),
+  model: z.string().nullable(),
+});
+type WebChatUsagePart = { type: "data-usage"; id: string; data: z.infer<typeof webChatUsageSchema> };
+
 type WebChatTranscriptPart =
+  | WebChatUsagePart
   | { type: "text"; text: string }
   | { type: "data-file"; id: string; data: WebChatFile }
   | { type: "data-automation"; id: string; data: AutomationArtifact }
@@ -262,19 +276,7 @@ type AutomationBuilderContext = {
 } | null;
 
 type WebChatUiChunk =
-  | { type: "data-benchmark-tool"; data: { name: string; failed: boolean; at: string } }
-  | {
-      type: "data-benchmark-usage";
-      data: {
-        turns: number;
-        toolCalls: number;
-        inputTokens: number;
-        outputTokens: number;
-        costUsd: number;
-        stopReason: string | null;
-      };
-    }
-  | { type: "data-benchmark-read"; data: { taskIds: string[] } }
+  | WebChatUsagePart
   | { type: "start"; messageId: string; messageMetadata?: { createdAt: string } }
   | { type: "start-step" }
   | { type: "data-progress"; id: string; data: WebChatProgressData }
@@ -449,20 +451,6 @@ function hasSuccessfulCreateAutomationSkill(result: RunAgentResult): boolean {
   return (result.rawUsage?.toolCalls ?? []).some(
     (toolCall) => toolCall.skillName?.trim() === "create-automation" && toolCall.success === true,
   );
-}
-
-const AUTOMATION_CREATE_INTENT_PATTERN =
-  /\b(?:create|make|set up|set-up|build|add|start|write|design)\b[^.!?\n]{0,80}\b(?:a|an|another|new)\b[^.!?\n]{0,80}\b(?:automation|workflow|scheduled task|recurring task)\b|\b(?:want|need)\b[^.!?\n]{0,40}\b(?:a|an|new)\b[^.!?\n]{0,40}\b(?:automation|workflow|scheduled task)\b|\b(?:remind me to|set a reminder|create a reminder|make a reminder)\b/i;
-
-const AUTOMATION_UPDATE_INTENT_PATTERN =
-  /\b(?:update|edit|change|modify|adjust|fix|improve|remove|delete|pause|resume|stop|disable|enable|rename|alter)\b[^.!?\n]{0,180}\b(?:automation|workflow|scheduled task)\b|\badd\b[^.!?\n]{0,120}\b(?:my|our|the|this|that|their)\b[^.!?\n]{0,60}\b(?:automation|workflow|scheduled task)\b/i;
-
-function hasAutomationCreateIntent(message: string): boolean {
-  return AUTOMATION_CREATE_INTENT_PATTERN.test(message) && !AUTOMATION_UPDATE_INTENT_PATTERN.test(message);
-}
-
-function hasAutomationUpdateIntent(message: string): boolean {
-  return AUTOMATION_UPDATE_INTENT_PATTERN.test(message);
 }
 
 function normalizedAutomationReference(value: string): string {
@@ -1578,6 +1566,10 @@ async function migrateLegacyWebChatTranscripts(
 
 function sanitizeTranscriptPart(part: unknown): WebChatStoredPart | null {
   if (!isRecord(part)) return null;
+  if (part.type === "data-usage" && typeof part.id === "string") {
+    const parsed = webChatUsageSchema.safeParse(part.data);
+    return parsed.success ? { type: "data-usage", id: part.id, data: parsed.data } : null;
+  }
   if (part.type === "text" && typeof part.text === "string") {
     return { type: "text", text: part.text };
   }
@@ -2725,20 +2717,6 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
       return c.json(badRequest("VALIDATION_ERROR", "Conversation id is invalid"), 400);
     }
 
-    const benchmarkContext = deps.config.BENCHMARKS_ENABLED
-      ? await deps.db
-          .selectFrom("benchmark_contexts")
-          .select("run_id")
-          .where("conversation_id", "=", conversationId)
-          .executeTakeFirst()
-      : undefined;
-    const benchmarkProvider = await benchmarkExecutionProvider({
-      db: deps.db,
-      enabled: deps.config.BENCHMARKS_ENABLED,
-      userId: currentUser.id,
-      conversationId,
-      loadProvider: deps.loadIntegrationProvider ?? (async () => null),
-    });
     const settingsRow = await deps.settings.get();
     const workspaceDir = await ensureWorkspace(deps.config, currentUser.id);
     let questionAnswer: WebChatQuestionAnswer | WebChatQuestionBatchAnswer | undefined;
@@ -3050,7 +3028,9 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           return part ? [part] : [];
         });
       };
+      let usagePart: WebChatUsagePart | undefined;
       const completeActivityMessage = async (message: WebChatTranscriptMessage | null) => {
+        if (message && usagePart) message.parts.push(usagePart);
         const snapshot = activity.snapshot().length ? activitySnapshot() : [];
         const finalText = message?.parts
           .filter((part) => part.type === "text")
@@ -3478,15 +3458,6 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
               await publishActivity(activity.finish(event.toolCallId, event.status, event.endedAt));
             },
             onToolResult: async (event) => {
-              if (deps.config.BENCHMARKS_ENABLED && conversationId.startsWith("benchmark-")) {
-                const evidence = benchmarkReadEvidence(event);
-                if (evidence) write({ type: "data-benchmark-read", data: evidence });
-              }
-              if (benchmarkContext)
-                write({
-                  type: "data-benchmark-tool",
-                  data: { name: event.toolName, failed: benchmarkToolFailed(event), at: new Date().toISOString() },
-                });
               if (!activeBuilderContext) return;
               if (!event.isError) {
                 lastBuilderFailure = undefined;
@@ -3521,7 +3492,7 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             orgName: settingsRow?.org_name,
             botName: settingsRow?.bot_name,
             integrationMcpServers,
-            loadIntegrationProvider: benchmarkProvider,
+            loadIntegrationProvider: deps.loadIntegrationProvider,
             cliIntegrations: deps.cliIntegrations,
             agentEnv,
             scheduler: deps.scheduler,
@@ -3595,6 +3566,23 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
             Date.now(),
           ),
         );
+
+        usagePart = {
+          type: "data-usage",
+          id: `usage-${progressMessageId}`,
+          data: {
+            turns: result.rawUsage.numTurns,
+            toolCalls: result.rawUsage.toolCalls.length,
+            inputTokens: result.rawUsage.inputTokens,
+            outputTokens: result.rawUsage.outputTokens,
+            costUsd: result.costUsd,
+            auxCostUsd: result.auxCostUsd,
+            totalCostUsd: result.costUsd + result.auxCostUsd,
+            stopReason: builderStepLimitReached ? "step_limit" : result.rawUsage.stopReason,
+            model: result.rawUsage.model,
+          },
+        };
+        write(usagePart);
 
         if (automationBuilderContext && (abortController.signal.aborted || result.rawUsage.stopReason === "aborted")) {
           if (!abortController.signal.aborted) abortBuilderRun("agent_aborted");
@@ -3684,18 +3672,6 @@ export function webChatRoutes(deps: WebChatRouteDeps) {
           (fileParts.length === 0 && automationArtifacts.length === 0 && integrationCards.length === 0 && !questionPart
             ? EMPTY_WEB_CHAT_RESPONSE_TEXT
             : "");
-        if (benchmarkContext)
-          write({
-            type: "data-benchmark-usage",
-            data: {
-              turns: result.rawUsage.numTurns,
-              toolCalls: result.rawUsage.toolCalls.length,
-              inputTokens: result.rawUsage.inputTokens,
-              outputTokens: result.rawUsage.outputTokens,
-              costUsd: result.rawUsage.sdkCostUsd,
-              stopReason: result.rawUsage.stopReason,
-            },
-          });
         if (automationBuilderContext) {
           deps.logger.info(
             {

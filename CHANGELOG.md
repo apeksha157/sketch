@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.9] -- 2026-09-09
+
+- Refactors benchmark orchestration to be owned by Platform, removing Sketch's benchmark routes, setup UI, enrollment/runtime services, and execution-provider overrides while preserving historical database migrations and tables.
+- Fixes automation intent detection so negated requests like “Do not create an automation” no longer open a placeholder draft before the agent runs, ensuring only positive creation and update routing is triggered.
+- Keeps ordinary chat, automation builder, and integration connection paths intact as the interface for Platform to exercise backend conversations, skills, and provider behaviors.
+
+## [1.7.8] -- 2026-09-09
+
+- Adds budget-driven, recency-fair enrichment on its own 10-minute cadence, replacing the fixed 50-file-per-tick cap with a time-budgeted loop that drains batches newest-first (with periodic oldest-first fairness slices), roughly an order of magnitude more throughput on large tenants.
+- Fixes Zoho CRM long-scan failures by extending the token-refresh buffer to 30 minutes and retrying mid-run 401s with a single token refresh instead of failing the sync; eliminates spurious "reconnect required" errors.
+- Fixes Zoho incremental sync by formatting `If-Modified-Since` to second precision with numeric offset so Zoho actually honours the cursor, ending full-scan churn that caused 20-minute run times and enrichment backpressure.
+- Serialises Microsoft connector syncs (Outlook, Outlook Calendar, Teams) into one credential lane to prevent concurrent-token-refresh races that caused Teams to flap red every cycle.
+- Fixes WhatsApp emission floor not respecting `WHATSAPP_CHUNK_MIN_MESSAGES` env override when no per-group config existed, falling back to hard-coded 10 instead of the schema default.
+- Adds Slack to the Files page with a source chip, Browse-all row, and Manage dialog offering Sync now; channel-provisioned lifecycle guards hide Disconnect and Update credentials so Channels owns the connector lifecycle.
+- Completes managed ClickUp transport with deterministic actions, file attachments, scoped webhook slots with encrypted signature capture, and builder controls for recovering unused endpoints; migration 233 preserves callback history.
+- Fixes Outlook indexing the 255-character `bodyPreview` stub instead of the full HTML body; adds a one-shot cursor-gated re-pull so existing stubs get re-summarised and re-embedded without a manual backfill.
+- Makes LinkedIn conversations searchable with summaries on short segments, one result row per thread, and author/direction lines including inbound/outbound counts; migration 236 requeues rows whose summary was skipped.
+- Adds `sketch_get_file_content` batch mode accepting 1–20 `fileIds` in one call with per-file and shared total character caps, returning hidden files as `found: false` without failing the batch.
+- Adds `sketch_list_entities` MCP tool for list queries over entity touch stats with filters (type, status, last touch/inbound windows, awaiting reply) and sorts (last touch, last inbound, touches90d, hotness, name) with typed keyset paging; restricted principals get visibility-filtered rows with null aggregates.
+- Adds integration-aware benchmark workspace runtime that discovers a bounded sample of a selected ClickUp, GitHub, or Linear area, proposes starter cases, freezes reviewed batches for execution, and records evidence and cleanup results.
+- Prevents internal Sketch task IDs from leaking into automation test triggers by giving explicit Test runs a provider-neutral envelope instead of falling through to the production scheduler payload.
+- Allows self-messages on Slack and WhatsApp so users can send test messages to their own connected accounts; bot-echo filtering remains in place.
+- Restores benchmark suggestions for ClickUp, GitHub, and Linear by publishing a provider-facing case schema with all properties required, normalising back through the domain schema, and bounding OpenRouter reasoning for interactive design.
+
 ## [1.7.7] -- 2026-09-07
 
 - Extracts the WhatsApp LLM boundary chunker into a shared `connectors/chunk-engine.ts` engine behind a `ChunkStreamAdapter` interface so Slack (P1) can reuse the same window-loading, LLM-boundary bisect, claim-revalidation and idle-close logic without forking; WhatsApp behaviour is unchanged and existing call sites/tests are untouched.

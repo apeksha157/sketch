@@ -40,8 +40,6 @@ import { settingsRoutes } from "./api/settings";
 import { setupRoutes } from "./api/setup";
 import { skillsRoutes } from "./api/skills";
 import { verifyJwt } from "./auth/jwt";
-import { benchmarkRoutes } from "./benchmarks/routes";
-import { benchmarkSetupRoutes } from "./benchmarks/setup";
 import type { GeminiGenerator } from "./connectors/gemini-generate";
 import type { WeeklyMintService } from "./connectors/weekly-mint";
 import type { EnrichmentSweepService } from "./entities/enrichment-sweep";
@@ -648,10 +646,6 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
       }),
     );
   }
-  app.route(
-    "/api/benchmark-setup",
-    benchmarkSetupRoutes({ db, config, provider: deps?.loadIntegrationProvider ?? (async () => null) }),
-  );
   app.route("/api/mcp-servers", mcpServerRoutes(mcpServers, users));
   app.route("/api/workspace/summary", workspaceSummaryRoutes({ db, config, users, mcpServers }));
   if (deps?.agentRunService) {
@@ -768,16 +762,6 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
   }
 
   if (config.SYSTEM_SECRET) {
-    app.route(
-      "/api/system/benchmarks",
-      benchmarkRoutes({
-        db,
-        config,
-        provider: deps?.loadIntegrationProvider ?? (async () => null),
-        request: async (path, init) => app.request(path, init),
-        executionAvailable: Boolean(deps?.runAgent && deps?.scheduler),
-      }),
-    );
     const onSlackTokensUpdated = deps?.onSlackTokensUpdated;
     const onLlmSettingsUpdated = deps?.onLlmSettingsUpdated;
     const whatsapp = deps?.whatsapp;
