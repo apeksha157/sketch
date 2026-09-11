@@ -175,7 +175,7 @@ export class SlackBackfillWorker {
     return this.createRange(
       {
         channelId,
-        channelName: await this.findChannelName(channelId),
+        channelName: isInitial ? await this.findChannelName(channelId) : undefined,
         kind: isInitial ? "initial" : "gap",
         rangeKey: isInitial ? "initial" : `gap:${window.upperTs}`,
       },
@@ -219,9 +219,18 @@ export class SlackBackfillWorker {
     };
   }
 
+  /**
+   * Best-effort: a failed lookup must never cost the join its range, since
+   * once live rows land startup reconciliation no longer covers the channel.
+   * An unnamed conversation is named by the next ACL pass.
+   */
   private async findChannelName(channelId: string): Promise<string | undefined> {
-    for await (const channel of this.options.facade.iterateChannels()) {
-      if (channel.id === channelId) return channel.name;
+    try {
+      for await (const channel of this.options.facade.iterateChannels()) {
+        if (channel.id === channelId) return channel.name;
+      }
+    } catch (error) {
+      this.options.logger.warn({ error, channelId }, "Slack channel name lookup failed");
     }
     return undefined;
   }

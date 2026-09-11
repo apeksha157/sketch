@@ -412,6 +412,28 @@ describe("Slack history backfill worker", () => {
     ]);
   });
 
+  it("still creates the join range when the channel name lookup fails", async () => {
+    const slack = createFakeSlack({ historyPages: [] });
+    const facade = {
+      ...slack.facade,
+      iterateChannels: async function* () {
+        yield* [];
+        throw new Error("slack_unavailable");
+      },
+    } as unknown as SlackIndexingFacade;
+    const worker = createWorker(db, facade);
+
+    const range = await worker.handleBotJoinedChannel(CHANNEL);
+
+    expect(range?.kind).toEqual("initial");
+    const conversation = await db
+      .selectFrom("conversations")
+      .select("display_name")
+      .where("provider_conversation_id", "=", CHANNEL)
+      .executeTakeFirstOrThrow();
+    expect(conversation.display_name).toBeNull();
+  });
+
   it("requests a Slack sync once a joined channel's range is fetched, at most once per interval", async () => {
     let nowMs = NOW_MS;
     let syncRequests = 0;
