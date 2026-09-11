@@ -297,6 +297,23 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>): void {
       expect(cut[1]).toMatchObject({ status: "open", message_count: 2, started_at: "2026-08-21T10:00:00.000Z" });
     });
 
+    it("closes a re-ingested tail against its send time, not the time it was ingested", async () => {
+      const conversationId = await ingest(
+        [
+          outbound("m-1", "2021-03-01T09:00:00.000Z", "Opening note from years ago"),
+          inbound("m-2", "2021-03-01T09:30:00.000Z", "Not right now, thanks"),
+        ],
+        "history",
+        "2026-09-01T10:00:00.000Z",
+      );
+
+      await runEngine(conversationId, "2026-09-01T10:05:00.000Z");
+
+      const cut = await slices(conversationId);
+      expect(cut).toHaveLength(1);
+      expect(cut[0]).toMatchObject({ status: "closed", flush_reason: "gap" });
+    });
+
     it("holds the 72-hour wall inside one production-sized backfill window", async () => {
       const conversationId = await ingest(
         [

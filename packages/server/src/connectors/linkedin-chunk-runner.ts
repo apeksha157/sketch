@@ -16,6 +16,7 @@ import {
   LINKEDIN_CHUNK_STREAM_KEY,
   type LinkedinChunkRosterSnapshot,
   createLinkedinChunkAdapter,
+  loadPendingLinkedinHistory,
 } from "./linkedin-chunk-adapter";
 import { LINKEDIN_CONVERSATION_KIND, LINKEDIN_CONVERSATION_PLATFORM } from "./linkedin-ingest";
 
@@ -51,6 +52,48 @@ export function linkedinIdleCloseCandidatesQuery(db: Kysely<DB>, idleBefore: str
 }
 
 /**
+ * Conversations whose history backlog the chunk stream has not consumed, oldest
+ * row id first. The set-level twin of `linkedinIdleCloseCandidatesQuery`: both
+ * name work the provider listing cannot, because a conversation drops out of
+ * the listing as soon as the watermark passes its last activity.
+ *
+ * It finds the work only. `loadPendingLinkedinHistory` stays the one definition
+ * of what is still pending for a conversation — the sweep hands each candidate
+ * to the same runner the listing uses, and that is where the predicate bounds
+ * and drains the next window.
+ */
+export function linkedinPendingHistoryCandidatesQuery(db: Kysely<DB>, limit: number) {
+  return db
+    .selectFrom("conversations")
+    .select("conversations.id as conversation_id")
+    .where("conversations.platform", "=", LINKEDIN_CONVERSATION_PLATFORM)
+    .where("conversations.kind", "=", LINKEDIN_CONVERSATION_KIND)
+    .where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom("conversation_messages")
+          .leftJoin("conversation_slice_stream_cursors", (join) =>
+            join
+              .onRef("conversation_slice_stream_cursors.conversation_id", "=", "conversation_messages.conversation_id")
+              .on("conversation_slice_stream_cursors.stream_key", "=", LINKEDIN_CHUNK_STREAM_KEY),
+          )
+          .select("conversation_messages.id")
+          .whereRef("conversation_messages.conversation_id", "=", "conversations.id")
+          .where("conversation_messages.source", "=", "history")
+          .where("conversation_messages.effective_at", "is not", null)
+          .where((inner) =>
+            inner.or([
+              inner("conversation_slice_stream_cursors.last_message_id", "is", null),
+              inner("conversation_messages.id", ">", inner.ref("conversation_slice_stream_cursors.last_message_id")),
+            ]),
+          ),
+      ),
+    )
+    .orderBy("conversations.id")
+    .limit(limit);
+}
+
+/**
  * How far the next backfill window may reach: the pending history rows ahead of
  * the stream cursor, cut at the first silence of `idleCloseHours` or more.
  *
@@ -72,20 +115,13 @@ export function linkedinIdleCloseCandidatesQuery(db: Kysely<DB>, idleBefore: str
 async function pendingHistoryBound(
   db: Kysely<DB>,
   conversationId: number,
-  lastMessageId: number | null,
   knobs: ChunkEngineKnobs,
 ): Promise<ChunkPendingBound | undefined> {
-  let query = db
-    .selectFrom("conversation_messages")
-    .select(["id", "effective_at"])
-    .where("conversation_id", "=", conversationId)
-    .where("source", "=", "history")
-    .where("effective_at", "is not", null);
-  if (lastMessageId !== null) query = query.where("id", ">", lastMessageId);
-  const rows = await query
-    .orderBy("id", "asc")
-    .limit(knobs.windowMessages + LINKEDIN_CHUNK_LOAD_MARGIN)
-    .execute();
+  const { rows } = await loadPendingLinkedinHistory(
+    db,
+    conversationId,
+    knobs.windowMessages + LINKEDIN_CHUNK_LOAD_MARGIN,
+  );
   const idleMs = knobs.idleCloseHours * 60 * 60 * 1000;
   let bound: ChunkPendingBound | undefined;
   for (const row of rows) {
@@ -140,13 +176,7 @@ export async function runLinkedinChunkConversation(
    * That is the WhatsApp page order without its backfill-graph bookkeeping.
    */
   for (;;) {
-    const cursor = await repo.getStreamCursor(options.conversationId, LINKEDIN_CHUNK_STREAM_KEY);
-    const bound = await pendingHistoryBound(
-      options.db,
-      options.conversationId,
-      cursor?.last_message_id ?? null,
-      options.knobs,
-    );
+    const bound = await pendingHistoryBound(options.db, options.conversationId, options.knobs);
     if (!bound) break;
     if (!options.generate) {
       skippedReason = "no_generator";

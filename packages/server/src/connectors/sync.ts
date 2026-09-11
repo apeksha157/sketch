@@ -448,6 +448,7 @@ export async function runConnectorSync(
       salienceGenerator,
       whatsappChunkerGenerate: chunkGenerate,
       slackChunkerGenerate: chunkGenerate,
+      linkedinChunkerGenerate: chunkGenerate,
       slackIndexing: options.slackIndexingFacade ?? null,
       appConfig: {
         SLACK_ENTITY_SYNC: appConfig?.SLACK_ENTITY_SYNC,

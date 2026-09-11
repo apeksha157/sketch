@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import type { Config } from "../config";
-import type { ConversationSliceRow } from "../db/repositories/conversation-slices";
+import { type ConversationSliceRow, createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { DB } from "../db/schema";
 import {
   type ChunkCursorState,
@@ -131,13 +131,60 @@ async function loadPending(
   return rows.map((row) => toNamedChunkEngineMessage(row));
 }
 
+/**
+ * Idle-close is the only reader, and in live mode it measures the tail against
+ * the wall clock. A re-ingested history row carries the receipt time of the
+ * ingest, not of the message, so reading `received_at` literally would hold
+ * every re-chunked conversation's last slice open for the whole idle window;
+ * for those rows the effective time is the only honest receipt time.
+ */
 async function tailMessage(db: Kysely<DB>, id: number): Promise<ChunkEngineMessage | undefined> {
   const row = await db
     .selectFrom("conversation_messages")
-    .select(CHUNK_MESSAGE_COLUMNS)
+    .select([...CHUNK_MESSAGE_COLUMNS, "source"])
     .where("id", "=", id)
     .executeTakeFirst();
-  return row ? toNamedChunkEngineMessage(row) : undefined;
+  if (!row) return undefined;
+  const message = toNamedChunkEngineMessage(row);
+  return row.source === "history" ? { ...message, receivedAt: message.effectiveAt } : message;
+}
+
+export interface LinkedinPendingHistoryRow {
+  id: number;
+  effective_at: string | null;
+}
+
+export interface LinkedinPendingHistory {
+  /** False until the engine has chunked this conversation at least once. */
+  chunked: boolean;
+  rows: LinkedinPendingHistoryRow[];
+}
+
+/**
+ * The conversation's history rows the chunk stream cursor has not consumed yet,
+ * oldest first. One definition with three readers: the runner bounds its next
+ * backfill window inside them, the emitter holds a conversation's slices back
+ * while any remain so a half-cut generation never reaches the timeline beside
+ * the legacy one, and the ingest keeps writing `history` until the backlog has
+ * drained.
+ */
+export async function loadPendingLinkedinHistory(
+  db: Kysely<DB>,
+  conversationId: number,
+  limit: number,
+): Promise<LinkedinPendingHistory> {
+  const cursor = await createConversationSlicesRepository(db).getStreamCursor(
+    conversationId,
+    LINKEDIN_CHUNK_STREAM_KEY,
+  );
+  let query = db
+    .selectFrom("conversation_messages")
+    .select(["id", "effective_at"])
+    .where("conversation_id", "=", conversationId)
+    .where("source", "=", "history")
+    .where("effective_at", "is not", null);
+  if (cursor?.last_message_id != null) query = query.where("id", ">", cursor.last_message_id);
+  return { chunked: cursor !== undefined, rows: await query.orderBy("id", "asc").limit(limit).execute() };
 }
 
 /**

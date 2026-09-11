@@ -78,7 +78,7 @@ describe("LinkedIn chunk adapter", () => {
   it("resolves knobs from the LINKEDIN_CHUNK prefix", () => {
     const defaults = resolveLinkedinChunkEngineKnobs(undefined);
     expect(defaults.minMessages).toBe(2);
-    expect(defaults.idleCloseHours).toBe(72);
+    expect(defaults.idleCloseHours).toBe(720);
     expect(defaults.provisionalRefreshMessages).toBe(5);
 
     const overridden = resolveLinkedinChunkEngineKnobs(

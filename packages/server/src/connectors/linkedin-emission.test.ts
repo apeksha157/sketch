@@ -69,7 +69,7 @@ describe("LinkedIn slice emission", () => {
       conversationUrn: CONVERSATION_URN,
       leadName: roster.leadName,
       messages,
-      source: "history",
+      source: "live",
       receivedAt: "2026-09-11T10:00:00.000Z",
     });
     const rows = await db

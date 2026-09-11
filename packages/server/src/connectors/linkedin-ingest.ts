@@ -13,6 +13,18 @@ export function linkedinProviderConversationId(accountId: string, conversationUr
   return `${accountId}:${conversationUrn}`;
 }
 
+/** The inverse. Only the first separator splits: a conversation urn contains colons of its own. */
+export function parseLinkedinProviderConversationId(
+  providerConversationId: string,
+): { accountId: string; conversationUrn: string } | null {
+  const separator = providerConversationId.indexOf(":");
+  if (separator <= 0 || separator === providerConversationId.length - 1) return null;
+  return {
+    accountId: providerConversationId.slice(0, separator),
+    conversationUrn: providerConversationId.slice(separator + 1),
+  };
+}
+
 export interface LinkedinIngestParams {
   db: Kysely<DB>;
   accountId: string;
@@ -22,7 +34,7 @@ export interface LinkedinIngestParams {
   /**
    * `history` for every row of a conversation's first ingest, whichever Aimfox
    * pass delivered it, so the whole backlog is chunked in backfill mode; `live`
-   * only once that conversation has moved onto the engine.
+   * only once the engine has caught up with that conversation.
    */
   source: "history" | "live";
   receivedAt?: string;

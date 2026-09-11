@@ -64,7 +64,7 @@ export type LinkedinChunkAppConfig = Pick<
   | "LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP"
   | "LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN"
   | "LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL"
-  | "LINKEDIN_CHUNK_CUTOVER_CONVERSATIONS_PER_RUN"
+  | "LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN"
 >;
 
 /**
@@ -90,7 +90,7 @@ export const LINKEDIN_CHUNK_APP_CONFIG_KEYS = Object.keys({
   LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP: true,
   LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN: true,
   LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL: true,
-  LINKEDIN_CHUNK_CUTOVER_CONVERSATIONS_PER_RUN: true,
+  LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN: true,
 } satisfies Record<keyof LinkedinChunkAppConfig, true>) as (keyof LinkedinChunkAppConfig)[];
 
 export const CONNECTOR_TYPES = [
@@ -682,6 +682,7 @@ export interface Connector {
       },
     ) => Promise<string>;
     slackChunkerGenerate?: ChunkGenerate;
+    linkedinChunkerGenerate?: ChunkGenerate;
     /**
      * Narrow Slack API facade injected from bootstrap for the slack-indexing
      * connector (rosters, member channels, user emails). Other connectors

@@ -19,7 +19,7 @@ import {
   segmentDirectionStats,
   segmentFileName,
 } from "./linkedin-aimfox";
-import { parseLinkedinChunkRosterSnapshot } from "./linkedin-chunk-adapter";
+import { loadPendingLinkedinHistory, parseLinkedinChunkRosterSnapshot } from "./linkedin-chunk-adapter";
 import { LINKEDIN_CONVERSATION_KIND, LINKEDIN_CONVERSATION_PLATFORM } from "./linkedin-ingest";
 import { type SliceKeysetCursor, sliceKeysetAfter, stableContentHash } from "./sync-utils";
 import type { SyncedItem } from "./types";
@@ -86,9 +86,30 @@ export interface EmitLinkedinSyncedItemsOptions {
    * later, and the stale-anchor sweep cannot see a slice that has no file.
    */
   minMessages?: number;
+  /**
+   * Aimfox accounts whose conversations this run owns, matched against the
+   * `${accountId}:${conversationUrn}` provider id. The page query stays
+   * unfiltered and the prefix is applied in code: a `LIKE` would need
+   * dialect-specific escaping for an account id containing a wildcard, and the
+   * slice pages are small. Omit to emit every LinkedIn conversation.
+   */
+  accountIds?: string[];
   emissionRefreshDays?: number;
   now?: Date;
-  onSkipReason?: (reason: LinkedinEmissionSkipReason) => void;
+  /**
+   * Carries the slice's conversation as well as the reason: a caller that
+   * archives one generation against the other has to know which conversation
+   * came out of the emitter short.
+   */
+  onSkipReason?: (reason: LinkedinEmissionSkipReason, providerConversationId: string) => void;
+  /**
+   * Every conversation whose kept slices this emission actually looked at,
+   * whether or not any of them yielded an item. A caller that archives one
+   * generation against the other has to gate on visits rather than on yields:
+   * a conversation whose slices are all published already yields nothing, and
+   * gating on yields would strand it if its archive were ever lost.
+   */
+  onVisitedConversation?: (providerConversationId: string) => void;
   onPageListedSliceCount?: (count: number) => void;
 }
 
@@ -328,6 +349,28 @@ async function syncedItemForKeptSlice(
   };
 }
 
+function ownedByAccounts(providerConversationId: string, accountIds: string[] | undefined): boolean {
+  if (!accountIds) return true;
+  return accountIds.some((accountId) => providerConversationId.startsWith(`${accountId}:`));
+}
+
+/**
+ * Holds a conversation's whole generation back until its history backlog has
+ * been chunked (D12). Publishing the prefix the engine has cut so far would put
+ * it on the timeline beside the legacy generation that still covers the thread
+ * in full, which is the doubling the cutover exists to avoid.
+ *
+ * Memoised per emission: the engine has already stopped for this run, so the
+ * answer cannot change while the pages are walked.
+ */
+async function historyPending(db: Kysely<DB>, conversationId: number, memo: Map<number, boolean>): Promise<boolean> {
+  const known = memo.get(conversationId);
+  if (known !== undefined) return known;
+  const pending = (await loadPendingLinkedinHistory(db, conversationId, 1)).rows.length > 0;
+  memo.set(conversationId, pending);
+  return pending;
+}
+
 /**
  * One `SyncedItem` per kept LinkedIn conversation slice, paged by a
  * (started_at, id) keyset so a long history never loads at once.
@@ -338,6 +381,7 @@ export async function* emitLinkedinSyncedItems(options: EmitLinkedinSyncedItemsO
     now.getTime() - normalizeEmissionRefreshDays(options.emissionRefreshDays) * DAY_MS,
   ).toISOString();
   let cursor: SliceKeysetCursor | null = null;
+  const pendingHistoryMemo = new Map<number, boolean>();
   for (;;) {
     const page = await listSliceContextPage(options.db, refreshCutoff, cursor, LINKEDIN_EMISSION_PAGE_SIZE);
     options.onPageListedSliceCount?.(page.length);
@@ -345,8 +389,11 @@ export async function* emitLinkedinSyncedItems(options: EmitLinkedinSyncedItemsO
     if (!last) break;
     cursor = { timestamp: last.slice.started_at, id: last.slice.id };
     for (const context of page) {
+      if (!ownedByAccounts(context.providerConversationId, options.accountIds)) continue;
+      if (await historyPending(options.db, context.conversationId, pendingHistoryMemo)) continue;
+      options.onVisitedConversation?.(context.providerConversationId);
       const { item, skipReason } = await syncedItemForKeptSlice(options.db, context, options, now);
-      if (skipReason) options.onSkipReason?.(skipReason);
+      if (skipReason) options.onSkipReason?.(skipReason, context.providerConversationId);
       if (item) yield item;
     }
     if (page.length < LINKEDIN_EMISSION_PAGE_SIZE) break;

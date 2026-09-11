@@ -93,7 +93,7 @@ describe("configSchema", () => {
         expect(result.data.LINKEDIN_CHUNK_MAX_MESSAGES).toBe(50);
         expect(result.data.LINKEDIN_CHUNK_MAX_TOKENS).toBe(4000);
         expect(result.data.LINKEDIN_CHUNK_TICK_MINUTES).toBe(30);
-        expect(result.data.LINKEDIN_CHUNK_IDLE_CLOSE_HOURS).toBe(72);
+        expect(result.data.LINKEDIN_CHUNK_IDLE_CLOSE_HOURS).toBe(720);
         expect(result.data.LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MESSAGES).toBe(5);
         expect(result.data.LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES).toBe(60);
         expect(result.data.LINKEDIN_CHUNK_MODEL).toBeNull();
@@ -102,7 +102,7 @@ describe("configSchema", () => {
         expect(result.data.LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP).toBe(30);
         expect(result.data.LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN).toBe(4);
         expect(result.data.LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL).toBe(4);
-        expect(result.data.LINKEDIN_CHUNK_CUTOVER_CONVERSATIONS_PER_RUN).toBe(50);
+        expect(result.data.LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN).toBe(50);
         expect(result.data.WHATSAPP_EMISSION_REFRESH_DAYS).toBe(7);
         expect(result.data.WHATSAPP_BACKFILL_GRAPH_PAGE_MESSAGES).toBe(500);
         expect(result.data.WHATSAPP_BACKFILL_GRAPH_PAGE_TOKENS).toBe(20_000);

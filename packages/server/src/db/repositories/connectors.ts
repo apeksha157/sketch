@@ -430,6 +430,49 @@ const browseVisibilityPredicate = sql<boolean>`(
   )
 )`;
 
+/**
+ * The live files of the given threads whose provider file id matches a
+ * generation pattern. Selection is by column only (no JSON predicate), so it
+ * behaves identically on SQLite and Postgres; callers add their own projection.
+ */
+function liveThreadFilesByProviderFileIdPattern(
+  db: Kysely<DB>,
+  input: { connectorConfigId: string; fileType: string; threadIds: string[]; providerFileIdPattern: string },
+) {
+  return db
+    .selectFrom("indexed_files")
+    .where("connector_config_id", "=", input.connectorConfigId)
+    .where("file_type", "=", input.fileType)
+    .where("thread_id", "in", input.threadIds)
+    .where("provider_file_id", "like", input.providerFileIdPattern)
+    .where("is_archived", "=", 0);
+}
+
+/**
+ * Archives indexed files and severs everything keyed to them: the per-file
+ * grants, the access scope and any conversation-slice link. Clearing the slice
+ * link is what lets a later re-emission relink cleanly — and, because
+ * `loadExistingContentHashes` skips archived rows, what makes an archive
+ * reversible by simply emitting the file again.
+ */
+async function archiveIndexedFileIds(db: Kysely<DB>, fileIds: string[]): Promise<number> {
+  if (fileIds.length === 0) return 0;
+  await forEachChunk(fileIds, async (batch) => {
+    await db.deleteFrom("file_access").where("indexed_file_id", "in", batch).execute();
+    await db
+      .updateTable("conversation_slices")
+      .set({ indexed_file_id: null })
+      .where("indexed_file_id", "in", batch)
+      .execute();
+    await db
+      .updateTable("indexed_files")
+      .set({ is_archived: 1, access_scope_id: null })
+      .where("id", "in", batch)
+      .execute();
+  });
+  return fileIds.length;
+}
+
 export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string) {
   return {
     /** List all connector configs. */
@@ -955,21 +998,108 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
         .select(["id"])
         .where("access_scope_id", "in", scopeIds)
         .execute();
-      const fileIds = files.map((file) => file.id);
-      if (fileIds.length === 0) return 0;
+      return archiveIndexedFileIds(
+        db,
+        files.map((file) => file.id),
+      );
+    },
 
-      await db.deleteFrom("file_access").where("indexed_file_id", "in", fileIds).execute();
-      await db
-        .updateTable("conversation_slices")
-        .set({ indexed_file_id: null })
-        .where("indexed_file_id", "in", fileIds)
+    /**
+     * Archives one conversation thread's files whose provider file id matches a
+     * pattern — the generation marker for connectors that ran an id-shaped
+     * indexer before moving onto the chunk engine.
+     */
+    async archiveThreadFilesByProviderFileIdPattern(input: {
+      connectorConfigId: string;
+      fileType: string;
+      threadId: string;
+      providerFileIdPattern: string;
+    }): Promise<number> {
+      const files = await liveThreadFilesByProviderFileIdPattern(db, { ...input, threadIds: [input.threadId] })
+        .select("id")
         .execute();
-      await db
-        .updateTable("indexed_files")
-        .set({ is_archived: 1, access_scope_id: null })
-        .where("id", "in", fileIds)
+      return archiveIndexedFileIds(
+        db,
+        files.map((file) => file.id),
+      );
+    },
+
+    /**
+     * Which of the given threads still hold live files matching the pattern.
+     * The LinkedIn cutover routes on it: a conversation the chunk engine has no
+     * row for belongs to the engine unless its pre-engine files are still on
+     * the timeline, and one batched call answers that for a whole listing.
+     */
+    async listThreadsWithLiveFilesByProviderFileIdPattern(input: {
+      connectorConfigId: string;
+      fileType: string;
+      threadIds: string[];
+      providerFileIdPattern: string;
+    }): Promise<Set<string>> {
+      if (input.threadIds.length === 0) return new Set();
+      const found = new Set<string>();
+      await forEachChunk([...new Set(input.threadIds)], async (batch) => {
+        const rows = await liveThreadFilesByProviderFileIdPattern(db, { ...input, threadIds: batch })
+          .select("thread_id")
+          .distinct()
+          .execute();
+        for (const row of rows) if (row.thread_id !== null) found.add(row.thread_id);
+      });
+      return found;
+    },
+
+    /**
+     * Archives the chunk-engine files of one conversation, found by joining the
+     * slice id a conversation-slice file is keyed by. The join replaces a
+     * pattern match because slice ids are uuids with no connector prefix.
+     */
+    async archiveConversationSliceFiles(input: {
+      connectorConfigId: string;
+      fileType: string;
+      conversationId: number;
+    }): Promise<number> {
+      const files = await db
+        .selectFrom("indexed_files")
+        .innerJoin("conversation_slices", "conversation_slices.id", "indexed_files.provider_file_id")
+        .select("indexed_files.id")
+        .where("indexed_files.connector_config_id", "=", input.connectorConfigId)
+        .where("indexed_files.file_type", "=", input.fileType)
+        .where("indexed_files.is_archived", "=", 0)
+        .where("conversation_slices.conversation_id", "=", input.conversationId)
         .execute();
-      return fileIds.length;
+      return archiveIndexedFileIds(
+        db,
+        files.map((file) => file.id),
+      );
+    },
+
+    /**
+     * Which of the given conversations already have a live chunk-engine file.
+     * Both cutover directions gate on it: the legacy generation is only
+     * archived once the engine generation is actually on the timeline, and the
+     * reverse only once there is something to roll back.
+     */
+    async listConversationsWithLiveSliceFiles(input: {
+      connectorConfigId: string;
+      fileType: string;
+      conversationIds: number[];
+    }): Promise<Set<number>> {
+      if (input.conversationIds.length === 0) return new Set();
+      const found = new Set<number>();
+      await forEachChunk([...new Set(input.conversationIds)], async (batch) => {
+        const rows = await db
+          .selectFrom("indexed_files")
+          .innerJoin("conversation_slices", "conversation_slices.id", "indexed_files.provider_file_id")
+          .select("conversation_slices.conversation_id")
+          .distinct()
+          .where("indexed_files.connector_config_id", "=", input.connectorConfigId)
+          .where("indexed_files.file_type", "=", input.fileType)
+          .where("indexed_files.is_archived", "=", 0)
+          .where("conversation_slices.conversation_id", "in", batch)
+          .execute();
+        for (const row of rows) found.add(row.conversation_id);
+      });
+      return found;
     },
 
     /**

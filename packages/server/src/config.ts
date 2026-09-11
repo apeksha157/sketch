@@ -233,7 +233,7 @@ export const configSchema = z.object({
   LINKEDIN_CHUNK_MAX_MESSAGES: z.coerce.number().int().min(1).default(50),
   LINKEDIN_CHUNK_MAX_TOKENS: z.coerce.number().int().min(1).default(4000),
   LINKEDIN_CHUNK_TICK_MINUTES: z.coerce.number().int().min(1).default(30),
-  LINKEDIN_CHUNK_IDLE_CLOSE_HOURS: z.coerce.number().int().min(1).default(72),
+  LINKEDIN_CHUNK_IDLE_CLOSE_HOURS: z.coerce.number().int().min(1).default(720),
   LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MESSAGES: z.coerce.number().int().min(1).default(5),
   LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: z.coerce.number().int().min(1).default(60),
   LINKEDIN_CHUNK_MODEL: z.preprocess(
@@ -248,7 +248,7 @@ export const configSchema = z.object({
   LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP: z.coerce.number().int().min(1).default(30),
   LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN: z.coerce.number().int().min(1).default(4),
   LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL: z.coerce.number().int().min(1).default(4),
-  LINKEDIN_CHUNK_CUTOVER_CONVERSATIONS_PER_RUN: z.coerce.number().int().min(1).default(50),
+  LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN: z.coerce.number().int().min(1).default(50),
   SLACK_DISCOVERY_PAGE_ROWS: z.coerce.number().int().min(1).default(5000),
   SLACK_DISCOVERY_MAX_PAGES: z.coerce.number().int().min(1).default(20),
   SLACK_EMISSION_LEGACY_PER_RUN: z.coerce.number().int().min(1).max(2000).default(200),
