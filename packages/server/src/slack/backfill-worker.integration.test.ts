@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createConversationRepository } from "../db/repositories/conversations";
 import { createSlackBackfillRangeRepository } from "../db/repositories/slack-backfill-ranges";
 import type { DB } from "../db/schema";
+import type { Logger } from "../logger";
 import { createTestDb, createTestLogger } from "../test-utils";
 import { SlackBackfillWorker, slackTsFromMs } from "./backfill-worker";
 import type { SlackHistoryMessage, SlackIndexingFacade, SlackIndexingPage } from "./indexing-facade";
@@ -82,13 +83,18 @@ function createFakeSlack(input: {
   return { facade, historyCalls, replyCalls };
 }
 
-function createWorker(db: Kysely<DB>, facade: SlackIndexingFacade): SlackBackfillWorker {
+function createWorker(
+  db: Kysely<DB>,
+  facade: SlackIndexingFacade,
+  overrides: { getBotUserId?: () => string | null; logger?: Logger } = {},
+): SlackBackfillWorker {
   return new SlackBackfillWorker({
     db,
-    logger: createTestLogger(),
+    logger: overrides.logger ?? createTestLogger(),
     facade,
     now: () => NOW_MS,
     tickMs: 1_000_000,
+    ...(overrides.getBotUserId ? { getBotUserId: overrides.getBotUserId } : {}),
   });
 }
 
@@ -257,6 +263,76 @@ describe("Slack history backfill worker", () => {
         lower_ts: slackTsFromMs(NOW_MS - 365 * 24 * 60 * 60_000),
       },
     ]);
+  });
+
+  it("waits for the Slack bot user id before stepping a range, then maps Sketch's own post to the bot identity", async () => {
+    const botUserId = "UBOT";
+    let currentBotUserId: string | null = null;
+    const slack = createFakeSlack({
+      historyPages: [
+        {
+          items: [historyMessage({ ts: tsDaysAgo(3), userId: botUserId, text: "Sketch said this" })],
+          nextCursor: null,
+        },
+      ],
+    });
+    const worker = createWorker(db, slack.facade, { getBotUserId: () => currentBotUserId });
+    worker.start();
+    await worker.reconcile();
+    await worker.kick();
+
+    const deferred = await db.selectFrom("slack_backfill_ranges").selectAll().executeTakeFirstOrThrow();
+    expect(deferred.phase).toEqual("pending");
+    expect(slack.historyCalls).toEqual([]);
+    expect(await db.selectFrom("conversation_messages").selectAll().execute()).toEqual([]);
+
+    currentBotUserId = botUserId;
+    await worker.kick();
+    await worker.stop();
+
+    const rows = await db.selectFrom("conversation_messages").select(["sender_jid", "is_bot"]).execute();
+    expect(rows).toEqual([{ sender_jid: "bot", is_bot: 1 }]);
+  });
+
+  it("treats a history thread parent as a channel row, not a reply", async () => {
+    const parent = tsDaysAgo(6);
+    const slack = createFakeSlack({
+      historyPages: [{ items: [historyMessage({ ts: parent, threadTs: parent, replyCount: 0 })], nextCursor: null }],
+    });
+    const worker = createWorker(db, slack.facade);
+    worker.start();
+    await worker.reconcile();
+    await worker.kick();
+    await worker.stop();
+
+    const rows = await db
+      .selectFrom("conversation_messages")
+      .select(["provider_message_id", "is_thread_reply", "provider_thread_id"])
+      .execute();
+    expect(rows).toEqual([{ provider_message_id: parent, is_thread_reply: 0, provider_thread_id: parent }]);
+  });
+
+  it("warns with no content when the indexing facade cannot page channel history", async () => {
+    const warnings: Array<Record<string, unknown>> = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (payload: Record<string, unknown>) => warnings.push(payload),
+      error: () => {},
+    } as unknown as Logger;
+    const slack = createFakeSlack({ historyPages: [] });
+    const facade = { ...slack.facade, listChannelHistoryPage: undefined } as unknown as SlackIndexingFacade;
+    const worker = createWorker(db, facade, { logger });
+    worker.start();
+    await worker.reconcile();
+    await worker.kick();
+    await worker.stop();
+
+    const range = await db.selectFrom("slack_backfill_ranges").selectAll().executeTakeFirstOrThrow();
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(
+      warnings.every((entry) => JSON.stringify(entry) === JSON.stringify({ rangeId: range.id, channelId: CHANNEL })),
+    ).toBe(true);
   });
 
   it("queues a manual range per member channel and skips channels with a running range", async () => {

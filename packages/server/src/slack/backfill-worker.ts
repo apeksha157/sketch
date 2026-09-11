@@ -233,7 +233,19 @@ export class SlackBackfillWorker {
     }
   }
 
+  /**
+   * Sketch's own past posts only map to the live identity (`sender_jid='bot'`)
+   * once the bot user id is known, so a range waits for the Slack connection
+   * rather than inserting duplicate rows under the raw user id.
+   */
   private async stepRange(range: SlackBackfillRangeRow): Promise<boolean> {
+    if (this.options.getBotUserId && this.options.getBotUserId() === null) {
+      this.options.logger.debug(
+        { rangeId: range.id, channelId: range.channel_id },
+        "Deferred Slack backfill range until the Slack bot user id is known",
+      );
+      return false;
+    }
     const nowIso = new Date(this.now()).toISOString();
     try {
       if (range.phase === "pending") {
@@ -269,7 +281,13 @@ export class SlackBackfillWorker {
 
   private async stepHistoryPage(range: SlackBackfillRangeRow, nowIso: string): Promise<boolean> {
     const listHistory = this.options.facade.listChannelHistoryPage;
-    if (!listHistory) return false;
+    if (!listHistory) {
+      this.options.logger.warn(
+        { rangeId: range.id, channelId: range.channel_id },
+        "Slack indexing facade cannot page channel history",
+      );
+      return false;
+    }
     const page = await listHistory(range.channel_id, {
       oldest: range.lower_ts,
       latest: range.upper_ts,
@@ -299,7 +317,13 @@ export class SlackBackfillWorker {
       return true;
     }
     const listReplies = this.options.facade.listThreadRepliesPage;
-    if (!listReplies) return false;
+    if (!listReplies) {
+      this.options.logger.warn(
+        { rangeId: range.id, channelId: range.channel_id },
+        "Slack indexing facade cannot page thread replies",
+      );
+      return false;
+    }
     const page = await listReplies(range.channel_id, thread.thread_ts, {
       oldest: range.lower_ts,
       limit: this.options.pageLimit ?? SLACK_BACKFILL_PAGE_LIMIT,
@@ -320,6 +344,10 @@ export class SlackBackfillWorker {
   /**
    * Sender-name resolution hits the Slack API, so the whole page is mapped
    * before the write transaction opens and the transaction stays local.
+   *
+   * `conversations.history` echoes `thread_ts === ts` on a thread parent; that
+   * is a top-level row, so the parent's own ts is dropped and only real replies
+   * carry a thread id.
    */
   private async buildInserts(
     range: SlackBackfillRangeRow,
@@ -330,13 +358,14 @@ export class SlackBackfillWorker {
     const inserts: ConversationMessageInsert[] = [];
     for (const message of messages) {
       if (!isCapturableHistoryMessage(message)) continue;
+      const messageThreadTs = threadTs ?? (message.threadTs === message.ts ? null : message.threadTs) ?? null;
       const insert =
         botUserId !== null && message.userId === botUserId
           ? mapSlackBotReplyToInsert({
               conversationId: range.conversation_id,
               messageRef: message.ts,
               text: message.text,
-              threadTs: threadTs ?? message.threadTs ?? null,
+              threadTs: messageThreadTs,
               source: "history",
               backfillRangeId: range.id,
             })
@@ -346,7 +375,7 @@ export class SlackBackfillWorker {
                 userId: message.userId,
                 botId: message.botId,
                 text: message.text,
-                threadTs: threadTs ?? message.threadTs ?? null,
+                threadTs: messageThreadTs,
               },
               {
                 conversationId: range.conversation_id,

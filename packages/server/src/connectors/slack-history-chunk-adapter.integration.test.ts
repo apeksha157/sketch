@@ -10,6 +10,7 @@ import {
   createSlackHistoryChunkAdapter,
   createSlackThreadChunkAdapter,
   repairSlackChunkStreamsOnStartup,
+  slackHistoryStreamKey,
 } from "./slack-chunk-adapters";
 
 const knobs = {
@@ -154,13 +155,48 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>, shared = f
       expect(first.messagesProcessed).toEqual(2);
       const cursor = await createConversationSlicesRepository(db).getStreamCursor(
         conversationId,
-        `${THREAD_TS}::history`,
+        slackHistoryStreamKey(THREAD_TS, rangeId),
       );
       expect(cursor?.last_message_id).toEqual(newest);
       expect(cursor?.last_effective_at).toEqual(new Date(1699000300 * 1000).toISOString());
 
       const second = await runChunkingPass(deps(db), { adapter: history, mode: "backfill" });
       expect(second.messagesProcessed).toEqual(0);
+    });
+
+    it("keeps two ranges on one channel on separate history cursors", async () => {
+      const conversationId = await seedChannel(db);
+      const newerRangeId = randomUUID();
+      const olderRangeId = randomUUID();
+      await insertRow(db, { conversationId, ts: "1699500100", source: "history", rangeId: newerRangeId });
+      const olderRow = await insertRow(db, {
+        conversationId,
+        ts: "1699000100",
+        source: "history",
+        rangeId: olderRangeId,
+      });
+
+      const newer = createSlackHistoryChunkAdapter({
+        conversationId,
+        threadTs: THREAD_TS,
+        rangeId: newerRangeId,
+        knobs,
+      });
+      await runChunkingPass(deps(db), { adapter: newer, mode: "backfill" });
+
+      const older = createSlackHistoryChunkAdapter({
+        conversationId,
+        threadTs: THREAD_TS,
+        rangeId: olderRangeId,
+        knobs,
+      });
+      const olderPass = await runChunkingPass(deps(db), { adapter: older, mode: "backfill" });
+      expect(olderPass.messagesProcessed).toEqual(1);
+      const olderCursor = await createConversationSlicesRepository(db).getStreamCursor(
+        conversationId,
+        slackHistoryStreamKey(THREAD_TS, olderRangeId),
+      );
+      expect(olderCursor?.last_message_id).toEqual(olderRow);
     });
   });
 }

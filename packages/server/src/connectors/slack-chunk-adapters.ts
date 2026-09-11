@@ -185,6 +185,15 @@ async function tailMessage(db: Kysely<DB>, id: number): Promise<ChunkEngineMessa
   return row ? toMessage(row) : undefined;
 }
 
+/**
+ * History cursors are keyed per range, not per channel: two ranges on one
+ * channel own disjoint row sets, and a shared cursor would let the newer
+ * range's high-water mark hide an older range's rows forever.
+ */
+export function slackHistoryStreamKey(baseStreamKey: string, rangeId: string): string {
+  return `${baseStreamKey}::history::${rangeId}`;
+}
+
 function createAdapter(
   params: SlackAdapterParams,
   providerThreadId: string | null,
@@ -192,7 +201,8 @@ function createAdapter(
 ): ChunkStreamAdapter {
   const baseStreamKey = providerThreadId ?? SLACK_CHANNEL_STREAM_KEY;
   const isHistory = provenance.origin === "history";
-  const streamKey = isHistory ? `${baseStreamKey}::history` : baseStreamKey;
+  const streamKey =
+    provenance.origin === "history" ? slackHistoryStreamKey(baseStreamKey, provenance.rangeId) : baseStreamKey;
   return {
     conversationId: params.conversationId,
     streamKey,

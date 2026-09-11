@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Kysely, Selectable, Transaction } from "kysely";
+import { type Kysely, type Selectable, type Transaction, sql } from "kysely";
 import type { DB, SlackBackfillRangesTable, SlackBackfillThreadsTable } from "../schema";
 
 export type SlackBackfillRangeKind = "initial" | "gap" | "manual";
@@ -213,26 +213,61 @@ export function createSlackBackfillRangeRepository(db: BackfillDb) {
 
     /**
      * Oldest range first inside a channel (initial before gaps), then the
-     * least-recently-served channel, so no channel can starve the others.
+     * least-recently-served channel, so no channel can starve the others. A
+     * range waits while an older incomplete range on the same channel exists:
+     * history cursors only move forward, so admitting a newer range first would
+     * strand the older one's rows.
      */
     async findNextGraphCandidate(input: { excludedConversationIds: number[] }): Promise<
       SlackBackfillRangeRow | undefined
     > {
       let query = db
-        .selectFrom("slack_backfill_ranges")
-        .selectAll()
-        .where("phase", "=", "fetched")
-        .where("graph_completed_at", "is", null)
-        .where("graph_halted_at", "is", null);
+        .selectFrom("slack_backfill_ranges as range")
+        .selectAll("range")
+        .where("range.phase", "=", "fetched")
+        .where("range.graph_completed_at", "is", null)
+        .where("range.graph_halted_at", "is", null)
+        .where(
+          sql<boolean>`NOT EXISTS (
+            SELECT 1
+            FROM slack_backfill_ranges AS older
+            WHERE older.channel_id = range.channel_id
+              AND older.graph_completed_at IS NULL
+              AND (
+                older.lower_ts < range.lower_ts
+                OR (older.lower_ts = range.lower_ts AND older.created_at < range.created_at)
+                OR (
+                  older.lower_ts = range.lower_ts
+                  AND older.created_at = range.created_at
+                  AND older.id < range.id
+                )
+              )
+          )`,
+        );
       if (input.excludedConversationIds.length > 0) {
-        query = query.where("conversation_id", "not in", input.excludedConversationIds);
+        query = query.where("range.conversation_id", "not in", input.excludedConversationIds);
       }
       return query
-        .orderBy("graph_last_served_at", "asc")
-        .orderBy("created_at", "asc")
-        .orderBy("id", "asc")
+        .orderBy(sql`CASE WHEN range.graph_last_served_at IS NULL THEN 0 ELSE 1 END`)
+        .orderBy("range.graph_last_served_at", "asc")
+        .orderBy("range.lower_ts", "asc")
+        .orderBy("range.created_at", "asc")
+        .orderBy("range.id", "asc")
         .limit(1)
         .executeTakeFirst();
+    },
+
+    /**
+     * Records a graph pass that deliberately left the cursor where it was, so a
+     * blocked range cannot monopolise the least-recently-served ordering.
+     */
+    async touchGraph(id: string, now: string): Promise<void> {
+      await db
+        .updateTable("slack_backfill_ranges")
+        .set({ graph_last_served_at: now, updated_at: now })
+        .where("id", "=", id)
+        .where("graph_completed_at", "is", null)
+        .execute();
     },
 
     async advanceGraphCursor(input: {

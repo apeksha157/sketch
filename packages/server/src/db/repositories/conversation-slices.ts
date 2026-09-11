@@ -217,6 +217,26 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
         .execute();
     },
 
+    /**
+     * Open history slices whose first row belongs to one backfill range. History
+     * streams are keyed per range, so an empty page for one range must not flush
+     * another range's still-growing slice on the same conversation.
+     */
+    async listOpenHistorySlicesForRange(
+      conversationId: number,
+      backfillRangeId: string,
+    ): Promise<ConversationSliceRow[]> {
+      return db
+        .selectFrom("conversation_slices as slice")
+        .innerJoin("conversation_messages as first_message", "first_message.id", "slice.first_message_id")
+        .selectAll("slice")
+        .where("slice.conversation_id", "=", conversationId)
+        .where("slice.status", "=", "open")
+        .where("slice.origin", "=", "history")
+        .where("first_message.backfill_range_id", "=", backfillRangeId)
+        .execute();
+    },
+
     async updateOpenSlice(input: {
       sliceId: string;
       firstMessageId: number;

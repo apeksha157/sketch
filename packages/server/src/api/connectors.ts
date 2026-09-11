@@ -2716,7 +2716,6 @@ export function connectorRoutes(
     });
   });
 
-  /** Update connector scope config (add/remove drives, folders, etc.). */
   /**
    * Retrospective opt-in for channels Sketch was already in: nothing backfills
    * automatically at upgrade. Safe to press repeatedly — dedup means a channel
@@ -2737,6 +2736,7 @@ export function connectorRoutes(
     return c.json(result, 202);
   });
 
+  /** Update connector scope config (add/remove drives, folders, etc.). */
   routes.patch("/:id/scope", async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));
     if (!config || !configEnabled(config)) {
