@@ -42,6 +42,20 @@ export function readSourceMeta(row: Pick<IndexedFilesTable, "source_meta">): Rec
   }
 }
 
+/**
+ * The LinkedIn connector nests conversation-segment stats under the `linkedinAimfox`
+ * key of `source_meta`; nothing has ever written them at the root.
+ */
+export function readLinkedinAimfoxManifest(
+  sourceMeta: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const account = sourceMeta?.linkedinAimfox;
+  if (!account || typeof account !== "object" || Array.isArray(account)) return null;
+  const raw = (account as Record<string, unknown>).segmentManifest;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return raw as Record<string, unknown>;
+}
+
 export interface ZohoCrmSourceMeta {
   module: string;
   recordId: string;

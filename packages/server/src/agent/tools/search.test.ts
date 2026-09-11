@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod/v4";
+import type { LinkedinAimfoxMeta, LinkedinAimfoxSegmentManifest } from "../../connectors/linkedin-aimfox";
 import { search } from "../../connectors/search";
 import { createUserRepository } from "../../db/repositories/users";
 import type { DB } from "../../db/schema";
@@ -735,12 +736,17 @@ it("collapses LinkedIn thread segments, expands on request, and still collapses 
         source_created_at: "2026-09-01T10:00:00.000Z",
         source_updated_at: "2026-09-01T10:00:00.000Z",
         source_meta: JSON.stringify({
-          segmentManifest: {
-            messageCount: 5,
-            inboundCount: 3,
-            outboundCount: 2,
-            lastInboundAt: "2026-09-01T10:00:00.000Z",
-            lastOutboundAt: "2026-09-01T09:00:00.000Z",
+          linkedinAimfox: {
+            accountId: "acct-1",
+            conversationUrn: "urn:li:conversation:1",
+            kind: "conversation_segment",
+            segmentManifest: {
+              messageCount: 5,
+              inboundCount: 3,
+              outboundCount: 2,
+              lastInboundAt: "2026-09-01T10:00:00.000Z",
+              lastOutboundAt: "2026-09-01T09:00:00.000Z",
+            },
           },
         }),
         synced_at: now,
@@ -760,12 +766,17 @@ it("collapses LinkedIn thread segments, expands on request, and still collapses 
         source_created_at: "2026-09-03T10:00:00.000Z",
         source_updated_at: "2026-09-03T10:00:00.000Z",
         source_meta: JSON.stringify({
-          segmentManifest: {
-            messageCount: 3,
-            inboundCount: 2,
-            outboundCount: 1,
-            lastInboundAt: "2026-09-03T10:00:00.000Z",
-            lastOutboundAt: "2026-09-03T09:00:00.000Z",
+          linkedinAimfox: {
+            accountId: "acct-1",
+            conversationUrn: "urn:li:conversation:1",
+            kind: "conversation_segment",
+            segmentManifest: {
+              messageCount: 3,
+              inboundCount: 2,
+              outboundCount: 1,
+              lastInboundAt: "2026-09-03T10:00:00.000Z",
+              lastOutboundAt: "2026-09-03T09:00:00.000Z",
+            },
           },
         }),
         synced_at: now,
@@ -785,12 +796,17 @@ it("collapses LinkedIn thread segments, expands on request, and still collapses 
         source_created_at: "2026-09-02T10:00:00.000Z",
         source_updated_at: "2026-09-02T10:00:00.000Z",
         source_meta: JSON.stringify({
-          segmentManifest: {
-            messageCount: 2,
-            inboundCount: 1,
-            outboundCount: 1,
-            lastInboundAt: null,
-            lastOutboundAt: "2026-09-02T10:00:00.000Z",
+          linkedinAimfox: {
+            accountId: "acct-1",
+            conversationUrn: "urn:li:conversation:1",
+            kind: "conversation_segment",
+            segmentManifest: {
+              messageCount: 2,
+              inboundCount: 1,
+              outboundCount: 1,
+              lastInboundAt: null,
+              lastOutboundAt: "2026-09-02T10:00:00.000Z",
+            },
           },
         }),
         synced_at: now,
@@ -892,6 +908,60 @@ it("collapses LinkedIn thread segments, expands on request, and still collapses 
   const emailText = email.content[0]?.text ?? "";
   expect(emailText.match(/sketchId: email-thread-/g)).toHaveLength(1);
   expect(emailText).toContain("Email second");
+});
+
+it("reads segment stats from the source_meta shape the LinkedIn connector writes", async () => {
+  const segmentManifest: LinkedinAimfoxSegmentManifest = {
+    segmentIndex: 0,
+    terminalMessageId: "urn:li:message:9",
+    messageCount: 4,
+    algorithmVersion: 1,
+    sealed: true,
+    inboundCount: 3,
+    outboundCount: 1,
+    lastInboundAt: "2026-09-05T10:00:00.000Z",
+    lastOutboundAt: "2026-09-04T10:00:00.000Z",
+  };
+  const sourceMeta: LinkedinAimfoxMeta = {
+    linkedinAimfox: {
+      accountId: "acct-1",
+      conversationUrn: "urn:li:conversation:2",
+      kind: "conversation_segment",
+      segmentManifest,
+    },
+  };
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "cfg-search-tools-linkedin-shape",
+      connector_type: "linkedin_aimfox",
+      auth_type: "oauth",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .execute();
+  await db
+    .insertInto("indexed_files")
+    .values({
+      id: "linkedin-shape-1",
+      connector_config_id: "cfg-search-tools-linkedin-shape",
+      provider_file_id: "linkedin-shape-1",
+      thread_id: "acct-1:urn:li:conversation:2",
+      file_name: "LinkedIn thread with Priya",
+      file_type: "linkedin_conversation",
+      content_category: "document",
+      source: "linkedin_aimfox",
+      content: "linkedin manifest shape marker",
+      access_scope_id: "scope-alice",
+      source_created_at: "2026-09-04T10:00:00.000Z",
+      source_updated_at: "2026-09-05T10:00:00.000Z",
+      source_meta: JSON.stringify(sourceMeta),
+      synced_at: new Date().toISOString(),
+    })
+    .execute();
+
+  const result = await handleSearch({ query: "linkedin manifest shape marker", source: "linkedin_aimfox" }, deps());
+  expect(result.content[0]?.text ?? "").toContain("thread: 4 messages, 3 in / 1 out, last from them (2026-09-05)");
 });
 
 function deps() {

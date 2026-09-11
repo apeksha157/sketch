@@ -20,7 +20,7 @@ import { sql } from "kysely";
 import type { Logger } from "pino";
 import { isPg } from "../db/dialect";
 import { EMBEDDING_DIMENSIONS } from "../db/index";
-import { readSourceMeta } from "../db/repositories/connectors";
+import { readLinkedinAimfoxManifest, readSourceMeta } from "../db/repositories/connectors";
 import { createCrmRecordFieldsRepository, normalizeCrmRecordFieldValue } from "../db/repositories/crm-record-fields";
 import { createEntityRepository } from "../db/repositories/entities";
 import { fileVisibilityRuleSql, visibleFileIdsSql } from "../db/repositories/file-visibility-rule";
@@ -1897,10 +1897,8 @@ type LinkedInSegmentManifest = {
 };
 
 function readLinkedInSegmentManifest(file: Pick<SearchMetadataFile, "source_meta">): LinkedInSegmentManifest {
-  const meta = readSourceMeta(file);
-  const raw = meta?.segmentManifest;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const manifest = raw as Record<string, unknown>;
+  const manifest = readLinkedinAimfoxManifest(readSourceMeta(file));
+  if (!manifest) return {};
   return {
     messageCount: typeof manifest.messageCount === "number" ? manifest.messageCount : undefined,
     inboundCount: typeof manifest.inboundCount === "number" ? manifest.inboundCount : undefined,

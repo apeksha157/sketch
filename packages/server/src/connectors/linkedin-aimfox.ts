@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
+import { readLinkedinAimfoxManifest } from "../db/repositories/connectors";
 import { normalizePhoneCountryCode } from "../identity-normalization";
 import { maxIso } from "../timestamps";
 import {
@@ -131,10 +132,11 @@ interface AccountRunState {
   pageCapHit: boolean;
 }
 
-interface LinkedinAimfoxMeta {
+export interface LinkedinAimfoxMeta {
   linkedinAimfox?: {
     accountId?: unknown;
     conversationUrn?: unknown;
+    kind?: string;
     segmentManifest?: LinkedinAimfoxRawSegmentManifest;
   };
 }
@@ -1009,7 +1011,7 @@ function readCheckpoint(sourceMeta: Record<string, unknown> | undefined): {
 }
 
 function readSegmentManifest(sourceMeta: Record<string, unknown> | null): LinkedinAimfoxSegmentManifest | null {
-  const value = (sourceMeta as LinkedinAimfoxMeta | null)?.linkedinAimfox?.segmentManifest;
+  const value = readLinkedinAimfoxManifest(sourceMeta) as LinkedinAimfoxRawSegmentManifest | null;
   if (!value) return null;
   if (
     typeof value.segmentIndex !== "number" ||
