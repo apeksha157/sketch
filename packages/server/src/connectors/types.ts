@@ -45,6 +45,54 @@ export type SlackIndexingAppConfig = Pick<
   | "SLACK_EMISSION_LEGACY_PER_RUN"
 >;
 
+export type LinkedinChunkAppConfig = Pick<
+  Config,
+  | "LINKEDIN_CHUNK_ENGINE_ENABLED"
+  | "LINKEDIN_CHUNK_WINDOW_MESSAGES"
+  | "LINKEDIN_CHUNK_WINDOW_TOKENS"
+  | "LINKEDIN_CHUNK_MIN_MESSAGES"
+  | "LINKEDIN_CHUNK_TARGET_MESSAGES"
+  | "LINKEDIN_CHUNK_MAX_MESSAGES"
+  | "LINKEDIN_CHUNK_MAX_TOKENS"
+  | "LINKEDIN_CHUNK_TICK_MINUTES"
+  | "LINKEDIN_CHUNK_IDLE_CLOSE_HOURS"
+  | "LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MESSAGES"
+  | "LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"
+  | "LINKEDIN_CHUNK_MODEL"
+  | "LINKEDIN_CHUNK_REASONING_EFFORT"
+  | "LINKEDIN_CHUNK_BURST_THRESHOLD_MESSAGES"
+  | "LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP"
+  | "LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN"
+  | "LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL"
+  | "LINKEDIN_CHUNK_CUTOVER_CONVERSATIONS_PER_RUN"
+>;
+
+/**
+ * Runtime key list for `LinkedinChunkAppConfig`, kept exhaustive by the
+ * `satisfies` constraint: a key added to the type but missed here fails to
+ * compile instead of silently falling back to the schema default downstream.
+ */
+export const LINKEDIN_CHUNK_APP_CONFIG_KEYS = Object.keys({
+  LINKEDIN_CHUNK_ENGINE_ENABLED: true,
+  LINKEDIN_CHUNK_WINDOW_MESSAGES: true,
+  LINKEDIN_CHUNK_WINDOW_TOKENS: true,
+  LINKEDIN_CHUNK_MIN_MESSAGES: true,
+  LINKEDIN_CHUNK_TARGET_MESSAGES: true,
+  LINKEDIN_CHUNK_MAX_MESSAGES: true,
+  LINKEDIN_CHUNK_MAX_TOKENS: true,
+  LINKEDIN_CHUNK_TICK_MINUTES: true,
+  LINKEDIN_CHUNK_IDLE_CLOSE_HOURS: true,
+  LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MESSAGES: true,
+  LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES: true,
+  LINKEDIN_CHUNK_MODEL: true,
+  LINKEDIN_CHUNK_REASONING_EFFORT: true,
+  LINKEDIN_CHUNK_BURST_THRESHOLD_MESSAGES: true,
+  LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP: true,
+  LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN: true,
+  LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL: true,
+  LINKEDIN_CHUNK_CUTOVER_CONVERSATIONS_PER_RUN: true,
+} satisfies Record<keyof LinkedinChunkAppConfig, true>) as (keyof LinkedinChunkAppConfig)[];
+
 export const CONNECTOR_TYPES = [
   "google_drive",
   "google_calendar",
@@ -633,7 +681,7 @@ export interface Connector {
      */
     slackIndexing?: SlackIndexingFacade | null;
     /** Optional application flags used by connectors with platform-specific policy switches. */
-    appConfig?: Partial<SlackIndexingAppConfig>;
+    appConfig?: Partial<SlackIndexingAppConfig & LinkedinChunkAppConfig>;
     onEntitySeed?: EntitySeedCallback;
     onPersonSeed?: PersonEntitySeedCallback;
     onContainerObservation?: ContainerObservationCallback;

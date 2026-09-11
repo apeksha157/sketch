@@ -32,6 +32,17 @@ import { fileVisibilityRuleSql } from "./file-visibility-rule";
 
 export { accessPrincipalPredicateSql } from "./file-visibility-rule";
 
+/**
+ * Columns that queue a file for a fresh LLM enrichment pass. Shared by
+ * `upsertFile`'s content-changed path and by the sync seam's enrichment
+ * refresh, so the retry ladder is reset in exactly one place.
+ */
+export const SUMMARY_ENRICHMENT_RESET = {
+  summary_status: "pending",
+  summary_attempts: 0,
+  summary_next_retry_at: null,
+} as const;
+
 export function readSourceMeta(row: Pick<IndexedFilesTable, "source_meta">): Record<string, unknown> | null {
   if (!row.source_meta) return null;
   try {
@@ -805,11 +816,7 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
           updates.embedding_status = "pending";
           updates.embedding_attempts = 0;
           updates.embedding_next_retry_at = null;
-          if (!embeddingsOnlyContentRefresh) {
-            updates.summary_status = "pending";
-            updates.summary_attempts = 0;
-            updates.summary_next_retry_at = null;
-          }
+          if (!embeddingsOnlyContentRefresh) Object.assign(updates, SUMMARY_ENRICHMENT_RESET);
         }
 
         await db.updateTable("indexed_files").set(updates).where("id", "=", existing.id).execute();

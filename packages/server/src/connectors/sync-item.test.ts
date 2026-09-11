@@ -247,3 +247,165 @@ describe("processSyncedItem CRM record fields", () => {
     ).toEqual([]);
   });
 });
+
+describe("processSyncedItem open-slice enrichment refresh", () => {
+  let db: Kysely<DB> | undefined;
+
+  afterEach(async () => {
+    await db?.destroy();
+    db = undefined;
+  });
+
+  function anchor(enrichedMessageCount: number, messageCount: number) {
+    return {
+      firstMessageId: 1,
+      messageCount,
+      emittedAt: "2026-09-10T10:00:00.000Z",
+      enrichedMessageCount,
+      enrichedAt: "2026-09-10T10:00:00.000Z",
+    };
+  }
+
+  async function seedSlice(storedSourceMeta: Record<string, unknown> | null): Promise<void> {
+    if (!db) throw new Error("missing db");
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "cfg-slice",
+        connector_type: "linkedin_aimfox",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: "owner",
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: "file-slice",
+        connector_config_id: "cfg-slice",
+        provider_file_id: "slice-1",
+        source: "linkedin_aimfox",
+        file_name: "conversation.md",
+        file_type: "linkedin_conversation",
+        content_category: "document",
+        content: "transcript",
+        content_hash: "slice-hash",
+        summary: "Resolved summary",
+        summary_status: "done",
+        summary_attempts: 3,
+        summary_next_retry_at: "2026-09-10T12:00:00.000Z",
+        embedding_status: "done",
+        source_meta: storedSourceMeta === null ? null : JSON.stringify(storedSourceMeta),
+        source_updated_at: "2026-09-10T10:00:00.000Z",
+        synced_at: "2026-09-10T10:00:00.000Z",
+      })
+      .execute();
+  }
+
+  async function reemit(
+    enrichmentRefresh: "full" | "embeddings_only",
+    sourceMeta: Record<string, unknown>,
+    rawContent?: SyncedItem["rawContent"],
+  ) {
+    if (!db) throw new Error("missing db");
+    const item: SyncedItem = {
+      providerFileId: "slice-1",
+      providerUrl: null,
+      fileName: "conversation.md",
+      fileType: "linkedin_conversation",
+      contentCategory: "document",
+      content: "transcript",
+      sourcePath: "LinkedIn",
+      sourceMeta,
+      rawContent,
+      enrichmentRefresh,
+      contentHash: "slice-hash",
+      sourceCreatedAt: null,
+      sourceUpdatedAt: "2026-09-10T11:00:00.000Z",
+    };
+    return processSyncedItem({
+      db,
+      repo: createConnectorRepository(db),
+      connectorConfigId: "cfg-slice",
+      connectorType: "linkedin_aimfox",
+      item,
+      existingHashes: await loadExistingContentHashes(db, "linkedin_aimfox", "cfg-slice"),
+    });
+  }
+
+  async function sliceRow() {
+    if (!db) throw new Error("missing db");
+    return db
+      .selectFrom("indexed_files")
+      .select(["summary_status", "summary_attempts", "summary_next_retry_at", "summary", "source_meta"])
+      .where("id", "=", "file-slice")
+      .executeTakeFirstOrThrow();
+  }
+
+  it("queues a full enrichment when unchanged content carries a stale anchor", async () => {
+    db = await createTestDb();
+    await seedSlice(anchor(1, 2));
+
+    const result = await reemit("full", anchor(2, 2));
+
+    expect(result.kind).toBe("enrichment_refreshed");
+    expect(await sliceRow()).toEqual({
+      summary_status: "pending",
+      summary_attempts: 0,
+      summary_next_retry_at: null,
+      summary: "Resolved summary",
+      source_meta: JSON.stringify(anchor(2, 2)),
+    });
+  });
+
+  it("leaves an already-enriched anchor untouched", async () => {
+    db = await createTestDb();
+    await seedSlice(anchor(2, 2));
+
+    const result = await reemit("full", anchor(2, 2));
+
+    expect(result.kind).toBe("unchanged");
+    expect(await sliceRow()).toMatchObject({
+      summary_status: "done",
+      summary_attempts: 3,
+      summary_next_retry_at: "2026-09-10T12:00:00.000Z",
+    });
+  });
+
+  it("never refreshes on the embeddings-only tier", async () => {
+    db = await createTestDb();
+    await seedSlice(anchor(1, 2));
+
+    const result = await reemit("embeddings_only", anchor(1, 3));
+
+    expect(result.kind).toBe("unchanged");
+    expect(await sliceRow()).toMatchObject({ summary_status: "done", summary_attempts: 3 });
+  });
+
+  it("keeps the stale anchor and the summary ladder when the raw-content write fails", async () => {
+    db = await createTestDb();
+    await seedSlice(anchor(1, 2));
+    await db.schema.dropTable("indexed_file_raw_contents").execute();
+
+    const result = await reemit("full", anchor(2, 2), { kind: "transcript", content: "## Transcript" });
+
+    expect(result.kind).toBe("unchanged");
+    expect(await sliceRow()).toEqual({
+      summary_status: "done",
+      summary_attempts: 3,
+      summary_next_retry_at: "2026-09-10T12:00:00.000Z",
+      summary: "Resolved summary",
+      source_meta: JSON.stringify(anchor(1, 2)),
+    });
+  });
+
+  it("leaves files without an emission anchor on the unchanged path", async () => {
+    db = await createTestDb();
+    await seedSlice({ googleDrive: { owner: "Alice" } });
+
+    const result = await reemit("full", { googleDrive: { owner: "Alice" } });
+
+    expect(result.kind).toBe("unchanged");
+    expect(await sliceRow()).toMatchObject({ summary_status: "done", summary_attempts: 3 });
+  });
+});

@@ -1,12 +1,18 @@
 import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
 import type { Logger } from "pino";
-import { type ZohoCrmSourceMeta, createConnectorRepository, readZohoCrmMeta } from "../db/repositories/connectors";
+import {
+  SUMMARY_ENRICHMENT_RESET,
+  type ZohoCrmSourceMeta,
+  createConnectorRepository,
+  readZohoCrmMeta,
+} from "../db/repositories/connectors";
 import { type CrmFieldHistoryAppendRow, createCrmFieldHistoryRepository } from "../db/repositories/crm-field-history";
 import { createCrmRecordFieldsRepository } from "../db/repositories/crm-record-fields";
 import { createRawContentRepository } from "../db/repositories/raw-contents";
 import type { DB } from "../db/schema";
 import { normalizeSourceTimestampForStorage } from "../timestamps";
+import { readEmissionAnchor } from "./emission-refresh-tier";
 import { clearEnrichmentData } from "./enrichment";
 import { getSyncIdentity, getSyncIdentityForItem, syncIdentityKey } from "./sync-identity";
 import type { ConnectorType, SyncedItem } from "./types";
@@ -35,6 +41,7 @@ export type ExistingContentHashMap = Map<
 export type ProcessSyncedItemResult =
   | { kind: "skipped_empty" }
   | { kind: "unchanged"; indexedFileId: string; rollupGroupIds: string[] }
+  | { kind: "enrichment_refreshed"; indexedFileId: string; rollupGroupIds: string[] }
   | { kind: "created"; indexedFileId: string; rollupGroupIds: string[] }
   | { kind: "updated"; indexedFileId: string; rollupGroupIds: string[] };
 
@@ -172,11 +179,27 @@ export async function processSyncedItem({
     !hashlessSourceVersionChanged
   ) {
     /**
+     * A full-tier re-emission of a conversation slice whose content is byte
+     * identical to the last emission still needs the LLM stages when the stored
+     * anchor shows they last ran over fewer messages than the file holds: the
+     * tier-one emissions in between re-embedded the transcript without
+     * summarizing it. Enrichment data is deliberately NOT cleared — the content
+     * is unchanged, so its chunks and embeddings are still correct (clearing
+     * them here would drop embeddings that nothing re-queues), and the earlier
+     * enrichment ran over a prefix of the same transcript, so its mentions stay
+     * valid while the pending summary pass derives the rest. The anchor is only
+     * read on the full tier, so the hot path never touches it.
+     */
+    const anchor = item.enrichmentRefresh === "full" ? readEmissionAnchor(existing.sourceMeta) : null;
+    const enrichmentRefreshDue = anchor !== null && anchor.enrichedMessageCount < anchor.messageCount;
+    /**
      * Raw content persists before the metadata update: when it fails, the
      * update below omits source_meta so the connector's detail marker for this
      * run is not saved and the next incremental sync re-fetches the detail.
      */
     const rawContentPersisted = await persistRawContent(db, existing.id, item, logger);
+    const sourceMetaPersisted = item.sourceMeta !== undefined && rawContentPersisted;
+    const enrichmentRefreshApplied = enrichmentRefreshDue && sourceMetaPersisted;
     await db.transaction().execute(async (trx) => {
       await trx
         .updateTable("indexed_files")
@@ -195,9 +218,8 @@ export async function processSyncedItem({
           ...(item.isAllDay !== undefined ? { is_all_day: item.isAllDay ? 1 : 0 } : {}),
           mime_type: item.mimeType ?? undefined,
           rollup_group_id: item.rollupGroupId ?? null,
-          ...(item.sourceMeta !== undefined && rawContentPersisted
-            ? { source_meta: JSON.stringify(item.sourceMeta) }
-            : {}),
+          ...(sourceMetaPersisted ? { source_meta: JSON.stringify(item.sourceMeta) } : {}),
+          ...(enrichmentRefreshApplied ? SUMMARY_ENRICHMENT_RESET : {}),
         })
         .where("id", "=", existing.id)
         .execute();
@@ -208,7 +230,11 @@ export async function processSyncedItem({
     });
     await repo.linkConnectorFile(connectorConfigId, existing.id);
     await syncItemAccess(repo, connectorConfigId, existing.id, item);
-    return { kind: "unchanged", indexedFileId: existing.id, rollupGroupIds };
+    return {
+      kind: enrichmentRefreshApplied ? "enrichment_refreshed" : "unchanged",
+      indexedFileId: existing.id,
+      rollupGroupIds,
+    };
   }
 
   const itemResult = await db.transaction().execute(async (trx) => {

@@ -42,6 +42,26 @@ describe("resolveChunkEngineKnobs", () => {
     });
   });
 
+  it("falls back to the LinkedIn schema defaults when no env config is loaded", () => {
+    expect(resolveChunkEngineKnobs("LINKEDIN_CHUNK", undefined)).toEqual({
+      windowMessages: configDefault("LINKEDIN_CHUNK_WINDOW_MESSAGES"),
+      windowTokens: configDefault("LINKEDIN_CHUNK_WINDOW_TOKENS"),
+      minMessages: configDefault("LINKEDIN_CHUNK_MIN_MESSAGES"),
+      targetMessages: configDefault("LINKEDIN_CHUNK_TARGET_MESSAGES"),
+      maxMessages: configDefault("LINKEDIN_CHUNK_MAX_MESSAGES"),
+      maxTokens: configDefault("LINKEDIN_CHUNK_MAX_TOKENS"),
+      tickMinutes: configDefault("LINKEDIN_CHUNK_TICK_MINUTES"),
+      idleCloseHours: configDefault("LINKEDIN_CHUNK_IDLE_CLOSE_HOURS"),
+      provisionalRefreshMessages: configDefault("LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MESSAGES"),
+      model: configDefault("LINKEDIN_CHUNK_MODEL"),
+      reasoningEffort: configDefault("LINKEDIN_CHUNK_REASONING_EFFORT"),
+      burstThresholdMessages: configDefault("LINKEDIN_CHUNK_BURST_THRESHOLD_MESSAGES"),
+      topicRegistryCap: configDefault("LINKEDIN_CHUNK_TOPIC_REGISTRY_CAP"),
+      groupWorkerPool: configDefault("LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL"),
+      maxWindowsPerRun: configDefault("LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN"),
+    });
+  });
+
   it("prefers a Slack env value over the schema default", () => {
     const resolved = resolveChunkEngineKnobs("SLACK_CHUNK", {
       SLACK_CHUNK_MAX_MESSAGES: 33,
@@ -60,6 +80,16 @@ describe("resolveChunkEngineKnobs", () => {
     expect(resolved.maxMessages).toBe(33);
     expect(resolved.groupWorkerPool).toBe(7);
     expect(resolved.minMessages).toBe(configDefault("WHATSAPP_CHUNK_MIN_MESSAGES"));
+  });
+
+  it("prefers a LinkedIn env value over the schema default", () => {
+    const resolved = resolveChunkEngineKnobs("LINKEDIN_CHUNK", {
+      LINKEDIN_CHUNK_MAX_MESSAGES: 33,
+      LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL: 7,
+    });
+    expect(resolved.maxMessages).toBe(33);
+    expect(resolved.groupWorkerPool).toBe(7);
+    expect(resolved.minMessages).toBe(configDefault("LINKEDIN_CHUNK_MIN_MESSAGES"));
   });
 
   it("prefers a caller override over the env value", () => {

@@ -50,7 +50,13 @@ import { loadExistingContentHashes, processSyncedItem } from "./sync-item";
 import { buildSyncNameResolver } from "./sync-name-resolution";
 import { reconcileConnectorSync, removeConnectorSourceItems } from "./sync-reconcile";
 import { extractErrorMessage, runWithConcurrency, serializeCredentials, truncateErrorMessage } from "./sync-utils";
-import type { ConnectorCredentials, ConnectorType, SyncResult } from "./types";
+import {
+  type ConnectorCredentials,
+  type ConnectorType,
+  LINKEDIN_CHUNK_APP_CONFIG_KEYS,
+  type LinkedinChunkAppConfig,
+  type SyncResult,
+} from "./types";
 
 // ── Sync progress tracking (in-memory, ephemeral) ──────────────────────────
 export interface SyncProgress {
@@ -141,6 +147,18 @@ async function loadActiveContainerTargetOverrides(
 }
 
 /**
+ * Forwards every LinkedIn chunk-engine key the runner was given, driven by the
+ * exhaustive key list so the allow-list cannot drift from the config type.
+ */
+function pickLinkedinChunkAppConfig(
+  appConfig: Partial<LinkedinChunkAppConfig> | undefined,
+): Partial<LinkedinChunkAppConfig> {
+  return Object.fromEntries(
+    LINKEDIN_CHUNK_APP_CONFIG_KEYS.map((key) => [key, appConfig?.[key]]),
+  ) as Partial<LinkedinChunkAppConfig>;
+}
+
+/**
  * Run a sync for a single connector config.
  */
 export async function runConnectorSync(
@@ -215,7 +233,8 @@ export async function runConnectorSync(
       | "OPENROUTER_API_KEY"
       | "CONTAINER_CLASSIFICATION_MODE"
       | "CONSOLIDATED_LOOP_MODE"
-    >
+    > &
+      LinkedinChunkAppConfig
   >,
   options: RunConnectorSyncOptions = {},
 ): Promise<SyncResult> {
@@ -452,6 +471,7 @@ export async function runConnectorSync(
         SLACK_DISCOVERY_PAGE_ROWS: appConfig?.SLACK_DISCOVERY_PAGE_ROWS,
         SLACK_DISCOVERY_MAX_PAGES: appConfig?.SLACK_DISCOVERY_MAX_PAGES,
         SLACK_EMISSION_LEGACY_PER_RUN: appConfig?.SLACK_EMISSION_LEGACY_PER_RUN,
+        ...pickLinkedinChunkAppConfig(appConfig),
       },
       onEntitySeed: async (seed) => {
         await factRepo.upsertFact({
@@ -558,7 +578,9 @@ export async function runConnectorSync(
         /**
          * An embeddings-only refresh re-emits the transcript without re-running the
          * LLM stages, so derived llm_task facts must not be reconciled (tombstoned)
-         * until the full refresh that can re-derive them.
+         * until the full refresh that can re-derive them. `enrichment_refreshed` is
+         * that full refresh arriving on unchanged content (sync-item.ts), so it
+         * reconciles like any other change.
          */
         const derivedFactsContentChanged =
           itemResult.kind !== "unchanged" && item.enrichmentRefresh !== "embeddings_only";
@@ -891,7 +913,8 @@ export interface SyncSchedulerDeps {
       | "OPENROUTER_API_KEY"
       | "CONTAINER_CLASSIFICATION_MODE"
       | "CONSOLIDATED_LOOP_MODE"
-    >
+    > &
+      LinkedinChunkAppConfig
   >;
 }
 
