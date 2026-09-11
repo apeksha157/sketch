@@ -1,11 +1,10 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  type AgentDeliveryModel,
-  type AgentOutputItemInput,
-  type AgentRoute,
-  type AgentSourceConfig,
-  createAgentOutputRepository,
+import type {
+  AgentDeliveryModel,
+  AgentOutputItemInput,
+  AgentRoute,
+  AgentSourceConfig,
 } from "../../db/repositories/agent-outputs";
 import { createConversationRepository } from "../../db/repositories/conversations";
 import { createSettingsRepository } from "../../db/repositories/settings";
@@ -13,10 +12,10 @@ import { createUserRepository } from "../../db/repositories/users";
 import { createWhatsAppGroupRepository } from "../../db/repositories/whatsapp-groups";
 import type { DB } from "../../db/schema";
 import type { QueueManager } from "../../queue";
-import { createTestConfig, createTestDb, createTestLogger } from "../../test-utils";
+import { createTestConfig, createTestDb } from "../../test-utils";
 import type { WhatsAppBot } from "../../whatsapp/bot";
 import { CONVERSATION_SUMMARY_AGENT_KEY, conversationSummaryDefinition } from "../definitions/conversation-summary";
-import { DAILY_BRIEF_AGENT_KEY, DAILY_BRIEF_AGENT_VERSION, dailyBriefDefinition } from "../definitions/daily-brief";
+import { DAILY_BRIEF_AGENT_KEY, dailyBriefDefinition } from "../definitions/daily-brief";
 import type { AgentOutputDeliveryPublisher } from "../output-delivery";
 import { AgentRunService, type AgentRunServiceDeps, scopeKeyForRoute } from "../service";
 import {
@@ -24,7 +23,6 @@ import {
   OUTPUT_DATE,
   allowSlackDelivery,
   briefItem,
-  createPausedQueueManager,
   createService,
   createWritingService,
   emptySummaryPayload,
@@ -258,6 +256,111 @@ describe("AgentRunService", () => {
     await acceptedTasks[0]?.();
     expect(scheduledRunAgent).toHaveBeenCalledTimes(1);
     expect(interactiveRunAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps an old queued output live through manual promotion and replacement execution", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const users = createUserRepository(db);
+    const user = await users.create({ name: "Agent User", email: "user@example.com" });
+    const interactiveRunAgent = vi.fn(async () => {
+      throw new Error("interactive test stop");
+    }) as unknown as AgentRunServiceDeps["runAgent"];
+    const scheduledRunAgent = vi.fn(async () => {
+      throw new Error("scheduled test stop");
+    }) as unknown as AgentRunServiceDeps["runScheduledAgent"];
+    const service = createService(db, tasks, {
+      runAgent: interactiveRunAgent,
+      runScheduledAgent: scheduledRunAgent,
+    });
+
+    const [scheduled] = await service.requestGenerationForUser({
+      agentKey: DAILY_BRIEF_AGENT_KEY,
+      userId: user.id,
+      outputDate: OUTPUT_DATE,
+      triggerType: "scheduled",
+    });
+    vi.setSystemTime(new Date(NOW.getTime() + 31 * 60 * 1000));
+
+    const [manual] = await service.requestGenerationForUser({
+      agentKey: DAILY_BRIEF_AGENT_KEY,
+      userId: user.id,
+      outputDate: OUTPUT_DATE,
+      triggerType: "manual",
+    });
+
+    expect(manual.id).toBe(scheduled.id);
+    expect(manual.trigger_type).toBe("manual");
+    expect(tasks).toHaveLength(2);
+
+    await tasks.shift()?.();
+    const [reused] = await service.requestGenerationForUser({
+      agentKey: DAILY_BRIEF_AGENT_KEY,
+      userId: user.id,
+      outputDate: OUTPUT_DATE,
+      triggerType: "scheduled",
+    });
+
+    expect(reused.id).toBe(scheduled.id);
+    expect(tasks).toHaveLength(1);
+
+    await tasks.shift()?.();
+    const rows = await db
+      .selectFrom("agent_outputs")
+      .select(["id", "status"])
+      .where("user_id", "=", user.id)
+      .where("output_date", "=", OUTPUT_DATE)
+      .execute();
+
+    expect(rows).toHaveLength(1);
+    expect(interactiveRunAgent).toHaveBeenCalledTimes(1);
+    expect(scheduledRunAgent).not.toHaveBeenCalled();
+  });
+
+  it("keeps an old active scheduled output live", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const users = createUserRepository(db);
+    const user = await users.create({ name: "Agent User", email: "user@example.com" });
+    let releaseScheduled!: () => void;
+    const scheduledGate = new Promise<void>((resolve) => {
+      releaseScheduled = resolve;
+    });
+    const interactiveRunAgent = vi.fn(async () => {
+      throw new Error("interactive test stop");
+    }) as unknown as AgentRunServiceDeps["runAgent"];
+    const scheduledRunAgent = vi.fn(async (_params, admission) => {
+      admission?.onStart?.();
+      await scheduledGate;
+      throw new Error("scheduled test stop");
+    }) as unknown as AgentRunServiceDeps["runScheduledAgent"];
+    const service = createService(db, tasks, {
+      runAgent: interactiveRunAgent,
+      runScheduledAgent: scheduledRunAgent,
+    });
+
+    const [scheduled] = await service.requestGenerationForUser({
+      agentKey: DAILY_BRIEF_AGENT_KEY,
+      userId: user.id,
+      outputDate: OUTPUT_DATE,
+      triggerType: "scheduled",
+    });
+    const runningTask = tasks.shift()?.();
+    await vi.waitFor(() => expect(scheduledRunAgent).toHaveBeenCalledTimes(1));
+    vi.setSystemTime(new Date(NOW.getTime() + 31 * 60 * 1000));
+
+    const [manual] = await service.requestGenerationForUser({
+      agentKey: DAILY_BRIEF_AGENT_KEY,
+      userId: user.id,
+      outputDate: OUTPUT_DATE,
+      triggerType: "manual",
+    });
+
+    expect(manual.id).toBe(scheduled.id);
+    expect(manual.trigger_type).toBe("scheduled");
+    expect(tasks).toHaveLength(0);
+    expect(interactiveRunAgent).not.toHaveBeenCalled();
+
+    releaseScheduled();
+    await runningTask;
   });
 
   it("keeps an admitted scheduled generation instead of duplicating it for a manual request", async () => {
