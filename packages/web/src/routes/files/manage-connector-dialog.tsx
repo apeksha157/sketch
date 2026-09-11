@@ -938,17 +938,25 @@ function LinkedinSettingsEditor({
 }
 
 const SLACK_HISTORY_LOOKBACK_DEFAULT_DAYS = 365;
-const SLACK_HISTORY_LOOKBACK_MIN_DAYS = 1;
+const SLACK_HISTORY_LOOKBACK_MIN_DAYS = 0;
 const SLACK_HISTORY_LOOKBACK_MAX_DAYS = 3650;
 
 function normalizeSlackLookbackDays(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) ? value : SLACK_HISTORY_LOOKBACK_DEFAULT_DAYS;
 }
 
+function describeSlackBackfill(result: { channelsQueued: number; channelsSkipped: number }): string {
+  const inProgress = result.channelsSkipped > 0 ? `${result.channelsSkipped} already in progress.` : "";
+  if (result.channelsQueued === 0) return inProgress || "No channels to index.";
+  const channels = `${result.channelsQueued} channel${result.channelsQueued === 1 ? "" : "s"}`;
+  return `Indexing history for ${channels}. ${inProgress}`.trim();
+}
+
 /**
  * Slack is a single org-wide connector, so this window applies to every channel
  * Sketch joins from now on. Channels Sketch is already in are backfilled only
- * when an admin asks for it here.
+ * when an admin asks for it here; that button saves an edited window first so
+ * it indexes exactly the days shown.
  */
 function SlackScopeEditor({
   connectorId,
@@ -967,8 +975,8 @@ function SlackScopeEditor({
     parsedDays >= SLACK_HISTORY_LOOKBACK_MIN_DAYS &&
     parsedDays <= SLACK_HISTORY_LOOKBACK_MAX_DAYS;
 
-  const saveScope = useMutation({
-    mutationFn: () => api.integrations.updateScope(connectorId, { ...scopeConfig, historyLookbackDays: parsedDays }),
+  const saveLookback = useMutation({
+    mutationFn: () => api.integrations.updateSlackHistoryLookback(connectorId, parsedDays),
     onSuccess: () => {
       toast.success("History window updated.");
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
@@ -977,12 +985,13 @@ function SlackScopeEditor({
   });
 
   const indexHistory = useMutation({
-    mutationFn: () => api.integrations.queueSlackHistoryBackfill(connectorId),
-    onSuccess: (result) => {
-      setLastRun(result);
-      toast.success(`Queued ${result.channelsQueued} channel(s) for history indexing.`);
+    mutationFn: async () => {
+      if (parsedDays !== currentDays) await api.integrations.updateSlackHistoryLookback(connectorId, parsedDays);
+      return api.integrations.queueSlackHistoryBackfill(connectorId);
     },
+    onSuccess: setLastRun,
     onError: (error: Error) => toast.error(error.message),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["integrations"] }),
   });
 
   return (
@@ -1004,7 +1013,7 @@ function SlackScopeEditor({
           className="h-8 text-xs"
         />
         <p className="text-[11px] text-muted-foreground">
-          Index history from the last N days when Sketch joins a channel.
+          Index history from the last N days when Sketch joins a channel. 0 turns history off.
         </p>
       </div>
 
@@ -1012,26 +1021,22 @@ function SlackScopeEditor({
         <Button
           size="sm"
           className="h-7 text-xs"
-          onClick={() => saveScope.mutate()}
-          disabled={!validDays || parsedDays === currentDays || saveScope.isPending}
+          onClick={() => saveLookback.mutate()}
+          disabled={!validDays || parsedDays === currentDays || saveLookback.isPending}
         >
-          {saveScope.isPending ? "Saving…" : "Save"}
+          {saveLookback.isPending ? "Saving…" : "Save"}
         </Button>
         <Button
           size="sm"
           variant="outline"
           className="h-7 text-xs"
           onClick={() => indexHistory.mutate()}
-          disabled={indexHistory.isPending}
+          disabled={!validDays || parsedDays === 0 || indexHistory.isPending}
         >
           {indexHistory.isPending ? "Queueing…" : "Index history now"}
         </Button>
       </div>
-      {lastRun ? (
-        <p className="text-[11px] text-muted-foreground">
-          Queued {lastRun.channelsQueued} channel(s); skipped {lastRun.channelsSkipped} already running.
-        </p>
-      ) : null}
+      {lastRun ? <p className="text-[11px] text-muted-foreground">{describeSlackBackfill(lastRun)}</p> : null}
     </div>
   );
 }

@@ -2,7 +2,8 @@ import type { Kysely } from "kysely";
 import type { DB } from "../db/schema";
 
 export const DEFAULT_SLACK_HISTORY_LOOKBACK_DAYS = 365;
-export const SLACK_HISTORY_LOOKBACK_MIN_DAYS = 1;
+/** 0 turns history off: joins, re-adds, and startup create no ranges. */
+export const SLACK_HISTORY_LOOKBACK_MIN_DAYS = 0;
 export const SLACK_HISTORY_LOOKBACK_MAX_DAYS = 3650;
 
 function clamp(days: number): number {

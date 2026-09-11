@@ -111,8 +111,35 @@ describe("Slack history backfill API", () => {
     expect((await patch(30)).status).toBe(200);
     const stored = await createConnectorRepository(db).findConfigById(connectorId);
     expect(JSON.parse(stored?.scope_config ?? "{}")).toMatchObject({ historyLookbackDays: 30 });
-    expect((await patch(0)).status).toBe(400);
+    expect((await patch(0)).status).toBe(200);
+    expect((await patch(-1)).status).toBe(400);
     expect((await patch(3651)).status).toBe(400);
     expect((await patch(1.5)).status).toBe(400);
+  });
+
+  it("saves the history lookback without resetting the sync cursor, and validates its bounds", async () => {
+    const connectors = createConnectorRepository(db);
+    await connectors.updateConfig(connectorId, {
+      scopeConfig: JSON.stringify({ keep: true }),
+      syncCursor: "cursor-1",
+    });
+    const put = (body: unknown, headers: Record<string, string> = { Cookie: cookie }) =>
+      app.request(`/api/connectors/${connectorId}/history-lookback`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      });
+
+    const res = await put({ historyLookbackDays: 0 });
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ historyLookbackDays: 0 });
+    const stored = await connectors.findConfigById(connectorId);
+    expect(JSON.parse(stored?.scope_config ?? "{}")).toEqual({ keep: true, historyLookbackDays: 0 });
+    expect(stored?.sync_cursor).toBe("cursor-1");
+
+    expect((await put({})).status).toBe(400);
+    expect((await put({ historyLookbackDays: -1 })).status).toBe(400);
+    expect((await put({ historyLookbackDays: 3651 })).status).toBe(400);
+    expect((await put({ historyLookbackDays: 30 }, { Cookie: await loginAs(app, MEMBER_EMAIL) })).status).toBe(403);
   });
 });

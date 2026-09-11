@@ -2736,6 +2736,30 @@ export function connectorRoutes(
     return c.json(result, 202);
   });
 
+  /**
+   * Saves the org-wide Slack history window. Deliberately not the scope PATCH:
+   * that route nulls the sync cursor and starts a resync, while the window only
+   * shapes ranges created from now on, so saving it needs no sync.
+   */
+  routes.put("/:id/history-lookback", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const config = await connectorRepo.findConfigById(c.req.param("id"));
+    if (!config || !configEnabled(config) || config.connector_type !== "slack") {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    const parsed = slackScopeSchema.required().safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
+    const currentScope = JSON.parse(config.scope_config) as Record<string, unknown>;
+    await connectorRepo.updateConfig(config.id, {
+      scopeConfig: JSON.stringify({ ...currentScope, historyLookbackDays: parsed.data.historyLookbackDays }),
+    });
+    return c.json({ historyLookbackDays: parsed.data.historyLookbackDays });
+  });
+
   /** Update connector scope config (add/remove drives, folders, etc.). */
   routes.patch("/:id/scope", async (c) => {
     const config = await connectorRepo.findConfigById(c.req.param("id"));

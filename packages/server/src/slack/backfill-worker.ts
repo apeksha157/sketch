@@ -115,29 +115,33 @@ export class SlackBackfillWorker {
   async reconcile(): Promise<{ initial: number; gap: number; rearmed: number }> {
     const nowIso = new Date(this.now()).toISOString();
     const rearmed = await this.ranges.rearmExhausted(nowIso);
+    const window = await this.lookbackWindow();
+    if (!window) {
+      this.options.logger.info({ rearmed }, "Slack history backfill reconciled; lookback is 0 days");
+      return { initial: 0, gap: 0, rearmed };
+    }
     const channels = await this.options.facade.listMemberChannels();
-    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
+    const channelNames = new Map(channels.map((channel) => [channel.id, channel.name]));
     const summaries = await this.ranges.summarizeChannels(channels.map((channel) => channel.id));
-    const upperTs = slackTsFromMs(this.now());
-    const windowLowerTs = slackTsFromMs(this.now() - lookbackDays * DAY_MS);
     let initial = 0;
     let gap = 0;
     for (const summary of summaries) {
+      const channelName = channelNames.get(summary.channelId);
       if (summary.ranges === 0 && summary.storedRows === 0) {
-        await this.createRange({ channelId: summary.channelId, kind: "initial", rangeKey: "initial" }, [
-          windowLowerTs,
-          upperTs,
+        await this.createRange({ channelId: summary.channelId, channelName, kind: "initial", rangeKey: "initial" }, [
+          window.lowerTs,
+          window.upperTs,
         ]);
         initial += 1;
         continue;
       }
       if (summary.ranges > 0 && summary.nonTerminalRanges === 0) {
-        const lowerTs = summary.newestStoredTs ?? windowLowerTs;
-        if (lowerTs >= upperTs) continue;
-        await this.createRange({ channelId: summary.channelId, kind: "gap", rangeKey: `gap:${upperTs}` }, [
-          lowerTs,
-          upperTs,
-        ]);
+        const lowerTs = summary.newestStoredTs ?? window.lowerTs;
+        if (lowerTs >= window.upperTs) continue;
+        await this.createRange(
+          { channelId: summary.channelId, channelName, kind: "gap", rangeKey: `gap:${window.upperTs}` },
+          [lowerTs, window.upperTs],
+        );
         gap += 1;
       }
     }
@@ -148,30 +152,35 @@ export class SlackBackfillWorker {
   /**
    * A join into a channel Sketch has never stored anything for takes the full
    * lookback window; a re-add only needs the gap since the newest stored row.
+   * Every join ends in one Slack sync: with a range, the drain requests it once
+   * the range is fetched so the history is included; without one, right away.
    */
   async handleBotJoinedChannel(channelId: string): Promise<SlackBackfillRangeRow | null> {
+    const range = await this.createJoinRange(channelId);
+    if (range) void this.kick();
+    else this.requestSync();
+    return range;
+  }
+
+  private async createJoinRange(channelId: string): Promise<SlackBackfillRangeRow | null> {
     const [summary] = await this.ranges.summarizeChannels([channelId]);
-    if (!summary) return null;
-    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
-    const upperTs = slackTsFromMs(this.now());
-    const windowLowerTs = slackTsFromMs(this.now() - lookbackDays * DAY_MS);
+    const window = await this.lookbackWindow();
+    if (!summary || !window) return null;
     const isInitial = summary.ranges === 0 && summary.storedRows === 0;
-    const lowerTs = isInitial
-      ? windowLowerTs
-      : summary.newestStoredTs && summary.newestStoredTs > windowLowerTs
+    const lowerTs =
+      !isInitial && summary.newestStoredTs && summary.newestStoredTs > window.lowerTs
         ? summary.newestStoredTs
-        : windowLowerTs;
-    if (lowerTs >= upperTs) return null;
-    const created = await this.createRange(
+        : window.lowerTs;
+    if (lowerTs >= window.upperTs) return null;
+    return this.createRange(
       {
         channelId,
+        channelName: await this.findChannelName(channelId),
         kind: isInitial ? "initial" : "gap",
-        rangeKey: isInitial ? "initial" : `gap:${upperTs}`,
+        rangeKey: isInitial ? "initial" : `gap:${window.upperTs}`,
       },
-      [lowerTs, upperTs],
+      [lowerTs, window.upperTs],
     );
-    void this.kick();
-    return created;
   }
 
   /**
@@ -180,10 +189,9 @@ export class SlackBackfillWorker {
    * live are not re-inserted.
    */
   async queueManualBackfill(): Promise<{ channelsQueued: number; channelsSkipped: number }> {
+    const window = await this.lookbackWindow();
+    if (!window) return { channelsQueued: 0, channelsSkipped: 0 };
     const channels = await this.options.facade.listMemberChannels();
-    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
-    const upperTs = slackTsFromMs(this.now());
-    const lowerTs = slackTsFromMs(this.now() - lookbackDays * DAY_MS);
     let channelsQueued = 0;
     let channelsSkipped = 0;
     for (const channel of channels) {
@@ -191,25 +199,46 @@ export class SlackBackfillWorker {
         channelsSkipped += 1;
         continue;
       }
-      await this.createRange({ channelId: channel.id, kind: "manual", rangeKey: `manual:${upperTs}` }, [
-        lowerTs,
-        upperTs,
-      ]);
+      await this.createRange(
+        { channelId: channel.id, channelName: channel.name, kind: "manual", rangeKey: `manual:${window.upperTs}` },
+        [window.lowerTs, window.upperTs],
+      );
       channelsQueued += 1;
     }
     void this.kick();
     return { channelsQueued, channelsSkipped };
   }
 
+  /** `null` when the admin set the lookback to 0 days: no history is fetched. */
+  private async lookbackWindow(): Promise<{ lowerTs: string; upperTs: string } | null> {
+    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
+    if (lookbackDays === 0) return null;
+    return {
+      lowerTs: slackTsFromMs(this.now() - lookbackDays * DAY_MS),
+      upperTs: slackTsFromMs(this.now()),
+    };
+  }
+
+  private async findChannelName(channelId: string): Promise<string | undefined> {
+    for await (const channel of this.options.facade.iterateChannels()) {
+      if (channel.id === channelId) return channel.name;
+    }
+    return undefined;
+  }
+
+  /**
+   * The channel name is stored only when the range creates the conversation,
+   * so the first files carry `#name` instead of the raw channel id. An existing
+   * conversation keeps its name: renames go through the ACL pass, which also
+   * re-emits the channel's files under the new name.
+   */
   private async createRange(
-    input: { channelId: string; kind: SlackBackfillRangeKind; rangeKey: string },
+    input: { channelId: string; channelName: string | undefined; kind: SlackBackfillRangeKind; rangeKey: string },
     bounds: [string, string],
   ): Promise<SlackBackfillRangeRow> {
-    const conversation = await this.conversations.getOrCreate({
-      platform: "slack",
-      kind: "channel",
-      providerConversationId: input.channelId,
-    });
+    const ref = { platform: "slack", kind: "channel", providerConversationId: input.channelId };
+    const conversation =
+      (await this.conversations.find(ref)) ?? (await this.conversations.getOrCreate(ref, input.channelName));
     const { row, created } = await this.ranges.ensureRange({
       channelId: input.channelId,
       conversationId: conversation.id,
@@ -245,11 +274,17 @@ export class SlackBackfillWorker {
    * repeat Slack API calls.
    */
   private async requestGraphSyncIfPending(): Promise<void> {
-    const request = this.options.requestSlackSync;
-    if (!request || this.now() - this.lastGraphSyncRequestAt < SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS) return;
+    if (!this.options.requestSlackSync) return;
+    if (this.now() - this.lastGraphSyncRequestAt < SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS) return;
     if (!(await this.ranges.findNextGraphCandidate({ excludedConversationIds: [] }))) return;
+    this.requestSync();
+  }
+
+  private requestSync(): void {
+    const request = this.options.requestSlackSync;
+    if (!request) return;
     this.lastGraphSyncRequestAt = this.now();
-    void request().catch((error) => this.options.logger.warn({ error }, "Slack history graph sync request failed"));
+    void request().catch((error) => this.options.logger.warn({ error }, "Slack sync request failed"));
   }
 
   /**

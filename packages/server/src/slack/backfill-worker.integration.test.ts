@@ -1,11 +1,13 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createConnectorRepository } from "../db/repositories/connectors";
 import { createConversationRepository } from "../db/repositories/conversations";
 import { createSlackBackfillRangeRepository } from "../db/repositories/slack-backfill-ranges";
+import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import type { Logger } from "../logger";
 import { createTestDb, createTestLogger } from "../test-utils";
-import { SlackBackfillWorker, slackTsFromMs } from "./backfill-worker";
+import { SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS, SlackBackfillWorker, slackTsFromMs } from "./backfill-worker";
 import type { SlackHistoryMessage, SlackIndexingFacade, SlackIndexingPage } from "./indexing-facade";
 
 const NOW_MS = Date.parse("2026-09-11T00:00:00.000Z");
@@ -45,14 +47,17 @@ function createFakeSlack(input: {
   const replyCalls: Array<{ threadTs: string; cursor?: string }> = [];
   let historyIndex = 0;
   const replyIndex = new Map<string, number>();
+  const channels = (input.channels ?? [CHANNEL]).map((id) => ({ id, name: `name-${id}`, isMember: true }));
   const facade = {
     isConfigured: async () => true,
     iterateUsers: async function* () {},
-    iterateChannels: async function* () {},
+    iterateChannels: async function* () {
+      yield* channels;
+    },
     iterateChannelMembers: async function* () {},
     listUsers: async () => [],
-    listChannels: async () => [],
-    listMemberChannels: async () => (input.channels ?? [CHANNEL]).map((id) => ({ id, name: id, isMember: true })),
+    listChannels: async () => channels,
+    listMemberChannels: async () => channels,
     listChannelMembers: async () => [],
     getUserInfo: async (userId: string) => ({
       slackUserId: userId,
@@ -86,15 +91,32 @@ function createFakeSlack(input: {
 function createWorker(
   db: Kysely<DB>,
   facade: SlackIndexingFacade,
-  overrides: { getBotUserId?: () => string | null; logger?: Logger } = {},
+  overrides: {
+    getBotUserId?: () => string | null;
+    logger?: Logger;
+    requestSlackSync?: () => Promise<void>;
+    now?: () => number;
+  } = {},
 ): SlackBackfillWorker {
   return new SlackBackfillWorker({
     db,
     logger: overrides.logger ?? createTestLogger(),
     facade,
-    now: () => NOW_MS,
+    now: overrides.now ?? (() => NOW_MS),
     tickMs: 1_000_000,
     ...(overrides.getBotUserId ? { getBotUserId: overrides.getBotUserId } : {}),
+    ...(overrides.requestSlackSync ? { requestSlackSync: overrides.requestSlackSync } : {}),
+  });
+}
+
+async function setLookbackDays(db: Kysely<DB>, historyLookbackDays: number): Promise<void> {
+  const admin = await createUserRepository(db).create({ name: "admin", email: "admin@test.com", authRole: "admin" });
+  await createConnectorRepository(db).createConfig({
+    connectorType: "slack",
+    authType: "system",
+    credentials: JSON.stringify({ type: "system" }),
+    scopeConfig: JSON.stringify({ historyLookbackDays }),
+    createdBy: admin.id,
   });
 }
 
@@ -348,5 +370,73 @@ describe("Slack history backfill worker", () => {
       .where("kind", "=", "manual")
       .execute();
     expect(manual).toEqual([{ channel_id: other, kind: "manual" }]);
+  });
+
+  it("creates no ranges anywhere when the lookback is 0 days, and a join still requests one sync", async () => {
+    await setLookbackDays(db, 0);
+    let syncRequests = 0;
+    const slack = createFakeSlack({ historyPages: [], channels: [CHANNEL, "C-other"] });
+    const worker = createWorker(db, slack.facade, {
+      requestSlackSync: async () => {
+        syncRequests += 1;
+      },
+    });
+
+    expect(await worker.reconcile()).toMatchObject({ initial: 0, gap: 0 });
+    expect(await worker.handleBotJoinedChannel(CHANNEL)).toBeNull();
+    expect(await worker.queueManualBackfill()).toEqual({ channelsQueued: 0, channelsSkipped: 0 });
+
+    expect(await db.selectFrom("slack_backfill_ranges").selectAll().execute()).toEqual([]);
+    expect(syncRequests).toBe(1);
+  });
+
+  it("stores the channel name when a join creates the conversation, and never renames an existing one", async () => {
+    const slack = createFakeSlack({ historyPages: [], channels: [CHANNEL, "C-known"] });
+    await createConversationRepository(db).getOrCreate(
+      { platform: "slack", kind: "channel", providerConversationId: "C-known" },
+      "old-name",
+    );
+    const worker = createWorker(db, slack.facade);
+
+    await worker.handleBotJoinedChannel(CHANNEL);
+    await worker.handleBotJoinedChannel("C-known");
+
+    const names = await db
+      .selectFrom("conversations")
+      .select(["provider_conversation_id", "display_name"])
+      .orderBy("provider_conversation_id")
+      .execute();
+    expect(names).toEqual([
+      { provider_conversation_id: "C-known", display_name: "old-name" },
+      { provider_conversation_id: CHANNEL, display_name: `name-${CHANNEL}` },
+    ]);
+  });
+
+  it("requests a Slack sync once a joined channel's range is fetched, at most once per interval", async () => {
+    let nowMs = NOW_MS;
+    let syncRequests = 0;
+    const slack = createFakeSlack({
+      historyPages: [{ items: [historyMessage({ ts: tsDaysAgo(3) })], nextCursor: null }],
+    });
+    const worker = createWorker(db, slack.facade, {
+      now: () => nowMs,
+      requestSlackSync: async () => {
+        syncRequests += 1;
+      },
+    });
+    worker.start();
+    await worker.handleBotJoinedChannel(CHANNEL);
+    await worker.kick();
+    const range = await db.selectFrom("slack_backfill_ranges").selectAll().executeTakeFirstOrThrow();
+    expect(range.phase).toEqual("fetched");
+    expect(syncRequests).toBe(1);
+
+    await worker.kick();
+    expect(syncRequests).toBe(1);
+
+    nowMs += SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS;
+    await worker.kick();
+    await worker.stop();
+    expect(syncRequests).toBe(2);
   });
 });

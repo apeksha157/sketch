@@ -100,6 +100,18 @@ describe("Slack backfill graph admission", () => {
     expect(slices.every((slice) => slice.origin === "history" && slice.status === "closed")).toBe(true);
   });
 
+  it("reads a range past WhatsApp's 500-message page in one sync under the Slack caps", async () => {
+    const { conversationId, rangeId } = await seedRange(db);
+    for (let index = 0; index < 600; index += 1) {
+      const ts = `1788000000.${String(index + 1).padStart(6, "0")}`;
+      await insertRow(db, { conversationId, ts, source: "history", rangeId, threadTs: ts });
+    }
+
+    const summary = await admit(db);
+    expect(summary.messagesRead).toEqual(600);
+    expect(summary.rangesCompleted).toEqual(1);
+  });
+
   it("finishes a multi-thread range in one pass when the oldest thread is already consumed", async () => {
     const { conversationId, rangeId } = await seedRange(db);
     await insertRow(db, {

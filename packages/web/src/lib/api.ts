@@ -2916,6 +2916,13 @@ export const api = {
         body: JSON.stringify({ scopeConfig }),
       });
     },
+    /** Saves the org-wide Slack history window without starting a sync. */
+    updateSlackHistoryLookback(id: string, historyLookbackDays: number) {
+      return request<{ historyLookbackDays: number }>(`/api/connectors/${id}/history-lookback`, {
+        method: "PUT",
+        body: JSON.stringify({ historyLookbackDays }),
+      });
+    },
     /** Queues a Slack history backfill for every member channel without a running range. */
     queueSlackHistoryBackfill(id: string) {
       return request<{ channelsQueued: number; channelsSkipped: number }>(`/api/connectors/${id}/history-backfills`, {
