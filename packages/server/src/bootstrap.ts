@@ -36,7 +36,7 @@ import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
 import { repairSlackChunkStreamsOnStartup } from "./connectors/slack-chunk-adapters";
 import { archiveAllSlackChannelFiles } from "./connectors/slack-emission";
 import { ensureSlackConnectorConfig } from "./connectors/slack-provisioning";
-import { startSyncScheduler } from "./connectors/sync";
+import { runConnectorSync, startSyncScheduler } from "./connectors/sync";
 import { createWeeklyMintService } from "./connectors/weekly-mint";
 import { createPricingService } from "./cost/cost-pricing";
 import { OpenRouterPriceMap } from "./cost/openrouter-price-map";
@@ -1150,6 +1150,11 @@ export async function createServer(config: Config, options?: CreateServerOptions
     logger,
     facade: slackIndexingFacade,
     getBotUserId: () => slack?.getBotUserId() ?? null,
+    requestSlackSync: async () => {
+      const [slackConfig] = await enrichmentConnectorRepo.findConfigsByType("slack");
+      if (!slackConfig || !["active", "pending", "error"].includes(slackConfig.sync_status)) return;
+      await runConnectorSync(db, slackConfig.id, logger, config, { slackIndexingFacade });
+    },
   });
 
   const slackAdapterDeps = {

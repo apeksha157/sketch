@@ -34,6 +34,17 @@ export interface SlackBackfillGraphSummary {
   skippedForPressure: boolean;
 }
 
+/**
+ * Slack-only admission caps, layered over the shared WhatsApp defaults so
+ * WhatsApp keeps its own. One page per channel per sync, sized to a full
+ * chunking pass (8 windows of 250 messages), and a larger all-channel budget
+ * so a year of history drains in a few passes instead of hours.
+ */
+export const SLACK_BACKFILL_GRAPH_KNOBS: Partial<WhatsAppBackfillGraphKnobs> = {
+  pageMessages: 2_000,
+  cycleMessages: 5_000,
+};
+
 interface HistoryRow {
   id: number;
   effective_at: string;
@@ -120,7 +131,7 @@ async function hasUnconsumedRangeRows(db: Kysely<DB>, range: SlackBackfillRangeR
 export async function admitSlackBackfillGraphPages(
   options: AdmitSlackBackfillGraphOptions,
 ): Promise<SlackBackfillGraphSummary> {
-  const knobs = resolveWhatsAppBackfillGraphKnobs(options.backfillGraphKnobs);
+  const knobs = resolveWhatsAppBackfillGraphKnobs({ ...SLACK_BACKFILL_GRAPH_KNOBS, ...options.backfillGraphKnobs });
   const now = options.now ?? new Date();
   const nowIso = now.toISOString();
   const ranges = createSlackBackfillRangeRepository(options.db);

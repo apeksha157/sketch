@@ -15,6 +15,7 @@ import { isSlackConversationControlMessage, mapSlackBotReplyToInsert, mapSlackMe
 export const SLACK_BACKFILL_TICK_MS = 5_000;
 export const SLACK_BACKFILL_PAGE_LIMIT = 200;
 export const SLACK_BACKFILL_RETRY_BASE_MS = 30_000;
+export const SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 /** Slack terminal failures: the channel is gone or Sketch is no longer in it. */
@@ -25,6 +26,7 @@ export interface SlackBackfillWorkerOptions {
   logger: Logger;
   facade: SlackIndexingFacade;
   getBotUserId?: () => string | null;
+  requestSlackSync?: () => Promise<void>;
   now?: () => number;
   tickMs?: number;
   pageLimit?: number;
@@ -60,6 +62,7 @@ export class SlackBackfillWorker {
   private active: Promise<void> | null = null;
   private rerun = false;
   private running = false;
+  private lastGraphSyncRequestAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly options: SlackBackfillWorkerOptions) {
     this.ranges = createSlackBackfillRangeRepository(options.db);
@@ -227,10 +230,26 @@ export class SlackBackfillWorker {
   private async drain(): Promise<void> {
     while (this.running) {
       const range = await this.ranges.findNextFetchable(new Date(this.now()).toISOString());
-      if (!range) return;
+      if (!range) break;
       const advanced = await this.stepRange(range);
-      if (!advanced) return;
+      if (!advanced) break;
     }
+    await this.requestGraphSyncIfPending();
+  }
+
+  /**
+   * Fetched history only becomes chunks and files inside a Slack sync, so a
+   * range waiting for graph admission asks for one instead of sitting until
+   * the 30-minute scheduler. Throttled because a sync that is held back by
+   * pipeline backpressure admits nothing, and back-to-back retries would only
+   * repeat Slack API calls.
+   */
+  private async requestGraphSyncIfPending(): Promise<void> {
+    const request = this.options.requestSlackSync;
+    if (!request || this.now() - this.lastGraphSyncRequestAt < SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS) return;
+    if (!(await this.ranges.findNextGraphCandidate({ excludedConversationIds: [] }))) return;
+    this.lastGraphSyncRequestAt = this.now();
+    void request().catch((error) => this.options.logger.warn({ error }, "Slack history graph sync request failed"));
   }
 
   /**
