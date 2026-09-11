@@ -30,7 +30,7 @@ import * as outlookCalendarProviderFileScopeMigration from "./164-outlook-calend
 import * as entityMergeGroupsMigration from "./186-entity-merge-groups";
 import * as entityNameProposalsMigration from "./187-entity-name-proposals";
 
-const EXPECTED_MIGRATION_COUNT = 234;
+const EXPECTED_MIGRATION_COUNT = 235;
 
 function createBlankDb(): Kysely<DB> {
   return new Kysely<DB>({

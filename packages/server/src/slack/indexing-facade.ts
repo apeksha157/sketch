@@ -32,6 +32,24 @@ export interface SlackIndexingUser {
   providerUpdatedAt?: string | null;
 }
 
+export interface SlackHistoryMessage {
+  ts: string;
+  userId: string | null;
+  botId: string | null;
+  text: string;
+  threadTs: string | null;
+  subtype: string | null;
+  replyCount: number;
+  hasFiles: boolean;
+}
+
+export interface SlackHistoryPageOptions {
+  oldest?: string;
+  latest?: string;
+  cursor?: string;
+  limit?: number;
+}
+
 export interface SlackIndexingPage<T> {
   items: T[];
   nextCursor: string | null;
@@ -203,6 +221,15 @@ export interface SlackIndexingFacade {
   listUsersPage?: (cursor?: string) => Promise<SlackIndexingPage<SlackIndexingUser>>;
   listChannelsPage?: (cursor?: string) => Promise<SlackIndexingPage<SlackIndexingChannel>>;
   listChannelMembersPage?: (channelId: string, cursor?: string) => Promise<SlackIndexingPage<string>>;
+  listChannelHistoryPage?: (
+    channelId: string,
+    options: SlackHistoryPageOptions,
+  ) => Promise<SlackIndexingPage<SlackHistoryMessage>>;
+  listThreadRepliesPage?: (
+    channelId: string,
+    threadTs: string,
+    options: SlackHistoryPageOptions,
+  ) => Promise<SlackIndexingPage<SlackHistoryMessage>>;
   iterateUsers(): AsyncIterable<SlackIndexingUser>;
   iterateChannels(): AsyncIterable<SlackIndexingChannel>;
   iterateChannelMembers(channelId: string): AsyncIterable<string>;
@@ -359,6 +386,72 @@ function createSlackIndexingFacadeWithState(
     return { items, nextCursor: result.response_metadata?.next_cursor || null };
   }
 
+  function mapHistoryMessage(message: unknown): SlackHistoryMessage | null {
+    const raw = readRecord(message);
+    const ts = readString(raw, "ts");
+    if (!ts) return null;
+    const replyCount = typeof raw.reply_count === "number" ? raw.reply_count : 0;
+    return {
+      ts,
+      userId: readString(raw, "user"),
+      botId: readString(raw, "bot_id"),
+      text: readString(raw, "text") ?? "",
+      threadTs: readString(raw, "thread_ts"),
+      subtype: readString(raw, "subtype"),
+      replyCount,
+      hasFiles: Array.isArray(raw.files) && raw.files.length > 0,
+    };
+  }
+
+  function mapHistoryPage(result: {
+    messages?: unknown[];
+    response_metadata?: { next_cursor?: string };
+  }): SlackIndexingPage<SlackHistoryMessage> {
+    const items: SlackHistoryMessage[] = [];
+    for (const message of result.messages ?? []) {
+      const mapped = mapHistoryMessage(message);
+      if (mapped) items.push(mapped);
+    }
+    return { items, nextCursor: result.response_metadata?.next_cursor || null };
+  }
+
+  async function listChannelHistoryPage(
+    channelId: string,
+    options: SlackHistoryPageOptions,
+  ): Promise<SlackIndexingPage<SlackHistoryMessage>> {
+    return mapHistoryPage(
+      await request((api) =>
+        api.conversations.history({
+          channel: channelId,
+          inclusive: false,
+          limit: options.limit ?? SLACK_PAGE_LIMIT,
+          ...(options.oldest ? { oldest: options.oldest } : {}),
+          ...(options.latest ? { latest: options.latest } : {}),
+          ...(options.cursor ? { cursor: options.cursor } : {}),
+        }),
+      ),
+    );
+  }
+
+  async function listThreadRepliesPage(
+    channelId: string,
+    threadTs: string,
+    options: SlackHistoryPageOptions,
+  ): Promise<SlackIndexingPage<SlackHistoryMessage>> {
+    return mapHistoryPage(
+      await request((api) =>
+        api.conversations.replies({
+          channel: channelId,
+          ts: threadTs,
+          limit: options.limit ?? SLACK_PAGE_LIMIT,
+          ...(options.oldest ? { oldest: options.oldest } : {}),
+          ...(options.latest ? { latest: options.latest } : {}),
+          ...(options.cursor ? { cursor: options.cursor } : {}),
+        }),
+      ),
+    );
+  }
+
   async function listChannelMembersPage(channelId: string, cursor?: string): Promise<SlackIndexingPage<string>> {
     const result = await request((api) =>
       api.conversations.members({ channel: channelId, limit: SLACK_PAGE_LIMIT, ...(cursor ? { cursor } : {}) }),
@@ -422,6 +515,8 @@ function createSlackIndexingFacadeWithState(
     listUsersPage,
     listChannelsPage,
     listChannelMembersPage,
+    listChannelHistoryPage,
+    listThreadRepliesPage,
     iterateUsers,
     iterateChannels,
     iterateChannelMembers,

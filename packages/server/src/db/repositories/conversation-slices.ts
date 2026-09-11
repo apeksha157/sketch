@@ -10,6 +10,7 @@ import type {
 
 export type ConversationSliceFlushReason = "gap" | "max_age" | "max_size" | "llm_boundary";
 export type ConversationSliceSalienceVerdict = "kept" | "dropped";
+export type ConversationSliceOrigin = "live" | "history";
 export type WhatsAppBackfillCheckpointStatus = "in_progress" | "complete" | "failed";
 
 export type ConversationSliceRow = Selectable<ConversationSlicesTable>;
@@ -33,6 +34,7 @@ export interface ConversationSliceInsert {
   indexedFileId?: string | null;
   providerThreadId?: string | null;
   status?: "open" | "closed";
+  origin?: ConversationSliceOrigin;
 }
 
 export interface StreamCursorClaim {
@@ -48,6 +50,10 @@ export interface StreamCursorAdvanceIfClaimed {
   streamKey: string;
   lastMessageId: number;
   claimToken: string;
+}
+
+export interface StreamCursorCompositeAdvanceIfClaimed extends StreamCursorAdvanceIfClaimed {
+  lastEffectiveAt: string;
 }
 
 export interface StreamCursorRelease {
@@ -109,6 +115,7 @@ function toSliceInsert(input: ConversationSliceInsert): Insertable<ConversationS
     indexed_file_id: input.indexedFileId ?? null,
     provider_thread_id: input.providerThreadId ?? null,
     status: input.status ?? "closed",
+    origin: input.origin ?? "live",
   };
 }
 
@@ -184,6 +191,7 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
     async getOpenSlice(
       conversationId: number,
       providerThreadId: string | null = null,
+      origin: ConversationSliceOrigin = "live",
     ): Promise<ConversationSliceRow | undefined> {
       return db
         .selectFrom("conversation_slices")
@@ -195,7 +203,18 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
             : eb("provider_thread_id", "=", providerThreadId),
         )
         .where("status", "=", "open")
+        .where("origin", "=", origin)
         .executeTakeFirst();
+    },
+
+    async listOpenSlices(conversationId: number, origin: ConversationSliceOrigin): Promise<ConversationSliceRow[]> {
+      return db
+        .selectFrom("conversation_slices")
+        .selectAll()
+        .where("conversation_id", "=", conversationId)
+        .where("status", "=", "open")
+        .where("origin", "=", origin)
+        .execute();
     },
 
     async updateOpenSlice(input: {
@@ -508,6 +527,46 @@ export function createConversationSlicesRepository(db: Kysely<DB>) {
         .where("stream_key", "=", input.streamKey)
         .where("claim_token", "=", input.claimToken)
         .where((eb) => eb.or([eb("last_message_id", "is", null), eb("last_message_id", "<", input.lastMessageId)]))
+        .executeTakeFirst();
+
+      if (Number(result.numUpdatedRows ?? 0) === 0) return undefined;
+      return db
+        .selectFrom("conversation_slice_stream_cursors")
+        .selectAll()
+        .where("conversation_id", "=", input.conversationId)
+        .where("stream_key", "=", input.streamKey)
+        .executeTakeFirstOrThrow();
+    },
+
+    /**
+     * History pages arrive newest-first, so row ids run backwards against time.
+     * The composite stream cursor therefore advances on `(effective_at, id)` and
+     * never on id alone, which would rewind and re-slice already-chunked rows.
+     */
+    async advanceStreamCursorCompositeIfClaimed(
+      input: StreamCursorCompositeAdvanceIfClaimed,
+    ): Promise<ConversationSliceStreamCursorRow | undefined> {
+      const result = await db
+        .updateTable("conversation_slice_stream_cursors")
+        .set({
+          last_effective_at: input.lastEffectiveAt,
+          last_message_id: input.lastMessageId,
+          updated_at: new Date().toISOString(),
+        })
+        .where("conversation_id", "=", input.conversationId)
+        .where("stream_key", "=", input.streamKey)
+        .where("claim_token", "=", input.claimToken)
+        .where((eb) =>
+          eb.or([
+            eb("last_effective_at", "is", null),
+            eb("last_message_id", "is", null),
+            eb("last_effective_at", "<", input.lastEffectiveAt),
+            eb.and([
+              eb("last_effective_at", "=", input.lastEffectiveAt),
+              eb("last_message_id", "<", input.lastMessageId),
+            ]),
+          ]),
+        )
         .executeTakeFirst();
 
       if (Number(result.numUpdatedRows ?? 0) === 0) return undefined;

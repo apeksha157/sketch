@@ -144,6 +144,51 @@ describe("ManageConnectorDialog connector capabilities", () => {
     expect(screen.queryByRole("button", { name: /Update credentials/i })).not.toBeInTheDocument();
   });
 
+  it("saves the Slack history window and queues a manual backfill", async () => {
+    const user = userEvent.setup();
+    let savedScope: unknown = null;
+    let backfillCalls = 0;
+    server.use(
+      http.patch("/api/connectors/:id/scope", async ({ request }) => {
+        savedScope = ((await request.json()) as { scopeConfig: unknown }).scopeConfig;
+        return HttpResponse.json({
+          connector: { id: "slack-conn", connectorType: "slack", scopeConfig: {}, syncStatus: "active" },
+        });
+      }),
+      http.post("/api/connectors/:id/history-backfills", () => {
+        backfillCalls++;
+        return HttpResponse.json({ channelsQueued: 4, channelsSkipped: 2 }, { status: 202 });
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={slack}
+        connector={connector({
+          id: "slack-conn",
+          connectorType: "slack",
+          authType: "system",
+          canDisconnect: false,
+          canUpdateCredentials: false,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    const input = await screen.findByLabelText(/History window/i);
+    await user.clear(input);
+    await user.type(input, "90");
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(savedScope).toMatchObject({ historyLookbackDays: 90 }));
+
+    await user.click(screen.getByRole("button", { name: /Index history now/i }));
+    await waitFor(() => expect(backfillCalls).toBe(1));
+    expect(await screen.findByText(/Queued 4 channel\(s\); skipped 2 already running\./)).toBeInTheDocument();
+  });
+
   it("passes the disconnected connector back to the Files page", async () => {
     const user = userEvent.setup();
     const onDisconnected = vi.fn();

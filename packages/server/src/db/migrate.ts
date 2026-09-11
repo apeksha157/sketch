@@ -238,6 +238,7 @@ import * as m234EntityTouchStats from "./migrations/234-entity-touch-stats";
 import * as m235 from "./migrations/235-benchmark-workspace";
 import * as m236 from "./migrations/236-requeue-linkedin-conversation-summaries";
 import * as m237 from "./migrations/237-crm-record-fields";
+import * as m238 from "./migrations/238-slack-history-backfill";
 import type { DB } from "./schema";
 
 /**
@@ -485,6 +486,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "235-benchmark-workspace": m235,
           "236-requeue-linkedin-conversation-summaries": m236,
           "237-crm-record-fields": m237,
+          "238-slack-history-backfill": m238,
         };
       },
     },

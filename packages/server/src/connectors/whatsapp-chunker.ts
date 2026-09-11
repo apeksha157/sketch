@@ -586,7 +586,7 @@ async function isBackfillRangeCovered(
     );
 }
 
-function resolveWhatsAppBackfillGraphKnobs(
+export function resolveWhatsAppBackfillGraphKnobs(
   overrides: Partial<WhatsAppBackfillGraphKnobs> = {},
 ): WhatsAppBackfillGraphKnobs {
   return {
@@ -599,7 +599,7 @@ function resolveWhatsAppBackfillGraphKnobs(
   };
 }
 
-async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<WhatsAppBackfillGraphBacklog> {
+export async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<WhatsAppBackfillGraphBacklog> {
   const [pendingSlices, pendingFiles, openFacts] = await Promise.all([
     db
       .selectFrom("conversation_slices")
@@ -629,7 +629,7 @@ async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<WhatsAp
   };
 }
 
-function exceedsWhatsAppBackfillGraphPressure(
+export function exceedsWhatsAppBackfillGraphPressure(
   backlog: WhatsAppBackfillGraphBacklog,
   knobs: WhatsAppBackfillGraphKnobs,
 ): boolean {

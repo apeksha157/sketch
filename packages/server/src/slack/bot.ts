@@ -234,6 +234,10 @@ export class SlackBot {
     }
   }
 
+  getBotUserId(): string | null {
+    return this.botUserId;
+  }
+
   static stripBotMention(text: string, botUserId: string): string {
     return text
       .replace(new RegExp(`<@${botUserId}>`, "g"), "")

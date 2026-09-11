@@ -711,6 +711,7 @@ export interface ConversationSlicesTable {
   indexed_file_id: string | null;
   provider_thread_id: string | null;
   status: Generated<string>;
+  origin: Generated<string>;
   facts_enriched_content_hash: string | null;
   legacy_unjudged_at: Generated<string | null>;
   created_at: Generated<string>;
@@ -730,6 +731,7 @@ export interface ConversationSliceStreamCursorsTable {
   conversation_id: number;
   stream_key: string;
   last_message_id: number | null;
+  last_effective_at: Generated<string | null>;
   claim_token: string | null;
   claimed_at: string | null;
   pending_since: Generated<string | null>;
@@ -913,6 +915,39 @@ export interface WhatsAppBackfillRangesTable {
   graph_cursor_message_id: Generated<number | null>;
   graph_completed_at: Generated<string | null>;
   parent_range_id: Generated<string | null>;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+export interface SlackBackfillRangesTable {
+  id: string;
+  channel_id: string;
+  conversation_id: number;
+  kind: string;
+  range_key: string;
+  lower_ts: string;
+  upper_ts: string;
+  phase: Generated<string>;
+  history_cursor: string | null;
+  attempts: Generated<number>;
+  next_retry_at: string | null;
+  last_error: string | null;
+  messages_fetched: Generated<number>;
+  graph_cursor_effective_at: string | null;
+  graph_cursor_id: number | null;
+  graph_completed_at: string | null;
+  graph_halted_at: string | null;
+  graph_last_served_at: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
+export interface SlackBackfillThreadsTable {
+  id: string;
+  range_id: string;
+  thread_ts: string;
+  status: Generated<string>;
+  reply_cursor: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }
@@ -2249,6 +2284,8 @@ export interface DB {
   slack_channel_participants: SlackChannelParticipantsTable;
   whatsapp_backfill_checkpoints: WhatsAppBackfillCheckpointsTable;
   whatsapp_backfill_ranges: WhatsAppBackfillRangesTable;
+  slack_backfill_ranges: SlackBackfillRangesTable;
+  slack_backfill_threads: SlackBackfillThreadsTable;
   whatsapp_window_keepalives: WhatsAppWindowKeepAlivesTable;
   scheduled_tasks: ScheduledTasksTable;
   automation_runs: AutomationRunsTable;

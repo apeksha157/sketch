@@ -9,6 +9,7 @@ import {
   type ChunkEngineMessage,
   type ChunkPendingOptions,
   type ChunkStreamAdapter,
+  createCompositeStreamChunkCursorStore,
   createStreamChunkCursorStore,
 } from "./chunk-engine";
 import { configDefault, resolveChunkEngineKnobs } from "./config-default";
@@ -57,6 +58,20 @@ interface SlackThreadAdapterParams extends SlackAdapterParams {
   threadTs: string;
 }
 
+export interface SlackHistoryAdapterParams extends SlackAdapterParams {
+  threadTs: string | null;
+  rangeId: string;
+}
+
+/**
+ * A live stream owns only `source='live'` rows; a history stream owns only the
+ * rows of its own backfill range. This provenance filter is what keeps the two
+ * from ever landing in the same slice, even though their row ids interleave.
+ */
+type SlackStreamProvenance = { origin: "live" } | { origin: "history"; rangeId: string };
+
+const LIVE_PROVENANCE: SlackStreamProvenance = { origin: "live" };
+
 /** Normalizes attachment placeholders for boundary prompts and slice transcripts. */
 export function renderSlackChunkMessageText(text: string, attachments: string | null): string {
   if (text.trim().toLowerCase() !== ATTACHMENT_PLACEHOLDER_TEXT) return text;
@@ -89,21 +104,31 @@ function requireSlackEngineMessage(message: ChunkEngineMessage): SlackEngineMess
   return message;
 }
 
-function streamQuery(db: Kysely<DB>, conversationId: number, providerThreadId: string | null) {
-  const query = db.selectFrom("conversation_messages").where("conversation_id", "=", conversationId);
-  return providerThreadId === null
-    ? query.where("is_thread_reply", "=", 0)
-    : query.where("is_thread_reply", "=", 1).where("provider_thread_id", "=", providerThreadId);
+function streamQuery(
+  db: Kysely<DB>,
+  conversationId: number,
+  providerThreadId: string | null,
+  provenance: SlackStreamProvenance,
+) {
+  const scoped = db.selectFrom("conversation_messages").where("conversation_id", "=", conversationId);
+  const threaded =
+    providerThreadId === null
+      ? scoped.where("is_thread_reply", "=", 0)
+      : scoped.where("is_thread_reply", "=", 1).where("provider_thread_id", "=", providerThreadId);
+  return provenance.origin === "live"
+    ? threaded.where("source", "=", "live")
+    : threaded.where("source", "=", "history").where("backfill_range_id", "=", provenance.rangeId);
 }
 
 async function loadOpenRaw(
   db: Kysely<DB>,
   conversationId: number,
   providerThreadId: string | null,
+  provenance: SlackStreamProvenance,
   open: ConversationSliceRow | undefined,
 ): Promise<ChunkEngineMessage[]> {
   if (!open) return [];
-  const rows = await streamQuery(db, conversationId, providerThreadId)
+  const rows = await streamQuery(db, conversationId, providerThreadId, provenance)
     .select(MESSAGE_COLUMNS)
     .where("id", ">=", open.first_message_id)
     .where("id", "<=", open.last_message_id)
@@ -116,15 +141,39 @@ async function loadPending(
   db: Kysely<DB>,
   conversationId: number,
   providerThreadId: string | null,
+  provenance: SlackStreamProvenance,
   cursor: ChunkCursorState,
   limit: number,
   options: ChunkPendingOptions,
 ): Promise<ChunkEngineMessage[]> {
-  let query = streamQuery(db, conversationId, providerThreadId).select(MESSAGE_COLUMNS).where("source", "=", "live");
-  if (cursor.lastMessageId !== null) query = query.where("id", ">", cursor.lastMessageId);
-  if (options.pendingUntil) query = query.where("id", "<=", options.pendingUntil.id);
-  const rows = await query.orderBy("id", "asc").limit(limit).execute();
-  return rows.map(toMessage);
+  const base = streamQuery(db, conversationId, providerThreadId, provenance).select(MESSAGE_COLUMNS);
+  if (provenance.origin === "live") {
+    let query = base;
+    if (cursor.lastMessageId !== null) query = query.where("id", ">", cursor.lastMessageId);
+    if (options.pendingUntil) query = query.where("id", "<=", options.pendingUntil.id);
+    return (await query.orderBy("id", "asc").limit(limit).execute()).map(toMessage);
+  }
+  let query = base.where("effective_at", "is not", null);
+  if (cursor.lastEffectiveAt !== null && cursor.lastMessageId !== null) {
+    const lastEffectiveAt = cursor.lastEffectiveAt;
+    const lastMessageId = cursor.lastMessageId;
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", ">", lastEffectiveAt),
+        eb.and([eb("effective_at", "=", lastEffectiveAt), eb("id", ">", lastMessageId)]),
+      ]),
+    );
+  }
+  if (options.pendingUntil) {
+    const bound = options.pendingUntil;
+    query = query.where((eb) =>
+      eb.or([
+        eb("effective_at", "<", bound.effectiveAt),
+        eb.and([eb("effective_at", "=", bound.effectiveAt), eb("id", "<=", bound.id)]),
+      ]),
+    );
+  }
+  return (await query.orderBy("effective_at", "asc").orderBy("id", "asc").limit(limit).execute()).map(toMessage);
 }
 
 async function tailMessage(db: Kysely<DB>, id: number): Promise<ChunkEngineMessage | undefined> {
@@ -136,27 +185,36 @@ async function tailMessage(db: Kysely<DB>, id: number): Promise<ChunkEngineMessa
   return row ? toMessage(row) : undefined;
 }
 
-function createAdapter(params: SlackAdapterParams, providerThreadId: string | null): ChunkStreamAdapter {
-  const streamKey = providerThreadId ?? SLACK_CHANNEL_STREAM_KEY;
+function createAdapter(
+  params: SlackAdapterParams,
+  providerThreadId: string | null,
+  provenance: SlackStreamProvenance,
+): ChunkStreamAdapter {
+  const baseStreamKey = providerThreadId ?? SLACK_CHANNEL_STREAM_KEY;
+  const isHistory = provenance.origin === "history";
+  const streamKey = isHistory ? `${baseStreamKey}::history` : baseStreamKey;
   return {
     conversationId: params.conversationId,
     streamKey,
     providerThreadId,
-    cursor: createStreamChunkCursorStore(params.conversationId, streamKey),
+    cursor: isHistory
+      ? createCompositeStreamChunkCursorStore(params.conversationId, streamKey)
+      : createStreamChunkCursorStore(params.conversationId, streamKey),
     loadOpenAndPending: async (db, open, cursor, cap, options) => {
       const limit = cap + LOAD_MARGIN;
       const [openRaw, pendingRaw] = await Promise.all([
-        loadOpenRaw(db, params.conversationId, providerThreadId, open),
-        loadPending(db, params.conversationId, providerThreadId, cursor, limit, options),
+        loadOpenRaw(db, params.conversationId, providerThreadId, provenance, open),
+        loadPending(db, params.conversationId, providerThreadId, provenance, cursor, limit, options),
       ]);
       return { openRaw, pendingRaw, pageFull: pendingRaw.length === limit };
     },
     nextPendingMessage: async (db, cursor, options) =>
-      (await loadPending(db, params.conversationId, providerThreadId, cursor, 1, options))[0],
+      (await loadPending(db, params.conversationId, providerThreadId, provenance, cursor, 1, options))[0],
     tailMessage,
     isIndexable: (message) => isIndexableSlackChunkMessage(requireSlackEngineMessage(message)),
     senderLabel: (message) => requireSlackEngineMessage(message).senderName,
-    order: "row_id",
+    order: isHistory ? "effective_time" : "row_id",
+    ...(isHistory ? { origin: "history" as const } : {}),
     boundaries: providerThreadId === null ? "llm" : "single-segment",
     promptHeader:
       "You are the Slack conversation boundary engine. Slack turns are short; preserve links and leave <@U…> mentions raw.",
@@ -173,11 +231,19 @@ function createAdapter(params: SlackAdapterParams, providerThreadId: string | nu
 }
 
 export function createSlackChannelChunkAdapter(params: SlackAdapterParams): ChunkStreamAdapter {
-  return createAdapter(params, null);
+  return createAdapter(params, null, LIVE_PROVENANCE);
 }
 
 export function createSlackThreadChunkAdapter(params: SlackThreadAdapterParams): ChunkStreamAdapter {
-  return createAdapter(params, params.threadTs);
+  return createAdapter(params, params.threadTs, LIVE_PROVENANCE);
+}
+
+/**
+ * The live adapter with its provenance, slice origin, ordering, and cursor
+ * swapped for the history pass of one backfill range.
+ */
+export function createSlackHistoryChunkAdapter(params: SlackHistoryAdapterParams): ChunkStreamAdapter {
+  return createAdapter(params, params.threadTs, { origin: "history", rangeId: params.rangeId });
 }
 
 /**
@@ -206,6 +272,7 @@ export async function repairSlackChunkStreamsOnStartup(
     UPDATE conversation_slices
     SET status = 'closed', flush_reason = 'gap', indexed_file_id = NULL
     WHERE status = 'open'
+      AND origin = 'live'
       AND EXISTS (
         SELECT 1
         FROM conversations
@@ -218,6 +285,7 @@ export async function repairSlackChunkStreamsOnStartup(
         FROM conversation_slices AS later
         WHERE later.conversation_id = conversation_slices.conversation_id
           AND later.status = 'closed'
+          AND later.origin = 'live'
           AND later.first_message_id > conversation_slices.first_message_id
           AND (
             later.provider_thread_id = conversation_slices.provider_thread_id

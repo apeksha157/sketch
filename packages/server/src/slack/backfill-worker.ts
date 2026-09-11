@@ -1,0 +1,387 @@
+import type { Kysely } from "kysely";
+import { type ConversationMessageInsert, createConversationRepository } from "../db/repositories/conversations";
+import {
+  type SlackBackfillRangeKind,
+  type SlackBackfillRangeRow,
+  createSlackBackfillRangeRepository,
+} from "../db/repositories/slack-backfill-ranges";
+import type { DB } from "../db/schema";
+import type { Logger } from "../logger";
+import { SYSTEM_MESSAGE_SUBTYPES } from "./bot";
+import { loadSlackHistoryLookbackDays } from "./history-lookback";
+import type { SlackHistoryMessage, SlackIndexingFacade } from "./indexing-facade";
+import { isSlackConversationControlMessage, mapSlackBotReplyToInsert, mapSlackMessageToInsert } from "./message-mapper";
+
+export const SLACK_BACKFILL_TICK_MS = 5_000;
+export const SLACK_BACKFILL_PAGE_LIMIT = 200;
+export const SLACK_BACKFILL_RETRY_BASE_MS = 30_000;
+const DAY_MS = 24 * 60 * 60_000;
+
+/** Slack terminal failures: the channel is gone or Sketch is no longer in it. */
+const FATAL_SLACK_ERRORS = new Set(["channel_not_found", "not_in_channel", "is_archived"]);
+
+export interface SlackBackfillWorkerOptions {
+  db: Kysely<DB>;
+  logger: Logger;
+  facade: SlackIndexingFacade;
+  getBotUserId?: () => string | null;
+  now?: () => number;
+  tickMs?: number;
+  pageLimit?: number;
+}
+
+export function slackTsFromMs(milliseconds: number): string {
+  return (milliseconds / 1000).toFixed(6);
+}
+
+function errorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") return null;
+  const record = error as Record<string, unknown>;
+  const data = record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : null;
+  const code = data?.error ?? record.code;
+  return typeof code === "string" ? code : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isCapturableHistoryMessage(message: SlackHistoryMessage): boolean {
+  if (message.subtype && SYSTEM_MESSAGE_SUBTYPES.has(message.subtype)) return false;
+  if (isSlackConversationControlMessage(message.text)) return false;
+  return message.text.trim().length > 0 || message.hasFiles;
+}
+
+export class SlackBackfillWorker {
+  private readonly ranges;
+  private readonly conversations;
+  private readonly now: () => number;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private active: Promise<void> | null = null;
+  private rerun = false;
+  private running = false;
+
+  constructor(private readonly options: SlackBackfillWorkerOptions) {
+    this.ranges = createSlackBackfillRangeRepository(options.db);
+    this.conversations = createConversationRepository(options.db);
+    this.now = options.now ?? Date.now;
+  }
+
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.timer = setInterval(() => void this.kick(), this.options.tickMs ?? SLACK_BACKFILL_TICK_MS);
+    this.timer.unref?.();
+    void this.reconcile()
+      .catch((error) => this.options.logger.warn({ error }, "Slack history backfill reconciliation failed"))
+      .then(() => this.kick());
+  }
+
+  async stop(): Promise<void> {
+    this.running = false;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    await this.active;
+  }
+
+  async kick(): Promise<void> {
+    if (!this.running) return;
+    if (this.active) {
+      this.rerun = true;
+      await this.active;
+      return;
+    }
+    this.active = this.drain().catch((error) => {
+      this.options.logger.error({ error }, "Slack history backfill worker failed");
+    });
+    const current = this.active;
+    await current;
+    this.active = null;
+    if (this.rerun) {
+      this.rerun = false;
+      await this.kick();
+    }
+  }
+
+  /**
+   * Startup reconciliation is the single owner of range creation for state the
+   * app could not observe live: a join or a re-add that happened while it was
+   * down. Channels that have rows but no range are the retrospective case and
+   * are left for the admin's "Index history now" button.
+   */
+  async reconcile(): Promise<{ initial: number; gap: number; rearmed: number }> {
+    const nowIso = new Date(this.now()).toISOString();
+    const rearmed = await this.ranges.rearmExhausted(nowIso);
+    const channels = await this.options.facade.listMemberChannels();
+    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
+    const summaries = await this.ranges.summarizeChannels(channels.map((channel) => channel.id));
+    const upperTs = slackTsFromMs(this.now());
+    const windowLowerTs = slackTsFromMs(this.now() - lookbackDays * DAY_MS);
+    let initial = 0;
+    let gap = 0;
+    for (const summary of summaries) {
+      if (summary.ranges === 0 && summary.storedRows === 0) {
+        await this.createRange({ channelId: summary.channelId, kind: "initial", rangeKey: "initial" }, [
+          windowLowerTs,
+          upperTs,
+        ]);
+        initial += 1;
+        continue;
+      }
+      if (summary.ranges > 0 && summary.nonTerminalRanges === 0) {
+        const lowerTs = summary.newestStoredTs ?? windowLowerTs;
+        if (lowerTs >= upperTs) continue;
+        await this.createRange({ channelId: summary.channelId, kind: "gap", rangeKey: `gap:${upperTs}` }, [
+          lowerTs,
+          upperTs,
+        ]);
+        gap += 1;
+      }
+    }
+    this.options.logger.info({ initial, gap, rearmed, channels: channels.length }, "Slack history backfill reconciled");
+    return { initial, gap, rearmed };
+  }
+
+  /**
+   * A join into a channel Sketch has never stored anything for takes the full
+   * lookback window; a re-add only needs the gap since the newest stored row.
+   */
+  async handleBotJoinedChannel(channelId: string): Promise<SlackBackfillRangeRow | null> {
+    const [summary] = await this.ranges.summarizeChannels([channelId]);
+    if (!summary) return null;
+    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
+    const upperTs = slackTsFromMs(this.now());
+    const windowLowerTs = slackTsFromMs(this.now() - lookbackDays * DAY_MS);
+    const isInitial = summary.ranges === 0 && summary.storedRows === 0;
+    const lowerTs = isInitial
+      ? windowLowerTs
+      : summary.newestStoredTs && summary.newestStoredTs > windowLowerTs
+        ? summary.newestStoredTs
+        : windowLowerTs;
+    if (lowerTs >= upperTs) return null;
+    const created = await this.createRange(
+      {
+        channelId,
+        kind: isInitial ? "initial" : "gap",
+        rangeKey: isInitial ? "initial" : `gap:${upperTs}`,
+      },
+      [lowerTs, upperTs],
+    );
+    void this.kick();
+    return created;
+  }
+
+  /**
+   * Queues `[now - lookback, now)` for every member channel without a running
+   * range. Dedup makes this safe to press at any time: rows already captured
+   * live are not re-inserted.
+   */
+  async queueManualBackfill(): Promise<{ channelsQueued: number; channelsSkipped: number }> {
+    const channels = await this.options.facade.listMemberChannels();
+    const lookbackDays = await loadSlackHistoryLookbackDays(this.options.db);
+    const upperTs = slackTsFromMs(this.now());
+    const lowerTs = slackTsFromMs(this.now() - lookbackDays * DAY_MS);
+    let channelsQueued = 0;
+    let channelsSkipped = 0;
+    for (const channel of channels) {
+      if (await this.ranges.hasNonTerminalRange(channel.id)) {
+        channelsSkipped += 1;
+        continue;
+      }
+      await this.createRange({ channelId: channel.id, kind: "manual", rangeKey: `manual:${upperTs}` }, [
+        lowerTs,
+        upperTs,
+      ]);
+      channelsQueued += 1;
+    }
+    void this.kick();
+    return { channelsQueued, channelsSkipped };
+  }
+
+  private async createRange(
+    input: { channelId: string; kind: SlackBackfillRangeKind; rangeKey: string },
+    bounds: [string, string],
+  ): Promise<SlackBackfillRangeRow> {
+    const conversation = await this.conversations.getOrCreate({
+      platform: "slack",
+      kind: "channel",
+      providerConversationId: input.channelId,
+    });
+    const { row, created } = await this.ranges.ensureRange({
+      channelId: input.channelId,
+      conversationId: conversation.id,
+      kind: input.kind,
+      rangeKey: input.rangeKey,
+      lowerTs: bounds[0],
+      upperTs: bounds[1],
+    });
+    if (created) {
+      this.options.logger.info(
+        { channelId: input.channelId, kind: input.kind, rangeKey: input.rangeKey, rangeId: row.id },
+        "Created Slack history backfill range",
+      );
+    }
+    return row;
+  }
+
+  private async drain(): Promise<void> {
+    while (this.running) {
+      const range = await this.ranges.findNextFetchable(new Date(this.now()).toISOString());
+      if (!range) return;
+      const advanced = await this.stepRange(range);
+      if (!advanced) return;
+    }
+  }
+
+  private async stepRange(range: SlackBackfillRangeRow): Promise<boolean> {
+    const nowIso = new Date(this.now()).toISOString();
+    try {
+      if (range.phase === "pending") {
+        await this.ranges.setPhase(range.id, "fetching_history", nowIso);
+        return true;
+      }
+      if (range.phase === "fetching_history") return await this.stepHistoryPage(range, nowIso);
+      if (range.phase === "fetching_threads") return await this.stepThreadPage(range, nowIso);
+      return false;
+    } catch (error) {
+      const code = errorCode(error);
+      if (code && FATAL_SLACK_ERRORS.has(code)) {
+        await this.ranges.markFailed(range.id, code, nowIso);
+        this.options.logger.warn(
+          { rangeId: range.id, channelId: range.channel_id, code },
+          "Slack backfill range failed",
+        );
+        return true;
+      }
+      const phase = await this.ranges.recordFailure({
+        id: range.id,
+        error: errorMessage(error),
+        now: nowIso,
+        retryAt: new Date(this.now() + SLACK_BACKFILL_RETRY_BASE_MS * (range.attempts + 1)).toISOString(),
+      });
+      this.options.logger.warn(
+        { error, rangeId: range.id, channelId: range.channel_id, phase },
+        "Slack backfill page failed",
+      );
+      return false;
+    }
+  }
+
+  private async stepHistoryPage(range: SlackBackfillRangeRow, nowIso: string): Promise<boolean> {
+    const listHistory = this.options.facade.listChannelHistoryPage;
+    if (!listHistory) return false;
+    const page = await listHistory(range.channel_id, {
+      oldest: range.lower_ts,
+      latest: range.upper_ts,
+      limit: this.options.pageLimit ?? SLACK_BACKFILL_PAGE_LIMIT,
+      ...(range.history_cursor ? { cursor: range.history_cursor } : {}),
+    });
+    const inserts = await this.buildInserts(range, page.items, null);
+    const threadTss = page.items.filter((message) => message.replyCount > 0).map((message) => message.ts);
+    await this.options.db.transaction().execute(async (trx) => {
+      const captured = await this.insertAll(trx, inserts);
+      const ranges = createSlackBackfillRangeRepository(trx);
+      await ranges.queueThreads(range.id, threadTss, nowIso);
+      await ranges.advanceHistoryCursor({ id: range.id, cursor: page.nextCursor, fetched: captured, now: nowIso });
+      if (!page.nextCursor) await ranges.setPhase(range.id, "fetching_threads", nowIso);
+    });
+    return true;
+  }
+
+  private async stepThreadPage(range: SlackBackfillRangeRow, nowIso: string): Promise<boolean> {
+    const thread = await this.ranges.nextPendingThread(range.id);
+    if (!thread) {
+      await this.ranges.setPhase(range.id, "fetched", nowIso);
+      this.options.logger.info(
+        { rangeId: range.id, channelId: range.channel_id, messagesFetched: range.messages_fetched },
+        "Slack history backfill range fetched",
+      );
+      return true;
+    }
+    const listReplies = this.options.facade.listThreadRepliesPage;
+    if (!listReplies) return false;
+    const page = await listReplies(range.channel_id, thread.thread_ts, {
+      oldest: range.lower_ts,
+      limit: this.options.pageLimit ?? SLACK_BACKFILL_PAGE_LIMIT,
+      ...(thread.reply_cursor ? { cursor: thread.reply_cursor } : {}),
+    });
+    const replies = page.items.filter((message) => message.ts !== thread.thread_ts && message.ts < range.upper_ts);
+    const inserts = await this.buildInserts(range, replies, thread.thread_ts);
+    await this.options.db.transaction().execute(async (trx) => {
+      const captured = await this.insertAll(trx, inserts);
+      const ranges = createSlackBackfillRangeRepository(trx);
+      await ranges.advanceHistoryCursor({ id: range.id, cursor: range.history_cursor, fetched: captured, now: nowIso });
+      if (page.nextCursor) await ranges.advanceThreadCursor({ id: thread.id, cursor: page.nextCursor, now: nowIso });
+      else await ranges.completeThread(thread.id, nowIso);
+    });
+    return true;
+  }
+
+  /**
+   * Sender-name resolution hits the Slack API, so the whole page is mapped
+   * before the write transaction opens and the transaction stays local.
+   */
+  private async buildInserts(
+    range: SlackBackfillRangeRow,
+    messages: SlackHistoryMessage[],
+    threadTs: string | null,
+  ): Promise<ConversationMessageInsert[]> {
+    const botUserId = this.options.getBotUserId?.() ?? null;
+    const inserts: ConversationMessageInsert[] = [];
+    for (const message of messages) {
+      if (!isCapturableHistoryMessage(message)) continue;
+      const insert =
+        botUserId !== null && message.userId === botUserId
+          ? mapSlackBotReplyToInsert({
+              conversationId: range.conversation_id,
+              messageRef: message.ts,
+              text: message.text,
+              threadTs: threadTs ?? message.threadTs ?? null,
+              source: "history",
+              backfillRangeId: range.id,
+            })
+          : mapSlackMessageToInsert(
+              {
+                ts: message.ts,
+                userId: message.userId,
+                botId: message.botId,
+                text: message.text,
+                threadTs: threadTs ?? message.threadTs ?? null,
+              },
+              {
+                conversationId: range.conversation_id,
+                senderName: await this.resolveSenderName(message),
+                addressedToSketch: false,
+                hasAttachments: message.hasFiles,
+                source: "history",
+                backfillRangeId: range.id,
+              },
+            );
+      inserts.push(insert);
+    }
+    return inserts;
+  }
+
+  private async insertAll(
+    trx: Parameters<typeof createConversationRepository>[0],
+    inserts: ConversationMessageInsert[],
+  ) {
+    const conversations = createConversationRepository(trx);
+    let captured = 0;
+    for (const insert of inserts) {
+      const result = await conversations.insertMessage(insert);
+      if (result.inserted) captured += 1;
+    }
+    return captured;
+  }
+
+  private async resolveSenderName(message: SlackHistoryMessage): Promise<string> {
+    if (!message.userId) return message.botId ?? "unknown";
+    try {
+      const user = await this.options.facade.getUserInfo(message.userId);
+      return user.displayName || user.realName || user.name;
+    } catch {
+      return message.userId;
+    }
+  }
+}

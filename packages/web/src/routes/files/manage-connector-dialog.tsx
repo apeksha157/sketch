@@ -492,6 +492,10 @@ function ScopeEditorDispatch({
     return <EmailScopeEditor connectorId={connectorId} scopeConfig={scopeConfig} />;
   }
 
+  if (connectorType === "slack") {
+    return <SlackScopeEditor connectorId={connectorId} scopeConfig={scopeConfig} />;
+  }
+
   const hierarchySection = showHierarchy ? (
     <HierarchyMappingPanel
       key={connectorId}
@@ -929,6 +933,105 @@ function LinkedinSettingsEditor({
           "Save"
         )}
       </Button>
+    </div>
+  );
+}
+
+const SLACK_HISTORY_LOOKBACK_DEFAULT_DAYS = 365;
+const SLACK_HISTORY_LOOKBACK_MIN_DAYS = 1;
+const SLACK_HISTORY_LOOKBACK_MAX_DAYS = 3650;
+
+function normalizeSlackLookbackDays(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) ? value : SLACK_HISTORY_LOOKBACK_DEFAULT_DAYS;
+}
+
+/**
+ * Slack is a single org-wide connector, so this window applies to every channel
+ * Sketch joins from now on. Channels Sketch is already in are backfilled only
+ * when an admin asks for it here.
+ */
+function SlackScopeEditor({
+  connectorId,
+  scopeConfig,
+}: {
+  connectorId: string;
+  scopeConfig: Record<string, unknown>;
+}) {
+  const queryClient = useQueryClient();
+  const currentDays = normalizeSlackLookbackDays(scopeConfig.historyLookbackDays);
+  const [days, setDays] = useState(String(currentDays));
+  const [lastRun, setLastRun] = useState<{ channelsQueued: number; channelsSkipped: number } | null>(null);
+  const parsedDays = Number(days);
+  const validDays =
+    Number.isInteger(parsedDays) &&
+    parsedDays >= SLACK_HISTORY_LOOKBACK_MIN_DAYS &&
+    parsedDays <= SLACK_HISTORY_LOOKBACK_MAX_DAYS;
+
+  const saveScope = useMutation({
+    mutationFn: () => api.integrations.updateScope(connectorId, { ...scopeConfig, historyLookbackDays: parsedDays }),
+    onSuccess: () => {
+      toast.success("History window updated.");
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const indexHistory = useMutation({
+    mutationFn: () => api.integrations.queueSlackHistoryBackfill(connectorId),
+    onSuccess: (result) => {
+      setLastRun(result);
+      toast.success(`Queued ${result.channelsQueued} channel(s) for history indexing.`);
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <Label
+          htmlFor="slack-history-lookback"
+          className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
+        >
+          History window
+        </Label>
+        <Input
+          id="slack-history-lookback"
+          type="number"
+          min={SLACK_HISTORY_LOOKBACK_MIN_DAYS}
+          max={SLACK_HISTORY_LOOKBACK_MAX_DAYS}
+          value={days}
+          onChange={(e) => setDays(e.target.value)}
+          className="h-8 text-xs"
+        />
+        <p className="text-[11px] text-muted-foreground">
+          Index history from the last N days when Sketch joins a channel.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          className="h-7 text-xs"
+          onClick={() => saveScope.mutate()}
+          disabled={!validDays || parsedDays === currentDays || saveScope.isPending}
+        >
+          {saveScope.isPending ? "Saving…" : "Save"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          onClick={() => indexHistory.mutate()}
+          disabled={indexHistory.isPending}
+        >
+          {indexHistory.isPending ? "Queueing…" : "Index history now"}
+        </Button>
+      </div>
+      {lastRun ? (
+        <p className="text-[11px] text-muted-foreground">
+          Queued {lastRun.channelsQueued} channel(s); skipped {lastRun.channelsSkipped} already running.
+        </p>
+      ) : null}
     </div>
   );
 }

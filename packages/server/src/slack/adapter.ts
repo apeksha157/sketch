@@ -88,6 +88,11 @@ import {
 import type { SlackEntitySyncService } from "./entity-sync";
 import { HOME_ACTION_REASONING_TEXT, HOME_ACTION_TOOL_PROGRESS, buildHomeView } from "./home";
 import { createSlackMessageHandler } from "./message-handler";
+import {
+  isSlackConversationControlMessage as isConversationControlMessage,
+  mapSlackBotReplyToInsert,
+  mapSlackMessageToInsert,
+} from "./message-mapper";
 import { createSlackQuestionTransport, decodeSlackQuestionActionValue } from "./question-interactions";
 import { SlackExternalUserError, SlackIdentityConflictError, resolveSlackUser } from "./resolve-user";
 import { isSlackStopCommand } from "./stop";
@@ -143,22 +148,6 @@ function parseInboxMetadata(value: string | null): Record<string, unknown> | nul
   }
 }
 
-function providerTimestampFromSlackTs(ts: string | undefined): string | null {
-  if (!ts) return null;
-  const seconds = Number(ts);
-  if (!Number.isFinite(seconds) || seconds <= 0) return null;
-  return new Date(seconds * 1000).toISOString();
-}
-
-function isConversationControlMessage(text: string): boolean {
-  const command = parseSketchCommand(text);
-  if (command === "new_session" || command === "tool_progress_query" || command === "reasoning_text_query") {
-    return true;
-  }
-  if (command?.startsWith("tool_progress_") || command?.startsWith("reasoning_text_")) return true;
-  return isToolProgressCommand(text) || isReasoningTextCommand(text);
-}
-
 /**
  * Group DMs (channel_type "mpim") are recorded under their own kind so the
  * indexing pipeline, which operates on kind "channel" only, never chunks or
@@ -173,11 +162,6 @@ function slackConversationRefForMessage(message: { type: string; channelId: stri
     return { platform: "slack", kind: "mpim", providerConversationId: message.channelId };
   }
   return { platform: "slack", kind: "channel", providerConversationId: message.channelId };
-}
-
-function slackProviderThreadId(message: { type: string; ts: string; threadTs?: string }): string | null {
-  if (message.type === "dm") return null;
-  return message.threadTs ?? message.ts;
 }
 
 export interface SlackAdapterDeps {
@@ -214,6 +198,7 @@ export interface SlackAdapterDeps {
   isInternalSlackUser?: (slackUserId: string, email: string | null) => Promise<boolean>;
   onSlackChannelDiscovered?: () => void;
   refreshSlackChannelMembership?: (channelId: string) => Promise<void>;
+  onSlackBotJoinedChannel?: (channelId: string) => Promise<void>;
   recordSlackChannelParticipantJoined?: (channelId: string, slackUserId: string) => Promise<void>;
   recordSlackChannelParticipantObserved?: (channelId: string, slackUserId: string) => Promise<void>;
   recordSlackChannelParticipantLeft?: (channelId: string, slackUserId: string) => Promise<void>;
@@ -393,6 +378,11 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       if (isBot && deps.refreshSlackChannelMembership) {
         void deps.refreshSlackChannelMembership(channelId).catch((err) => {
           logger.warn({ err, channelId }, "Slack membership refresh failed after bot join");
+        });
+      }
+      if (isBot && deps.onSlackBotJoinedChannel) {
+        void deps.onSlackBotJoinedChannel(channelId).catch((err) => {
+          logger.warn({ err, channelId }, "Slack history backfill range creation failed after bot join");
         });
       }
     }
@@ -1001,20 +991,25 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
       return { conversation, captured: null, inserted: false, omitted: true };
     }
 
-    const captured = await repos.conversations.insertMessage({
-      conversationId: conversation.id,
-      providerMessageId: message.ts,
-      senderJid: message.userId ?? message.botId ?? "unknown",
-      senderName: params.senderName,
-      senderUserId: params.senderUserId ?? null,
-      addressedToSketch: params.addressedToSketch,
-      text: message.text || (params.attachments && params.attachments.length > 0 ? "See attached files." : ""),
-      attachments: params.attachments,
-      providerThreadId: slackProviderThreadId(message),
-      providerParentMessageId: message.threadTs ?? null,
-      isThreadReply: Boolean(message.threadTs),
-      providerTimestamp: providerTimestampFromSlackTs(message.ts),
-    });
+    const captured = await repos.conversations.insertMessage(
+      mapSlackMessageToInsert(
+        {
+          ts: message.ts,
+          userId: message.userId,
+          botId: message.botId,
+          text: message.text,
+          threadTs: message.threadTs,
+          isDm: message.type === "dm",
+        },
+        {
+          conversationId: conversation.id,
+          senderName: params.senderName,
+          senderUserId: params.senderUserId ?? null,
+          addressedToSketch: params.addressedToSketch,
+          ...(params.attachments ? { attachments: params.attachments } : {}),
+        },
+      ),
+    );
 
     return { conversation, captured: captured.row, inserted: captured.inserted, omitted: false };
   };
@@ -1028,19 +1023,15 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
   }) => {
     for (const sent of params.sent) {
       if (!sent.messageRef) continue;
-      await repos.conversations.insertMessage({
-        conversationId: params.conversationId,
-        providerMessageId: sent.messageRef,
-        senderJid: "bot",
-        senderName: params.botName ?? "Sketch",
-        isBot: true,
-        addressedToSketch: false,
-        text: sent.text,
-        providerThreadId: params.threadTs ?? null,
-        providerParentMessageId: params.threadTs ?? null,
-        isThreadReply: Boolean(params.threadTs),
-        providerTimestamp: providerTimestampFromSlackTs(sent.messageRef),
-      });
+      await repos.conversations.insertMessage(
+        mapSlackBotReplyToInsert({
+          conversationId: params.conversationId,
+          messageRef: sent.messageRef,
+          text: sent.text,
+          threadTs: params.threadTs ?? null,
+          botName: params.botName ?? null,
+        }),
+      );
     }
   };
 
