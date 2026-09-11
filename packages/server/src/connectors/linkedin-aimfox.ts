@@ -688,7 +688,7 @@ function fillSegmentDirection(
   };
 }
 
-function segmentDirectionStats(messages: OrderedMessage[], accountId: string) {
+export function segmentDirectionStats(messages: OrderedMessage[], accountId: string) {
   let inboundCount = 0;
   let outboundCount = 0;
   let lastInboundAt: string | null = null;
@@ -831,7 +831,7 @@ function buildLinkedinConversationSyncedItem(input: {
  * clears stale owner stamps through syncItemAccess. Legacy and owner mode keep
  * the creator's Sketch email as the only per-file principal.
  */
-function linkedinAccessPrincipals(visibility: LinkedinVisibilityMode, ownerEmail: string) {
+export function linkedinAccessPrincipals(visibility: LinkedinVisibilityMode, ownerEmail: string) {
   return visibility === "workspace" ? [] : toEmailPrincipals([ownerEmail]);
 }
 
@@ -910,7 +910,11 @@ function renderLinkedinProfile(seed: LinkedinAimfoxPersonSeed): string {
  * already says who spoke. Automated campaign messages remain in the record
  * and carry an `(automated)` tag so retrieval can tell a blast from a reply.
  */
-function renderConversationSegment(input: { ownerName: string; leadName: string; messages: OrderedMessage[] }): string {
+export function renderConversationSegment(input: {
+  ownerName: string;
+  leadName: string;
+  messages: OrderedMessage[];
+}): string {
   const lines = input.messages.map(({ message, timestamp }) =>
     renderTranscriptLine({
       at: formatTranscriptTime(timestamp),
@@ -927,7 +931,7 @@ function formatTranscriptTime(iso: string | null): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
 }
 
-function segmentFileName(
+export function segmentFileName(
   ownerName: string,
   leadName: string,
   firstTimestamp: string | null,
@@ -975,20 +979,20 @@ function estimateMessageTokens(message: AimfoxMessage): number {
  * So it hashes only immutable coordinates: the message's position among
  * API-order messages sharing the same sender and timestamp, never the body.
  */
-function aimfoxMessageIdentity(conversationUrn: string, message: AimfoxMessage, ordinal: number): string {
+export function aimfoxMessageIdentity(conversationUrn: string, message: AimfoxMessage, ordinal: number): string {
   const stableId = message.urn ?? message.id ?? message.message_id;
   if (stableId?.trim()) return stableId.trim();
   return sha256(`${conversationUrn}|${message.created_at}|${message.sender.id}|${ordinal}`);
 }
 
-function displaySenderName(sender: AimfoxMessage["sender"]): string {
+export function displaySenderName(sender: AimfoxMessage["sender"]): string {
   const name = sender.full_name?.trim();
   if (name) return name;
   if (!sender.id || sender.id.startsWith("urn:")) return "Unknown sender";
   return sender.id;
 }
 
-function linkedinProfileProviderFileId(accountId: string, leadId: string): string {
+export function linkedinProfileProviderFileId(accountId: string, leadId: string): string {
   return `linkedin:${accountId}:profile:${leadId}`;
 }
 

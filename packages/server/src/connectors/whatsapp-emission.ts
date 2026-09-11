@@ -408,6 +408,7 @@ async function syncedItemForKeptSlice(
     skipReason: null,
     item: {
       providerFileId: context.slice.id,
+      conversationSliceId: context.slice.id,
       providerUrl: null,
       fileName: `WhatsApp: ${titleGroup} - ${formatSliceTimeRange(context.slice)}`,
       fileType: WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,

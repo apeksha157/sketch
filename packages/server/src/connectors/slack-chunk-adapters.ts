@@ -12,6 +12,13 @@ import {
   createCompositeStreamChunkCursorStore,
   createStreamChunkCursorStore,
 } from "./chunk-engine";
+import {
+  CHUNK_MESSAGE_COLUMNS,
+  type ChunkMessageRow,
+  type NamedChunkEngineMessage,
+  isNamedChunkEngineMessage,
+  toNamedChunkEngineMessage,
+} from "./chunk-message-rows";
 import { configDefault, resolveChunkEngineKnobs } from "./config-default";
 import {
   SLACK_CHANNEL_STREAM_KEY,
@@ -21,33 +28,6 @@ import {
 import { ATTACHMENT_PLACEHOLDER_TEXT } from "./transcript";
 
 const LOAD_MARGIN = 50;
-const MESSAGE_COLUMNS = [
-  "id",
-  "provider_message_id",
-  "sender_name",
-  "is_bot",
-  "text",
-  "attachments",
-  "provider_timestamp",
-  "received_at",
-  "effective_at",
-] as const;
-
-interface SlackEngineMessage extends ChunkEngineMessage {
-  senderName: string;
-}
-
-interface SlackMessageRow {
-  id: number;
-  provider_message_id: string;
-  sender_name: string;
-  is_bot: number;
-  text: string;
-  attachments: string | null;
-  provider_timestamp: string | null;
-  received_at: string;
-  effective_at: string | null;
-}
 
 interface SlackAdapterParams {
   conversationId: number;
@@ -80,25 +60,12 @@ export function renderSlackChunkMessageText(text: string, attachments: string | 
   return parsed.firstName ? `[shared file: ${parsed.firstName}]` : "[shared file]";
 }
 
-function toMessage(row: SlackMessageRow): SlackEngineMessage {
-  return {
-    id: row.id,
-    providerMessageId: row.provider_message_id,
-    senderName: row.sender_name,
-    isBot: row.is_bot === 1,
-    text: renderSlackChunkMessageText(row.text, row.attachments),
-    attachments: row.attachments,
-    effectiveAt: row.effective_at ?? row.provider_timestamp ?? row.received_at,
-    receivedAt: row.received_at,
-  };
+function toMessage(row: ChunkMessageRow): NamedChunkEngineMessage {
+  return toNamedChunkEngineMessage(row, renderSlackChunkMessageText(row.text, row.attachments));
 }
 
-function isSlackEngineMessage(message: ChunkEngineMessage): message is SlackEngineMessage {
-  return "senderName" in message && typeof message.senderName === "string";
-}
-
-function requireSlackEngineMessage(message: ChunkEngineMessage): SlackEngineMessage {
-  if (!isSlackEngineMessage(message)) {
+function requireSlackEngineMessage(message: ChunkEngineMessage): NamedChunkEngineMessage {
+  if (!isNamedChunkEngineMessage(message)) {
     throw new Error("Slack chunk adapter received an invalid message");
   }
   return message;
@@ -129,7 +96,7 @@ async function loadOpenRaw(
 ): Promise<ChunkEngineMessage[]> {
   if (!open) return [];
   const rows = await streamQuery(db, conversationId, providerThreadId, provenance)
-    .select(MESSAGE_COLUMNS)
+    .select(CHUNK_MESSAGE_COLUMNS)
     .where("id", ">=", open.first_message_id)
     .where("id", "<=", open.last_message_id)
     .orderBy("id", "asc")
@@ -146,7 +113,7 @@ async function loadPending(
   limit: number,
   options: ChunkPendingOptions,
 ): Promise<ChunkEngineMessage[]> {
-  const base = streamQuery(db, conversationId, providerThreadId, provenance).select(MESSAGE_COLUMNS);
+  const base = streamQuery(db, conversationId, providerThreadId, provenance).select(CHUNK_MESSAGE_COLUMNS);
   if (provenance.origin === "live") {
     let query = base;
     if (cursor.lastMessageId !== null) query = query.where("id", ">", cursor.lastMessageId);
@@ -179,7 +146,7 @@ async function loadPending(
 async function tailMessage(db: Kysely<DB>, id: number): Promise<ChunkEngineMessage | undefined> {
   const row = await db
     .selectFrom("conversation_messages")
-    .select(MESSAGE_COLUMNS)
+    .select(CHUNK_MESSAGE_COLUMNS)
     .where("id", "=", id)
     .executeTakeFirst();
   return row ? toMessage(row) : undefined;

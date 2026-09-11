@@ -229,6 +229,14 @@ export interface SyncedItem {
   providerFileId: string;
   providerMessageId?: string;
   threadId?: string;
+  /**
+   * Set by the conversation-slice emitters so sync can link the persisted file
+   * back onto `conversation_slices.indexed_file_id`. It is the slice id, which
+   * is also `providerFileId` for those items; the separate field is what lets
+   * sync link data-driven instead of switching on the connector type, since a
+   * connector like LinkedIn emits profiles and slices side by side.
+   */
+  conversationSliceId?: string;
   providerUrl: string | null;
   fileName: string;
   fileType: string | null;

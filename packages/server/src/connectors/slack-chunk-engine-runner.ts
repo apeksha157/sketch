@@ -3,7 +3,7 @@ import type { Logger } from "pino";
 import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import type { DB } from "../db/schema";
 import { type ChunkEngineKnobs, evaluateIdleClose } from "./chunk-engine";
-import { runStreamTick } from "./chunk-engine-runner";
+import { idleCloseCandidatesQuery, runStreamTick } from "./chunk-engine-runner";
 import type { ChunkGenerate } from "./chunk-generate";
 import { createSlackChannelChunkAdapter, createSlackThreadChunkAdapter } from "./slack-chunk-adapters";
 import { discoverSlackChunkStreams } from "./slack-chunk-discovery";
@@ -131,23 +131,7 @@ function groupByConversation(rows: StreamWork[]): Map<number, string[]> {
 }
 
 export function slackIdleCloseCandidatesQuery(db: Kysely<DB>, idleBefore: string) {
-  return db
-    .selectFrom("conversation_slices")
-    .select(["conversation_slices.conversation_id", "conversation_slices.provider_thread_id"])
-    .where("conversation_slices.status", "=", "open")
-    .where("conversation_slices.origin", "=", "live")
-    .where("conversation_slices.ended_at", "<", idleBefore)
-    .where((eb) =>
-      eb.exists(
-        eb
-          .selectFrom("conversations")
-          .select("conversations.id")
-          .whereRef("conversations.id", "=", "conversation_slices.conversation_id")
-          .where("conversations.platform", "=", "slack")
-          .where("conversations.kind", "=", "channel"),
-      ),
-    )
-    .orderBy("conversation_slices.ended_at");
+  return idleCloseCandidatesQuery(db, { platform: "slack", kind: "channel", idleBefore });
 }
 
 export async function runSlackChunkEngine(options: SlackChunkEngineRunOptions): Promise<SlackChunkEngineRunSummary> {

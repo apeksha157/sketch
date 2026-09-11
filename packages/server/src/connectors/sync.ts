@@ -564,8 +564,8 @@ export async function runConnectorSync(
           continue;
         }
 
-        if (connectorType === "whatsapp" || connectorType === "slack") {
-          await linkConversationSliceIndexedFile(db, item.providerFileId, itemResult.indexedFileId, syncLogger);
+        if (item.conversationSliceId) {
+          await linkConversationSliceIndexedFile(db, item.conversationSliceId, itemResult.indexedFileId, syncLogger);
         }
 
         affectedIndexedFileIds.add(itemResult.indexedFileId);
