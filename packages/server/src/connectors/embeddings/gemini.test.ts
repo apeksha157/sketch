@@ -39,4 +39,21 @@ describe("Gemini embedding provider", () => {
     await expect(embedQuery("query")).rejects.toBeInstanceOf(GeminiHttpError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("reaches the network once as the recovery probe after the cooldown", async () => {
+    let now = 0;
+    const options = { maxRpm: 60_000, maxRetries: 0, quotaIdentity: "q-embed", now: () => now, sleep: async () => {} };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(MONTHLY_SPENDING_CAP_BODY, { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ embedding: { values: [0.1, 0.2] } }), { status: 200 }));
+    const provider = createGeminiEmbeddingProvider("key-a", options);
+
+    await expect(provider.embedTexts(["first"])).rejects.toBeInstanceOf(GeminiHttpError);
+
+    now += 5 * 60 * 1000;
+    fetchMock.mockClear();
+    await expect(provider.embedTexts(["second"])).resolves.toEqual([[0.1, 0.2]]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

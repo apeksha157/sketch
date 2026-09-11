@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { GeminiHttpError, resetGeminiControlsForTests, runGeminiRequest } from "../connectors/gemini-control";
 import type { Logger } from "../logger";
 import { AgentRunAdmissionCancelledError, createAgentRunLimiter } from "./concurrency-limiter";
+
+const MONTHLY_SPENDING_CAP_BODY = JSON.stringify({
+  error: {
+    code: 429,
+    message:
+      "Your project has exceeded its monthly spending cap. Please go to AI Studio at https://ai.studio/spend to manage your project spend cap. Learn more at https://ai.google.dev/gemini-api/docs/billing#project-spend-caps. ",
+    status: "RESOURCE_EXHAUSTED",
+  },
+});
 
 function deferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -318,5 +328,82 @@ describe("AgentRunLimiter", () => {
         expect(entry.fields.durationMs).toEqual(expect.any(Number));
       }
     }
+  });
+
+  it("drains a saturated scheduled pool of capped briefs so queued work starts", async () => {
+    resetGeminiControlsForTests();
+    const { logger } = captureLogger();
+    const limiter = createAgentRunLimiter({ limit: 1, queue: "scheduled", logger });
+    const now = 0;
+    const geminiOptions = {
+      maxRpm: 60_000,
+      maxRetries: 0,
+      quotaIdentity: "q-slot",
+      now: () => now,
+      sleep: async () => {},
+    };
+    let networkAttempts = 0;
+    let active = 0;
+    let maxActive = 0;
+    const started: string[] = [];
+
+    const brief = (name: string) =>
+      limiter.run(async () => {
+        started.push(name);
+        active++;
+        maxActive = Math.max(maxActive, active);
+        try {
+          await runGeminiRequest(
+            "key-a",
+            async () => {
+              networkAttempts++;
+              throw new GeminiHttpError(429, MONTHLY_SPENDING_CAP_BODY);
+            },
+            geminiOptions,
+          );
+        } catch {
+          // Keyword-only search fallback.
+        } finally {
+          active--;
+        }
+      });
+
+    const briefs = [brief("brief-1"), brief("brief-2"), brief("brief-3")];
+    const workflow = limiter.run(async () => {
+      started.push("workflow");
+      return "workflow complete";
+    });
+
+    await Promise.all(briefs);
+    await expect(workflow).resolves.toBe("workflow complete");
+    expect(networkAttempts).toBe(1);
+    expect(maxActive).toBe(1);
+    expect(started).toEqual(["brief-1", "brief-2", "brief-3", "workflow"]);
+    expect(limiter.snapshot()).toEqual({ limit: 1, active: 0, waiting: 0 });
+  });
+
+  it("keeps unrelated transient retries working inside the same scheduled pool", async () => {
+    resetGeminiControlsForTests();
+    const { logger } = captureLogger();
+    const limiter = createAgentRunLimiter({ limit: 1, queue: "scheduled", logger });
+    let attempts = 0;
+
+    const brief = limiter.run(() =>
+      runGeminiRequest(
+        "key-b",
+        async () => {
+          attempts++;
+          if (attempts === 1) throw new GeminiHttpError(503, "upstream unavailable");
+          return "brief complete";
+        },
+        { maxRpm: 60_000, maxRetries: 1, quotaIdentity: "q-slot-transient", sleep: async () => {} },
+      ),
+    );
+    const workflow = limiter.run(async () => "workflow complete");
+
+    await expect(brief).resolves.toBe("brief complete");
+    await expect(workflow).resolves.toBe("workflow complete");
+    expect(attempts).toBe(2);
+    expect(limiter.snapshot()).toEqual({ limit: 1, active: 0, waiting: 0 });
   });
 });
