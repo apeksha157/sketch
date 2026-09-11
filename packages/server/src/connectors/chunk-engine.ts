@@ -4,6 +4,7 @@ import type { Logger } from "pino";
 import {
   type ConversationSliceCursorRow,
   type ConversationSliceFlushReason,
+  type ConversationSliceOrigin,
   type ConversationSliceRow,
   type ConversationSliceStreamCursorRow,
   createConversationSlicesRepository,
@@ -21,6 +22,7 @@ export interface ChunkEngineDeps {
       model: string | null;
       reasoningEffort: "low" | "medium" | "high";
       maxTokens?: number;
+      timeoutMs?: number;
       label?: string;
     },
   ) => Promise<string>;
@@ -125,6 +127,7 @@ export interface ChunkStreamAdapter {
   isIndexable(message: ChunkEngineMessage): boolean;
   senderLabel(message: ChunkEngineMessage): string;
   order: "effective_time" | "row_id";
+  origin?: ConversationSliceOrigin;
   boundaries: "llm" | "single-segment";
   promptHeader: string;
   generateLabel(kind: "boundary" | "repair"): string;
@@ -134,6 +137,11 @@ export interface ChunkStreamAdapter {
   onSliceClosed?(trx: Transaction<DB>, slice: ConversationSliceRow): Promise<void>;
   onBoundaryValidationFailed?(logger: Logger, mode: "live" | "backfill"): void;
   knobs: ChunkEngineKnobs;
+}
+
+/** Slices are keyed by `(conversation, thread, origin)`; live is the default. */
+function adapterOrigin(adapter: ChunkStreamAdapter): ConversationSliceOrigin {
+  return adapter.origin ?? "live";
 }
 
 function logBoundaryValidationFailure(logger: Logger, adapter: ChunkStreamAdapter, mode: "live" | "backfill"): void {
@@ -154,7 +162,7 @@ function compositeCursorState(row: ConversationSliceCursorRow): ChunkCursorState
 
 function streamCursorState(row: ConversationSliceStreamCursorRow): ChunkCursorState {
   return {
-    lastEffectiveAt: null,
+    lastEffectiveAt: row.last_effective_at,
     lastMessageId: row.last_message_id,
     claimToken: row.claim_token,
     pendingSince: row.pending_since,
@@ -216,7 +224,54 @@ export function createStreamChunkCursorStore(conversationId: number, streamKey: 
   };
 }
 
+/**
+ * Same stream-cursor row and claim protocol as the id-only store, but ordered by
+ * `(effective_at, id)` so a stream whose row ids are not chronological (Slack
+ * history, fetched newest-first) never rewinds its cursor.
+ */
+export function createCompositeStreamChunkCursorStore(conversationId: number, streamKey: string): ChunkCursorStore {
+  const idOnly = createStreamChunkCursorStore(conversationId, streamKey);
+  return {
+    ...idOnly,
+    advance: async (db, input) => {
+      const row = await createConversationSlicesRepository(db).advanceStreamCursorCompositeIfClaimed({
+        conversationId,
+        streamKey,
+        lastEffectiveAt: input.message.effectiveAt,
+        lastMessageId: input.message.id,
+        claimToken: input.claimToken,
+      });
+      return row ? streamCursorState(row) : undefined;
+    },
+    isAfterCursor: (message, cursor) => {
+      if (cursor.lastEffectiveAt === null || cursor.lastMessageId === null) return true;
+      const cursorMs = effectiveMs(cursor.lastEffectiveAt);
+      const messageMs = effectiveMs(message.effectiveAt);
+      return messageMs > cursorMs || (messageMs === cursorMs && message.id > cursor.lastMessageId);
+    },
+    matches: (left, right) =>
+      left.lastEffectiveAt === right.lastEffectiveAt && left.lastMessageId === right.lastMessageId,
+  };
+}
+
 const CLAIM_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * Reasoning models spend output tokens thinking before they answer, and the
+ * provider counts both against this cap. At high effort a full boundary window
+ * exhausted 2048 tokens on reasoning alone and returned empty text, so the cap
+ * is sized for the reasoning, not the small JSON answer. It is a ceiling only;
+ * callers pay for the tokens actually used.
+ */
+const BOUNDARY_MAX_OUTPUT_TOKENS = 16_384;
+
+/**
+ * That reasoning also takes time: a busy 40-message window at high effort ran
+ * close to a minute, past the generator's 60s default, so every retry of the
+ * same window timed out and the stream never advanced.
+ */
+const BOUNDARY_TIMEOUT_MS = 300_000;
+
 interface SortableMessage extends ChunkEngineMessage {
   senderLabel: string;
   effectiveMs: number;
@@ -579,6 +634,7 @@ async function repairOrphanedOpenSlice(
       ]),
     )
     .where("status", "=", "closed")
+    .where("origin", "=", adapterOrigin(adapter))
     .where("first_message_id", ">", open.first_message_id)
     .limit(1)
     .executeTakeFirst();
@@ -593,7 +649,11 @@ async function repairOrphanedOpenSlice(
       throw new ClaimLostError();
     }
     const sliceRepo = createConversationSlicesRepository(trx);
-    const currentOpen = await sliceRepo.getOpenSlice(adapter.conversationId, adapter.providerThreadId);
+    const currentOpen = await sliceRepo.getOpenSlice(
+      adapter.conversationId,
+      adapter.providerThreadId,
+      adapterOrigin(adapter),
+    );
     if (currentOpen?.id !== open.id) throw new ClaimLostError();
     const closed = await sliceRepo.closeOpenSlice(open.id, adapter.flushReason("idle"));
     if (!closed) throw new ClaimLostError();
@@ -620,6 +680,7 @@ async function loadWindow(
   let open = await createConversationSlicesRepository(db).getOpenSlice(
     adapter.conversationId,
     adapter.providerThreadId,
+    adapterOrigin(adapter),
   );
   open = await repairOrphanedOpenSlice(db, adapter, open, cursor);
   const loaded = await adapter.loadOpenAndPending(db, open, cursor, adapter.knobs.windowMessages, {
@@ -702,7 +763,8 @@ async function generateBoundarySegments(
     firstOutput = await deps.generate(prompt, {
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
-      maxTokens: 2048,
+      maxTokens: BOUNDARY_MAX_OUTPUT_TOKENS,
+      timeoutMs: BOUNDARY_TIMEOUT_MS,
       label: adapter.generateLabel("boundary"),
     });
     return validateBoundarySegments(firstOutput, messageCount);
@@ -721,7 +783,8 @@ async function generateBoundarySegments(
     const repairedOutput = await deps.generate(repairPrompt, {
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
-      maxTokens: 2048,
+      maxTokens: BOUNDARY_MAX_OUTPUT_TOKENS,
+      timeoutMs: BOUNDARY_TIMEOUT_MS,
       label: adapter.generateLabel("repair"),
     });
     return validateBoundarySegments(repairedOutput, messageCount);
@@ -765,6 +828,7 @@ async function ensureNoOverlap(
         ]),
       ]),
     )
+    .where("origin", "=", adapterOrigin(adapter))
     .where((eb) =>
       adapter.order === "row_id"
         ? eb.and([eb("first_message_id", "<=", maxMessageId), eb("last_message_id", ">=", minMessageId)])
@@ -812,6 +876,7 @@ async function persistPlannedSlice(
     salienceVerdict: "kept",
     providerThreadId: adapter.providerThreadId,
     status,
+    origin: adapterOrigin(adapter),
   });
   if (inserted.row.status !== status) throw new OverlapGuardError();
   return inserted.row;
@@ -851,7 +916,11 @@ async function applyBoundaryWindow(
     ) {
       throw new ClaimLostError();
     }
-    const currentOpen = await sliceRepo.getOpenSlice(params.adapter.conversationId, params.adapter.providerThreadId);
+    const currentOpen = await sliceRepo.getOpenSlice(
+      params.adapter.conversationId,
+      params.adapter.providerThreadId,
+      adapterOrigin(params.adapter),
+    );
     if (currentOpen?.id !== previousOpen?.id) throw new ClaimLostError();
     await ensureNoOverlap(trx, params.adapter, planned, previousOpen?.id);
     const topicRepo = params.adapter.usesTopicRegistry ? createConversationTopicsRepository(trx) : undefined;
@@ -946,6 +1015,7 @@ async function applyBoundaryWindow(
             )
             .where("first_message_id", "=", item.firstMessageId)
             .where("status", "=", "closed")
+            .where("origin", "=", adapterOrigin(params.adapter))
             .executeTakeFirst();
           if (existing && !sliceHasSameContent(existing, item)) throw new OverlapGuardError();
           const reusedExisting = Boolean(existing);
@@ -1248,7 +1318,11 @@ export async function evaluateIdleClose(
     return await deps.db.transaction().execute(async (trx) => {
       const sliceRepo = createConversationSlicesRepository(trx);
       const cursor = await params.adapter.cursor.get(trx);
-      const open = await sliceRepo.getOpenSlice(params.adapter.conversationId, params.adapter.providerThreadId);
+      const open = await sliceRepo.getOpenSlice(
+        params.adapter.conversationId,
+        params.adapter.providerThreadId,
+        adapterOrigin(params.adapter),
+      );
       if (!cursor || cursor.claimToken !== claimToken || !open) return false;
       const tailIds = parseDenoisedIds(open);
       const tailId = tailIds[tailIds.length - 1];

@@ -1,4 +1,5 @@
 import { configDefault } from "./config-default";
+import { admitSlackBackfillGraphPages } from "./slack-backfill-graph";
 import { resolveSlackChunkEngineKnobs } from "./slack-chunk-adapters";
 import { runSlackChunkEngine } from "./slack-chunk-engine-runner";
 import {
@@ -58,6 +59,14 @@ export function createSlackIndexingConnector(): Connector {
       }
 
       const knobs = resolveSlackChunkEngineKnobs(appConfig);
+      const backfillGraph = await admitSlackBackfillGraphPages({
+        db,
+        logger,
+        generate: slackChunkerGenerate,
+        channelKnobs: knobs.channel,
+        threadKnobs: knobs.thread,
+      });
+      logger.info(backfillGraph, "Completed Slack backfill graph admission run");
       await runSlackChunkEngine({
         db,
         logger,

@@ -86,6 +86,7 @@ import {
 } from "../db/repositories/whatsapp-groups";
 import type { DB } from "../db/schema";
 import { HIDDEN_ENTITY_SOURCE_TYPES } from "../entities/profile-facts";
+import { SLACK_HISTORY_LOOKBACK_MAX_DAYS, SLACK_HISTORY_LOOKBACK_MIN_DAYS } from "../slack/history-lookback";
 import { createSettingsBackedSlackIndexingFacade } from "../slack/indexing-facade";
 import type { WhatsAppSocketFacade } from "../whatsapp/facade-contract";
 import {
@@ -299,6 +300,23 @@ function withoutWhatsAppGroupSelection(scopeConfig: Record<string, unknown>): Re
   return scope;
 }
 
+const slackScopeSchema = z.object({
+  historyLookbackDays: z
+    .number()
+    .int()
+    .min(SLACK_HISTORY_LOOKBACK_MIN_DAYS)
+    .max(SLACK_HISTORY_LOOKBACK_MAX_DAYS)
+    .optional(),
+});
+
+function normalizeSlackScopeConfig(scopeConfig: Record<string, unknown>): Record<string, unknown> {
+  const parsed = slackScopeSchema.parse(scopeConfig);
+  return {
+    ...scopeConfig,
+    ...(parsed.historyLookbackDays !== undefined ? { historyLookbackDays: parsed.historyLookbackDays } : {}),
+  };
+}
+
 function normalizeConnectorScopeConfig(
   connectorType: ConnectorType,
   scopeConfig: Record<string, unknown> | undefined,
@@ -310,6 +328,7 @@ function normalizeConnectorScopeConfig(
     }
     return undefined;
   }
+  if (connectorType === "slack") return normalizeSlackScopeConfig(scopeConfig);
   if (connectorType === "linkedin_aimfox") {
     return normalizeLinkedinEnrichmentScopeConfig(
       normalizeLinkedinVisibilityScopeConfig(scopeConfig, {
@@ -507,6 +526,8 @@ export function connectorRoutes(
      * until the worker adopts the captured history into a range.
      */
     wakeWhatsAppBackfill?: () => Promise<void> | void;
+    /** Queues a `manual` Slack history range per member channel and kicks the worker. */
+    queueSlackHistoryBackfill?: () => Promise<{ channelsQueued: number; channelsSkipped: number }>;
     containerClassificationGenerator?: GeminiGenerator;
   },
 ) {
@@ -2693,6 +2714,50 @@ export function connectorRoutes(
         syncStatus: updated.sync_status,
       },
     });
+  });
+
+  /**
+   * Retrospective opt-in for channels Sketch was already in: nothing backfills
+   * automatically at upgrade. Safe to press repeatedly — dedup means a channel
+   * only gains the rows it was actually missing.
+   */
+  routes.post("/:id/history-backfills", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const config = await connectorRepo.findConfigById(c.req.param("id"));
+    if (!config || !configEnabled(config) || config.connector_type !== "slack") {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    if (!deps?.queueSlackHistoryBackfill) {
+      return c.json({ error: { code: "UNAVAILABLE", message: "Slack history backfill is not available" } }, 503);
+    }
+    const result = await deps.queueSlackHistoryBackfill();
+    logger.info({ connectorId: config.id, ...result }, "Queued Slack history backfill");
+    return c.json(result, 202);
+  });
+
+  /**
+   * Saves the org-wide Slack history window. Deliberately not the scope PATCH:
+   * that route nulls the sync cursor and starts a resync, while the window only
+   * shapes ranges created from now on, so saving it needs no sync.
+   */
+  routes.put("/:id/history-lookback", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const config = await connectorRepo.findConfigById(c.req.param("id"));
+    if (!config || !configEnabled(config) || config.connector_type !== "slack") {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    const parsed = slackScopeSchema.required().safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
+    const currentScope = JSON.parse(config.scope_config) as Record<string, unknown>;
+    await connectorRepo.updateConfig(config.id, {
+      scopeConfig: JSON.stringify({ ...currentScope, historyLookbackDays: parsed.data.historyLookbackDays }),
+    });
+    return c.json({ historyLookbackDays: parsed.data.historyLookbackDays });
   });
 
   /** Update connector scope config (add/remove drives, folders, etc.). */

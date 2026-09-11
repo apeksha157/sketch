@@ -135,6 +135,7 @@ export function slackIdleCloseCandidatesQuery(db: Kysely<DB>, idleBefore: string
     .selectFrom("conversation_slices")
     .select(["conversation_slices.conversation_id", "conversation_slices.provider_thread_id"])
     .where("conversation_slices.status", "=", "open")
+    .where("conversation_slices.origin", "=", "live")
     .where("conversation_slices.ended_at", "<", idleBefore)
     .where((eb) =>
       eb.exists(

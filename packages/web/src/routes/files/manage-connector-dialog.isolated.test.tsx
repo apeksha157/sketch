@@ -144,6 +144,60 @@ describe("ManageConnectorDialog connector capabilities", () => {
     expect(screen.queryByRole("button", { name: /Update credentials/i })).not.toBeInTheDocument();
   });
 
+  it("saves the Slack history window without a resync, and Index history now saves an edited window first", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    server.use(
+      http.patch("/api/connectors/:id/scope", () => {
+        calls.push("scope");
+        return HttpResponse.json({});
+      }),
+      http.put("/api/connectors/:id/history-lookback", async ({ request }) => {
+        const { historyLookbackDays } = (await request.json()) as { historyLookbackDays: number };
+        calls.push(`lookback:${historyLookbackDays}`);
+        return HttpResponse.json({ historyLookbackDays });
+      }),
+      http.post("/api/connectors/:id/history-backfills", () => {
+        calls.push("backfill");
+        return HttpResponse.json({ channelsQueued: 4, channelsSkipped: 2 }, { status: 202 });
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={slack}
+        connector={connector({
+          id: "slack-conn",
+          connectorType: "slack",
+          authType: "system",
+          canDisconnect: false,
+          canUpdateCredentials: false,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    const input = await screen.findByLabelText(/History window/i);
+    await user.clear(input);
+    await user.type(input, "90");
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(calls).toEqual(["lookback:90"]));
+
+    await user.clear(input);
+    await user.type(input, "45");
+    await user.click(screen.getByRole("button", { name: /Index history now/i }));
+    await waitFor(() => expect(calls).toEqual(["lookback:90", "lookback:45", "backfill"]));
+    expect(await screen.findByText("Indexing history for 4 channels. 2 already in progress.")).toBeInTheDocument();
+
+    await user.clear(input);
+    await user.type(input, "0");
+    expect(screen.getByRole("button", { name: /Index history now/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Save$/ })).toBeEnabled();
+  });
+
   it("passes the disconnected connector back to the Files page", async () => {
     const user = userEvent.setup();
     const onDisconnected = vi.fn();

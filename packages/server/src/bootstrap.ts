@@ -36,7 +36,7 @@ import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
 import { repairSlackChunkStreamsOnStartup } from "./connectors/slack-chunk-adapters";
 import { archiveAllSlackChannelFiles } from "./connectors/slack-emission";
 import { ensureSlackConnectorConfig } from "./connectors/slack-provisioning";
-import { startSyncScheduler } from "./connectors/sync";
+import { runConnectorSync, startSyncScheduler } from "./connectors/sync";
 import { createWeeklyMintService } from "./connectors/weekly-mint";
 import { createPricingService } from "./cost/cost-pricing";
 import { OpenRouterPriceMap } from "./cost/openrouter-price-map";
@@ -100,6 +100,7 @@ import { TaskScheduler } from "./scheduler/service";
 import { ensureBuiltinManagedSkills } from "./skills/builtin";
 import { syncFeaturedSkills } from "./skills/sync";
 import { createConfiguredSlackBot, validateSlackTokens } from "./slack/adapter";
+import { SlackBackfillWorker } from "./slack/backfill-worker";
 import type { SlackBot } from "./slack/bot";
 import { createSlackEntitySync } from "./slack/entity-sync";
 import { createSettingsBackedSlackIndexingFacade } from "./slack/indexing-facade";
@@ -1144,6 +1145,18 @@ export async function createServer(config: Config, options?: CreateServerOptions
   const agentScheduler = new AgentScheduler({ service: agentRunService, logger });
   if (backgroundWork) agentScheduler.start();
 
+  const slackBackfillWorker = new SlackBackfillWorker({
+    db,
+    logger,
+    facade: slackIndexingFacade,
+    getBotUserId: () => slack?.getBotUserId() ?? null,
+    requestSlackSync: async () => {
+      const [slackConfig] = await enrichmentConnectorRepo.findConfigsByType("slack");
+      if (!slackConfig || !["active", "pending", "error"].includes(slackConfig.sync_status)) return;
+      await runConnectorSync(db, slackConfig.id, logger, config, { slackIndexingFacade });
+    },
+  });
+
   const slackAdapterDeps = {
     db,
     config,
@@ -1183,6 +1196,9 @@ export async function createServer(config: Config, options?: CreateServerOptions
       void slackMembershipReconciler.wake().catch((err) => {
         logger.warn({ err }, "Slack membership reconciliation failed after channel discovery");
       });
+    },
+    onSlackBotJoinedChannel: async (channelId: string) => {
+      await slackBackfillWorker.handleBotJoinedChannel(channelId);
     },
   };
 
@@ -1309,6 +1325,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     await createWhatsAppInboundEventsRepository(db).resetDispatched();
     whatsappInboundConsumer.start();
     whatsappBackfillWorker?.start();
+    slackBackfillWorker.start();
   }
   const whatsappInboundRetention = backgroundWork
     ? startWhatsAppInboundRetention({
@@ -1366,6 +1383,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
      * have its captured history adopted.
      */
     wakeWhatsAppBackfill: () => whatsappBackfillWorker?.reconcile(true),
+    queueSlackHistoryBackfill: () => slackBackfillWorker.queueManualBackfill(),
     captureWhatsAppLid: (userId, phoneE164) => {
       void whatsappUserLidRefresh.capture(userId, phoneE164).catch((error) => {
         logger.warn(
@@ -1522,6 +1540,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     await operationalAlertWorker?.stop();
     if (backgroundWork) {
       await whatsappBackfillWorker?.stop();
+      await slackBackfillWorker.stop();
       await whatsappInboundConsumer.stop();
     }
     whatsappInboundRetention?.stop();

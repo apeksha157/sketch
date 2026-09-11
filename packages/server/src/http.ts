@@ -119,6 +119,8 @@ interface AppDeps {
   whatsapp?: WhatsAppSocketFacade;
   /** Adopts captured-but-unowned WhatsApp history: on group enable and before a manual sync. */
   wakeWhatsAppBackfill?: () => Promise<void> | void;
+  /** Queues a `manual` Slack history range per member channel and kicks the worker. */
+  queueSlackHistoryBackfill?: () => Promise<{ channelsQueued: number; channelsSkipped: number }>;
   whatsappRuntime?: WhatsAppRuntime;
   watiWebhook?: WatiWhatsAppProvider;
   managedWhatsapp?: ManagedWhatsAppProvider;
@@ -740,6 +742,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
         enrichmentGenerator: deps.enrichmentGenerator,
         whatsapp: deps.whatsapp,
         wakeWhatsAppBackfill: deps.wakeWhatsAppBackfill,
+        queueSlackHistoryBackfill: deps.queueSlackHistoryBackfill,
       }),
     );
   }
