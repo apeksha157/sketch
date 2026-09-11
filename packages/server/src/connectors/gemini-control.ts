@@ -86,6 +86,10 @@ function isApiKeyInvalid(err: unknown): boolean {
   return errorText(err).includes("API_KEY_INVALID");
 }
 
+function isMonthlySpendingCapExceeded(status: number | undefined, err: unknown): boolean {
+  return status === 429 && errorText(err).toLowerCase().includes("exceeded its monthly spending cap");
+}
+
 async function validateGeminiKey(apiKey: string): Promise<"valid" | "invalid" | "unknown"> {
   try {
     const res = await fetch(
@@ -123,6 +127,7 @@ async function validationStatus(
 
 async function retryReason(err: unknown, apiKey: string, options?: GeminiClientOptions): Promise<string | null> {
   const status = errorStatus(err);
+  if (isMonthlySpendingCapExceeded(status, err)) return null;
   if (status === 429) return "rate_limit";
   if (status !== undefined && status >= 500) return "server_error";
   if (isApiKeyInvalid(err)) {
