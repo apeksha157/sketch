@@ -67,6 +67,24 @@ describe("createOpenRouterGenerator", () => {
     expect(body.max_tokens).toBe(1500);
   });
 
+  it("reports a per-call timeout that aborts the body read as a timeout, not a missing-text response", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = createOpenRouterGenerator("sk-or-test", { timeoutMs: 60_000 });
+
+    await expect(generator.generate("Segment this", { timeoutMs: 20 })).rejects.toThrow(
+      "OpenRouter generation timed out after 20ms",
+    );
+  });
+
   it("retries without temperature when a reasoning model rejects it, then omits it for later calls", async () => {
     const rejection = () =>
       Response.json(

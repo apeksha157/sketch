@@ -22,6 +22,7 @@ export interface ChunkEngineDeps {
       model: string | null;
       reasoningEffort: "low" | "medium" | "high";
       maxTokens?: number;
+      timeoutMs?: number;
       label?: string;
     },
   ) => Promise<string>;
@@ -263,6 +264,14 @@ const CLAIM_STALE_MS = 30 * 60 * 1000;
  * callers pay for the tokens actually used.
  */
 const BOUNDARY_MAX_OUTPUT_TOKENS = 16_384;
+
+/**
+ * That reasoning also takes time: a busy 40-message window at high effort ran
+ * close to a minute, past the generator's 60s default, so every retry of the
+ * same window timed out and the stream never advanced.
+ */
+const BOUNDARY_TIMEOUT_MS = 300_000;
+
 interface SortableMessage extends ChunkEngineMessage {
   senderLabel: string;
   effectiveMs: number;
@@ -755,6 +764,7 @@ async function generateBoundarySegments(
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
       maxTokens: BOUNDARY_MAX_OUTPUT_TOKENS,
+      timeoutMs: BOUNDARY_TIMEOUT_MS,
       label: adapter.generateLabel("boundary"),
     });
     return validateBoundarySegments(firstOutput, messageCount);
@@ -774,6 +784,7 @@ async function generateBoundarySegments(
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
       maxTokens: BOUNDARY_MAX_OUTPUT_TOKENS,
+      timeoutMs: BOUNDARY_TIMEOUT_MS,
       label: adapter.generateLabel("repair"),
     });
     return validateBoundarySegments(repairedOutput, messageCount);

@@ -176,7 +176,8 @@ export function createOpenRouterGenerator(
   async function generate(prompt: string, opts?: GenerateOptions): Promise<string> {
     const startedAt = Date.now();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 60_000);
+    const timeoutMs = opts?.timeoutMs ?? options.timeoutMs ?? 60_000;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     const maxTokens = opts?.maxTokens ?? DEFAULT_MAX_TOKENS;
     const requestedModel = opts?.model?.trim();
     const modelForCall = requestedModel || model;
@@ -211,6 +212,10 @@ export function createOpenRouterGenerator(
         }),
       });
       const body = (await response.json().catch(() => ({}))) as OpenRouterChatResponse;
+      /** OpenRouter sends headers before the model finishes, so the timeout can
+       *  abort the body read after `fetch` resolved; name it instead of letting
+       *  the empty body read as a missing-text response. */
+      if (controller.signal.aborted) throw new Error(`OpenRouter generation timed out after ${timeoutMs}ms`);
       return { response, body };
     }
 

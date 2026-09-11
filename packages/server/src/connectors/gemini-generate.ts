@@ -67,6 +67,8 @@ export interface GenerateOptions {
   reasoningEffort?: "low" | "medium" | "high";
   /** Max output tokens (default 2048). */
   maxTokens?: number;
+  /** Per-call request timeout for providers that enforce one (OpenRouter); overrides the generator default. */
+  timeoutMs?: number;
   /** Response MIME type — set to "application/json" for structured output. */
   responseMimeType?: string;
   /** Caller label included in error messages and diagnostic logs (e.g. "extractEntities"). */
