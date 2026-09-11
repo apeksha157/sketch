@@ -254,6 +254,15 @@ export function createCompositeStreamChunkCursorStore(conversationId: number, st
 }
 
 const CLAIM_STALE_MS = 30 * 60 * 1000;
+
+/**
+ * Reasoning models spend output tokens thinking before they answer, and the
+ * provider counts both against this cap. At high effort a full boundary window
+ * exhausted 2048 tokens on reasoning alone and returned empty text, so the cap
+ * is sized for the reasoning, not the small JSON answer. It is a ceiling only;
+ * callers pay for the tokens actually used.
+ */
+const BOUNDARY_MAX_OUTPUT_TOKENS = 16_384;
 interface SortableMessage extends ChunkEngineMessage {
   senderLabel: string;
   effectiveMs: number;
@@ -745,7 +754,7 @@ async function generateBoundarySegments(
     firstOutput = await deps.generate(prompt, {
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
-      maxTokens: 2048,
+      maxTokens: BOUNDARY_MAX_OUTPUT_TOKENS,
       label: adapter.generateLabel("boundary"),
     });
     return validateBoundarySegments(firstOutput, messageCount);
@@ -764,7 +773,7 @@ async function generateBoundarySegments(
     const repairedOutput = await deps.generate(repairPrompt, {
       model: knobs.model,
       reasoningEffort: knobs.reasoningEffort,
-      maxTokens: 2048,
+      maxTokens: BOUNDARY_MAX_OUTPUT_TOKENS,
       label: adapter.generateLabel("repair"),
     });
     return validateBoundarySegments(repairedOutput, messageCount);
