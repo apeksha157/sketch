@@ -90,12 +90,7 @@ describe("Slack backfill graph admission", () => {
 
     const first = await admit(db);
     expect(first.messagesRead).toEqual(2);
-    const range = await createSlackBackfillRangeRepository(db).getById(rangeId);
-    expect(range?.graph_cursor_id).not.toBeNull();
-    expect(range?.graph_completed_at).toBeNull();
-
-    const second = await admit(db);
-    expect(second.rangesCompleted).toEqual(1);
+    expect(first.rangesCompleted).toEqual(1);
     const completed = await createSlackBackfillRangeRepository(db).getById(rangeId);
     expect(completed?.phase).toEqual("complete");
     expect(completed?.graph_completed_at).not.toBeNull();
@@ -103,6 +98,46 @@ describe("Slack backfill graph admission", () => {
     const slices = await db.selectFrom("conversation_slices").select(["origin", "status"]).execute();
     expect(slices.length).toBeGreaterThan(0);
     expect(slices.every((slice) => slice.origin === "history" && slice.status === "closed")).toBe(true);
+  });
+
+  it("finishes a multi-thread range in one pass when the oldest thread is already consumed", async () => {
+    const { conversationId, rangeId } = await seedRange(db);
+    await insertRow(db, {
+      conversationId,
+      ts: "1788000000.000100",
+      source: "history",
+      rangeId,
+      threadTs: "1788000000.000100",
+    });
+    await insertRow(db, {
+      conversationId,
+      ts: "1788100000.000100",
+      source: "history",
+      rangeId,
+      threadTs: "1788100000.000100",
+    });
+    await insertRow(db, {
+      conversationId,
+      ts: "1788100000.000200",
+      source: "history",
+      rangeId,
+      threadTs: "1788100000.000100",
+    });
+    await insertRow(db, {
+      conversationId,
+      ts: "1788200000.000100",
+      source: "history",
+      rangeId,
+      threadTs: "1788200000.000100",
+    });
+
+    const pass = await admit(db);
+
+    expect(pass.rangesCompleted).toEqual(1);
+    const range = await createSlackBackfillRangeRepository(db).getById(rangeId);
+    expect(range?.graph_completed_at).not.toBeNull();
+    const open = await db.selectFrom("conversation_slices").select("id").where("status", "=", "open").execute();
+    expect(open).toEqual([]);
   });
 
   it("leaves the live open slice and live pending queries untouched", async () => {
@@ -218,7 +253,6 @@ describe("Slack backfill graph admission", () => {
       .executeTakeFirstOrThrow();
 
     await insertRow(db, { conversationId, ts: "1788000000.000100", source: "history", rangeId });
-    await admit(db);
     await admit(db);
 
     expect((await ranges.getById(rangeId))?.graph_completed_at).not.toBeNull();

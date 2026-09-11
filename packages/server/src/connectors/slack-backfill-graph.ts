@@ -67,16 +67,6 @@ function streamKeyOf(row: HistoryRow): string {
   return row.is_thread_reply === 1 && row.provider_thread_id ? row.provider_thread_id : SLACK_CHANNEL_STREAM_KEY;
 }
 
-interface GraphPoint {
-  effectiveAt: string;
-  id: number;
-}
-
-function comparePoints(left: GraphPoint, right: GraphPoint): number {
-  if (left.effectiveAt !== right.effectiveAt) return left.effectiveAt < right.effectiveAt ? -1 : 1;
-  return left.id - right.id;
-}
-
 /**
  * True while any row of the range sits after its own stream's history cursor.
  * The range's per-stream cursor keys are derived in SQL so one statement covers
@@ -116,16 +106,16 @@ async function hasUnconsumedRangeRows(db: Kysely<DB>, range: SlackBackfillRangeR
  * `backfill` mode so slices land with `origin='history'` and never touch the
  * live open slice. Runs before the live pass on every Slack sync.
  *
- * A range that returns an empty page with no rows left behind its own stream
- * cursors is fully sliced: its open history slices are flushed and the range is
- * stamped complete, because history is a finite set with nothing left to wait
- * for. Only live streams keep an open chunk.
+ * A range with no rows left behind its own stream cursors is fully sliced: its
+ * open history slices are flushed and the range is stamped complete, because
+ * history is a finite set with nothing left to wait for. Only live streams keep
+ * an open chunk. A short page that every stream consumed finishes the range in
+ * the same pass rather than waiting for an empty page on the next sync.
  *
- * The range cursor never runs ahead of what the engine consumed: it is read
- * back from the engine's own per-stream cursors and advanced only to the
- * least-advanced of them, and a page where any stream was skipped or left rows
- * pending does not advance it at all, so those rows are re-offered on the next
- * pass instead of being stranded.
+ * The range cursor never runs ahead of what the engine consumed: a page where
+ * any stream was skipped or left rows pending does not advance it, so those
+ * rows are re-offered on the next pass. Otherwise every stream consumed its
+ * page rows and the cursor moves to the page tail.
  */
 export async function admitSlackBackfillGraphPages(
   options: AdmitSlackBackfillGraphOptions,
@@ -143,6 +133,14 @@ export async function admitSlackBackfillGraphPages(
     rangesCompleted: 0,
     rangesHalted: 0,
     skippedForPressure: false,
+  };
+
+  const finishRange = async (range: SlackBackfillRangeRow): Promise<void> => {
+    for (const open of await slices.listOpenHistorySlicesForRange(range.conversation_id, range.id)) {
+      await slices.closeOpenSlice(open.id, "gap");
+      summary.slicesClosed += 1;
+    }
+    if (await ranges.completeGraph(range.id, nowIso)) summary.rangesCompleted += 1;
   };
 
   while (summary.messagesRead < knobs.cycleMessages) {
@@ -163,11 +161,7 @@ export async function admitSlackBackfillGraphPages(
         await ranges.touchGraph(range.id, nowIso);
         continue;
       }
-      for (const open of await slices.listOpenHistorySlicesForRange(range.conversation_id, range.id)) {
-        await slices.closeOpenSlice(open.id, "gap");
-        summary.slicesClosed += 1;
-      }
-      if (await ranges.completeGraph(range.id, nowIso)) summary.rangesCompleted += 1;
+      await finishRange(range);
       continue;
     }
 
@@ -181,7 +175,6 @@ export async function admitSlackBackfillGraphPages(
 
     let halted = false;
     let blocked = false;
-    const consumed: GraphPoint[] = [];
     for (const [streamKey, streamRows] of byStream) {
       const last = streamRows[streamRows.length - 1];
       if (!last) continue;
@@ -217,31 +210,20 @@ export async function admitSlackBackfillGraphPages(
         halted = true;
         break;
       }
-      if (result.skippedReason !== undefined || result.pendingRemaining) {
-        blocked = true;
-        continue;
-      }
-      const streamCursor = await slices.getStreamCursor(
-        range.conversation_id,
-        slackHistoryStreamKey(streamKey, range.id),
-      );
-      if (!streamCursor || streamCursor.last_effective_at === null || streamCursor.last_message_id === null) {
-        blocked = true;
-        continue;
-      }
-      consumed.push({ effectiveAt: streamCursor.last_effective_at, id: streamCursor.last_message_id });
+      if (result.skippedReason !== undefined || result.pendingRemaining) blocked = true;
     }
     if (halted) continue;
 
-    const least = consumed.length > 0 ? consumed.reduce((a, b) => (comparePoints(b, a) < 0 ? b : a)) : undefined;
-    if (blocked || !least) await ranges.touchGraph(range.id, nowIso);
+    const tail = rows[rows.length - 1];
+    if (blocked || !tail) await ranges.touchGraph(range.id, nowIso);
     else {
       await ranges.advanceGraphCursor({
         id: range.id,
-        effectiveAt: least.effectiveAt,
-        messageId: least.id,
+        effectiveAt: tail.effective_at,
+        messageId: tail.id,
         now: nowIso,
       });
+      if (rows.length < pageLimit && !(await hasUnconsumedRangeRows(options.db, range))) await finishRange(range);
     }
     summary.messagesRead += rows.length;
     summary.rangesServed += 1;
