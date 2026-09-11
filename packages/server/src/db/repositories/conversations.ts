@@ -284,13 +284,12 @@ export function createConversationRepository(db: ConversationDb) {
     row: ConversationMessageRow,
     backfillRangeId: string | null | undefined,
   ): Promise<ConversationMessageRow> {
-    if (!backfillRangeId || row.backfill_range_id || row.source === "live") return row;
+    if (!backfillRangeId || row.backfill_range_id) return row;
     await db
       .updateTable("conversation_messages")
       .set({ backfill_range_id: backfillRangeId })
       .where("id", "=", row.id)
       .where("backfill_range_id", "is", null)
-      .where("source", "<>", "live")
       .execute();
     return db.selectFrom("conversation_messages").selectAll().where("id", "=", row.id).executeTakeFirstOrThrow();
   }
