@@ -46,11 +46,17 @@ interface ReplacementGate {
 
 export class AgentOutputRunQueue {
   private readonly scheduledAdmissions = new Map<string, ScheduledRunAdmission>();
+  private readonly liveRunCounts = new Map<string, number>();
 
   constructor(private readonly deps: AgentOutputRunQueueDeps) {}
 
+  hasLiveRun(outputId: string): boolean {
+    return (this.liveRunCounts.get(outputId) ?? 0) > 0;
+  }
+
   enqueue(params: EnqueueRunParams): boolean {
     const admission = this.createScheduledAdmission(params);
+    this.addLiveRun(params.outputId);
     const task = this.createTask(params, admission);
 
     if (!this.deps.queueManager) {
@@ -61,7 +67,10 @@ export class AgentOutputRunQueue {
     const accepted = this.deps.queueManager
       .getQueue(`agent-${params.triggerType}-${params.agentKey}-${params.userId}`)
       .enqueue(task);
-    if (!accepted) this.removeAdmission(params.outputId, admission);
+    if (!accepted) {
+      this.removeAdmission(params.outputId, admission);
+      this.removeLiveRun(params.outputId);
+    }
     return accepted;
   }
 
@@ -127,6 +136,7 @@ export class AgentOutputRunQueue {
         });
       } finally {
         this.removeAdmission(params.outputId, admission);
+        this.removeLiveRun(params.outputId);
       }
     };
   }
@@ -160,6 +170,20 @@ export class AgentOutputRunQueue {
     if (admission && this.scheduledAdmissions.get(outputId) === admission) {
       this.scheduledAdmissions.delete(outputId);
     }
+  }
+
+  private addLiveRun(outputId: string): void {
+    this.liveRunCounts.set(outputId, (this.liveRunCounts.get(outputId) ?? 0) + 1);
+  }
+
+  private removeLiveRun(outputId: string): void {
+    const count = this.liveRunCounts.get(outputId);
+    if (count === undefined) return;
+    if (count <= 1) {
+      this.liveRunCounts.delete(outputId);
+      return;
+    }
+    this.liveRunCounts.set(outputId, count - 1);
   }
 
   private createReplacementGate(): ReplacementGate {

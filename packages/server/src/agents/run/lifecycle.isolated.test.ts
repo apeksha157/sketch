@@ -18,6 +18,7 @@ import type { WhatsAppBot } from "../../whatsapp/bot";
 import { CONVERSATION_SUMMARY_AGENT_KEY, conversationSummaryDefinition } from "../definitions/conversation-summary";
 import { DAILY_BRIEF_AGENT_KEY, DAILY_BRIEF_AGENT_VERSION, dailyBriefDefinition } from "../definitions/daily-brief";
 import type { AgentOutputDeliveryPublisher } from "../output-delivery";
+import { AgentScheduler } from "../scheduler";
 import { AgentRunService, type AgentRunServiceDeps, scopeKeyForRoute } from "../service";
 import {
   NOW,
@@ -99,6 +100,63 @@ describe("AgentRunService", () => {
     expect(replacement?.id).not.toBe("stale-output");
     expect(running).toHaveLength(1);
     expect(running[0].id).toBe(replacement?.id);
+    expect(tasks).toHaveLength(1);
+  });
+
+  it("recovers only an eligible restart orphan through the scheduler path", async () => {
+    const tasks: Array<() => Promise<void>> = [];
+    const users = createUserRepository(db);
+    const user = await users.create({ name: "Agent User", email: "user@example.com" });
+    const staleAt = new Date(NOW.getTime() - 31 * 60 * 1000).toISOString();
+    await db
+      .insertInto("agent_outputs")
+      .values([
+        {
+          id: "eligible-stale-output",
+          agent_key: DAILY_BRIEF_AGENT_KEY,
+          user_id: user.id,
+          output_date: OUTPUT_DATE,
+          period_key: OUTPUT_DATE,
+          timezone: "UTC",
+          status: "running",
+          trigger_type: "scheduled",
+          agent_version: DAILY_BRIEF_AGENT_VERSION,
+          created_at: staleAt,
+          updated_at: staleAt,
+        },
+        {
+          id: "historical-stale-output",
+          agent_key: DAILY_BRIEF_AGENT_KEY,
+          user_id: user.id,
+          output_date: "2026-06-14",
+          period_key: "2026-06-14",
+          timezone: "UTC",
+          status: "running",
+          trigger_type: "scheduled",
+          agent_version: DAILY_BRIEF_AGENT_VERSION,
+          created_at: staleAt,
+          updated_at: staleAt,
+        },
+      ])
+      .execute();
+    const service = createService(db, tasks);
+    const scheduler = new AgentScheduler({ service, logger: createTestLogger() });
+
+    await scheduler.tick(NOW);
+
+    const outputs = await db
+      .selectFrom("agent_outputs")
+      .select(["id", "period_key", "status"])
+      .where("user_id", "=", user.id)
+      .orderBy("created_at", "asc")
+      .orderBy("id", "asc")
+      .execute();
+    const currentPeriod = outputs.filter((output) => output.period_key === OUTPUT_DATE);
+
+    expect(outputs.find((output) => output.id === "eligible-stale-output")?.status).toBe("failed");
+    expect(outputs.find((output) => output.id === "historical-stale-output")?.status).toBe("running");
+    expect(currentPeriod).toHaveLength(2);
+    expect(currentPeriod.filter((output) => output.status === "running")).toHaveLength(1);
     expect(tasks).toHaveLength(1);
   });
 

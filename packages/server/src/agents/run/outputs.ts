@@ -368,7 +368,11 @@ export abstract class AgentRunOutputLayer extends AgentRunTargetLayer {
   }
 
   private isRunningStale(output: AgentOutputRow, now: Date): boolean {
-    return output.status === "running" && isOlderThan(output.created_at, now, RUNNING_STALE_AFTER_MS);
+    return (
+      output.status === "running" &&
+      isOlderThan(output.created_at, now, RUNNING_STALE_AFTER_MS) &&
+      !this.runQueue.hasLiveRun(output.id)
+    );
   }
 
   private async reuseRunningOutput(
