@@ -1,6 +1,7 @@
 import { WhatsAppQR } from "@/components/whatsapp-qr";
 import type { ChannelStatus } from "@/lib/api";
 import { api } from "@/lib/api";
+import { getIntegration } from "@/lib/integrations";
 import { generateSlackManifest } from "@/lib/slack-manifest";
 import {
   ArrowSquareOutIcon,
@@ -51,10 +52,11 @@ import { Input } from "@sketch/ui/components/input";
 import { Label } from "@sketch/ui/components/label";
 import { Skeleton } from "@sketch/ui/components/skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { dashboardRoute, useDashboardAuth } from "./dashboard";
+import { ManageConnectorDialog } from "./files/manage-connector-dialog";
 import { managedSlackAuthorizationUrl } from "./managed-redirect";
 
 export const channelsRoute = createRoute({
@@ -184,17 +186,31 @@ function SlackCard({
   managedUrl?: string;
 }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showConnectDialog, setShowConnectDialog] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
+  const [showManageDialog, setShowManageDialog] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   const isConfigured = channel.configured;
   const isConnected = channel.connected === true;
 
+  /**
+   * The Slack connector settings live in the Files page dialog; Channels opens the same
+   * component rather than growing its own copy, so it needs the same connector row.
+   */
+  const { data: connectorsData } = useQuery({
+    queryKey: ["integrations"],
+    queryFn: () => api.integrations.list(),
+    enabled: canManage && isConfigured,
+  });
+  const slackConnector = connectorsData?.connectors.find((c) => c.connectorType === "slack") ?? null;
+
   const handleConnected = () => {
     setShowConnectDialog(false);
     toast.success("Slack connected.");
     queryClient.invalidateQueries({ queryKey: ["channels", "status"] });
+    queryClient.invalidateQueries({ queryKey: ["integrations"] });
   };
 
   const handleDisconnect = async () => {
@@ -256,6 +272,9 @@ function SlackCard({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {slackConnector && (
+                    <DropdownMenuItem onClick={() => setShowManageDialog(true)}>Manage</DropdownMenuItem>
+                  )}
                   <DropdownMenuItem className="text-destructive" onClick={() => setShowDisconnectDialog(true)}>
                     Disconnect
                   </DropdownMenuItem>
@@ -287,6 +306,25 @@ function SlackCard({
           onConnected={handleConnected}
         />
       )}
+
+      <ManageConnectorDialog
+        definition={getIntegration("slack") ?? null}
+        connector={slackConnector}
+        open={showManageDialog}
+        onOpenChange={setShowManageDialog}
+        onDisconnected={() => {
+          queryClient.invalidateQueries({ queryKey: ["channels", "status"] });
+          queryClient.invalidateQueries({ queryKey: ["integrations"] });
+        }}
+        onReconnect={() => {
+          setShowManageDialog(false);
+          navigate({ to: "/files" });
+        }}
+        onIndexingStarted={() => {
+          setShowManageDialog(false);
+          navigate({ to: "/files" });
+        }}
+      />
 
       <AlertDialog open={showDisconnectDialog} onOpenChange={setShowDisconnectDialog}>
         <AlertDialogContent>

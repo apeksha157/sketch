@@ -15,18 +15,24 @@ import { isSlackConversationControlMessage, mapSlackBotReplyToInsert, mapSlackMe
 export const SLACK_BACKFILL_TICK_MS = 5_000;
 export const SLACK_BACKFILL_PAGE_LIMIT = 200;
 export const SLACK_BACKFILL_RETRY_BASE_MS = 30_000;
-export const SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS = 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 /** Slack terminal failures: the channel is gone or Sketch is no longer in it. */
 const FATAL_SLACK_ERRORS = new Set(["channel_not_found", "not_in_channel", "is_archived"]);
+
+/**
+ * "busy" is the only outcome worth asking about again: the sync already running
+ * may have passed graph admission before this history landed, so the fetch
+ * needs a later one. "unavailable" means there is nothing to ask.
+ */
+export type SlackSyncRequestOutcome = "started" | "busy" | "unavailable";
 
 export interface SlackBackfillWorkerOptions {
   db: Kysely<DB>;
   logger: Logger;
   facade: SlackIndexingFacade;
   getBotUserId?: () => string | null;
-  requestSlackSync?: () => Promise<void>;
+  requestSlackSync?: () => Promise<SlackSyncRequestOutcome>;
   now?: () => number;
   tickMs?: number;
   pageLimit?: number;
@@ -62,7 +68,8 @@ export class SlackBackfillWorker {
   private active: Promise<void> | null = null;
   private rerun = false;
   private running = false;
-  private lastGraphSyncRequestAt = Number.NEGATIVE_INFINITY;
+  private rangesFetchedThisDrain = false;
+  private syncRequestInFlight = false;
 
   constructor(private readonly options: SlackBackfillWorkerOptions) {
     this.ranges = createSlackBackfillRangeRepository(options.db);
@@ -272,28 +279,40 @@ export class SlackBackfillWorker {
       const advanced = await this.stepRange(range);
       if (!advanced) break;
     }
-    await this.requestGraphSyncIfPending();
+    if (this.rangesFetchedThisDrain) this.requestSync();
   }
 
   /**
-   * Fetched history only becomes chunks and files inside a Slack sync, so a
-   * range waiting for graph admission asks for one instead of sitting until
-   * the 30-minute scheduler. Throttled because a sync that is held back by
-   * pipeline backpressure admits nothing, and back-to-back retries would only
-   * repeat Slack API calls.
+   * Fetched history only becomes chunks and files inside a Slack sync, so the
+   * action that produced it ends in exactly one: a join or "Index history now"
+   * gets its files in seconds instead of at the next scheduled sync. Whatever
+   * that sync's admission caps leave over is the scheduler's work — the worker
+   * never asks again, since a repeat that admits nothing still costs a full
+   * channel and membership pass against the Slack API.
+   *
+   * A sync already in flight is the exception: it may have admitted its pages
+   * before this fetch finished, so the ask is kept and retried on a later tick
+   * rather than dropped, which would strand the files until the scheduler runs.
    */
-  private async requestGraphSyncIfPending(): Promise<void> {
-    if (!this.options.requestSlackSync) return;
-    if (this.now() - this.lastGraphSyncRequestAt < SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS) return;
-    if (!(await this.ranges.findNextGraphCandidate({ excludedConversationIds: [] }))) return;
-    this.requestSync();
-  }
-
   private requestSync(): void {
     const request = this.options.requestSlackSync;
-    if (!request) return;
-    this.lastGraphSyncRequestAt = this.now();
-    void request().catch((error) => this.options.logger.warn({ error }, "Slack sync request failed"));
+    if (!request) {
+      this.rangesFetchedThisDrain = false;
+      return;
+    }
+    if (this.syncRequestInFlight) return;
+    this.syncRequestInFlight = true;
+    void request()
+      .then((outcome) => {
+        if (outcome !== "busy") this.rangesFetchedThisDrain = false;
+      })
+      .catch((error) => {
+        this.rangesFetchedThisDrain = false;
+        this.options.logger.warn({ error }, "Slack sync request failed");
+      })
+      .finally(() => {
+        this.syncRequestInFlight = false;
+      });
   }
 
   /**
@@ -373,6 +392,7 @@ export class SlackBackfillWorker {
     const thread = await this.ranges.nextPendingThread(range.id);
     if (!thread) {
       await this.ranges.setPhase(range.id, "fetched", nowIso);
+      this.rangesFetchedThisDrain = true;
       this.options.logger.info(
         { rangeId: range.id, channelId: range.channel_id, messagesFetched: range.messages_fetched },
         "Slack history backfill range fetched",

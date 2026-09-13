@@ -1152,8 +1152,12 @@ export async function createServer(config: Config, options?: CreateServerOptions
     getBotUserId: () => slack?.getBotUserId() ?? null,
     requestSlackSync: async () => {
       const [slackConfig] = await enrichmentConnectorRepo.findConfigsByType("slack");
-      if (!slackConfig || !["active", "pending", "error"].includes(slackConfig.sync_status)) return;
+      if (!slackConfig) return "unavailable";
+      if (slackConfig.sync_status === "syncing") return "busy";
+      if (!["active", "pending", "error"].includes(slackConfig.sync_status)) return "unavailable";
+      logger.info({ connectorId: slackConfig.id }, "Slack sync requested by the history backfill worker");
       await runConnectorSync(db, slackConfig.id, logger, config, { slackIndexingFacade });
+      return "started";
     },
   });
 

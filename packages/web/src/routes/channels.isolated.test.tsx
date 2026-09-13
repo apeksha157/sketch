@@ -18,6 +18,7 @@ const mockToast = vi.hoisted(() => ({
   info: vi.fn(),
   error: vi.fn(),
 }));
+const mockNavigate = vi.hoisted(() => vi.fn());
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -26,6 +27,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
     useRouteContext: () => ({
       auth: mockAuth.value,
     }),
+    useNavigate: () => mockNavigate,
   };
 });
 vi.mock("sonner", async (importOriginal) => {
@@ -350,6 +352,107 @@ describe("ChannelsPage", () => {
       const dialogConnectBtn = connectButtons[connectButtons.length - 1];
       expect(dialogConnectBtn).toBeDisabled();
     });
+  });
+
+  describe("Slack manage", () => {
+    function slackConnectorHandler() {
+      server.use(
+        http.get("/api/connectors", () =>
+          HttpResponse.json({
+            connectors: [
+              {
+                id: "slack-conn",
+                connectorType: "slack",
+                authType: "system",
+                scopeConfig: { historyLookbackDays: 30 },
+                syncStatus: "active",
+                lastSyncedAt: null,
+                errorMessage: null,
+                createdBy: "admin-1",
+                createdAt: "2026-01-01T00:00:00Z",
+                fileCount: 3,
+                isOwner: true,
+                canManage: true,
+                canDisconnect: false,
+                canSync: true,
+                canChangeScope: true,
+                canUpdateCredentials: false,
+                canBrowseScope: false,
+                canEnrich: true,
+              },
+            ],
+            teamMemberCount: 1,
+            connectorMemberCounts: {},
+          }),
+        ),
+      );
+    }
+
+    it("opens the shared connector dialog with the Slack history settings", async () => {
+      channelsHandler({ configured: true, connected: true }, { configured: false, connected: null });
+      slackConnectorHandler();
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "Slack actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+
+      expect(await screen.findByLabelText(/History window/i)).toHaveValue(30);
+      expect(await screen.findByRole("button", { name: /Index history now/i })).toBeInTheDocument();
+    }, 15000);
+
+    it("sends the admin to the Files page after starting a sync", async () => {
+      channelsHandler({ configured: true, connected: true }, { configured: false, connected: null });
+      slackConnectorHandler();
+      const syncFn = vi.fn();
+      server.use(
+        http.post("/api/connectors/:id/syncs", () => {
+          syncFn();
+          return HttpResponse.json({ success: true });
+        }),
+      );
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "Slack actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+      await user.click(await screen.findByRole("button", { name: /Sync now/i }));
+
+      await waitFor(() => expect(syncFn).toHaveBeenCalled());
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));
+    }, 15000);
+
+    it("sends the admin to the Files page after queueing a history backfill", async () => {
+      channelsHandler({ configured: true, connected: true }, { configured: false, connected: null });
+      slackConnectorHandler();
+      server.use(
+        http.post("/api/connectors/:id/history-backfills", () =>
+          HttpResponse.json({ channelsQueued: 2, channelsSkipped: 0 }, { status: 202 }),
+        ),
+      );
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "Slack actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+      await user.click(await screen.findByRole("button", { name: /Index history now/i }));
+
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));
+    }, 15000);
+
+    it("offers no Manage item when the workspace has no Slack connector", async () => {
+      channelsHandler({ configured: true, connected: true }, { configured: false, connected: null });
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "Slack actions" }));
+      expect(await screen.findByRole("menuitem", { name: "Disconnect" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Manage" })).not.toBeInTheDocument();
+    }, 15000);
   });
 
   describe("Slack disconnect", () => {

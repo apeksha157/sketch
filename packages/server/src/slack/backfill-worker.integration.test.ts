@@ -7,7 +7,7 @@ import { createUserRepository } from "../db/repositories/users";
 import type { DB } from "../db/schema";
 import type { Logger } from "../logger";
 import { createTestDb, createTestLogger } from "../test-utils";
-import { SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS, SlackBackfillWorker, slackTsFromMs } from "./backfill-worker";
+import { SlackBackfillWorker, type SlackSyncRequestOutcome, slackTsFromMs } from "./backfill-worker";
 import type { SlackHistoryMessage, SlackIndexingFacade, SlackIndexingPage } from "./indexing-facade";
 
 const NOW_MS = Date.parse("2026-09-11T00:00:00.000Z");
@@ -94,7 +94,7 @@ function createWorker(
   overrides: {
     getBotUserId?: () => string | null;
     logger?: Logger;
-    requestSlackSync?: () => Promise<void>;
+    requestSlackSync?: () => Promise<SlackSyncRequestOutcome>;
     now?: () => number;
   } = {},
 ): SlackBackfillWorker {
@@ -379,6 +379,7 @@ describe("Slack history backfill worker", () => {
     const worker = createWorker(db, slack.facade, {
       requestSlackSync: async () => {
         syncRequests += 1;
+        return "started";
       },
     });
 
@@ -434,16 +435,15 @@ describe("Slack history backfill worker", () => {
     expect(conversation.display_name).toBeNull();
   });
 
-  it("requests a Slack sync once a joined channel's range is fetched, at most once per interval", async () => {
-    let nowMs = NOW_MS;
+  it("requests exactly one Slack sync when a joined channel's range finishes fetching", async () => {
     let syncRequests = 0;
     const slack = createFakeSlack({
       historyPages: [{ items: [historyMessage({ ts: tsDaysAgo(3) })], nextCursor: null }],
     });
     const worker = createWorker(db, slack.facade, {
-      now: () => nowMs,
       requestSlackSync: async () => {
         syncRequests += 1;
+        return "started";
       },
     });
     worker.start();
@@ -453,12 +453,83 @@ describe("Slack history backfill worker", () => {
     expect(range.phase).toEqual("fetched");
     expect(syncRequests).toBe(1);
 
+    /** The range still awaits graph admission; the scheduler owns it from here, so later
+     *  drains must not ask again — a repeat sync costs a full Slack channel and member pass. */
+    await worker.kick();
+    await worker.kick();
+    await worker.stop();
+    expect(syncRequests).toBe(1);
+  });
+
+  it("keeps asking until a sync actually starts when one was already running", async () => {
+    const outcomes: SlackSyncRequestOutcome[] = ["busy", "busy", "started"];
+    let syncRequests = 0;
+    const slack = createFakeSlack({
+      historyPages: [{ items: [historyMessage({ ts: tsDaysAgo(3) })], nextCursor: null }],
+    });
+    const worker = createWorker(db, slack.facade, {
+      requestSlackSync: async () => {
+        syncRequests += 1;
+        return outcomes.shift() ?? "started";
+      },
+    });
+    worker.start();
+    await worker.handleBotJoinedChannel(CHANNEL);
     await worker.kick();
     expect(syncRequests).toBe(1);
 
-    nowMs += SLACK_BACKFILL_GRAPH_SYNC_INTERVAL_MS;
+    /** The running sync may have admitted its pages before this fetch landed, so a
+     *  declined ask is retried rather than dropped — otherwise the files would wait
+     *  for the scheduler. Once one starts, the worker stops asking. */
+    await worker.kick();
+    await worker.kick();
+    expect(syncRequests).toBe(3);
+
     await worker.kick();
     await worker.stop();
-    expect(syncRequests).toBe(2);
+    expect(syncRequests).toBe(3);
+  });
+
+  it("stops asking when there is no Slack connector to sync", async () => {
+    let syncRequests = 0;
+    const slack = createFakeSlack({
+      historyPages: [{ items: [historyMessage({ ts: tsDaysAgo(3) })], nextCursor: null }],
+    });
+    const worker = createWorker(db, slack.facade, {
+      requestSlackSync: async () => {
+        syncRequests += 1;
+        return "unavailable";
+      },
+    });
+    worker.start();
+    await worker.handleBotJoinedChannel(CHANNEL);
+    await worker.kick();
+    await worker.kick();
+    await worker.stop();
+    expect(syncRequests).toBe(1);
+  });
+
+  it("requests one sync per drain that fetched, so a multi-channel manual backfill needs one", async () => {
+    let syncRequests = 0;
+    const slack = createFakeSlack({ historyPages: [], channels: [CHANNEL, "C-other"] });
+    const worker = createWorker(db, slack.facade, {
+      requestSlackSync: async () => {
+        syncRequests += 1;
+        return "started";
+      },
+    });
+    /** Queued before start, so startup reconciliation adds nothing and the drain
+     *  below is the only one: two channels fetched, one sync asked for. */
+    await worker.queueManualBackfill();
+    worker.start();
+    await worker.kick();
+    await worker.stop();
+
+    const phases = await db.selectFrom("slack_backfill_ranges").select(["kind", "phase"]).execute();
+    expect(phases).toEqual([
+      { kind: "manual", phase: "fetched" },
+      { kind: "manual", phase: "fetched" },
+    ]);
+    expect(syncRequests).toBe(1);
   });
 });

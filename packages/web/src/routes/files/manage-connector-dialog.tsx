@@ -64,6 +64,7 @@ export function ManageConnectorDialog({
   onOpenChange,
   onDisconnected,
   onReconnect,
+  onIndexingStarted,
 }: {
   definition: IntegrationDefinition | null;
   connector: ConnectorConfig | null;
@@ -71,6 +72,10 @@ export function ManageConnectorDialog({
   onOpenChange: (open: boolean) => void;
   onDisconnected: (connector: ConnectorConfig) => void | Promise<void>;
   onReconnect: (def: IntegrationDefinition) => void;
+  /** Fired when this dialog starts indexing work — a sync, or a queued history backfill. The Files
+   *  page shows progress in place, so it passes nothing; callers opening this dialog elsewhere use
+   *  it to send the admin where the files appear. */
+  onIndexingStarted?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
@@ -98,6 +103,7 @@ export function ManageConnectorDialog({
       toast.success("Sync started.");
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
       queryClient.invalidateQueries({ queryKey: ["sync-progress"] });
+      onIndexingStarted?.();
     },
     onError: (error: Error) => toast.error(error.message),
   });
@@ -246,6 +252,7 @@ export function ManageConnectorDialog({
                 scopeEntries={scopeEntries}
                 allowEmptySelection={definition.allowEmptyScopeSelection === true}
                 onBrowsingChange={setIsBrowsingScope}
+                onIndexingStarted={onIndexingStarted}
               />
               {connector.connectorType === "whatsapp" && (
                 <WhatsAppMemberLabelsEditor connectorId={connector.id} scopeConfig={connector.scopeConfig} />
@@ -472,6 +479,7 @@ function ScopeEditorDispatch({
   scopeEntries,
   allowEmptySelection,
   onBrowsingChange,
+  onIndexingStarted,
 }: {
   scopeType: "none" | "flat" | "nested" | "tree";
   connectorId: string;
@@ -485,6 +493,7 @@ function ScopeEditorDispatch({
   scopeEntries: [string, unknown][];
   allowEmptySelection?: boolean;
   onBrowsingChange?: (browsing: boolean) => void;
+  onIndexingStarted?: () => void;
 }) {
   const showHierarchy = Array.isArray(hierarchyLevels) && hierarchyLevels.length > 0;
 
@@ -493,7 +502,9 @@ function ScopeEditorDispatch({
   }
 
   if (connectorType === "slack") {
-    return <SlackScopeEditor connectorId={connectorId} scopeConfig={scopeConfig} />;
+    return (
+      <SlackScopeEditor connectorId={connectorId} scopeConfig={scopeConfig} onIndexingStarted={onIndexingStarted} />
+    );
   }
 
   const hierarchySection = showHierarchy ? (
@@ -961,9 +972,11 @@ function describeSlackBackfill(result: { channelsQueued: number; channelsSkipped
 function SlackScopeEditor({
   connectorId,
   scopeConfig,
+  onIndexingStarted,
 }: {
   connectorId: string;
   scopeConfig: Record<string, unknown>;
+  onIndexingStarted?: () => void;
 }) {
   const queryClient = useQueryClient();
   const currentDays = normalizeSlackLookbackDays(scopeConfig.historyLookbackDays);
@@ -989,7 +1002,10 @@ function SlackScopeEditor({
       if (parsedDays !== currentDays) await api.integrations.updateSlackHistoryLookback(connectorId, parsedDays);
       return api.integrations.queueSlackHistoryBackfill(connectorId);
     },
-    onSuccess: setLastRun,
+    onSuccess: (result) => {
+      setLastRun(result);
+      if (result.channelsQueued > 0) onIndexingStarted?.();
+    },
     onError: (error: Error) => toast.error(error.message),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["integrations"] }),
   });

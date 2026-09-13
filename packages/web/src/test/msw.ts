@@ -198,6 +198,10 @@ export const handlers = [
     });
   }),
 
+  http.get("/api/connectors", () => {
+    return HttpResponse.json({ connectors: [], teamMemberCount: 0, connectorMemberCounts: {} });
+  }),
+
   http.get("/api/connectors/credential-source", () => {
     return HttpResponse.json({
       mode: "local",
