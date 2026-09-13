@@ -451,6 +451,23 @@ function preserveMaterializedAt(incomingHash: RawBuilder<string | null>): RawBui
   `;
 }
 
+/**
+ * A revived tombstone is always fresh work, whatever its inputs hash to: the
+ * tombstone cleared `materialized_at` but not this stamp, so preserving it would
+ * leave an open fact that backfill admission never counts. Otherwise the stamp
+ * follows the same rule as the verdict — unchanged inputs park again for the
+ * same reason, so the fact stays out of the pressure metric.
+ */
+function preserveMaterializationDeferredAt(incomingHash: RawBuilder<string | null>): RawBuilder<string | null> {
+  return sql<string | null>`
+    CASE
+      WHEN indexed_file_facts.deleted_at IS NOT NULL THEN NULL
+      WHEN ${sameMaterializationInputHash(incomingHash)} THEN indexed_file_facts.materialization_deferred_at
+      ELSE NULL
+    END
+  `;
+}
+
 function preserveMaterializationAttempts(incomingHash: RawBuilder<string | null>): RawBuilder<number> {
   return sql<number>`
     CASE
@@ -893,6 +910,7 @@ export function createIndexedFileFactRepository(db: Kysely<DB>) {
         materialization_input_hash: materializationInputHash,
         materialized_at: null,
         materialization_attempts: 0,
+        materialization_deferred_at: null,
         updated_at: now,
       };
 
@@ -904,6 +922,7 @@ export function createIndexedFileFactRepository(db: Kysely<DB>) {
             ...values,
             materialized_at: preserveMaterializedAt(incomingHash),
             materialization_attempts: preserveMaterializationAttempts(incomingHash),
+            materialization_deferred_at: preserveMaterializationDeferredAt(incomingHash),
           })
           .where("fact_key", "=", legacyFactKey)
           .executeTakeFirst();
@@ -929,6 +948,7 @@ export function createIndexedFileFactRepository(db: Kysely<DB>) {
             ...values,
             materialized_at: preserveMaterializedAt(excludedHash),
             materialization_attempts: preserveMaterializationAttempts(excludedHash),
+            materialization_deferred_at: preserveMaterializationDeferredAt(excludedHash),
           }),
         )
         .execute();
@@ -1252,7 +1272,12 @@ export function createIndexedFileFactRepository(db: Kysely<DB>) {
       if (indexedFileIds.length === 0) return;
       await db
         .updateTable("indexed_file_facts")
-        .set({ materialized_at: null, materialization_attempts: 0, updated_at: new Date().toISOString() })
+        .set({
+          materialized_at: null,
+          materialization_attempts: 0,
+          materialization_deferred_at: null,
+          updated_at: new Date().toISOString(),
+        })
         .where("indexed_file_id", "in", indexedFileIds)
         .where("deleted_at", "is", null)
         .execute();

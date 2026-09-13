@@ -812,4 +812,61 @@ describe("WhatsApp backfill graph admission scheduling", () => {
       "Skipped WhatsApp backfill graph admission under pipeline backpressure",
     );
   });
+
+  /**
+   * Parking is routinely permanent — a held entity collision waits on human
+   * review, a below-threshold mention on a second sighting — so counting parked
+   * facts as pressure once shut history indexing on a real tenant for good.
+   */
+  it("admits history when the open facts are all parked, and still counts unswept ones", async () => {
+    const seeded = await seedGraphChat(db, { groupJid: "parked@g.us" });
+    await insertHistory(db, seeded.conversationId, seeded.rangeId, "parked-history", "2026-07-01T09:00:00.000Z");
+    await insertFact(db, "parked-fact", { deferredAt: "2026-07-01T00:00:00.000Z" });
+    const testLogger = logger();
+
+    await runAdmission(db, [seeded.group], {
+      db,
+      groups: [seeded.group],
+      logger: testLogger,
+      backfillGraphKnobs: { openFactsMax: 0 },
+    });
+
+    expect(testLogger.info).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "Skipped WhatsApp backfill graph admission under pipeline backpressure",
+    );
+    await expect(db.selectFrom("conversation_slices").select("id").execute()).resolves.not.toEqual([]);
+
+    await insertFact(db, "unswept-fact", {});
+    const blockedLogger = logger();
+    const next = await seedGraphChat(db, { groupJid: "unswept@g.us" });
+    await insertHistory(db, next.conversationId, next.rangeId, "unswept-history", "2026-07-02T09:00:00.000Z");
+
+    await runAdmission(db, [next.group], {
+      db,
+      groups: [next.group],
+      logger: blockedLogger,
+      backfillGraphKnobs: { openFactsMax: 0 },
+    });
+
+    expect(blockedLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ openFacts: 1, parkedFacts: 1, openFactsMax: 0 }),
+      "Skipped WhatsApp backfill graph admission under pipeline backpressure",
+    );
+  });
 });
+
+async function insertFact(db: Kysely<DB>, id: string, opts: { deferredAt?: string }): Promise<void> {
+  await db
+    .insertInto("indexed_file_facts")
+    .values({
+      id,
+      fact_key: id,
+      source: "test",
+      fact_type: "test",
+      relation: "test",
+      raw: "{}",
+      ...(opts.deferredAt ? { materialization_deferred_at: opts.deferredAt } : {}),
+    })
+    .execute();
+}

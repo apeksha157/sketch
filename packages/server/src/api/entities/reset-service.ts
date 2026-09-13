@@ -266,10 +266,21 @@ export async function performReset(db: Kysely<DB>, opts: ResetExecutionOptions):
   if (opts.factTypes.length > 0) {
     const result = await db
       .updateTable("indexed_file_facts")
-      .set({ materialized_at: null, materialization_attempts: 0, updated_at: new Date().toISOString() })
+      .set({
+        materialized_at: null,
+        materialization_attempts: 0,
+        materialization_deferred_at: null,
+        updated_at: new Date().toISOString(),
+      })
       .where("fact_type", "in", opts.factTypes)
       .where("deleted_at", "is", null)
-      .where((eb) => eb.or([eb("materialized_at", "is not", null), eb("materialization_attempts", ">", 0)]))
+      .where((eb) =>
+        eb.or([
+          eb("materialized_at", "is not", null),
+          eb("materialization_attempts", ">", 0),
+          eb("materialization_deferred_at", "is not", null),
+        ]),
+      )
       .executeTakeFirst();
     factsMarkedUnmaterialized = Number(result.numUpdatedRows ?? 0);
   }

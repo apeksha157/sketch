@@ -127,6 +127,13 @@ function fetchReplayFactBatch(
  * paging cheaply without loading `raw`. Exported so tests can `EXPLAIN` the exact
  * query and assert the planner uses that index on both dialects.
  */
+/**
+ * Never filter this on `materialization_deferred_at`. That column exists only so
+ * backfill admission can ignore parked facts; the sweep has to keep re-reading
+ * them, because re-evaluation is the sole path by which a below-threshold
+ * mention is promoted once a second file names it. Narrowing this query to match
+ * the admission metric would park those facts for good.
+ */
 export function buildOpenFactCandidateQuery(
   db: Kysely<DB>,
   cursor: FactBatchCursor,
@@ -454,7 +461,11 @@ async function materializeUnmaterializedFactsInner(
       if (shouldMarkMaterialized(result)) {
         await db
           .updateTable("indexed_file_facts")
-          .set({ materialized_at: new Date().toISOString(), materialization_attempts: 0 })
+          .set({
+            materialized_at: new Date().toISOString(),
+            materialization_attempts: 0,
+            materialization_deferred_at: null,
+          })
           .where("id", "=", fact.id)
           .execute();
         if (
@@ -466,6 +477,19 @@ async function materializeUnmaterializedFactsInner(
           summary.materialized++;
       } else {
         summary.deferred++;
+        /**
+         * Parking is often permanent — a held entity collision waits on human
+         * review, a below-threshold mention on a second sighting — so the stamp
+         * is what keeps these out of backfill admission pressure. Written once
+         * per fact, since a re-parked fact is already stamped.
+         */
+        if (!fact.materialization_deferred_at) {
+          await db
+            .updateTable("indexed_file_facts")
+            .set({ materialization_deferred_at: new Date().toISOString() })
+            .where("id", "=", fact.id)
+            .execute();
+        }
       }
     } catch (err) {
       const attempts = fact.materialization_attempts + 1;

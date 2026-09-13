@@ -512,7 +512,18 @@ async function chunkWhatsAppGroup(options: ChunkWhatsAppGroupOptions): Promise<W
 interface WhatsAppBackfillGraphBacklog {
   pendingSlices: number;
   pendingFiles: number;
+  /**
+   * Open facts no sweep has parked yet — the only part of the backlog that
+   * admitting more history adds to, and so the only part worth gating on.
+   */
   openFacts: number;
+  /**
+   * Parked facts, reported for diagnosis but never gated on: a held entity
+   * collision waits on human review and a below-threshold mention on a second
+   * sighting, so neither drains on its own and blocking admission for them once
+   * pinned history indexing shut for good.
+   */
+  parkedFacts: number;
 }
 
 interface WhatsAppBackfillGraphChatResult {
@@ -600,7 +611,7 @@ export function resolveWhatsAppBackfillGraphKnobs(
 }
 
 export async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<WhatsAppBackfillGraphBacklog> {
-  const [pendingSlices, pendingFiles, openFacts] = await Promise.all([
+  const [pendingSlices, pendingFiles, openFacts, parkedFacts] = await Promise.all([
     db
       .selectFrom("conversation_slices")
       .select((eb) => eb.fn.countAll().as("count"))
@@ -620,12 +631,22 @@ export async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<
       .where("deleted_at", "is", null)
       .where("materialized_at", "is", null)
       .where("materialization_attempts", "<", MAX_MATERIALIZATION_ATTEMPTS)
+      .where("materialization_deferred_at", "is", null)
+      .executeTakeFirst(),
+    db
+      .selectFrom("indexed_file_facts")
+      .select((eb) => eb.fn.countAll().as("count"))
+      .where("deleted_at", "is", null)
+      .where("materialized_at", "is", null)
+      .where("materialization_attempts", "<", MAX_MATERIALIZATION_ATTEMPTS)
+      .where("materialization_deferred_at", "is not", null)
       .executeTakeFirst(),
   ]);
   return {
     pendingSlices: Number(pendingSlices?.count ?? 0),
     pendingFiles: Number(pendingFiles?.count ?? 0),
     openFacts: Number(openFacts?.count ?? 0),
+    parkedFacts: Number(parkedFacts?.count ?? 0),
   };
 }
 

@@ -30,7 +30,7 @@ import * as outlookCalendarProviderFileScopeMigration from "./164-outlook-calend
 import * as entityMergeGroupsMigration from "./186-entity-merge-groups";
 import * as entityNameProposalsMigration from "./187-entity-name-proposals";
 
-const EXPECTED_MIGRATION_COUNT = 235;
+const EXPECTED_MIGRATION_COUNT = 236;
 
 function createBlankDb(): Kysely<DB> {
   return new Kysely<DB>({
@@ -1039,6 +1039,29 @@ describe("runMigrations — full sequence", () => {
     expect(indexSql).toContain("deleted_at is null");
     expect(indexSql).toContain("materialized_at is null");
     expect(indexSql).toContain("materialization_attempts < 5");
+  });
+
+  it("creates the unswept-facts partial index without the sweep's paging columns", async () => {
+    await runMigrations(db, { quiet: true });
+
+    const columns = await sql<{ name: string }>`PRAGMA table_info(indexed_file_facts)`.execute(db);
+    expect(columns.rows.map((row) => row.name)).toContain("materialization_deferred_at");
+
+    const result = await sql<{ name: string; sql: string }>`
+      SELECT name, sql
+      FROM sqlite_master
+      WHERE type = 'index'
+        AND name = 'idx_indexed_file_facts_open_unswept'
+    `.execute(db);
+
+    expect(result.rows).toHaveLength(1);
+    const indexSql = result.rows[0].sql.toLowerCase().replaceAll('"', "");
+    expect(indexSql).toContain("deleted_at is null");
+    expect(indexSql).toContain("materialized_at is null");
+    expect(indexSql).toContain("materialization_attempts < 5");
+    expect(indexSql).toContain("materialization_deferred_at is null");
+    /** Only the admission count reads this index; the sweep keeps using migration 142's. */
+    expect(indexSql).not.toContain("created_at");
   });
 
   it("creates the durable conversation follow-up schema", async () => {

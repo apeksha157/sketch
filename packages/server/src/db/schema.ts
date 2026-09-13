@@ -1779,6 +1779,7 @@ export interface IndexedFileFactsTable {
   normalization_projected_at: string | null;
   materialized_at: string | null;
   materialization_attempts: Generated<number>;
+  materialization_deferred_at: string | null;
   created_at: Generated<string>;
   updated_at: Generated<string>;
 }

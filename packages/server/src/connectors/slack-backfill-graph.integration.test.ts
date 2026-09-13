@@ -276,6 +276,36 @@ describe("Slack backfill graph admission", () => {
     expect(stillOpen.status).toEqual("open");
   });
 
+  /**
+   * The canvas-ai outage: 12,678 facts parked awaiting human review or a second
+   * sighting sat above the 5,000 open-fact ceiling, so a fully fetched year of
+   * Slack history was never admitted at all — not slowly, never.
+   */
+  it("admits history when every open fact is parked well past the pressure ceiling", async () => {
+    const { conversationId, rangeId } = await seedRange(db);
+    await insertRow(db, { conversationId, ts: "1788000000.000100", source: "history", rangeId });
+    for (let index = 0; index < 6_000; index += 1) {
+      await db
+        .insertInto("indexed_file_facts")
+        .values({
+          id: `parked-${index}`,
+          fact_key: `parked-${index}`,
+          source: "test",
+          fact_type: "test",
+          relation: "test",
+          raw: "{}",
+          materialization_deferred_at: "2026-07-01T00:00:00.000Z",
+        })
+        .execute();
+    }
+
+    const summary = await admit(db);
+
+    expect(summary.skippedForPressure).toBe(false);
+    expect(summary.messagesRead).toEqual(1);
+    expect(summary.rangesCompleted).toEqual(1);
+  });
+
   it("leaves followup reminder queries unchanged when history rows land", async () => {
     const { conversationId, rangeId } = await seedRange(db);
     const followups = createConversationFollowupsRepository(db);
