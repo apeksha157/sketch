@@ -21,7 +21,15 @@ export interface ConversationSliceEmissionAnchor extends Record<string, unknown>
  * tier one forever.
  */
 export function parseEmissionAnchor(sourceMeta: string | null): ConversationSliceEmissionAnchor | null {
-  const parsed = readSourceMeta({ source_meta: sourceMeta });
+  return readEmissionAnchor(readSourceMeta({ source_meta: sourceMeta }));
+}
+
+/**
+ * Same validation as `parseEmissionAnchor` for callers that already hold the
+ * decoded `source_meta` object (the sync seam keeps one per file in memory),
+ * so the JSON is never parsed twice.
+ */
+export function readEmissionAnchor(parsed: Record<string, unknown> | null): ConversationSliceEmissionAnchor | null {
   if (
     !parsed ||
     !Number.isInteger(parsed.firstMessageId) ||

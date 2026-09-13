@@ -491,6 +491,7 @@ export async function* emitSlackSyncedItems(options: {
 
         yield {
           providerFileId: context.slice.id,
+          conversationSliceId: context.slice.id,
           providerUrl: null,
           fileName: `Slack: #${context.channelName} - ${formatSliceTimeRange(context.slice)}`,
           fileType: SLACK_CONVERSATION_SLICE_FILE_TYPE,

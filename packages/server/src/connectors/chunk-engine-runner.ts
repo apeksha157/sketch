@@ -50,6 +50,34 @@ export async function withProviderBackoff<T>(
   }
 }
 
+/**
+ * Open slices whose tail has gone quiet, for one conversation platform. The
+ * `ended_at` predicate is what selects the `conversation_slices_open_ended_at_idx`
+ * partial index, so every connector's idle sweep must keep this shape.
+ */
+export function idleCloseCandidatesQuery(
+  db: Kysely<DB>,
+  input: { platform: string; kind: string; idleBefore: string },
+) {
+  return db
+    .selectFrom("conversation_slices")
+    .select(["conversation_slices.conversation_id", "conversation_slices.provider_thread_id"])
+    .where("conversation_slices.status", "=", "open")
+    .where("conversation_slices.origin", "=", "live")
+    .where("conversation_slices.ended_at", "<", input.idleBefore)
+    .where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom("conversations")
+          .select("conversations.id")
+          .whereRef("conversations.id", "=", "conversation_slices.conversation_id")
+          .where("conversations.platform", "=", input.platform)
+          .where("conversations.kind", "=", input.kind),
+      ),
+    )
+    .orderBy("conversation_slices.ended_at");
+}
+
 export interface ChunkStreamTickOptions {
   db: Kysely<DB>;
   logger: Logger;

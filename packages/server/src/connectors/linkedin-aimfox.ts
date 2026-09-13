@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
+import type { Kysely } from "kysely";
 import type { Logger } from "pino";
+import type { Config } from "../config";
+import { readLinkedinAimfoxManifest } from "../db/repositories/connectors";
+import type { DB } from "../db/schema";
 import { normalizePhoneCountryCode } from "../identity-normalization";
 import { maxIso } from "../timestamps";
 import {
@@ -9,6 +13,8 @@ import {
   type AimfoxLead,
   type AimfoxMessage,
 } from "./aimfox-client";
+import type { ChunkGenerate } from "./chunk-generate";
+import { configDefault } from "./config-default";
 import {
   type LinkedinEnrichmentScope,
   type LinkedinVisibilityMode,
@@ -16,6 +22,21 @@ import {
   parseLinkedinVisibilityScopeConfig,
 } from "./enrichment/scope";
 import { type LinkedinAimfoxPersonSeed, buildPersonSeed } from "./linkedin-aimfox-mappers";
+import { resolveLinkedinChunkEngineKnobs } from "./linkedin-chunk-adapter";
+import {
+  type LinkedinEngineAccountRun,
+  type LinkedinEngineArchiveDeps,
+  type LinkedinEngineDeps,
+  createLinkedinEngineAccountRun,
+  emptyLinkedinEngineRouting,
+  finalizeLinkedinCutover,
+  resolveLinkedinEngineRouting,
+  rollbackLinkedinConversations,
+  runLinkedinEngineConversation,
+  sweepLinkedinEngineConversations,
+} from "./linkedin-chunk-sync";
+import { emitLinkedinSyncedItems } from "./linkedin-emission";
+import { parseLinkedinProviderConversationId } from "./linkedin-ingest";
 import { extractErrorMessage, runWithConcurrency, truncateErrorMessage } from "./sync-utils";
 import { renderTranscriptLine } from "./transcript";
 import type { ApiKeyCredentials, Connector, ConnectorCredentials, ContactPointSeed, SyncedItem } from "./types";
@@ -119,6 +140,30 @@ interface AccountRunState {
   runAnchorMs: number;
   incremental: Map<string, ConversationCompletion>;
   backfill: Map<string, ConversationCompletion>;
+  /** Null while the chunk engine is off; otherwise this account's cutover bookkeeping. */
+  engine: LinkedinEngineAccountRun | null;
+  /**
+   * Completions for conversations reached only through slice emission — the
+   * stale-anchor sweep and idle-close both emit for conversations Aimfox did
+   * not list this run, and those items must still be counted before an archive
+   * decides they persisted.
+   */
+  engineEmitted: Map<string, ConversationCompletion>;
+  /**
+   * Conversations the emitter looked at this run. Not the same as the ones it
+   * yielded for: a conversation whose slices are all published already yields
+   * nothing, and it is exactly that conversation whose lost archive has to be
+   * retried.
+   */
+  engineVisitedUrns: Set<string>;
+  /**
+   * Conversations whose engine generation came out of the emitter with a hole —
+   * a slice the emitter could not render. Their legacy files stay until a later
+   * run emits the whole generation.
+   */
+  engineEmissionBlocked: Set<string>;
+  engineLegacyFilesArchived: number;
+  engineConversationsRolledBack: number;
   backfillAttempted: boolean;
   backfillPageShort: boolean;
   accountsWalked: number;
@@ -131,10 +176,11 @@ interface AccountRunState {
   pageCapHit: boolean;
 }
 
-interface LinkedinAimfoxMeta {
+export interface LinkedinAimfoxMeta {
   linkedinAimfox?: {
     accountId?: unknown;
     conversationUrn?: unknown;
+    kind?: string;
     segmentManifest?: LinkedinAimfoxRawSegmentManifest;
   };
 }
@@ -171,6 +217,10 @@ interface IngestContext {
   scopeConfig: ParsedLinkedinAimfoxScopeConfig;
   ownerEmail: string;
   logger: Logger;
+  /** True whenever the chunk engine is configured on, even when it cannot run this pass. */
+  engineEnabled: boolean;
+  archive: LinkedinEngineArchiveDeps | null;
+  engine: LinkedinEngineDeps | null;
   getExistingItemState?: (providerFileId: string) => {
     sourceMeta: Record<string, unknown> | null;
     threadId: string | null;
@@ -237,16 +287,27 @@ export function createLinkedinAimfoxConnector(): Connector {
       currentCursor = parseLinkedinAimfoxCursor(opts.cursor);
       runState = new Map();
       const runAnchorMs = Date.now();
+      const now = new Date(runAnchorMs);
+      const archiveDeps = resolveArchiveDeps(opts.db, opts.connectorConfigId, opts.logger);
+      const engineEnabled = opts.appConfig?.LINKEDIN_CHUNK_ENGINE_ENABLED === true;
+      const engine = resolveEngineDeps(archiveDeps, opts.appConfig, opts.linkedinChunkerGenerate, now);
       const ownerNames = await loadOwnerNames(api_key, scopeConfig.maxRpm, opts.logger);
 
       for (const accountId of scopeConfig.accountIds) {
         const existing = currentCursor.accounts[accountId] ?? emptyAccountCursor();
+        const engineRun = engine ? createLinkedinEngineAccountRun(accountId) : null;
         const state: AccountRunState = {
           existing,
           ownerName: ownerNames.get(accountId) ?? `LinkedIn account ${accountId}`,
           runAnchorMs,
           incremental: new Map(),
           backfill: new Map(),
+          engine: engineRun,
+          engineEmitted: new Map(),
+          engineVisitedUrns: new Set(),
+          engineEmissionBlocked: new Set(),
+          engineLegacyFilesArchived: 0,
+          engineConversationsRolledBack: 0,
           backfillAttempted: false,
           backfillPageShort: false,
           accountsWalked: 1,
@@ -267,6 +328,9 @@ export function createLinkedinAimfoxConnector(): Connector {
           scopeConfig,
           ownerEmail: opts.ownerEmail,
           logger: opts.logger,
+          engineEnabled,
+          archive: archiveDeps,
+          engine,
           getExistingItemState: opts.getExistingItemState,
         };
         const handled = new Set<string>();
@@ -304,14 +368,28 @@ export function createLinkedinAimfoxConnector(): Connector {
           yield* ingestConversations(context, fresh, state.backfill);
         }
       }
+
+      if (engine) {
+        const engineRuns = new Map<string, LinkedinEngineAccountRun>();
+        for (const [accountId, state] of runState) if (state.engine) engineRuns.set(accountId, state.engine);
+        await sweepLinkedinEngineConversations(engine, engineRuns);
+        yield* emitEngineSlices(engine, {
+          accountIds: scopeConfig.accountIds,
+          runState,
+          visibility: scopeConfig.visibility,
+          ownerEmail: opts.ownerEmail,
+          appConfig: opts.appConfig,
+          now,
+        });
+      }
+      if (archiveDeps) await settleChunkGenerations(archiveDeps, runState, engineEnabled);
     },
 
     onItemResult({ item, persisted }) {
       const checkpoint = readCheckpoint(item.sourceMeta);
       if (!checkpoint) return;
       const account = runState.get(checkpoint.accountId);
-      const conversation =
-        account?.incremental.get(checkpoint.conversationUrn) ?? account?.backfill.get(checkpoint.conversationUrn);
+      const conversation = account ? findConversationCompletion(account, checkpoint.conversationUrn) : undefined;
       if (!conversation) return;
       if (persisted) conversation.persistedItems++;
       else conversation.failed = true;
@@ -329,6 +407,166 @@ export function createLinkedinAimfoxConnector(): Connector {
       return linkedinSyncDiagnostics(runState);
     },
   };
+}
+
+/**
+ * The database handles every archive needs. A sync run without them (a
+ * credential check, a unit-level drain) still indexes, it just cannot settle
+ * either chunk generation.
+ */
+function resolveArchiveDeps(
+  db: Kysely<DB> | undefined,
+  connectorConfigId: string | undefined,
+  logger: Logger,
+): LinkedinEngineArchiveDeps | null {
+  return db && connectorConfigId ? { db, logger, connectorConfigId } : null;
+}
+
+/**
+ * The engine runs only with the flag on and everything it needs present. With
+ * no boundary generator there is nothing to ingest rows for — they would sit
+ * unchunked and freeze the conversation's timeline — so the run skips the
+ * engine entirely and the segmenter covers every conversation that has no
+ * engine files of its own.
+ */
+function resolveEngineDeps(
+  archive: LinkedinEngineArchiveDeps | null,
+  appConfig: Partial<Config> | undefined,
+  generate: ChunkGenerate | undefined,
+  now: Date,
+): LinkedinEngineDeps | null {
+  if (!archive || !generate || appConfig?.LINKEDIN_CHUNK_ENGINE_ENABLED !== true) return null;
+  return {
+    ...archive,
+    knobs: resolveLinkedinChunkEngineKnobs(appConfig),
+    generate,
+    now,
+    sweepConversationsPerRun:
+      appConfig?.LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN ??
+      configDefault("LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN"),
+  };
+}
+
+function findConversationCompletion(
+  state: AccountRunState,
+  conversationUrn: string,
+): ConversationCompletion | undefined {
+  return (
+    state.incremental.get(conversationUrn) ??
+    state.backfill.get(conversationUrn) ??
+    state.engineEmitted.get(conversationUrn)
+  );
+}
+
+function conversationCompletionForEmission(state: AccountRunState, conversationUrn: string): ConversationCompletion {
+  const existing = findConversationCompletion(state, conversationUrn);
+  if (existing) return existing;
+  const created: ConversationCompletion = { activity: null, expectedItems: 0, persistedItems: 0, failed: false };
+  state.engineEmitted.set(conversationUrn, created);
+  return created;
+}
+
+/** True when nothing this run was expected to write for the conversation is missing. */
+function conversationPersisted(state: AccountRunState, conversationUrn: string): boolean {
+  const completion = findConversationCompletion(state, conversationUrn);
+  return !completion || isComplete(completion);
+}
+
+/**
+ * The archive gate of the cutover: everything the engine generation owed this
+ * run is on the timeline. A slice the emitter skipped counts against it even
+ * though no item failed — the generation has a hole, and legacy is what still
+ * covers it.
+ */
+function engineGenerationPersisted(state: AccountRunState, conversationUrn: string): boolean {
+  return conversationPersisted(state, conversationUrn) && !state.engineEmissionBlocked.has(conversationUrn);
+}
+
+/** The rollback's mirror of it: legacy items were actually expected, and all of them landed. */
+function legacySegmentsPersisted(state: AccountRunState, conversationUrn: string): boolean {
+  const completion = findConversationCompletion(state, conversationUrn);
+  return completion !== undefined && completion.expectedItems > 0 && isComplete(completion);
+}
+
+/**
+ * Kept slices of every conversation this connector's accounts own, counted into
+ * the conversation completions as they go: the archive that ends a cutover may
+ * only fire once each of these has actually persisted. A slice the emitter
+ * itself refuses — an unreadable roster snapshot is the only such gate that
+ * loses content — blocks that conversation's archive the same way a failed
+ * write does.
+ */
+async function* emitEngineSlices(
+  engine: LinkedinEngineDeps,
+  input: {
+    accountIds: string[];
+    runState: Map<string, AccountRunState>;
+    visibility: LinkedinVisibilityMode;
+    ownerEmail: string;
+    appConfig: Partial<Config> | undefined;
+    now: Date;
+  },
+): AsyncGenerator<SyncedItem> {
+  for await (const item of emitLinkedinSyncedItems({
+    db: engine.db,
+    logger: engine.logger,
+    visibility: input.visibility,
+    ownerEmail: input.ownerEmail,
+    accountIds: input.accountIds,
+    refreshMessages: engine.knobs.provisionalRefreshMessages,
+    refreshMaxMinutes:
+      input.appConfig?.LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES ??
+      configDefault("LINKEDIN_CHUNK_PROVISIONAL_REFRESH_MAX_MINUTES"),
+    now: input.now,
+    onSkipReason: (reason, providerConversationId) => {
+      if (reason !== "missing_roster_snapshot") return;
+      const parsed = parseLinkedinProviderConversationId(providerConversationId);
+      const skipped = parsed ? input.runState.get(parsed.accountId) : undefined;
+      if (parsed && skipped) skipped.engineEmissionBlocked.add(parsed.conversationUrn);
+    },
+    onVisitedConversation: (providerConversationId) => {
+      const parsed = parseLinkedinProviderConversationId(providerConversationId);
+      const visited = parsed ? input.runState.get(parsed.accountId) : undefined;
+      if (parsed && visited) visited.engineVisitedUrns.add(parsed.conversationUrn);
+    },
+  })) {
+    const checkpoint = readCheckpoint(item.sourceMeta);
+    const state = checkpoint ? input.runState.get(checkpoint.accountId) : undefined;
+    if (checkpoint && state) conversationCompletionForEmission(state, checkpoint.conversationUrn).expectedItems += 1;
+    yield item;
+  }
+}
+
+/**
+ * Leaves one generation of files per conversation, in whichever direction the
+ * flag points, and settles nothing while the flag is on but the engine could
+ * not run — the rollback is the flag's mirror, not a fallback for a missing
+ * boundary generator. Runs after the last item of the run has been yielded,
+ * which is also after its `onItemResult`: the connector cannot know a
+ * conversation's slices are all emitted until the emitter is drained, so the
+ * counting lives in `onItemResult` and the archiving here, the first moment
+ * `sync.ts` allows the swap to be judged complete.
+ */
+async function settleChunkGenerations(
+  archive: LinkedinEngineArchiveDeps,
+  runState: Map<string, AccountRunState>,
+  engineEnabled: boolean,
+): Promise<void> {
+  for (const [accountId, state] of runState) {
+    if (engineEnabled) {
+      if (!state.engine) continue;
+      state.engineLegacyFilesArchived += await finalizeLinkedinCutover(archive, state.engine, {
+        visitedConversationUrns: state.engineVisitedUrns,
+        isPersisted: (conversationUrn) => engineGenerationPersisted(state, conversationUrn),
+      });
+      continue;
+    }
+    state.engineConversationsRolledBack += await rollbackLinkedinConversations(archive, {
+      accountId,
+      conversationUrns: [...state.incremental.keys(), ...state.backfill.keys()],
+      hasPersistedLegacySegments: (conversationUrn) => legacySegmentsPersisted(state, conversationUrn),
+    });
+  }
 }
 
 type ConversationLeadResult =
@@ -446,6 +684,13 @@ async function* ingestConversations(
   completions: Map<string, ConversationCompletion>,
 ): AsyncGenerator<SyncedItem> {
   const { client, accountId, state, scopeConfig, logger } = context;
+  const routing = context.engineEnabled
+    ? await resolveLinkedinEngineRouting(context.archive, {
+        accountId,
+        conversationUrns: conversations.map((conversation) => conversation.conversation_urn),
+        engineRunnable: context.engine !== null,
+      })
+    : emptyLinkedinEngineRouting();
   const results = await resolveConversationLeads(client, conversations, scopeConfig.maxInflight);
   for (const result of results) {
     const conversationUrn = result.conversation.conversation_urn;
@@ -476,6 +721,11 @@ async function* ingestConversations(
         conversation: result.conversation,
         ownerEmail: context.ownerEmail,
         seed,
+        engine: context.engine,
+        engineRun: state.engine,
+        engineRouted: routing.engineConversationUrns.has(conversationUrn),
+        engineConversationId: routing.engineConversationIds.get(conversationUrn),
+        legacyBlocked: routing.legacyBlocked.has(conversationUrn),
         segmentLimits: {
           maxMessages: scopeConfig.segmentMaxMessages,
           maxTokens: scopeConfig.segmentMaxTokens,
@@ -543,6 +793,13 @@ async function buildLinkedinSyncedItems(
     segmentLimits: LinkedinSegmentLimits;
     contactPointDefaultRegion?: string;
     visibility: LinkedinVisibilityMode;
+    engine: LinkedinEngineDeps | null;
+    engineRun: LinkedinEngineAccountRun | null;
+    /** Set when D13 routing put this conversation on the engine for this run. */
+    engineRouted: boolean;
+    /** Its `conversations` row id, when D13 routing found one; absent for a brand-new thread. */
+    engineConversationId: number | undefined;
+    legacyBlocked: boolean;
     getExistingItemState?: (providerFileId: string) => {
       sourceMeta: Record<string, unknown> | null;
       threadId: string | null;
@@ -558,6 +815,32 @@ async function buildLinkedinSyncedItems(
     engaged: hasReply,
     lastRepliedAt: conversationLastRepliedAt(messages, input.accountId),
   });
+
+  /**
+   * On the engine the conversation's transcript is not built here: the rows go
+   * into `conversation_messages`, the engine cuts them, and the emitter yields
+   * the kept slices once every conversation of the run has been ingested.
+   */
+  if (input.engineRouted && input.engine && input.engineRun) {
+    await runLinkedinEngineConversation(input.engine, input.engineRun, {
+      conversationId: input.engineConversationId,
+      conversationUrn: input.conversation.conversation_urn,
+      leadId: input.seed.leadId,
+      leadName: input.seed.name,
+      ownerName: input.ownerName,
+      messages: detail.messages,
+    });
+    return [profileItem];
+  }
+
+  /**
+   * The engine is on but could not run this pass, and this conversation already
+   * has engine files: minting fresh legacy segments over them would put both
+   * generations on the timeline at once. The profile still refreshes, so the
+   * conversation is never blank while the engine is away.
+   */
+  if (input.legacyBlocked) return [profileItem];
+
   const manifests = loadExistingSealedManifests(input);
   const segments = buildLinkedinSegments(messages, manifests, input.segmentLimits, input.accountId);
   return [
@@ -686,7 +969,7 @@ function fillSegmentDirection(
   };
 }
 
-function segmentDirectionStats(messages: OrderedMessage[], accountId: string) {
+export function segmentDirectionStats(messages: OrderedMessage[], accountId: string) {
   let inboundCount = 0;
   let outboundCount = 0;
   let lastInboundAt: string | null = null;
@@ -829,7 +1112,7 @@ function buildLinkedinConversationSyncedItem(input: {
  * clears stale owner stamps through syncItemAccess. Legacy and owner mode keep
  * the creator's Sketch email as the only per-file principal.
  */
-function linkedinAccessPrincipals(visibility: LinkedinVisibilityMode, ownerEmail: string) {
+export function linkedinAccessPrincipals(visibility: LinkedinVisibilityMode, ownerEmail: string) {
   return visibility === "workspace" ? [] : toEmailPrincipals([ownerEmail]);
 }
 
@@ -908,7 +1191,11 @@ function renderLinkedinProfile(seed: LinkedinAimfoxPersonSeed): string {
  * already says who spoke. Automated campaign messages remain in the record
  * and carry an `(automated)` tag so retrieval can tell a blast from a reply.
  */
-function renderConversationSegment(input: { ownerName: string; leadName: string; messages: OrderedMessage[] }): string {
+export function renderConversationSegment(input: {
+  ownerName: string;
+  leadName: string;
+  messages: OrderedMessage[];
+}): string {
   const lines = input.messages.map(({ message, timestamp }) =>
     renderTranscriptLine({
       at: formatTranscriptTime(timestamp),
@@ -925,7 +1212,7 @@ function formatTranscriptTime(iso: string | null): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)}`;
 }
 
-function segmentFileName(
+export function segmentFileName(
   ownerName: string,
   leadName: string,
   firstTimestamp: string | null,
@@ -973,20 +1260,20 @@ function estimateMessageTokens(message: AimfoxMessage): number {
  * So it hashes only immutable coordinates: the message's position among
  * API-order messages sharing the same sender and timestamp, never the body.
  */
-function aimfoxMessageIdentity(conversationUrn: string, message: AimfoxMessage, ordinal: number): string {
+export function aimfoxMessageIdentity(conversationUrn: string, message: AimfoxMessage, ordinal: number): string {
   const stableId = message.urn ?? message.id ?? message.message_id;
   if (stableId?.trim()) return stableId.trim();
   return sha256(`${conversationUrn}|${message.created_at}|${message.sender.id}|${ordinal}`);
 }
 
-function displaySenderName(sender: AimfoxMessage["sender"]): string {
+export function displaySenderName(sender: AimfoxMessage["sender"]): string {
   const name = sender.full_name?.trim();
   if (name) return name;
   if (!sender.id || sender.id.startsWith("urn:")) return "Unknown sender";
   return sender.id;
 }
 
-function linkedinProfileProviderFileId(accountId: string, leadId: string): string {
+export function linkedinProfileProviderFileId(accountId: string, leadId: string): string {
   return `linkedin:${accountId}:profile:${leadId}`;
 }
 
@@ -1009,7 +1296,7 @@ function readCheckpoint(sourceMeta: Record<string, unknown> | undefined): {
 }
 
 function readSegmentManifest(sourceMeta: Record<string, unknown> | null): LinkedinAimfoxSegmentManifest | null {
-  const value = (sourceMeta as LinkedinAimfoxMeta | null)?.linkedinAimfox?.segmentManifest;
+  const value = readLinkedinAimfoxManifest(sourceMeta) as LinkedinAimfoxRawSegmentManifest | null;
   if (!value) return null;
   if (
     typeof value.segmentIndex !== "number" ||
@@ -1142,6 +1429,11 @@ function linkedinSyncDiagnostics(runState: Map<string, AccountRunState>) {
     leadDetailFailures: 0,
     buildFailures: 0,
     pageCapHit: false,
+    chunkConversationsMoved: 0,
+    chunkConversationsPending: 0,
+    chunkConversationsRolledBack: 0,
+    chunkConversationsSwept: 0,
+    chunkLegacyFilesArchived: 0,
   };
   for (const state of runState.values()) {
     totals.accountsWalked += state.accountsWalked;
@@ -1152,6 +1444,13 @@ function linkedinSyncDiagnostics(runState: Map<string, AccountRunState>) {
     totals.leadDetailFailures += state.leadDetailFailures;
     totals.buildFailures += state.buildFailures;
     totals.pageCapHit ||= state.pageCapHit;
+    totals.chunkLegacyFilesArchived += state.engineLegacyFilesArchived;
+    totals.chunkConversationsRolledBack += state.engineConversationsRolledBack;
+    totals.chunkConversationsSwept += state.engine?.swept ?? 0;
+    totals.chunkConversationsMoved += state.engine?.moved.size ?? 0;
+    for (const conversation of state.engine?.conversations.values() ?? []) {
+      if (conversation.historyPending) totals.chunkConversationsPending += 1;
+    }
   }
   return totals;
 }

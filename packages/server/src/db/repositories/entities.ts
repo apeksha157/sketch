@@ -19,7 +19,7 @@ import { yieldToEventLoop } from "../../lib/event-loop";
 import { maxIso, parseTimestampMs } from "../../timestamps";
 import { isPg } from "../dialect";
 import type { DB, EntitiesTable, EntityContactPointsTable } from "../schema";
-import { type FileViewer, fileVisibilityPredicate } from "./connectors";
+import { type FileViewer, fileVisibilityPredicate, readLinkedinAimfoxManifest, readSourceMeta } from "./connectors";
 import { type EntityAliasProvenance, recordAlias, recordAliases } from "./entity-alias-rows";
 import { fileVisibilityRuleSql } from "./file-visibility-rule";
 
@@ -177,25 +177,12 @@ function clampHotness(value: number): number {
 }
 
 function readLinkedinManifest(sourceMeta: string | null): LinkedinManifestTouchStats | null {
-  if (!sourceMeta) return null;
-  try {
-    const root = JSON.parse(sourceMeta) as {
-      linkedinAimfox?: {
-        segmentManifest?: {
-          lastInboundAt?: unknown;
-          lastOutboundAt?: unknown;
-        };
-      };
-    };
-    const manifest = root.linkedinAimfox?.segmentManifest;
-    if (!manifest) return null;
-    return {
-      lastInboundAt: typeof manifest.lastInboundAt === "string" ? manifest.lastInboundAt : null,
-      lastOutboundAt: typeof manifest.lastOutboundAt === "string" ? manifest.lastOutboundAt : null,
-    };
-  } catch {
-    return null;
-  }
+  const manifest = readLinkedinAimfoxManifest(readSourceMeta({ source_meta: sourceMeta }));
+  if (!manifest) return null;
+  return {
+    lastInboundAt: typeof manifest.lastInboundAt === "string" ? manifest.lastInboundAt : null,
+    lastOutboundAt: typeof manifest.lastOutboundAt === "string" ? manifest.lastOutboundAt : null,
+  };
 }
 
 /**

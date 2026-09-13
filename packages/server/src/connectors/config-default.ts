@@ -5,13 +5,13 @@ export function configDefault<Key extends keyof Config>(key: Key): Config[Key] {
   return configSchema.shape[key].parse(undefined) as Config[Key];
 }
 
-export type ChunkEngineKnobPrefix = "SLACK_CHUNK" | "WHATSAPP_CHUNK";
+export type ChunkEngineKnobPrefix = "SLACK_CHUNK" | "WHATSAPP_CHUNK" | "LINKEDIN_CHUNK";
 
 /**
- * Knob field to env key suffix. Both connectors expose the same engine knobs
- * under their own prefix, so one map keeps the two ladders from drifting.
- * `groupWorkerPool` is the single asymmetry: Slack's stream unit is a channel,
- * so its key says CHANNEL.
+ * Knob field to env key suffix. Every connector on the shared engine exposes the
+ * same knobs under its own prefix, so one map keeps the ladders from drifting.
+ * `groupWorkerPool` is the single asymmetry: the stream unit is a channel for
+ * Slack and a conversation for LinkedIn, and each key says so.
  */
 const CHUNK_ENGINE_KNOB_KEY_SUFFIXES: Record<keyof ChunkEngineKnobs, string | Record<ChunkEngineKnobPrefix, string>> = {
   windowMessages: "WINDOW_MESSAGES",
@@ -27,7 +27,11 @@ const CHUNK_ENGINE_KNOB_KEY_SUFFIXES: Record<keyof ChunkEngineKnobs, string | Re
   reasoningEffort: "REASONING_EFFORT",
   burstThresholdMessages: "BURST_THRESHOLD_MESSAGES",
   topicRegistryCap: "TOPIC_REGISTRY_CAP",
-  groupWorkerPool: { SLACK_CHUNK: "CHANNEL_WORKER_POOL", WHATSAPP_CHUNK: "GROUP_WORKER_POOL" },
+  groupWorkerPool: {
+    SLACK_CHUNK: "CHANNEL_WORKER_POOL",
+    WHATSAPP_CHUNK: "GROUP_WORKER_POOL",
+    LINKEDIN_CHUNK: "CONVERSATION_WORKER_POOL",
+  },
   maxWindowsPerRun: "MAX_WINDOWS_PER_RUN",
 };
 
