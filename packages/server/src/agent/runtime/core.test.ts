@@ -37,7 +37,224 @@ function mockProvider(model: LanguageModel, modelId = "claude-sonnet-4-6"): Agen
   };
 }
 
+function toolCallStream(toolCallId: string, toolName: string, input = "{}") {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: "tool-call" as const, toolCallId, toolName, input },
+        {
+          type: "finish" as const,
+          finishReason: { unified: "tool-calls" as const, raw: undefined },
+          usage: usage(10, 2),
+        },
+      ],
+    }),
+  };
+}
+
+function stopStream(text = "done") {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        { type: "text-start" as const, id: "final-text" },
+        { type: "text-delta" as const, id: "final-text", delta: text },
+        { type: "text-end" as const, id: "final-text" },
+        { type: "finish" as const, finishReason: { unified: "stop" as const, raw: undefined }, usage: usage(10, 2) },
+      ],
+    }),
+  };
+}
+
 describe("agent runtime core", () => {
+  it("disables a tool after three identical MCP failures and appends one user notice", async () => {
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [
+        toolCallStream("read-1", "ReadFile"),
+        toolCallStream("read-2", "ReadFile"),
+        toolCallStream("read-3", "ReadFile"),
+        toolCallStream("search-1", "Search"),
+        stopStream(),
+      ],
+    });
+    const warn = vi.fn();
+    const persistedMessages: unknown[] = [];
+    const notice =
+      "Tool ReadFile is disabled for the rest of this run after 3 identical failures: file id <id> failed. Do not try it again. Continue with the other available tools or answer with what you have.";
+    const result = await runAgentRuntimeCore({
+      provider: mockProvider(model),
+      prompt: "read",
+      systemPrompt: "system",
+      maxTurns: 6,
+      persistSession: true,
+      sessionId: "breaker-persistence",
+      sessionStore: {
+        async load() {
+          return [];
+        },
+        async appendTransactional(_sessionId, messages) {
+          persistedMessages.push(...messages);
+        },
+        async archive() {},
+      },
+      tools: {
+        ReadFile: tool({
+          inputSchema: z.object({}),
+          execute: async () => ({
+            isError: true,
+            content: [{ type: "text", text: "File ID abcdef0123456789 failed" }],
+          }),
+        }),
+        Search: tool({ inputSchema: z.object({}), execute: async () => "ok" }),
+      },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 15,
+        terminalToolNames: [],
+      },
+      logger: { warn },
+    });
+
+    expect(model.doStreamCalls[3]?.tools?.map((candidate) => candidate.name)).toEqual(["Search"]);
+    expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain(notice);
+    expect(JSON.stringify(model.doStreamCalls[2]?.prompt)).not.toContain("is disabled for the rest of this run");
+    const fifthPrompt = model.doStreamCalls[4]?.prompt ?? [];
+    const fifthPromptJson = JSON.stringify(fifthPrompt);
+    const noticeIndex = fifthPrompt.findIndex((message) => JSON.stringify(message).includes(notice));
+    const searchResultIndex = fifthPrompt.findIndex((message) =>
+      JSON.stringify(message).includes('"toolName":"Search"'),
+    );
+    expect(fifthPromptJson.split(notice)).toHaveLength(2);
+    expect(searchResultIndex).toBeGreaterThan(noticeIndex);
+    expect(JSON.stringify(persistedMessages)).not.toContain(notice);
+    expect(warn).toHaveBeenCalledWith(
+      { toolName: "ReadFile", fingerprint: "file id <id> failed", streak: 3 },
+      "Tool circuit breaker tripped",
+    );
+    expect(result.toolCircuitBreaker).toEqual({
+      trippedTools: ["ReadFile"],
+      totalErrors: 3,
+      budgetExhausted: false,
+    });
+  });
+
+  it("does not trip on three different MCP error texts and leaves prepareStep unchanged before a trip", async () => {
+    let attempt = 0;
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [
+        toolCallStream("read-1", "ReadFile"),
+        toolCallStream("read-2", "ReadFile"),
+        toolCallStream("read-3", "ReadFile"),
+        stopStream(),
+      ],
+    });
+    await runAgentRuntimeCore({
+      provider: mockProvider(model),
+      prompt: "read",
+      systemPrompt: "system",
+      maxTurns: 5,
+      persistSession: false,
+      tools: {
+        ReadFile: tool({
+          inputSchema: z.object({}),
+          execute: async () => {
+            attempt += 1;
+            return { isError: true, content: [{ type: "text", text: `failure ${attempt}` }] };
+          },
+        }),
+      },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 15,
+        terminalToolNames: [],
+      },
+    });
+
+    expect(model.doStreamCalls.map((call) => call.tools?.map((candidate) => candidate.name))).toEqual([
+      ["ReadFile"],
+      ["ReadFile"],
+      ["ReadFile"],
+      ["ReadFile"],
+    ]);
+    expect(model.doStreamCalls[1]?.tools).toEqual(model.doStreamCalls[0]?.tools);
+    expect(model.doStreamCalls[2]?.tools).toEqual(model.doStreamCalls[0]?.tools);
+    expect(model.doStreamCalls.map((call) => JSON.stringify(call.prompt))).not.toContain(
+      expect.stringContaining("is disabled for the rest of this run"),
+    );
+  });
+
+  it("restricts an exhausted error budget to terminal tools and permits a successful terminal call", async () => {
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [
+        toolCallStream("read-1", "ReadFile"),
+        toolCallStream("read-2", "ReadFile"),
+        toolCallStream("read-3", "ReadFile"),
+        toolCallStream("question", "Question"),
+      ],
+    });
+    const result = await runAgentRuntimeCore({
+      provider: mockProvider(model),
+      prompt: "read then ask",
+      systemPrompt: "system",
+      maxTurns: 4,
+      persistSession: false,
+      tools: {
+        ReadFile: tool({
+          inputSchema: z.object({}),
+          execute: async () => ({ isError: true, content: [{ type: "text", text: "failed" }] }),
+        }),
+        Question: tool({ inputSchema: z.object({}), execute: async () => ({ asked: true }) }),
+      },
+      stopAfterToolNames: ["Question"],
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 10,
+        totalErrorBudget: 3,
+        terminalToolNames: ["Question"],
+      },
+    });
+
+    expect(model.doStreamCalls[3]?.tools?.map((candidate) => candidate.name)).toEqual(["Question"]);
+    expect(JSON.stringify(model.doStreamCalls[3]?.prompt)).toContain(
+      "Tool error budget exhausted. No further tool calls are available except: Question.",
+    );
+    expect(result.stopReason).toBe("tool_use");
+    expect(result.toolCircuitBreaker?.budgetExhausted).toBe(true);
+  });
+
+  it("sets tool choice to none when an exhausted budget has no available terminal tools", async () => {
+    const model = new MockLanguageModelV4({
+      provider: "mock-anthropic",
+      modelId: "claude-sonnet-4-6",
+      doStream: [toolCallStream("read", "ReadFile"), stopStream()],
+    });
+    await runAgentRuntimeCore({
+      provider: mockProvider(model),
+      prompt: "read",
+      systemPrompt: "system",
+      maxTurns: 2,
+      persistSession: false,
+      tools: {
+        ReadFile: tool({
+          inputSchema: z.object({}),
+          execute: async () => ({ isError: true, content: [{ type: "text", text: "failed" }] }),
+        }),
+      },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 1,
+        terminalToolNames: [],
+      },
+    });
+
+    expect(model.doStreamCalls[1]?.tools).toBeUndefined();
+    expect(model.doStreamCalls[1]?.toolChoice).toEqual({ type: "none" });
+  });
+
   it("streams text around a multi-step tool loop and emits ordered events", async () => {
     const model = new MockLanguageModelV4({
       provider: "mock-anthropic",
@@ -220,6 +437,11 @@ describe("agent runtime core", () => {
       persistSession: false,
       stopAfterToolNames: ["Question"],
       tools: { Question: tool({ inputSchema: z.object({}), execute: async () => output }) },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 15,
+        terminalToolNames: ["Question"],
+      },
       events: { onToolEnd },
     });
     expect(result.finalText).toBe("Please provide the missing input.");
@@ -364,6 +586,11 @@ describe("agent runtime core", () => {
           execute: async () => ({ pending: true }),
         }),
       },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 15,
+        terminalToolNames: ["AskUserQuestion"],
+      },
     });
 
     expect(result.stopReason).toBe("tool_use");
@@ -417,10 +644,16 @@ describe("agent runtime core", () => {
           execute: async () => ({ pending: true }),
         }),
       },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 15,
+        terminalToolNames: ["AskUserQuestion"],
+      },
     });
 
     expect(result.stopReason).toBe("end_turn");
     expect(result.finalText).toBe("Please provide the missing details.");
+    expect(result.toolCircuitBreaker).toMatchObject({ totalErrors: 1, trippedTools: [] });
     expect(model.doStreamCalls).toHaveLength(2);
   });
 
@@ -474,6 +707,11 @@ describe("agent runtime core", () => {
           inputSchema: z.object({ skill: z.string() }),
           execute: async () => "skill instructions",
         }),
+      },
+      toolCircuitBreaker: {
+        consecutiveIdenticalFailures: 3,
+        totalErrorBudget: 15,
+        terminalToolNames: ["Skill"],
       },
     });
 

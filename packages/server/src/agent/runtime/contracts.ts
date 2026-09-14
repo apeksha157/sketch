@@ -137,6 +137,11 @@ export interface AgentRuntimeResult {
   durations: AgentRuntimeDurations;
   usage: AgentRuntimeUsage;
   cost: AgentRuntimeCostSummary;
+  toolCircuitBreaker?: {
+    trippedTools: string[];
+    totalErrors: number;
+    budgetExhausted: boolean;
+  };
 }
 
 /** Message role persisted in agent_messages.role. */

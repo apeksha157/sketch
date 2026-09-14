@@ -25,6 +25,12 @@ import { createAgentRuntimeSessionId } from "./ids";
 import { capPersistedRuntimeMessages } from "./persisted-content";
 import { computeRuntimeCost } from "./pricing";
 import type { AgentRuntimeProvider } from "./provider";
+import {
+  ToolCircuitBreaker,
+  type ToolCircuitBreakerOptions,
+  type ToolOutcome,
+  fingerprintToolError,
+} from "./tool-circuit-breaker";
 import { emptyRuntimeUsage, extractRuntimeModelUsage, mergeRuntimeUsageByModel, usageForModel } from "./usage";
 
 export interface RunAgentRuntimeCoreParams {
@@ -43,6 +49,7 @@ export interface RunAgentRuntimeCoreParams {
   compaction?: AgentRuntimeCompactionProvider;
   persistSession: boolean;
   cacheBreakpoints?: boolean;
+  toolCircuitBreaker?: ToolCircuitBreakerOptions | false;
   logger?: AgentRuntimeCoreLogger;
 }
 
@@ -74,6 +81,44 @@ function objectInput(input: unknown): Record<string, unknown> {
 function mcpToolError(output: unknown): Error | undefined {
   if (!output || typeof output !== "object" || !("isError" in output) || output.isError !== true) return undefined;
   return new Error("MCP tool reported failure; inspect the stored tool result.");
+}
+
+function orderedToolOutcomes(step: StepResult<ToolSet>): ToolOutcome[] {
+  const resultsById = new Map(
+    [...step.toolResults, ...step.content.filter((part) => part.type === "tool-error")].map((result) => {
+      const typed = result as { toolCallId: string };
+      return [typed.toolCallId, result] as const;
+    }),
+  );
+  return step.toolCalls.map((call) => {
+    const typedCall = call as { toolCallId: string; toolName: string };
+    const result = resultsById.get(typedCall.toolCallId) as
+      | { type?: string; output?: unknown; error?: unknown }
+      | undefined;
+    return {
+      toolName: typedCall.toolName,
+      errorFingerprint: result
+        ? fingerprintToolError(result.output, result.type === "tool-error" ? result.error : undefined)
+        : undefined,
+    };
+  });
+}
+
+function breakerNotice(params: {
+  newlyTripped: Array<{ toolName: string; fingerprint: string }>;
+  budgetJustExhausted: boolean;
+  options: ToolCircuitBreakerOptions;
+}): string {
+  const notices = params.newlyTripped.map(
+    ({ toolName, fingerprint }) =>
+      `Tool ${toolName} is disabled for the rest of this run after ${params.options.consecutiveIdenticalFailures} identical failures: ${fingerprint}. Do not try it again. Continue with the other available tools or answer with what you have.`,
+  );
+  if (params.budgetJustExhausted) {
+    notices.push(
+      `Tool error budget exhausted. No further tool calls are available except: ${params.options.terminalToolNames.join(", ") || "none"}. Answer now with what you have.`,
+    );
+  }
+  return notices.join("\n\n");
 }
 
 function matchesSuccessfulToolResult(predicate: (tool: { name: string; input: unknown; output: unknown }) => boolean) {
@@ -260,6 +305,10 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
     messages: [...historyMessages, currentUserMessage],
     cacheBreakpoints: params.cacheBreakpoints ?? true,
   });
+  const allToolNames = Object.keys(params.tools ?? {});
+  const breakerOptions = params.toolCircuitBreaker || undefined;
+  const breaker = breakerOptions ? new ToolCircuitBreaker(breakerOptions) : undefined;
+  const pendingBreakerNotices: string[] = [];
   const agent = new ToolLoopAgent({
     model: params.provider.model,
     tools: params.tools ?? {},
@@ -269,6 +318,26 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
       ...(params.stopAfterToolNames?.length ? [hasSuccessfulToolResult(params.stopAfterToolNames)] : []),
       ...(params.stopAfterToolCall ? [matchesSuccessfulToolResult(params.stopAfterToolCall)] : []),
     ],
+    prepareStep: breaker
+      ? ({ messages }) => {
+          const activeTools = breaker.activeTools(allToolNames);
+          const notice = pendingBreakerNotices.splice(0).join("\n\n");
+          if (activeTools === undefined && !notice) return {};
+
+          return {
+            ...(activeTools === undefined ? {} : { activeTools }),
+            ...(activeTools?.length === 0 ? { toolChoice: "none" as const } : {}),
+            ...(notice
+              ? {
+                  messages: [
+                    ...messages,
+                    { role: "user" as const, content: [{ type: "text" as const, text: notice }] },
+                  ],
+                }
+              : {}),
+          };
+        }
+      : undefined,
     onToolExecutionStart: async (event) => {
       await params.events?.onToolStart?.({
         name: event.toolCall.toolName,
@@ -298,6 +367,24 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
     onStepEnd: (step) => {
       observedTurns = Math.max(observedTurns, step.stepNumber + 1);
       providerMs += step.performance.responseTimeMs;
+      if (breaker && breakerOptions) {
+        const update = breaker.recordStep(orderedToolOutcomes(step));
+        for (const trip of update.newlyTripped) {
+          params.logger?.warn(
+            {
+              toolName: trip.toolName,
+              fingerprint: trip.fingerprint,
+              streak: breakerOptions.consecutiveIdenticalFailures,
+            },
+            "Tool circuit breaker tripped",
+          );
+        }
+        if (update.budgetJustExhausted) {
+          params.logger?.warn({ totalErrors: breaker.totalErrors() }, "Tool error budget exhausted");
+        }
+        const notice = breakerNotice({ ...update, options: breakerOptions });
+        if (notice) pendingBreakerNotices.push(notice);
+      }
     },
   });
 
@@ -363,5 +450,6 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
     },
     usage,
     cost: costFromUsage(params.provider, usage),
+    ...(breaker ? { toolCircuitBreaker: breaker.snapshot() } : {}),
   };
 }
