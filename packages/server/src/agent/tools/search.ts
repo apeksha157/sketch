@@ -130,24 +130,25 @@ export const getEntityContextToolSchema = {
 
 export const getFileContentToolDescription = `Retrieve the content of one indexed file by ID, or a batch of up to 20 indexed files by ID. Use this after Search returns relevant results and you need the complete text — e.g. meeting summaries, complete documents, or full task descriptions.
 
+Pass fileId for a single file or fileIds for several. Both are optional; send only the one you need. If both arrive, empty values are ignored and the ids are merged.
+
 Pass view: "full" to get the raw stored version where one exists — for meetings this is the complete sentence-by-sentence transcript with speakers and timestamps. Full view is paged; pass the offset from the previous page's footer to continue reading.
 
-Batch reads use fileIds and return JSON in the same order requested, including duplicates. Batch reads are summary/indexed-content only: view and offset are single-file only. maxCharsPerFile is batch-only and defaults to 2000. Batch reads share one total content cap across all files (50000 characters on the public MCP), so a large batch with a high maxCharsPerFile is cut from the tail and marked contentTruncated.`;
+Batch reads use fileIds and return JSON in the same order requested, including duplicates. view and offset apply to single-file reads and are ignored for batches. maxCharsPerFile is batch-only and defaults to 2000. Batch reads share one total content cap across all files (50000 characters on the public MCP), so a large batch with a high maxCharsPerFile is cut from the tail and marked contentTruncated.`;
 
 /** Page size for view: "full" responses on every surface (JS string length, the same metric as offsets). */
 export const FULL_CONTENT_PAGE_CHARS = 50_000;
 
 export const getFileContentToolSchema = {
-  fileId: z
-    .string()
-    .optional()
-    .describe("The indexed file ID from a Search result. Use exactly one of fileId or fileIds."),
+  fileId: z.string().optional().describe("One indexed file id from a Search result."),
   fileIds: z
     .array(z.string())
     .min(1)
     .max(20)
     .optional()
-    .describe("Batch of indexed file IDs from Search results. Use exactly one of fileId or fileIds."),
+    .describe(
+      "Up to 20 indexed file ids from Search results. If both fileId and fileIds are given, the ids are merged.",
+    ),
   view: z
     .enum(["summary", "full"])
     .optional()
@@ -632,29 +633,46 @@ export async function handleGetFileContent(
   { fileId, fileIds, view, offset, maxCharsPerFile }: GetFileContentArgs,
   deps: SketchMcpDeps,
 ): Promise<ToolResult> {
-  if ((fileId === undefined) === (fileIds === undefined)) {
-    return { content: [{ type: "text", text: "Exactly one of fileId or fileIds is required." }], isError: true };
+  const single = fileId?.trim() || undefined;
+  const batch = fileIds?.map((id) => id.trim()).filter((id) => id.length > 0);
+  let batchIds: string[] | undefined;
+  let singleFileId: string | undefined;
+
+  if (fileId === undefined && fileIds !== undefined) {
+    batchIds = batch;
+  } else if (fileId !== undefined && fileIds === undefined) {
+    singleFileId = single;
+  } else if (fileId !== undefined && fileIds !== undefined) {
+    if (!single) {
+      batchIds = batch;
+    } else if (!batch?.length || batch.every((id) => id === single)) {
+      singleFileId = single;
+    } else {
+      batchIds = [single, ...batch];
+    }
   }
-  if (fileIds !== undefined && view !== undefined) {
-    return { content: [{ type: "text", text: "view is only valid with fileId, not fileIds." }], isError: true };
+
+  if (!singleFileId && !batchIds?.length) {
+    return {
+      content: [{ type: "text", text: "Provide fileId (one id) or fileIds (a list of ids)." }],
+      isError: true,
+    };
   }
-  if (fileIds !== undefined && offset !== undefined) {
-    return { content: [{ type: "text", text: "offset is only valid with fileId, not fileIds." }], isError: true };
+  if (batchIds && batchIds.length > 20) {
+    return { content: [{ type: "text", text: "At most 20 file ids per call." }], isError: true };
   }
-  if (fileId !== undefined && maxCharsPerFile !== undefined) {
-    return { content: [{ type: "text", text: "maxCharsPerFile is only valid with fileIds." }], isError: true };
-  }
-  if (offset !== undefined && view !== "full") {
+  if (singleFileId && offset !== undefined && view !== "full") {
     return { content: [{ type: "text", text: 'offset is only valid with view: "full".' }], isError: true };
   }
   if (!deps.db) {
     return { content: [{ type: "text", text: "File content not available." }] };
   }
   const userPrincipals = await resolveContentPrincipals(contentPrincipalDeps(deps));
-  if (fileIds !== undefined) {
+  if (batchIds) {
+    /** Unknown and inaccessible IDs intentionally share the same not-found result to avoid leaking file visibility. */
     const visibleFileIds = await filterAccessibleFileIds(
       deps.db,
-      fileIds,
+      batchIds,
       userPrincipals,
       deps.slackEntitySyncEnabled ?? true,
     );
@@ -673,7 +691,7 @@ export async function handleGetFileContent(
     let remaining = totalCap;
     let contentTruncated = false;
 
-    const files = fileIds.map((requestedFileId) => {
+    const files = batchIds.map((requestedFileId) => {
       const file = fileById.get(requestedFileId);
       if (!file) return { fileId: requestedFileId, found: false };
 
@@ -696,9 +714,11 @@ export async function handleGetFileContent(
 
     return { content: [{ type: "text", text: JSON.stringify({ files, contentTruncated }, null, 2) }] };
   }
-  const singleFileId = fileId;
-  if (singleFileId === undefined) {
-    return { content: [{ type: "text", text: "Exactly one of fileId or fileIds is required." }], isError: true };
+  if (!singleFileId) {
+    return {
+      content: [{ type: "text", text: "Provide fileId (one id) or fileIds (a list of ids)." }],
+      isError: true,
+    };
   }
   if (deps.publicMcp && userPrincipals !== undefined && userPrincipals.length === 0) {
     return { content: [{ type: "text", text: `File ${singleFileId} not found.` }] };
