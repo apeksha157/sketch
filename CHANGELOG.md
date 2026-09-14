@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.10] -- 2026-09-14
+
+- Allows users to manage Slack connector settings directly from the Channels page, opening the same dialog used by Files with history window, Sync now, and Index history now actions that route to Files for progress tracking.
+- Indexes channel history when Sketch joins a Slack channel, with a configurable `historyLookbackDays` setting on the connector (default 365, 0 disables) and an opt-in "Index history now" action for already-joined channels; messages deduplicate on the existing composite key and history runs in its own chunk-stream mode with per-channel caps.
+- Fixes Slack channel membership after join so channels become accessible even when no conversation has been captured, completing a full membership refresh on bot joins and relying on the existing sweep for quiet joined channels.
+- Fixes LinkedIn search results not showing author/direction lines and message counts by reading `segmentManifest` from the correct nested `source_meta.linkedinAimfox` path instead of the root object.
+- Fixes history backfill admission blocking indefinitely on tenants with many parked facts by excluding `queued_held` and `deferred_below_threshold` rows from pipeline backpressure counts; adds `materialization_deferred_at` column and partial index via migration 239 so the gate only counts facts no sweep has ever parked.
+- Adds per-run tool circuit breaker that disables a tool after three identical consecutive failures and exhausts a 15-error budget, breaking retry loops that previously ran a single tool call up to 93 times.
+- Fixes `GetFileContent` to accept merged `fileId`/`fileIds` arguments that some models send simultaneously instead of rejecting with a hard error; empty values are ignored, a single surviving id takes the single-file path, and batch mode carries its existing caps.
+- Caps Slack, WhatsApp, and scheduled agent runs at 40 turns (web chat stays at 100) and reports step-cap hits as a distinct `stopReason` with a fallback message instead of silently showing "No response".
+- Fixes backfill sync cadence to request exactly one Slack sync per drain cycle that fetched history, replacing the previous 60-second polling loop that burned full `conversations.list` pagination under backpressure for zero extra admissions.
+
 ## [1.7.9] -- 2026-09-09
 
 - Refactors benchmark orchestration to be owned by Platform, removing Sketch's benchmark routes, setup UI, enrollment/runtime services, and execution-provider overrides while preserving historical database migrations and tables.
