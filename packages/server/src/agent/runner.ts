@@ -1322,6 +1322,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     ...params,
     availableManagedIntegrations,
     ...(getCanvasAccessToken ? { getCanvasAccessToken } : {}),
+    ...(params.maxTurns === undefined && isNonWebChatRun(params) ? { maxTurns: CHAT_MAX_TURNS } : {}),
   };
   if (params.agentRuntime === "aisdk") {
     return runAgentWithAiSdk(effectiveParams, adminReadAllEnabled);

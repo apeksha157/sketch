@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
-import { extractAssistantText, extractAssistantTextDelta, runAgent } from "./runner";
+import { CHAT_MAX_TURNS, extractAssistantText, extractAssistantTextDelta, runAgent } from "./runner";
 import { DEFAULT_AGENT_RUNTIME_COST_TABLE } from "./runtime/pricing";
 import type { AgentRuntimeProvider } from "./runtime/provider";
 
@@ -521,6 +521,7 @@ describe("runAgent", () => {
 
     await runAgent(
       makeBaseParams({
+        contextType: "dm",
         model: "claude-test-model",
         maxTurns: 50,
       }),
@@ -531,6 +532,51 @@ describe("runAgent", () => {
     };
     expect(callArgs.options.model).toBe("claude-test-model");
     expect(callArgs.options.maxTurns).toBe(50);
+  });
+
+  it.each([
+    ["Slack DM", { platform: "slack", contextType: "dm" }],
+    ["Slack channel mention", { platform: "slack", contextType: "channel_mention" }],
+    ["Slack question resume", { platform: "slack", contextType: "dm", resumeSessionId: "sess-slack-question" }],
+    ["WhatsApp DM", { platform: "whatsapp", contextType: "dm" }],
+    ["WhatsApp group", { platform: "whatsapp", contextType: "channel_mention" }],
+    [
+      "WhatsApp question resume",
+      { platform: "whatsapp", contextType: "dm", resumeSessionId: "sess-whatsapp-question" },
+    ],
+  ] as const)("defaults %s runs to the chat turn cap", async (_label, context) => {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    let capturedMaxTurns: number | undefined;
+    vi.mocked(query).mockImplementation(((args: unknown) => {
+      capturedMaxTurns = (args as { options: { maxTurns?: number } }).options.maxTurns;
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sess-chat-cap" };
+        yield { type: "result", session_id: "sess-chat-cap", total_cost_usd: 0 };
+      })();
+    }) as unknown as typeof query);
+
+    await runAgent(makeBaseParams(context));
+
+    expect(capturedMaxTurns).toBe(CHAT_MAX_TURNS);
+  });
+
+  it.each([
+    ["web chat", { platform: "slack", responseSurface: "web", contextType: "dm" }],
+    ["scheduled context without an explicit budget", { platform: "slack", contextType: "scheduled_task" }],
+  ] as const)("keeps the runtime default for %s", async (_label, context) => {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    let capturedMaxTurns: number | undefined;
+    vi.mocked(query).mockImplementation(((args: unknown) => {
+      capturedMaxTurns = (args as { options: { maxTurns?: number } }).options.maxTurns;
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "sess-default-cap" };
+        yield { type: "result", session_id: "sess-default-cap", total_cost_usd: 0 };
+      })();
+    }) as unknown as typeof query);
+
+    await runAgent(makeBaseParams(context));
+
+    expect(capturedMaxTurns).toBe(100);
   });
 
   it("enables SDK partial messages and forwards assistant text deltas", async () => {

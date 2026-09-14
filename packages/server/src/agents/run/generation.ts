@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { createChildAbortController, getActiveRunContext } from "../../agent/active-runs";
 import { AgentRunAdmissionCancelledError } from "../../agent/concurrency-limiter";
 import { buildSketchContext } from "../../agent/prompt";
-import type { RunAgentParams, RunAgentResult } from "../../agent/runner";
+import { CHAT_MAX_TURNS, type RunAgentParams, type RunAgentResult } from "../../agent/runner";
 import {
   type AgentOutputWriter,
   type WriteAgentOutputPayload,
@@ -250,7 +250,7 @@ export class AgentRunGenerationLayer extends AgentRunOutputLayer {
         contextType: "scheduled_task",
         currentUserId: user.id,
         userRepo: this.deps.users,
-        maxTurns: 35,
+        maxTurns: CHAT_MAX_TURNS,
         agentInstructions: def.buildInstructions(),
         agentAllowedTools: def.allowedTools,
         agentOutputWriter: writer,
