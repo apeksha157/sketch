@@ -43,6 +43,31 @@ export function parseLinkedinVisibilityScopeConfig(
   return linkedinVisibilitySchema.catch("owner").parse(scopeConfig?.visibility);
 }
 
+/**
+ * The chunk-engine switch is operator-facing, so it lives in the connector's
+ * scope config next to `visibility` and `enrichment` rather than in a
+ * deployment secret. Absent means "not decided here": the deployment-wide
+ * `LINKEDIN_CHUNK_ENGINE_ENABLED` default then applies.
+ */
+export function parseLinkedinChunkEngineScopeConfig(
+  scopeConfig: Record<string, unknown> | null | undefined,
+): boolean | undefined {
+  const value = scopeConfig?.chunkEngine;
+  return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * The single reader of the chunk-engine switch. Every surface that branches on
+ * it — sync routing, the reindex worker, the API — goes through here, so the
+ * per-connector value and the env default can never disagree between them.
+ */
+export function resolveLinkedinChunkEngineEnabled(input: {
+  scopeConfig: Record<string, unknown> | null | undefined;
+  envDefault: boolean | undefined;
+}): boolean {
+  return parseLinkedinChunkEngineScopeConfig(input.scopeConfig) ?? input.envDefault === true;
+}
+
 export function normalizeLinkedinEnrichmentScopeConfig(scopeConfig: Record<string, unknown>): Record<string, unknown> {
   if (!Object.hasOwn(scopeConfig, "enrichment")) return scopeConfig;
   return { ...scopeConfig, enrichment: parseLinkedinEnrichmentScope(scopeConfig) };

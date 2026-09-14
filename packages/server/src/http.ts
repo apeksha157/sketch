@@ -41,6 +41,7 @@ import { setupRoutes } from "./api/setup";
 import { skillsRoutes } from "./api/skills";
 import { verifyJwt } from "./auth/jwt";
 import type { GeminiGenerator } from "./connectors/gemini-generate";
+import type { LinkedinReindexQueueResult } from "./connectors/linkedin-reindex-worker";
 import type { WeeklyMintService } from "./connectors/weekly-mint";
 import type { EnrichmentSweepService } from "./entities/enrichment-sweep";
 import { entityReviewRoutes } from "./entities/review";
@@ -121,6 +122,8 @@ interface AppDeps {
   wakeWhatsAppBackfill?: () => Promise<void> | void;
   /** Queues a `manual` Slack history range per member channel and kicks the worker. */
   queueSlackHistoryBackfill?: () => Promise<{ channelsQueued: number; channelsSkipped: number }>;
+  /** Queues a LinkedIn chunk-engine reindex for one connector and kicks the worker. */
+  queueLinkedinReindex?: (connectorConfigId: string) => Promise<LinkedinReindexQueueResult>;
   whatsappRuntime?: WhatsAppRuntime;
   watiWebhook?: WatiWhatsAppProvider;
   managedWhatsapp?: ManagedWhatsAppProvider;
@@ -743,6 +746,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
         whatsapp: deps.whatsapp,
         wakeWhatsAppBackfill: deps.wakeWhatsAppBackfill,
         queueSlackHistoryBackfill: deps.queueSlackHistoryBackfill,
+        queueLinkedinReindex: deps.queueLinkedinReindex,
       }),
     );
   }

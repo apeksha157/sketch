@@ -7,6 +7,8 @@ import { displaySenderName, orderLinkedinMessages } from "./linkedin-aimfox";
 export const LINKEDIN_CONVERSATION_PLATFORM = "linkedin";
 export const LINKEDIN_CONVERSATION_KIND = "conversation";
 export const LINKEDIN_DELETED_MESSAGE_TEXT = "[Deleted message]";
+/** Legacy burst-segment files, identified by the provider file id the pre-engine segmenter mints. */
+export const LEGACY_LINKEDIN_SEGMENT_PROVIDER_FILE_ID_PATTERN = "linkedin:%:segment-%";
 
 /** Identical to the indexed file's `thread_id`, so both generations of files collapse together. */
 export function linkedinProviderConversationId(accountId: string, conversationUrn: string): string {

@@ -215,6 +215,14 @@ export const handlers = [
     return HttpResponse.json({ suggestion: null });
   }),
 
+  http.get("/api/connectors/:id/reindexes/current", () => {
+    return HttpResponse.json({
+      chunkEngineEnabled: false,
+      phases: { pending: 0, fetched: 0, complete: 0, failed: 0, exhausted: 0 },
+      legacyConversations: 0,
+    });
+  }),
+
   http.get("/api/enrichment/allowance", () => {
     return HttpResponse.json({ remaining: 4200, resetsAt: null });
   }),

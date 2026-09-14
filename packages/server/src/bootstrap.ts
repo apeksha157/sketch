@@ -23,6 +23,7 @@ import { createAutomationCapabilityRegistry } from "./automation/capabilities";
 import { AutomationLockSweeper } from "./automation/lock-service";
 import { isAutomationWebhookTrigger, parseAutomationTriggerConfig } from "./automation/webhook";
 import type { Config } from "./config";
+import { resolveConnectorCredentials } from "./connectors/credential-providers";
 import {
   buildEnrichmentProviderConfig,
   createEnrichmentEmbeddingProvider,
@@ -30,6 +31,7 @@ import {
 } from "./connectors/enrichment-providers";
 import { SalesqlClient } from "./connectors/enrichment/salesql-client";
 import { parseLinkedinEnrichmentScope } from "./connectors/enrichment/scope";
+import { LinkedinReindexWorker } from "./connectors/linkedin-reindex-worker";
 import { migrateManagedConnectorCredentialsToCanvas } from "./connectors/managed-credential-migration";
 import { createOpenRouterGenerator } from "./connectors/openrouter-generate";
 import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
@@ -1161,6 +1163,50 @@ export async function createServer(config: Config, options?: CreateServerOptions
     },
   });
 
+  /**
+   * Re-cutting a tenant's pre-engine LinkedIn conversations means refetching
+   * each one from Aimfox under a 60 rpm pacer, so it runs as a paced worker
+   * rather than inside the request that asked for it or inside one sync.
+   */
+  const linkedinReindexWorker = new LinkedinReindexWorker({
+    db,
+    logger,
+    appConfig: config,
+    listConnectors: async () => {
+      const configs = await enrichmentConnectorRepo.findConfigsByType("linkedin_aimfox");
+      return configs
+        .filter((linkedinConfig) => linkedinConfig.sync_status !== "disabled")
+        .map((linkedinConfig) => ({
+          id: linkedinConfig.id,
+          scopeConfig: linkedinConfig.scope_config
+            ? (JSON.parse(linkedinConfig.scope_config) as Record<string, unknown>)
+            : {},
+        }));
+    },
+    resolveApiKey: async (connectorConfigId) => {
+      const linkedinConfig = await enrichmentConnectorRepo.findConfigById(connectorConfigId);
+      if (!linkedinConfig) return null;
+      const owner = await users.findById(linkedinConfig.created_by);
+      const resolved = await resolveConnectorCredentials({
+        db,
+        config: linkedinConfig,
+        appConfig: config,
+        ownerEmail: owner?.email ?? null,
+        logger,
+      });
+      return resolved.credentials.type === "api_key" ? (resolved.credentials.api_key ?? null) : null;
+    },
+    requestSync: async (connectorConfigId) => {
+      const linkedinConfig = await enrichmentConnectorRepo.findConfigById(connectorConfigId);
+      if (!linkedinConfig) return "unavailable";
+      if (linkedinConfig.sync_status === "syncing") return "busy";
+      if (!["active", "pending", "error"].includes(linkedinConfig.sync_status)) return "unavailable";
+      logger.info({ connectorId: connectorConfigId }, "LinkedIn sync requested by the reindex worker");
+      await runConnectorSync(db, connectorConfigId, logger, config);
+      return "started";
+    },
+  });
+
   const slackAdapterDeps = {
     db,
     config,
@@ -1330,6 +1376,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     whatsappInboundConsumer.start();
     whatsappBackfillWorker?.start();
     slackBackfillWorker.start();
+    linkedinReindexWorker.start();
   }
   const whatsappInboundRetention = backgroundWork
     ? startWhatsAppInboundRetention({
@@ -1388,6 +1435,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
      */
     wakeWhatsAppBackfill: () => whatsappBackfillWorker?.reconcile(true),
     queueSlackHistoryBackfill: () => slackBackfillWorker.queueManualBackfill(),
+    queueLinkedinReindex: (connectorConfigId: string) => linkedinReindexWorker.queueReindex(connectorConfigId),
     captureWhatsAppLid: (userId, phoneE164) => {
       void whatsappUserLidRefresh.capture(userId, phoneE164).catch((error) => {
         logger.warn(
@@ -1545,6 +1593,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     if (backgroundWork) {
       await whatsappBackfillWorker?.stop();
       await slackBackfillWorker.stop();
+      await linkedinReindexWorker.stop();
       await whatsappInboundConsumer.stop();
     }
     whatsappInboundRetention?.stop();

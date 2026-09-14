@@ -1375,6 +1375,13 @@ export interface HierarchyLevel {
   default: HierarchyTarget;
 }
 
+/** Per-phase reindex progress for one LinkedIn connector, plus what is still on the old chunker. */
+export interface LinkedinReindexStatus {
+  chunkEngineEnabled: boolean;
+  phases: { pending: number; fetched: number; complete: number; failed: number; exhausted: number };
+  legacyConversations: number;
+}
+
 export interface ConnectorConfig {
   id: string;
   connectorType: string;
@@ -2687,6 +2694,24 @@ export const api = {
         method: "PUT",
         body: JSON.stringify(enrichment),
       });
+    },
+    /** Turns the LinkedIn chunk engine on or off for one connector, overriding the deployment default. */
+    updateLinkedinChunkEngine(id: string, enabled: boolean) {
+      return request<{ chunkEngineEnabled: boolean }>(`/api/connectors/${id}/chunk-engine`, {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+    },
+    /** How many LinkedIn conversations are still on the old chunker, and how a running reindex is doing. */
+    linkedinReindexStatus(id: string) {
+      return request<LinkedinReindexStatus>(`/api/connectors/${id}/reindexes/current`);
+    },
+    /** Queues a re-index of every LinkedIn conversation still cut by the old chunker. */
+    queueLinkedinReindex(id: string) {
+      return request<{ conversationsQueued: number; conversationsSkipped: number; conversationsRearmed: number }>(
+        `/api/connectors/${id}/reindexes`,
+        { method: "POST" },
+      );
     },
     updateVisibility(id: string, visibility: "owner" | "workspace") {
       return request<{

@@ -2,6 +2,7 @@ import {
   ConnectorSettingsFields,
   IntegrationIcon,
   LinkedinVisibilitySwitch,
+  SettingRow,
 } from "@/components/connect-integration-dialog";
 /**
  * ManageConnectorDialog — status summary, sync scope configuration, credential
@@ -14,10 +15,11 @@ import {
  */
 import { HierarchyMappingPanel } from "@/components/hierarchy-mapping-panel";
 import { GenericScopeEditor } from "@/components/scope-picker";
-import type { ConnectorConfig, HierarchyLevel, WhatsAppGroupMemberLabel } from "@/lib/api";
+import type { ConnectorConfig, HierarchyLevel, LinkedinReindexStatus, WhatsAppGroupMemberLabel } from "@/lib/api";
 import { ApiRequestError, api } from "@/lib/api";
 import type { IntegrationDefinition, SettingsField, SettingsValues } from "@/lib/integrations";
 import { settingsFromScope } from "@/lib/integrations";
+import { useDashboardAuth } from "@/routes/dashboard";
 import {
   ArrowsClockwiseIcon,
   CheckCircleIcon,
@@ -52,6 +54,7 @@ import {
 import { Input } from "@sketch/ui/components/input";
 import { Label } from "@sketch/ui/components/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@sketch/ui/components/select";
+import { Switch } from "@sketch/ui/components/switch";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -867,6 +870,7 @@ function LinkedinSettingsEditor({
   canChangeEnrichment: boolean;
 }) {
   const queryClient = useQueryClient();
+  const isAdmin = useDashboardAuth().role === "admin";
   const currentVisibility = connector.visibility ?? "owner";
   const current = useMemo(() => settingsFromScope(fields, stored), [fields, stored]);
   const [visibility, setVisibility] = useState<"owner" | "workspace">(currentVisibility);
@@ -943,6 +947,111 @@ function LinkedinSettingsEditor({
         ) : (
           "Save"
         )}
+      </Button>
+      {isAdmin ? <LinkedinChunkEngineSection connectorId={connector.id} disabled={mutation.isPending} /> : null}
+    </div>
+  );
+}
+
+const LINKEDIN_REINDEX_POLL_MS = 5_000;
+
+function describeLinkedinReindex(status: LinkedinReindexStatus): string {
+  const running = status.phases.pending + status.phases.fetched;
+  const stalled: string[] = [];
+  if (status.phases.exhausted > 0) stalled.push(`${status.phases.exhausted} paused after repeated errors`);
+  if (status.phases.failed > 0) stalled.push(`${status.phases.failed} could not be re-fetched from LinkedIn`);
+  const note = stalled.length > 0 ? ` ${stalled.join(", ")}.` : "";
+  if (running > 0) {
+    const plural = running === 1 ? "" : "s";
+    return `Re-indexing ${running} conversation${plural} — ${status.phases.fetched} fetched, ${status.phases.pending} to fetch.${note}`;
+  }
+  if (status.legacyConversations > 0) {
+    const one = status.legacyConversations === 1;
+    return `${status.legacyConversations} conversation${one ? "" : "s"} ${one ? "is" : "are"} still on the old chunker.${note}`;
+  }
+  return `Every conversation is on the chunk engine.${note}`;
+}
+
+/**
+ * The chunk-engine switch and the re-index it gates. Admin-only, like the
+ * routes behind it: a member's status request is refused, which would render
+ * a switch that can never move.
+ *
+ * The switch is saved on flip rather than behind the Save button above,
+ * because its current value is not simply what the scope config holds: an
+ * unset connector follows the deployment-wide default, and only the server
+ * knows that. The status query is where both facts arrive.
+ *
+ * Turning the engine on changes only how *new* chunking is done. Conversations
+ * indexed before it keep their old files until someone re-indexes them here,
+ * which refetches each thread from LinkedIn and is therefore paced in the
+ * background — hence a count above the button and a poll while a run is live,
+ * so a migration in progress is visible rather than silent.
+ */
+function LinkedinChunkEngineSection({ connectorId, disabled }: { connectorId: string; disabled: boolean }) {
+  const queryClient = useQueryClient();
+  const status = useQuery({
+    queryKey: ["linkedin-reindex", connectorId],
+    queryFn: () => api.integrations.linkedinReindexStatus(connectorId),
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      return data && data.phases.pending + data.phases.fetched > 0 ? LINKEDIN_REINDEX_POLL_MS : false;
+    },
+  });
+
+  const setEngine = useMutation({
+    mutationFn: (enabled: boolean) => api.integrations.updateLinkedinChunkEngine(connectorId, enabled),
+    onSuccess: (result) => {
+      toast.success(result.chunkEngineEnabled ? "Topic-based chunking turned on." : "Topic-based chunking turned off.");
+      queryClient.invalidateQueries({ queryKey: ["linkedin-reindex", connectorId] });
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const reindex = useMutation({
+    mutationFn: () => api.integrations.queueLinkedinReindex(connectorId),
+    onSuccess: (result) => {
+      const started = result.conversationsQueued + result.conversationsRearmed;
+      toast.success(
+        started > 0 ? `Re-indexing ${started} conversation${started === 1 ? "" : "s"}.` : "Nothing left to re-index.",
+      );
+      queryClient.invalidateQueries({ queryKey: ["linkedin-reindex", connectorId] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const busy = disabled || setEngine.isPending;
+  const switchId = `manage-${connectorId}-chunk-engine`;
+
+  return (
+    <div className="space-y-2 border-t border-border pt-3">
+      <SettingRow
+        id={switchId}
+        label="Topic-based conversation chunking"
+        help="Groups a LinkedIn thread by topic instead of by fixed time gaps. Off keeps the older chunker."
+        control={
+          <Switch
+            id={switchId}
+            size="sm"
+            checked={status.data?.chunkEngineEnabled === true}
+            onCheckedChange={(checked) => setEngine.mutate(checked)}
+            disabled={busy || !status.data}
+            className="mt-0.5"
+          />
+        }
+      />
+      {status.data ? <p className="text-[11px] text-muted-foreground">{describeLinkedinReindex(status.data)}</p> : null}
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 text-xs"
+        onClick={() => reindex.mutate()}
+        disabled={
+          busy || reindex.isPending || status.data?.chunkEngineEnabled !== true || status.data.legacyConversations === 0
+        }
+      >
+        {reindex.isPending ? "Queueing…" : "Re-index old conversations"}
       </Button>
     </div>
   );

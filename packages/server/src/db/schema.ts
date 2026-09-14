@@ -942,6 +942,23 @@ export interface SlackBackfillRangesTable {
   updated_at: Generated<string>;
 }
 
+export interface LinkedinReindexConversationsTable {
+  id: string;
+  run_id: string;
+  connector_config_id: string;
+  account_id: string;
+  conversation_urn: string;
+  lead_id: string | null;
+  lead_name: string | null;
+  owner_name: string | null;
+  phase: Generated<string>;
+  attempts: Generated<number>;
+  next_retry_at: string | null;
+  last_error: string | null;
+  created_at: Generated<string>;
+  updated_at: Generated<string>;
+}
+
 export interface SlackBackfillThreadsTable {
   id: string;
   range_id: string;
@@ -2287,6 +2304,7 @@ export interface DB {
   whatsapp_backfill_ranges: WhatsAppBackfillRangesTable;
   slack_backfill_ranges: SlackBackfillRangesTable;
   slack_backfill_threads: SlackBackfillThreadsTable;
+  linkedin_reindex_conversations: LinkedinReindexConversationsTable;
   whatsapp_window_keepalives: WhatsAppWindowKeepAlivesTable;
   scheduled_tasks: ScheduledTasksTable;
   automation_runs: AutomationRunsTable;

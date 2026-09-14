@@ -20,6 +20,7 @@ import {
   type LinkedinVisibilityMode,
   normalizeLinkedinEnrichmentScopeConfig,
   parseLinkedinVisibilityScopeConfig,
+  resolveLinkedinChunkEngineEnabled,
 } from "./enrichment/scope";
 import { type LinkedinAimfoxPersonSeed, buildPersonSeed } from "./linkedin-aimfox-mappers";
 import { resolveLinkedinChunkEngineKnobs } from "./linkedin-chunk-adapter";
@@ -80,6 +81,8 @@ export interface LinkedinAimfoxScopeConfig extends Record<string, unknown> {
   contactPointDefaultRegion?: string;
   visibility?: LinkedinVisibilityMode;
   enrichment?: LinkedinEnrichmentScope;
+  /** Overrides `LINKEDIN_CHUNK_ENGINE_ENABLED` for this connector; absent takes the env default. */
+  chunkEngine?: boolean;
 }
 
 /**
@@ -289,8 +292,11 @@ export function createLinkedinAimfoxConnector(): Connector {
       const runAnchorMs = Date.now();
       const now = new Date(runAnchorMs);
       const archiveDeps = resolveArchiveDeps(opts.db, opts.connectorConfigId, opts.logger);
-      const engineEnabled = opts.appConfig?.LINKEDIN_CHUNK_ENGINE_ENABLED === true;
-      const engine = resolveEngineDeps(archiveDeps, opts.appConfig, opts.linkedinChunkerGenerate, now);
+      const engineEnabled = resolveLinkedinChunkEngineEnabled({
+        scopeConfig: opts.scopeConfig,
+        envDefault: opts.appConfig?.LINKEDIN_CHUNK_ENGINE_ENABLED,
+      });
+      const engine = resolveEngineDeps(archiveDeps, engineEnabled, opts.appConfig, opts.linkedinChunkerGenerate, now);
       const ownerNames = await loadOwnerNames(api_key, scopeConfig.maxRpm, opts.logger);
 
       for (const accountId of scopeConfig.accountIds) {
@@ -431,11 +437,12 @@ function resolveArchiveDeps(
  */
 function resolveEngineDeps(
   archive: LinkedinEngineArchiveDeps | null,
+  engineEnabled: boolean,
   appConfig: Partial<Config> | undefined,
   generate: ChunkGenerate | undefined,
   now: Date,
 ): LinkedinEngineDeps | null {
-  if (!archive || !generate || appConfig?.LINKEDIN_CHUNK_ENGINE_ENABLED !== true) return null;
+  if (!archive || !generate || !engineEnabled) return null;
   return {
     ...archive,
     knobs: resolveLinkedinChunkEngineKnobs(appConfig),

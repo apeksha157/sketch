@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { createConnectorRepository } from "../db/repositories/connectors";
+import { createLinkedinReindexRepository } from "../db/repositories/linkedin-reindex";
 import type { DB } from "../db/schema";
 import type { AimfoxMessage } from "./aimfox-client";
 import type { ChunkEngineKnobs } from "./chunk-engine";
@@ -17,6 +18,7 @@ import {
 } from "./linkedin-chunk-runner";
 import { LINKEDIN_CONVERSATION_FILE_TYPE } from "./linkedin-emission";
 import {
+  LEGACY_LINKEDIN_SEGMENT_PROVIDER_FILE_ID_PATTERN,
   LINKEDIN_CONVERSATION_KIND,
   LINKEDIN_CONVERSATION_PLATFORM,
   ingestLinkedinConversation,
@@ -24,9 +26,6 @@ import {
   parseLinkedinProviderConversationId,
 } from "./linkedin-ingest";
 import { forEachChunk } from "./sync-utils";
-
-/** Legacy burst-segment files, identified by the id shape the segmenter mints. */
-const LEGACY_SEGMENT_PROVIDER_FILE_ID_PATTERN = "linkedin:%:segment-%";
 
 export interface LinkedinEngineArchiveDeps {
   db: Kysely<DB>;
@@ -116,7 +115,7 @@ export async function resolveLinkedinEngineRouting(
       connectorConfigId: deps.connectorConfigId,
       fileType: LINKEDIN_CONVERSATION_FILE_TYPE,
       threadIds: unmigrated.map((conversationUrn) => linkedinProviderConversationId(input.accountId, conversationUrn)),
-      providerFileIdPattern: LEGACY_SEGMENT_PROVIDER_FILE_ID_PATTERN,
+      providerFileIdPattern: LEGACY_LINKEDIN_SEGMENT_PROVIDER_FILE_ID_PATTERN,
     });
     const engineConversationUrns = new Set(conversationIds.keys());
     for (const conversationUrn of unmigrated) {
@@ -226,9 +225,11 @@ async function tickLinkedinEngineConversation(
  * same per-conversation path the listing uses — which is also what makes each
  * one a cutover candidate again, so a half-moved conversation converges.
  *
- * A conversation with no slice to read a roster from is skipped: the engine has
- * never cut it, so there is nothing to resume and nothing to close. The reindex
- * path carries its own roster and does not depend on this.
+ * A conversation with no slice to read a roster from falls back to the roster
+ * its reindex row carries, which is exactly the state a fetch-then-cut leaves:
+ * rows ingested, nothing chunked yet. Only a conversation with neither is
+ * skipped — the engine has never cut it, so there is nothing to resume and
+ * nothing to close.
  */
 export async function sweepLinkedinEngineConversations(
   deps: LinkedinEngineDeps,
@@ -241,12 +242,22 @@ export async function sweepLinkedinEngineConversations(
     linkedinPendingHistoryCandidatesQuery(deps.db, budget).execute(),
     linkedinIdleCloseCandidatesQuery(deps.db, idleBefore).limit(budget).execute(),
   ]);
-  const candidateIds = [...new Set([...pendingHistory, ...idle].map((row) => row.conversation_id))];
+  const share = splitLinkedinSweepBudget(budget, pendingHistory.length, idle.length);
+  const candidateIds = [
+    ...new Set(
+      [
+        ...pendingHistory.slice(0, share.pendingHistory),
+        ...idle.slice(0, share.idle),
+        ...pendingHistory.slice(share.pendingHistory),
+        ...idle.slice(share.idle),
+      ].map((row) => row.conversation_id),
+    ),
+  ];
 
   let swept = 0;
   for (const candidate of await resolveSweepCandidates(deps.db, runs, candidateIds)) {
     if (swept >= budget) break;
-    const roster = await latestRosterSnapshot(deps.db, candidate.conversationId);
+    const roster = await sweepRosterSnapshot(deps, candidate);
     if (!roster) {
       deps.logger.debug(
         { accountId: candidate.run.accountId, conversationUrn: candidate.conversationUrn },
@@ -273,9 +284,37 @@ interface LinkedinSweepCandidate {
 }
 
 /**
+ * How one sweep's budget is divided between the two candidate sets.
+ *
+ * A reindex puts thousands of conversations into the pending-history set at
+ * once. Handing that set the whole budget starves idle-close for as many syncs
+ * as the migration lasts, so every live conversation that simply went quiet
+ * keeps an open tail the whole time. Each set is therefore guaranteed about
+ * half, and whatever the other set does not need falls to it — a run with three
+ * idle conversations still spends the remaining forty-seven on the backlog.
+ *
+ * The split shapes the order candidates are offered in, not the pool: both
+ * sets are passed on in full, so a prefix of unusable candidates (an account
+ * outside this run, a conversation the listing already ticked) costs nothing.
+ */
+export function splitLinkedinSweepBudget(
+  budget: number,
+  pendingHistoryCount: number,
+  idleCount: number,
+): { pendingHistory: number; idle: number } {
+  const half = Math.ceil(budget / 2);
+  const idleShare = Math.min(idleCount, Math.max(half, budget - pendingHistoryCount));
+  return { pendingHistory: Math.min(pendingHistoryCount, budget - idleShare), idle: idleShare };
+}
+
+/**
  * Candidate rows narrowed to conversations this run's accounts own and has not
  * already ticked. The sweep is run-level rather than per account so one budget
  * cannot be spent entirely on whichever account happens to sort first.
+ *
+ * Returned in the order asked for, because that order is how the budget is
+ * shared between the two candidate sets; a chunked `in` returns rows in
+ * whatever order the database likes.
  */
 async function resolveSweepCandidates(
   db: Kysely<DB>,
@@ -283,7 +322,7 @@ async function resolveSweepCandidates(
   conversationIds: number[],
 ): Promise<LinkedinSweepCandidate[]> {
   if (conversationIds.length === 0) return [];
-  const candidates: LinkedinSweepCandidate[] = [];
+  const byConversationId = new Map<number, LinkedinSweepCandidate>();
   await forEachChunk(conversationIds, async (batch) => {
     const rows = await db
       .selectFrom("conversations")
@@ -294,10 +333,39 @@ async function resolveSweepCandidates(
       const parsed = parseLinkedinProviderConversationId(row.provider_conversation_id);
       const run = parsed ? runs.get(parsed.accountId) : undefined;
       if (!parsed || !run || run.conversations.has(parsed.conversationUrn)) continue;
-      candidates.push({ run, conversationUrn: parsed.conversationUrn, conversationId: row.id });
+      byConversationId.set(row.id, { run, conversationUrn: parsed.conversationUrn, conversationId: row.id });
     }
   });
-  return candidates;
+  return conversationIds
+    .map((conversationId) => byConversationId.get(conversationId))
+    .filter((candidate): candidate is LinkedinSweepCandidate => candidate !== undefined);
+}
+
+/**
+ * The roster for one swept conversation: the engine's own snapshot when it has
+ * cut a slice, otherwise the one the reindex worker recorded when it refetched
+ * the thread. A reindexed conversation has no slice until this very pass, so
+ * without the second source its first drain would strand itself.
+ */
+async function sweepRosterSnapshot(
+  deps: LinkedinEngineDeps,
+  candidate: LinkedinSweepCandidate,
+): Promise<LinkedinChunkRosterSnapshot | null> {
+  const stored = await latestRosterSnapshot(deps.db, candidate.conversationId);
+  if (stored) return stored;
+  const queued = await createLinkedinReindexRepository(deps.db).findFetchedConversation({
+    connectorConfigId: deps.connectorConfigId,
+    accountId: candidate.run.accountId,
+    conversationUrn: candidate.conversationUrn,
+  });
+  if (!queued?.lead_id || !queued.lead_name || !queued.owner_name) return null;
+  return {
+    accountId: candidate.run.accountId,
+    conversationUrn: candidate.conversationUrn,
+    leadId: queued.lead_id,
+    leadName: queued.lead_name,
+    ownerName: queued.owner_name,
+  };
 }
 
 /**
@@ -342,6 +410,10 @@ export interface LinkedinCutoverFinalizeInput {
  * the timeline would suffer: an undrained history backlog (the engine covers a
  * prefix, legacy covers the whole thread), or an item of this run that failed
  * to persist. Both retry next run.
+ *
+ * The archive and the reindex row's completion land in one transaction: the
+ * swap is what ends a reindex, and a crash between the two would leave the
+ * queue claiming work that is already on the timeline.
  */
 export async function finalizeLinkedinCutover(
   deps: LinkedinEngineArchiveDeps,
@@ -363,15 +435,25 @@ export async function finalizeLinkedinCutover(
     conversationIds: [...conversationIds.values()],
   });
 
+  const nowIso = new Date().toISOString();
   let archived = 0;
   for (const conversationUrn of eligible) {
     const conversationId = conversationIds.get(conversationUrn);
     if (conversationId === undefined || !withEngineFiles.has(conversationId)) continue;
-    archived += await repo.archiveThreadFilesByProviderFileIdPattern({
-      connectorConfigId: deps.connectorConfigId,
-      fileType: LINKEDIN_CONVERSATION_FILE_TYPE,
-      threadId: linkedinProviderConversationId(run.accountId, conversationUrn),
-      providerFileIdPattern: LEGACY_SEGMENT_PROVIDER_FILE_ID_PATTERN,
+    archived += await deps.db.transaction().execute(async (trx) => {
+      const count = await createConnectorRepository(trx).archiveThreadFilesByProviderFileIdPattern({
+        connectorConfigId: deps.connectorConfigId,
+        fileType: LINKEDIN_CONVERSATION_FILE_TYPE,
+        threadId: linkedinProviderConversationId(run.accountId, conversationUrn),
+        providerFileIdPattern: LEGACY_LINKEDIN_SEGMENT_PROVIDER_FILE_ID_PATTERN,
+      });
+      await createLinkedinReindexRepository(trx).markComplete({
+        connectorConfigId: deps.connectorConfigId,
+        accountId: run.accountId,
+        conversationUrn,
+        now: nowIso,
+      });
+      return count;
     });
     run.moved.add(conversationUrn);
   }

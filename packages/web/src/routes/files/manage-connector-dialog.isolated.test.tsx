@@ -6,8 +6,23 @@ import { renderWithProviders } from "@/test/utils";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ManageConnectorDialog } from "./manage-connector-dialog";
+
+const auth = vi.hoisted(() => ({ role: "admin" as "admin" | "member" }));
+
+vi.mock("@/routes/dashboard", () => ({
+  useDashboardAuth: () => ({
+    role: auth.role,
+    userId: "user-1",
+    displayName: "User",
+    displayIdentifier: "user@test.com",
+  }),
+}));
+
+afterEach(() => {
+  auth.role = "admin";
+});
 
 const fireflies = getIntegration("fireflies") ?? null;
 const gmail = getIntegration("gmail") ?? null;
@@ -480,7 +495,7 @@ describe("ManageConnectorDialog connector capabilities", () => {
 
     const save = await screen.findByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
-    expect(screen.getAllByRole("switch")).toHaveLength(2);
+    expect(screen.getAllByRole("switch")).toHaveLength(3);
     await user.click(screen.getByRole("switch", { name: /Everyone in the workspace/i }));
     await user.click(screen.getByRole("switch", { name: /Look up contact details/i }));
     await user.click(save);
@@ -489,6 +504,200 @@ describe("ManageConnectorDialog connector capabilities", () => {
       expect(visibilityBody).toEqual({ visibility: "workspace" });
       expect(putBody).toEqual({ enabled: true, dailyCap: 25, autoMerge: true });
     });
+  });
+
+  it("re-indexes the LinkedIn conversations still on the old chunker", async () => {
+    const user = userEvent.setup();
+    let reindexCalls = 0;
+    server.use(
+      http.get("/api/connectors/:id/reindexes/current", () =>
+        HttpResponse.json({
+          chunkEngineEnabled: true,
+          phases: { pending: 0, fetched: 0, complete: 0, failed: 0, exhausted: 0 },
+          legacyConversations: 7,
+        }),
+      ),
+      http.post("/api/connectors/:id/reindexes", () => {
+        reindexCalls++;
+        return HttpResponse.json(
+          { conversationsQueued: 7, conversationsSkipped: 0, conversationsRearmed: 0 },
+          { status: 202 },
+        );
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={linkedin}
+        connector={connector({
+          id: "linkedin-conn",
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          scopeConfig: { accountIds: ["acct-1"], visibility: "owner" },
+          visibility: "owner",
+          fileCount: 3,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    expect(await screen.findByText("7 conversations are still on the old chunker.")).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: /Re-index old conversations/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    await waitFor(() => expect(reindexCalls).toBe(1));
+  });
+
+  it("counts re-armed conversations as work a second press started", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/connectors/:id/reindexes/current", () =>
+        HttpResponse.json({
+          chunkEngineEnabled: true,
+          phases: { pending: 0, fetched: 0, complete: 0, failed: 0, exhausted: 3 },
+          legacyConversations: 3,
+        }),
+      ),
+      http.post("/api/connectors/:id/reindexes", () =>
+        HttpResponse.json(
+          { conversationsQueued: 0, conversationsSkipped: 3, conversationsRearmed: 3 },
+          { status: 202 },
+        ),
+      ),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={linkedin}
+        connector={connector({
+          id: "linkedin-conn",
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          scopeConfig: { accountIds: ["acct-1"], visibility: "owner" },
+          visibility: "owner",
+          fileCount: 3,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: /Re-index old conversations/i });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    expect(await screen.findByText("Re-indexing 3 conversations.")).toBeInTheDocument();
+  });
+
+  it("surfaces the conversations a reindex could not move, so a stalled run does not read as idle", async () => {
+    server.use(
+      http.get("/api/connectors/:id/reindexes/current", () =>
+        HttpResponse.json({
+          chunkEngineEnabled: true,
+          phases: { pending: 0, fetched: 0, complete: 4, failed: 2, exhausted: 3 },
+          legacyConversations: 5,
+        }),
+      ),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={linkedin}
+        connector={connector({
+          id: "linkedin-conn",
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          scopeConfig: { accountIds: ["acct-1"], visibility: "owner" },
+          visibility: "owner",
+          fileCount: 3,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    expect(
+      await screen.findByText(
+        "5 conversations are still on the old chunker. 3 paused after repeated errors, 2 could not be re-fetched from LinkedIn.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the chunk-engine section from a member, whose status request would be refused", async () => {
+    auth.role = "member";
+    let statusCalls = 0;
+    server.use(
+      http.get("/api/connectors/:id/reindexes/current", () => {
+        statusCalls++;
+        return new HttpResponse(null, { status: 403 });
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={linkedin}
+        connector={connector({
+          id: "linkedin-conn",
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          scopeConfig: { accountIds: ["acct-1"], visibility: "owner" },
+          visibility: "owner",
+          fileCount: 3,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "Save" });
+    expect(screen.queryByRole("switch", { name: /Topic-based conversation chunking/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Re-index old conversations/i })).not.toBeInTheDocument();
+    expect(statusCalls).toBe(0);
+  });
+
+  it("turns the LinkedIn chunk engine on from its own switch", async () => {
+    const user = userEvent.setup();
+    let toggleBody: unknown;
+    server.use(
+      http.put("/api/connectors/:id/chunk-engine", async ({ request }) => {
+        toggleBody = await request.json();
+        return HttpResponse.json({ chunkEngineEnabled: true });
+      }),
+    );
+
+    renderWithProviders(
+      <ManageConnectorDialog
+        definition={linkedin}
+        connector={connector({
+          id: "linkedin-conn",
+          connectorType: "linkedin_aimfox",
+          authType: "api_key",
+          scopeConfig: { accountIds: ["acct-1"], visibility: "owner" },
+          visibility: "owner",
+          fileCount: 3,
+        })}
+        open
+        onOpenChange={() => {}}
+        onDisconnected={() => {}}
+        onReconnect={() => {}}
+      />,
+    );
+
+    const toggle = await screen.findByRole("switch", { name: /Topic-based conversation chunking/i });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    await user.click(toggle);
+
+    await waitFor(() => expect(toggleBody).toEqual({ enabled: true }));
   });
 
   it("saves an empty WhatsApp group selection through the generic scope editor", async () => {

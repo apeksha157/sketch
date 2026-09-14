@@ -249,6 +249,10 @@ export const configSchema = z.object({
   LINKEDIN_CHUNK_MAX_WINDOWS_PER_RUN: z.coerce.number().int().min(1).default(4),
   LINKEDIN_CHUNK_CONVERSATION_WORKER_POOL: z.coerce.number().int().min(1).default(4),
   LINKEDIN_CHUNK_SWEEP_CONVERSATIONS_PER_RUN: z.coerce.number().int().min(1).default(50),
+  LINKEDIN_CHUNK_REINDEX_HISTORY_ON_STARTUP: z
+    .enum(["true", "false", "1", "0"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
   SLACK_DISCOVERY_PAGE_ROWS: z.coerce.number().int().min(1).default(5000),
   SLACK_DISCOVERY_MAX_PAGES: z.coerce.number().int().min(1).default(20),
   SLACK_EMISSION_LEGACY_PER_RUN: z.coerce.number().int().min(1).max(2000).default(200),

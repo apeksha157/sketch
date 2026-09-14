@@ -50,11 +50,15 @@ import {
   normalizeLinkedinVisibilityScopeConfig,
   parseLinkedinEnrichmentScope,
   parseLinkedinVisibilityScopeConfig,
+  resolveLinkedinChunkEngineEnabled,
 } from "../connectors/enrichment/scope";
 import { buildCredentialHint } from "../connectors/fireflies";
 import type { GeminiGenerator } from "../connectors/gemini-generate";
 import { ensureValidToken, listFolderContents, listMyDriveFolders, listSharedDrives } from "../connectors/google-drive";
 import { LinkedinAimfoxNoAccountsError, discoverLinkedinAimfoxScopeConfig } from "../connectors/linkedin-aimfox";
+import { LINKEDIN_CONVERSATION_FILE_TYPE } from "../connectors/linkedin-emission";
+import { LEGACY_LINKEDIN_SEGMENT_PROVIDER_FILE_ID_PATTERN } from "../connectors/linkedin-ingest";
+import type { LinkedinReindexQueueResult } from "../connectors/linkedin-reindex-worker";
 import { browseNotionRootPages, getBrowseStatus, startNotionBrowse } from "../connectors/notion";
 import { createOpenRouterGenerator } from "../connectors/openrouter-generate";
 import { buildOtterCredentialHint } from "../connectors/otter";
@@ -77,6 +81,7 @@ import { createEntityRepository, whereLiveEntity } from "../db/repositories/enti
 import { createEntityDomainsRepository } from "../db/repositories/entity-domains";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
 import { createFileSharesRepository } from "../db/repositories/file-shares";
+import { createLinkedinReindexRepository } from "../db/repositories/linkedin-reindex";
 import { createSettingsRepository } from "../db/repositories/settings";
 import type { createUserRepository } from "../db/repositories/users";
 import {
@@ -510,6 +515,7 @@ export function connectorRoutes(
       | "CONTAINER_CLASSIFICATION_ENABLED"
       | "PROJECT_MINTING_MODEL"
       | "CONTACT_POINT_DEFAULT_REGION"
+      | "LINKEDIN_CHUNK_ENGINE_ENABLED"
     >
   >,
   deps?: {
@@ -528,6 +534,8 @@ export function connectorRoutes(
     wakeWhatsAppBackfill?: () => Promise<void> | void;
     /** Queues a `manual` Slack history range per member channel and kicks the worker. */
     queueSlackHistoryBackfill?: () => Promise<{ channelsQueued: number; channelsSkipped: number }>;
+    /** Queues a LinkedIn chunk-engine reindex for one connector and kicks the worker. */
+    queueLinkedinReindex?: (connectorConfigId: string) => Promise<LinkedinReindexQueueResult>;
     containerClassificationGenerator?: GeminiGenerator;
   },
 ) {
@@ -596,6 +604,24 @@ export function connectorRoutes(
 
   function configEnabled(config: { connector_type: string; sync_status?: string }): boolean {
     return configVisible(config) && config.sync_status !== "disabled";
+  }
+
+  function linkedinScopeConfig(config: { scope_config: string | null }): Record<string, unknown> {
+    return config.scope_config ? (JSON.parse(config.scope_config) as Record<string, unknown>) : {};
+  }
+
+  /** The engine switch for one connector: its own scope config first, the deployment default second. */
+  function linkedinChunkEngineEnabled(config: { scope_config: string | null }): boolean {
+    return resolveLinkedinChunkEngineEnabled({
+      scopeConfig: linkedinScopeConfig(config),
+      envDefault: appConfig?.LINKEDIN_CHUNK_ENGINE_ENABLED,
+    });
+  }
+
+  /** Every reindex route is scoped to one enabled LinkedIn connector; anything else is a 404. */
+  async function linkedinConfigForReindex(id: string) {
+    const config = await connectorRepo.findConfigById(id);
+    return config && configEnabled(config) && config.connector_type === "linkedin_aimfox" ? config : null;
   }
 
   function containerClassificationEnabled(config: { connector_type: string }): boolean {
@@ -2714,6 +2740,86 @@ export function connectorRoutes(
         syncStatus: updated.sync_status,
       },
     });
+  });
+
+  /**
+   * The LinkedIn conversations still cut by the pre-engine segmenter, and the
+   * chunk-engine switch that governs whether re-cutting them is possible at
+   * all. Both the button and its progress line read this one resource.
+   */
+  routes.get("/:id/reindexes/current", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const config = await linkedinConfigForReindex(c.req.param("id"));
+    if (!config) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    const [phases, legacyConversations] = await Promise.all([
+      createLinkedinReindexRepository(db).countsByPhase(config.id),
+      connectorRepo.countLiveThreadsByProviderFileIdPattern({
+        connectorConfigId: config.id,
+        fileType: LINKEDIN_CONVERSATION_FILE_TYPE,
+        providerFileIdPattern: LEGACY_LINKEDIN_SEGMENT_PROVIDER_FILE_ID_PATTERN,
+      }),
+    ]);
+    return c.json({ chunkEngineEnabled: linkedinChunkEngineEnabled(config), phases, legacyConversations });
+  });
+
+  /**
+   * Re-cuts a LinkedIn connector's pre-engine conversations. Each one has to be
+   * refetched from Aimfox first — it has no rows in the shared conversation
+   * tables at all — so this only queues the work and the worker paces it.
+   *
+   * Rejected while the engine is off for this connector: the fetched rows would
+   * sit unchunked, with the timeline showing neither generation moving.
+   */
+  routes.post("/:id/reindexes", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const config = await linkedinConfigForReindex(c.req.param("id"));
+    if (!config) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    if (!linkedinChunkEngineEnabled(config)) {
+      return c.json(
+        {
+          error: {
+            code: "CHUNK_ENGINE_DISABLED",
+            message: "Turn the LinkedIn chunk engine on before re-indexing conversations",
+          },
+        },
+        409,
+      );
+    }
+    if (!deps?.queueLinkedinReindex) {
+      return c.json({ error: { code: "UNAVAILABLE", message: "LinkedIn re-indexing is not available" } }, 503);
+    }
+    const result = await deps.queueLinkedinReindex(config.id);
+    logger.info({ connectorId: config.id, ...result }, "Queued a LinkedIn reindex");
+    return c.json(result, 202);
+  });
+
+  /**
+   * The operator-facing chunk-engine switch. Deliberately not the scope PATCH:
+   * that route nulls the sync cursor and starts a resync, while flipping the
+   * engine changes only which chunker the next run uses.
+   */
+  routes.put("/:id/chunk-engine", async (c) => {
+    const denied = denyIfNotAdmin(c);
+    if (denied) return denied;
+    const config = await linkedinConfigForReindex(c.req.param("id"));
+    if (!config) {
+      return c.json({ error: { code: "NOT_FOUND", message: "Connector not found" } }, 404);
+    }
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) {
+      const message = parsed.error.issues[0]?.message ?? "Invalid request";
+      return c.json({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    }
+    await connectorRepo.updateConfig(config.id, {
+      scopeConfig: JSON.stringify({ ...linkedinScopeConfig(config), chunkEngine: parsed.data.enabled }),
+    });
+    return c.json({ chunkEngineEnabled: parsed.data.enabled });
   });
 
   /**

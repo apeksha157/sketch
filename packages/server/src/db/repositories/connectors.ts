@@ -1049,6 +1049,55 @@ export function createConnectorRepository(db: Kysely<DB>, encryptionKey?: string
     },
 
     /**
+     * Every thread that still holds live files matching the pattern, with the
+     * rollup anchor those files hang off. The LinkedIn reindex reads it twice:
+     * to name the conversations still on the pre-engine segmenter, and to
+     * recover each one's lead id from its profile file's provider id, which is
+     * that anchor.
+     */
+    async listLiveThreadRollupsByProviderFileIdPattern(input: {
+      connectorConfigId: string;
+      fileType: string;
+      providerFileIdPattern: string;
+      limit: number;
+    }): Promise<Array<{ threadId: string; rollupGroupId: string | null }>> {
+      const rows = await db
+        .selectFrom("indexed_files")
+        .select(["thread_id", "rollup_group_id"])
+        .distinct()
+        .where("connector_config_id", "=", input.connectorConfigId)
+        .where("file_type", "=", input.fileType)
+        .where("provider_file_id", "like", input.providerFileIdPattern)
+        .where("is_archived", "=", 0)
+        .where("thread_id", "is not", null)
+        .orderBy("thread_id", "asc")
+        .orderBy("rollup_group_id", "asc")
+        .limit(input.limit)
+        .execute();
+      return rows
+        .filter((row): row is { thread_id: string; rollup_group_id: string | null } => row.thread_id !== null)
+        .map((row) => ({ threadId: row.thread_id, rollupGroupId: row.rollup_group_id }));
+    },
+
+    /** How many threads still hold live files matching the pattern: the reindex's "still to move" count. */
+    async countLiveThreadsByProviderFileIdPattern(input: {
+      connectorConfigId: string;
+      fileType: string;
+      providerFileIdPattern: string;
+    }): Promise<number> {
+      const row = await db
+        .selectFrom("indexed_files")
+        .select((eb) => eb.fn.count<number>("thread_id").distinct().as("count"))
+        .where("connector_config_id", "=", input.connectorConfigId)
+        .where("file_type", "=", input.fileType)
+        .where("provider_file_id", "like", input.providerFileIdPattern)
+        .where("is_archived", "=", 0)
+        .where("thread_id", "is not", null)
+        .executeTakeFirstOrThrow();
+      return Number(row.count);
+    },
+
+    /**
      * Archives the chunk-engine files of one conversation, found by joining the
      * slice id a conversation-slice file is keyed by. The join replaces a
      * pattern match because slice ids are uuids with no connector prefix.
