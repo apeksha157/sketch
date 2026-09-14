@@ -20,6 +20,7 @@ import {
   buildSketchContext,
   getImageAttachmentPathsFromSketchContext,
 } from "../agent/prompt";
+import { buildRunOutcomeMessage } from "../agent/run-outcome-message";
 import {
   type McpServerConfig,
   type RunAgentParams,
@@ -1371,8 +1372,9 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
               sourceConversationId: String(capture.conversation.id),
               requestKey: `slack:${message.channelId}:${assistantThreadTs ?? "root"}:${result.sessionId}`,
             });
-            if (finalText) {
-              const sent = await onFinalMessage(finalText);
+            const finalMessage = buildRunOutcomeMessage(finalText, result, deliveredQuestion ? null : "_No response_");
+            if (finalMessage) {
+              const sent = await onFinalMessage(finalMessage);
               await captureSlackBotReplies({
                 conversationId: capture.conversation.id,
                 sent,
@@ -1394,11 +1396,8 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
             if (pendingInbox && pendingInbox.ids.length > 0 && inboxMessagesRepo) {
               await inboxMessagesRepo.markConsumed(pendingInbox.ids);
             }
-            if (result.messageSent || result.pendingUploads.length > 0) {
+            if (result.messageSent || finalMessage || result.pendingUploads.length > 0) {
               await repos.conversations.updateWatermark(capture.conversation.id, capture.captured.id);
-            }
-            if (!finalText && !deliveredQuestion) {
-              await replyToUser("_No response_");
             }
           } catch (err) {
             if (isRuntimeAbortError(err, abortController.signal)) {
@@ -1921,8 +1920,9 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
               sourceConversationId: String(capture.conversation.id),
               requestKey: `slack:${message.channelId}:${threadTs}:${result.sessionId}`,
             });
-            if (finalText) {
-              const sent = await onFinalMessage(finalText);
+            const finalMessage = buildRunOutcomeMessage(finalText, result, deliveredQuestion ? null : "_No response_");
+            if (finalMessage) {
+              const sent = await onFinalMessage(finalMessage);
               await captureSlackBotReplies({
                 conversationId: capture.conversation.id,
                 sent,
@@ -1941,16 +1941,13 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
             }
 
             await clearAssistantStatus?.();
-            if (result.messageSent || result.pendingUploads.length > 0) {
+            if (result.messageSent || finalMessage || result.pendingUploads.length > 0) {
               await repos.conversations.updateCursor({
                 conversationId: capture.conversation.id,
                 scopeType: SLACK_THREAD_CURSOR_SCOPE,
                 scopeKey: threadTs,
                 messageId: capture.captured.id,
               });
-            }
-            if (!finalText && !deliveredQuestion) {
-              await slackBot.postThreadReply(message.channelId, threadTs, "_No response_");
             }
           } catch (err) {
             if (isRuntimeAbortError(err, abortController.signal)) {

@@ -394,7 +394,7 @@ describe("agent runtime core", () => {
       },
     });
 
-    expect(result.stopReason).toBe("tool_use");
+    expect(result.stopReason).toBe("max_turns");
     expect(starts).toEqual(["same-a:a", "same-b:b"]);
     expect(ends).toEqual([
       { id: "same-b", output: "b" },
@@ -476,7 +476,7 @@ describe("agent runtime core", () => {
       provider: mockProvider(model),
       prompt: "abort",
       systemPrompt: "system",
-      maxTurns: 5,
+      maxTurns: 1,
       persistSession: false,
       abortSignal: controller.signal,
       events: {
@@ -536,7 +536,7 @@ describe("agent runtime core", () => {
     });
 
     expect(result.num_turns).toBe(1);
-    expect(result.stopReason).toBe("tool_use");
+    expect(result.stopReason).toBe("max_turns");
     expect(model.doStreamCalls).toHaveLength(1);
   });
 
@@ -577,7 +577,7 @@ describe("agent runtime core", () => {
       provider: mockProvider(model),
       prompt: "ask the user",
       systemPrompt: "system",
-      maxTurns: 5,
+      maxTurns: 1,
       stopAfterToolNames: ["AskUserQuestion"],
       persistSession: false,
       tools: {
@@ -694,7 +694,7 @@ describe("agent runtime core", () => {
       provider: mockProvider(model),
       prompt: "create an automation",
       systemPrompt: "system",
-      maxTurns: 5,
+      maxTurns: 1,
       stopAfterToolCall: ({ name, input }) =>
         name === "Skill" &&
         typeof input === "object" &&

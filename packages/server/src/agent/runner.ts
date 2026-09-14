@@ -1257,7 +1257,12 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
         durationApiMs: runtimeResult.durations.providerMs,
         numTurns: runtimeResult.num_turns,
         stopReason: runtimeResult.stopReason,
-        errorSubtype: runtimeResult.stopReason === "error" ? "runtime_error" : null,
+        errorSubtype:
+          runtimeResult.stopReason === "error"
+            ? "runtime_error"
+            : runtimeResult.stopReason === "max_turns"
+              ? "error_max_turns"
+              : null,
         isResumedSession: usedExistingSession,
         totalAttachments: attachments.length,
         imageCount: images.length,

@@ -19,6 +19,7 @@ export type AgentRuntimeStopReason =
   | "max_tokens"
   | "stop_sequence"
   | "tool_use"
+  | "max_turns"
   | "aborted"
   | "error"
   | "unknown";

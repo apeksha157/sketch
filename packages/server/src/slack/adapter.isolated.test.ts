@@ -1057,6 +1057,32 @@ describe("slack/adapter", () => {
       expect(mockBotInstance.postMessage).toHaveBeenCalledWith("D1", "_No response_");
     });
 
+    it("posts and captures the max-turn fallback through the normal DM reply path", async () => {
+      const deps = makeDeps({
+        runAgent: vi.fn().mockResolvedValue(
+          makeAgentResult({
+            messageSent: false,
+            trace: { progressEvents: [], finalText: null },
+            rawUsage: { stopReason: "max_turns" },
+          }),
+        ),
+      });
+      createConfiguredSlackBot({ botToken: "xoxb-test", appToken: "xapp-test" }, deps);
+      const { dm } = getHandlers();
+
+      await dm({ text: "loop", userId: "S1", channelId: "D1", ts: "1", type: "dm" });
+      await flush();
+
+      expect(mockBotInstance.postMessage).toHaveBeenCalledWith(
+        "D1",
+        "_I couldn't finish this one: I hit my step limit. Try a narrower ask._",
+      );
+      expect(deps.repos.conversations.insertMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ isBot: true, text: expect.stringContaining("step limit") }),
+      );
+      expect(deps.repos.conversations.updateWatermark).toHaveBeenCalledWith(1, 1);
+    });
+
     it("still posts the final reply when progress flush fails", async () => {
       mockBotInstance.updateMessage.mockRejectedValue(new Error("progress boom"));
       const deps = makeDeps({

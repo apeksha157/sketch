@@ -437,7 +437,15 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
     steps,
   });
   const finishReason = await settleFinishReason(streamResult);
-  const stopReason = sawAbort || params.abortSignal?.aborted ? "aborted" : mapFinishReason(finishReason);
+  const finalStepMatchedTerminal =
+    (params.stopAfterToolNames?.length ? hasSuccessfulToolResult(params.stopAfterToolNames)({ steps }) : false) ||
+    (params.stopAfterToolCall ? matchesSuccessfulToolResult(params.stopAfterToolCall)({ steps }) : false);
+  const stopReason =
+    sawAbort || params.abortSignal?.aborted
+      ? "aborted"
+      : finishReason === "tool-calls" && steps.length >= params.maxTurns && !finalStepMatchedTerminal
+        ? "max_turns"
+        : mapFinishReason(finishReason);
 
   return {
     sessionId,
