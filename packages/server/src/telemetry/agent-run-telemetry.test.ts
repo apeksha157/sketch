@@ -179,6 +179,38 @@ describe("instrumentAgentRun", () => {
     expect(spans[0].events.some((e) => e.name === "tool_call")).toBe(true);
   });
 
+  it("records stop reason, breaker state, and tool success", async () => {
+    const { tracer, spans } = createFakeTracer();
+    const pricing: PricingService = {
+      resolve: vi.fn().mockResolvedValue({ costUsd: 1.23, costSource: "openrouter" }),
+    };
+    const breakerResult: RunAgentResult = {
+      ...result,
+      rawUsage: {
+        ...usage,
+        stopReason: "max_turns",
+        toolCircuitBreaker: { trippedTools: ["Read", "Search"], totalErrors: 15, budgetExhausted: true },
+        toolCalls: [{ toolName: "Read", skillName: null, startedAt: 1, endedAt: 2, success: false }],
+      },
+    };
+
+    await instrumentAgentRun(
+      tracer,
+      pricing,
+      { provider: "openrouter", modelId: null },
+      params,
+      async () => breakerResult,
+    );
+
+    expect(spans[0].attributes).toMatchObject({
+      "sketch.stop_reason": "max_turns",
+      "sketch.tool_breaker.tripped_tools": "Read,Search",
+      "sketch.tool_breaker.total_errors": 15,
+      "sketch.tool_breaker.budget_exhausted": true,
+    });
+    expect(spans[1].attributes["sketch.tool_call.success"]).toBe(false);
+  });
+
   it("passes the response model to the pricing service, falling back to the configured model id", async () => {
     const { tracer } = createFakeTracer();
     const resolve = vi.fn().mockResolvedValue({ costUsd: 1, costSource: "openrouter" });

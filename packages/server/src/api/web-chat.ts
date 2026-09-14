@@ -1057,7 +1057,8 @@ function builderResultReachedStepLimit(result: RunAgentResult, maxTurns: number)
   return (
     !result.pendingInteraction &&
     !result.pendingQuestion &&
-    (result.rawUsage.errorSubtype === "error_max_turns" ||
+    (result.rawUsage.stopReason === "max_turns" ||
+      result.rawUsage.errorSubtype === "error_max_turns" ||
       (result.rawUsage.stopReason === "tool_use" && result.rawUsage.numTurns >= maxTurns))
   );
 }

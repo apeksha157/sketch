@@ -1220,6 +1220,70 @@ describe("GetFileContent view: full", () => {
   });
 });
 
+describe("GetFileContent argument normalization", () => {
+  it("uses single mode when the batch is empty or repeats the single id", async () => {
+    await db
+      .insertInto("indexed_file_raw_contents")
+      .values({
+        indexed_file_id: "file-alice",
+        kind: "transcript",
+        content: "full normalized content",
+        char_length: 23,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .execute();
+
+    const emptyBatch = await handleGetFileContent(
+      { fileId: " file-alice ", fileIds: [""], view: "full", maxCharsPerFile: 1 },
+      deps(),
+    );
+    const repeated = await handleGetFileContent({ fileId: "file-alice", fileIds: ["file-alice"] }, deps());
+
+    expect(emptyBatch.content[0]?.text).toContain("full normalized content");
+    expect(repeated.content[0]?.text).toContain("# Alice project");
+  });
+
+  it("uses batch mode for a blank single id and for fileIds-only calls", async () => {
+    const merged = await handleGetFileContent({ fileId: "", fileIds: ["file-alice", "file-bob"] }, deps());
+    const singleton = await handleGetFileContent({ fileIds: ["file-alice"] }, deps());
+    const mergedParsed = JSON.parse(merged.content[0]?.text ?? "{}");
+    const singletonParsed = JSON.parse(singleton.content[0]?.text ?? "{}");
+
+    expect(mergedParsed.files.map((file: { fileId: string }) => file.fileId)).toEqual(["file-alice", "file-bob"]);
+    expect(singletonParsed.files).toHaveLength(1);
+    expect(singletonParsed.files[0]).toMatchObject({ fileId: "file-alice", found: true });
+  });
+
+  it("merges distinct ids in single-first order and preserves duplicates", async () => {
+    const result = await handleGetFileContent(
+      { fileId: "file-alice", fileIds: ["file-bob", "file-alice"], view: "full" },
+      deps(),
+    );
+    const parsed = JSON.parse(result.content[0]?.text ?? "{}");
+
+    expect(parsed.files.map((file: { fileId: string }) => file.fileId)).toEqual([
+      "file-alice",
+      "file-bob",
+      "file-alice",
+    ]);
+  });
+
+  it("rejects empty and over-cap normalized inputs", async () => {
+    const empty = await handleGetFileContent({ fileId: "", fileIds: [""] }, deps());
+    const overCap = await handleGetFileContent(
+      { fileId: "file-alice", fileIds: Array.from({ length: 20 }, (_, index) => `file-${index}`) },
+      deps(),
+    );
+
+    expect(empty).toMatchObject({
+      isError: true,
+      content: [{ text: "Provide fileId (one id) or fileIds (a list of ids)." }],
+    });
+    expect(overCap).toMatchObject({ isError: true, content: [{ text: "At most 20 file ids per call." }] });
+  });
+});
+
 describe("GetFileContent fileIds batch", () => {
   it("returns three files in request order with per-file truncation", async () => {
     await db
@@ -1308,7 +1372,7 @@ describe("GetFileContent fileIds batch", () => {
     ]);
   });
 
-  it("shares the total cap across files and rejects full view batching", async () => {
+  it("shares the total cap across files and ignores full view for batches", async () => {
     await db
       .insertInto("indexed_files")
       .values([
@@ -1358,7 +1422,9 @@ describe("GetFileContent fileIds batch", () => {
     expect(cappedParsed.files[1]).toMatchObject({ content: "", contentTruncated: true });
     expect(cappedParsed.contentTruncated).toBe(true);
 
-    const bad = await handleGetFileContent({ fileIds: ["batch-total-a"], view: "full" }, deps());
-    expect(bad.isError).toBe(true);
+    const withView = await handleGetFileContent({ fileIds: ["batch-total-a"], view: "full" }, deps());
+    const withViewParsed = JSON.parse(withView.content[0]?.text ?? "{}");
+    expect(withView.isError).toBeUndefined();
+    expect(withViewParsed.files[0]).toMatchObject({ fileId: "batch-total-a", content: "12345" });
   });
 });

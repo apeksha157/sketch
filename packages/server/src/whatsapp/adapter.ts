@@ -16,6 +16,7 @@ import type {
 } from "../agent/interactions/types";
 import type { InboxMessageContext, QuotedMessageContext, SketchContextParams } from "../agent/prompt";
 import { buildSketchContext, getImageAttachmentPathsFromSketchContext } from "../agent/prompt";
+import { buildRunOutcomeMessage } from "../agent/run-outcome-message";
 import {
   type McpServerConfig,
   type RunAgentParams,
@@ -572,13 +573,12 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
         "whatsapp",
         toolConfig,
       );
-      if (finalText) await onFinalMessage(finalText);
-      else {
-        await whatsapp.sendText(
-          params.target,
-          "Your answer was saved, but I couldn't continue right now. Please try again shortly.",
-        );
-      }
+      const finalMessage = buildRunOutcomeMessage(
+        finalText,
+        result,
+        "Your answer was saved, but I couldn't continue right now. Please try again shortly.",
+      );
+      if (finalMessage) await onFinalMessage(finalMessage);
     });
   };
 
@@ -1375,12 +1375,13 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
             "whatsapp",
             toolConfig,
           );
-          if (finalText) {
-            const sent = await onFinalMessage(finalText);
+          const finalMessage = buildRunOutcomeMessage(finalText, result, null);
+          if (finalMessage) {
+            const sent = await onFinalMessage(finalMessage);
             await captureBotReply({
               conversationId: capture.conversation.id,
               sent,
-              text: finalText,
+              text: finalMessage,
               botName: settingsRow?.bot_name,
               connectionKey: message.connectionKey,
             });
@@ -1401,7 +1402,7 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
           if (pendingInbox.ids.length > 0 && inboxMessagesRepo) {
             await inboxMessagesRepo.markConsumed(pendingInbox.ids);
           }
-          if (result.messageSent || result.pendingUploads.length > 0) {
+          if (result.messageSent || finalMessage || result.pendingUploads.length > 0) {
             await repos.conversations.updateWatermark(capture.conversation.id, capture.captured.id);
           }
           await updateReaction(message, null);
@@ -1749,12 +1750,13 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
           "whatsapp",
           toolConfig,
         );
-        if (finalText) {
-          const sent = await onFinalMessage(finalText);
+        const finalMessage = buildRunOutcomeMessage(finalText, result, null);
+        if (finalMessage) {
+          const sent = await onFinalMessage(finalMessage);
           await captureBotReply({
             conversationId: capture.conversation.id,
             sent,
-            text: finalText,
+            text: finalMessage,
             botName: settingsRow?.bot_name,
             connectionKey: message.connectionKey,
           });
@@ -1771,7 +1773,7 @@ export function wireWhatsAppHandlers(whatsapp: WhatsAppRuntime, deps: WhatsAppAd
             logger.warn({ err, filePath }, "Failed to send file via WhatsApp");
           }
         }
-        if (result.messageSent || result.pendingUploads.length > 0) {
+        if (result.messageSent || finalMessage || result.pendingUploads.length > 0) {
           await repos.conversations.updateWatermark(capture.conversation.id, capture.captured.id);
         }
         await updateReaction(message, null);

@@ -1476,6 +1476,43 @@ describe("whatsapp/adapter", () => {
       );
     });
 
+    it("posts, captures, and checkpoints the error-budget fallback for an empty DM result", async () => {
+      const deps = makeDeps({
+        runAgent: vi.fn().mockResolvedValue(
+          makeAgentResult({
+            messageSent: false,
+            trace: { progressEvents: [], finalText: null },
+            rawUsage: {
+              stopReason: "end_turn",
+              toolCircuitBreaker: { trippedTools: ["Read"], totalErrors: 15, budgetExhausted: true },
+            },
+          }),
+        ),
+      });
+      const { mock, getHandler } = createMockWhatsApp();
+      wireWhatsAppHandlers(mock as never, deps);
+
+      await getHandler()({
+        type: "dm",
+        text: "loop",
+        jid: "1234@s.whatsapp.net",
+        messageId: "m1",
+        pushName: "Alice",
+        rawMessage: {},
+        phoneNumber: "+1234567890",
+      });
+      await flush();
+
+      expect(mock.sendText).toHaveBeenCalledWith(
+        "1234567890@s.whatsapp.net",
+        "_I couldn't finish this one: too many tool calls failed. Try a narrower ask._",
+      );
+      expect(deps.repos.conversations.insertMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ isBot: true, text: expect.stringContaining("tool calls failed") }),
+      );
+      expect(deps.repos.conversations.updateWatermark).toHaveBeenCalledWith(1, expect.any(Number));
+    });
+
     it("does not send DM tool progress by default", async () => {
       const deps = makeDeps({
         runAgent: vi.fn().mockImplementation(async ({ onProgressEvent }) => {

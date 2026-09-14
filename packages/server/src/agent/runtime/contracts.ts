@@ -19,6 +19,7 @@ export type AgentRuntimeStopReason =
   | "max_tokens"
   | "stop_sequence"
   | "tool_use"
+  | "max_turns"
   | "aborted"
   | "error"
   | "unknown";
@@ -137,6 +138,11 @@ export interface AgentRuntimeResult {
   durations: AgentRuntimeDurations;
   usage: AgentRuntimeUsage;
   cost: AgentRuntimeCostSummary;
+  toolCircuitBreaker?: {
+    trippedTools: string[];
+    totalErrors: number;
+    budgetExhausted: boolean;
+  };
 }
 
 /** Message role persisted in agent_messages.role. */

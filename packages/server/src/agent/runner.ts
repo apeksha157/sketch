@@ -86,6 +86,7 @@ import {
   loadAgentRuntimeClaudeMdContext,
   prependClaudeMdContext,
 } from "./runtime/skills";
+import type { ToolCircuitBreakerOptions } from "./runtime/tool-circuit-breaker";
 import { createAgentRuntimeWorkspaceTools } from "./runtime/workspace-tools";
 import {
   archiveSdkSessionId,
@@ -97,7 +98,11 @@ import {
   saveSessionIdForRuntime,
 } from "./sessions";
 import { createSketchMcpServer } from "./sketch-tools";
-import { type AgentOutputWriter, recordRejectedWriteAgentOutputCall } from "./tools/agent-output";
+import {
+  type AgentOutputWriter,
+  WRITE_AGENT_OUTPUT_TOOL_NAME,
+  recordRejectedWriteAgentOutputCall,
+} from "./tools/agent-output";
 import { ASK_USER_QUESTIONS_TOOL_NAME, ASK_USER_QUESTION_TOOL_NAME } from "./tools/questions";
 import {
   AutomationArtifactCollector,
@@ -312,6 +317,11 @@ export interface RawRunUsage {
   toolCalls: ToolCallRecord[];
   auxLlmCalls: AuxLlmCall[];
   sdkCostUsd: number;
+  toolCircuitBreaker?: {
+    trippedTools: string[];
+    totalErrors: number;
+    budgetExhausted: boolean;
+  };
 }
 
 /** Business result plus the raw usage payload for the telemetry/pricing boundary. */
@@ -468,6 +478,22 @@ export interface RunAgentParams {
   loadAgentRuntimeProviderConfig?: () => Promise<AgentRuntimeProviderFactoryConfig | null>;
   agentRuntimeProvider?: AgentRuntimeProvider;
   agentRuntimeExtensions?: AgentRuntimeHarnessExtensions;
+  toolCircuitBreaker?: ToolCircuitBreakerOptions | false;
+}
+
+export const INTERACTIVE_TOOL_BREAKER = {
+  consecutiveIdenticalFailures: 3,
+  totalErrorBudget: 15,
+} as const;
+export const CHAT_MAX_TURNS = 40;
+
+function isInteractiveAgentRun(params: RunAgentParams): boolean {
+  if (params.contextType !== "dm" && params.contextType !== "channel_mention") return false;
+  return params.responseSurface !== "web" || params.taskContext?.conversationKind !== "builder";
+}
+
+function isNonWebChatRun(params: RunAgentParams): boolean {
+  return params.responseSurface !== "web" && (params.contextType === "dm" || params.contextType === "channel_mention");
 }
 
 const DEFAULT_RUN_TOOLS: readonly string[] = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Skill"];
@@ -1001,6 +1027,19 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
     const shouldStopAfterCreateAutomationSkill =
       params.stopAfterCreateAutomationSkill ??
       (params.responseSurface === "web" && params.taskContext?.conversationKind !== "builder");
+    const questionStopToolNames = questionToolNames.filter((name) => customTools[name]);
+    const defaultTerminalToolNames = [
+      ...questionStopToolNames,
+      ...([`mcp__sketch__${WRITE_AGENT_OUTPUT_TOOL_NAME}`] as const).filter((name) => tools[name]),
+      ...(shouldStopAfterCreateAutomationSkill && tools.Skill ? ["Skill"] : []),
+    ];
+    const toolCircuitBreaker =
+      params.toolCircuitBreaker === false
+        ? false
+        : (params.toolCircuitBreaker ??
+          (isInteractiveAgentRun(params)
+            ? { ...INTERACTIVE_TOOL_BREAKER, terminalToolNames: defaultTerminalToolNames }
+            : false));
     const baseSessionStore = createDbAgentRuntimeSessionStore(params.db);
     const sessionStore = {
       ...baseSessionStore,
@@ -1064,7 +1103,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
           tools,
           maxTurns: params.maxTurns ?? 100,
           maxPersistedTextBytes: params.maxPersistedTextBytes,
-          stopAfterToolNames: questionToolNames.filter((name) => customTools[name]),
+          stopAfterToolNames: questionStopToolNames,
           stopAfterToolCall: shouldStopAfterCreateAutomationSkill
             ? ({ name, input }) => isCreateAutomationSkillInvocation(name, input)
             : undefined,
@@ -1074,6 +1113,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
           compaction: compactionProvider,
           abortSignal: params.abortController?.signal,
           logger,
+          toolCircuitBreaker,
           events: {
             onSessionId: async (nextSessionId) => {
               sessionId = nextSessionId;
@@ -1172,7 +1212,6 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
     const auxLlmCalls = [...(params.seedAuxCalls ?? []), ...drainedToolEffects.auxLlmCalls];
     const auxCostUsd = sumAuxCost(auxLlmCalls);
     const firstModel = Object.keys(runtimeResult.usage.byModel)[0] ?? provider.modelId;
-
     logger.info(
       {
         userId: userName,
@@ -1218,7 +1257,12 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
         durationApiMs: runtimeResult.durations.providerMs,
         numTurns: runtimeResult.num_turns,
         stopReason: runtimeResult.stopReason,
-        errorSubtype: runtimeResult.stopReason === "error" ? "runtime_error" : null,
+        errorSubtype:
+          runtimeResult.stopReason === "error"
+            ? "runtime_error"
+            : runtimeResult.stopReason === "max_turns"
+              ? "error_max_turns"
+              : null,
         isResumedSession: usedExistingSession,
         totalAttachments: attachments.length,
         imageCount: images.length,
@@ -1229,6 +1273,7 @@ async function runAgentWithAiSdk(params: RunAgentParams, adminReadAllEnabled: bo
         toolCalls,
         auxLlmCalls,
         sdkCostUsd: runtimeResult.cost.totalUsd,
+        ...(runtimeResult.toolCircuitBreaker ? { toolCircuitBreaker: runtimeResult.toolCircuitBreaker } : {}),
       },
     };
   } finally {
@@ -1277,6 +1322,7 @@ export async function runAgent(params: RunAgentParams): Promise<RunAgentResult> 
     ...params,
     availableManagedIntegrations,
     ...(getCanvasAccessToken ? { getCanvasAccessToken } : {}),
+    ...(params.maxTurns === undefined && isNonWebChatRun(params) ? { maxTurns: CHAT_MAX_TURNS } : {}),
   };
   if (params.agentRuntime === "aisdk") {
     return runAgentWithAiSdk(effectiveParams, adminReadAllEnabled);

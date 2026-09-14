@@ -418,7 +418,11 @@ describe("public MCP server", () => {
     });
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { result: { tools: Array<{ name: string }> } };
+    const body = (await res.json()) as {
+      result: {
+        tools: Array<{ name: string; inputSchema: { properties?: Record<string, unknown>; required?: string[] } }>;
+      };
+    };
     expect(body.result.tools.map((tool) => tool.name).sort()).toEqual([
       "sketch_get_entity",
       "sketch_get_entity_context",
@@ -429,6 +433,31 @@ describe("public MCP server", () => {
       "sketch_search_delivery_targets",
       "sketch_search_entities",
       "sketch_send_message",
+    ]);
+    const getFileContent = body.result.tools.find((tool) => tool.name === "sketch_get_file_content");
+    expect(getFileContent?.inputSchema).toMatchObject({
+      properties: { fileIds: { minItems: 1, maxItems: 20 } },
+    });
+    expect(getFileContent?.inputSchema.required ?? []).not.toContain("fileId");
+    expect(getFileContent?.inputSchema.required ?? []).not.toContain("fileIds");
+  });
+
+  it("keeps lenient GetFileContent argument handling on the public MCP surface", async () => {
+    const { token } = await createOAuthTokenForUser({ email: "mcp@example.com" });
+    await seedPublicMcpSearchFiles("mcp@example.com");
+    const app = createApp(db, createTestConfig({}), { logger: createTestLogger() });
+
+    const single = await callMcpTool(token, app, "sketch_get_file_content", {
+      fileId: "file-public-mcp-user",
+      fileIds: [""],
+    });
+    const batch = await callMcpTool(token, app, "sketch_get_file_content", {
+      fileIds: ["file-public-mcp-user"],
+    });
+
+    expect(single.result.content[0]?.text).toContain("# Public MCP user visible");
+    expect(JSON.parse(batch.result.content[0]?.text ?? "{}").files).toMatchObject([
+      { fileId: "file-public-mcp-user", found: true },
     ]);
   });
 

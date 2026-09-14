@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CHAT_MAX_TURNS } from "../../agent/runner";
 import {
   type AgentDeliveryModel,
   type AgentOutputItemInput,
@@ -79,6 +80,10 @@ describe("AgentRunService", () => {
     await tasks.shift()?.();
 
     expect(scheduledRunAgent).toHaveBeenCalledTimes(1);
+    expect(scheduledRunAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ maxTurns: CHAT_MAX_TURNS }),
+      expect.anything(),
+    );
     expect(interactiveRunAgent).not.toHaveBeenCalled();
 
     await service.requestGenerationForUser({
