@@ -91,6 +91,14 @@ export function setAgentResultAttributes(
   span.setAttribute("sketch.file_sizes", JSON.stringify(usage.fileSizes));
   span.setAttribute("sketch.prompt_mode", usage.promptMode);
   span.setAttribute("sketch.pending_uploads", business.pendingUploads);
+  if (usage.stopReason !== null) {
+    span.setAttribute("sketch.stop_reason", usage.stopReason);
+  }
+  if (usage.toolCircuitBreaker) {
+    span.setAttribute("sketch.tool_breaker.tripped_tools", usage.toolCircuitBreaker.trippedTools.join(","));
+    span.setAttribute("sketch.tool_breaker.total_errors", usage.toolCircuitBreaker.totalErrors);
+    span.setAttribute("sketch.tool_breaker.budget_exhausted", usage.toolCircuitBreaker.budgetExhausted);
+  }
 
   if (usage.toolCalls.length > 0) {
     span.setAttribute(
@@ -128,6 +136,9 @@ export function createToolCallSpans(
     childSpan.setAttribute("gen_ai.tool.name", tc.toolName);
     childSpan.setAttribute("sketch.skill.name", tc.skillName ?? "");
     childSpan.setAttribute("sketch.run_id", runId);
+    if (tc.success !== undefined) {
+      childSpan.setAttribute("sketch.tool_call.success", tc.success);
+    }
     childSpan.end(tc.endedAt);
   }
 }
