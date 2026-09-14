@@ -39,6 +39,12 @@ export function isRuntimeAbortError(error: unknown, signal?: AbortSignal): boole
   }
 
   if (signal?.aborted) return true;
-  if (!(error instanceof Error)) return false;
-  return error.name === "AbortError" || error.message.toLowerCase().includes("aborted");
+  seen.clear();
+  current = error;
+  while (current !== null && (typeof current === "object" || typeof current === "function") && !seen.has(current)) {
+    if (current instanceof Error && current.name === "AbortError") return true;
+    seen.add(current);
+    current = current instanceof Error ? current.cause : (current as { cause?: unknown }).cause;
+  }
+  return false;
 }

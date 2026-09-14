@@ -26,4 +26,27 @@ describe("runtime abort errors", () => {
 
     expect(isRuntimeAbortError(userAbort, AbortSignal.abort(userAbort))).toBe(true);
   });
+
+  it("does not classify an aborted message without an aborted signal", () => {
+    expect(isRuntimeAbortError(new Error("stream aborted by upstream"))).toBe(false);
+    expect(isRuntimeAbortError(new Error("Claude Code process aborted by user"))).toBe(false);
+  });
+
+  it("classifies a plain Claude SDK abort message when the caller signal is aborted", () => {
+    expect(isRuntimeAbortError(new Error("Claude Code process aborted by user"), AbortSignal.abort())).toBe(true);
+  });
+
+  it("classifies direct and wrapped AbortError instances", () => {
+    const abort = new DOMException("cancelled", "AbortError");
+    const wrapped = new Error("provider wrapper", { cause: abort });
+
+    expect(isRuntimeAbortError(abort)).toBe(true);
+    expect(isRuntimeAbortError(wrapped)).toBe(true);
+  });
+
+  it("keeps timeout precedence when it wraps an AbortError", () => {
+    const timeout = new ModelRequestTimeoutError(new DOMException("cancelled", "AbortError"));
+
+    expect(isRuntimeAbortError(timeout, AbortSignal.abort())).toBe(false);
+  });
 });

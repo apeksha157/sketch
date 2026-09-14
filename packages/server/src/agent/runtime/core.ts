@@ -404,6 +404,9 @@ export async function runAgentRuntimeCore(params: RunAgentRuntimeCoreParams): Pr
         await params.events?.onReasoningDelta?.(part.text);
       } else if (part.type === "abort") {
         sawAbort = true;
+        if (!params.abortSignal?.aborted) {
+          params.logger?.warn({ sessionId }, "Provider stream aborted without caller abort");
+        }
       } else if (part.type === "error") {
         throw part.error;
       }
