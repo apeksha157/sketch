@@ -5,7 +5,7 @@
  */
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTestDb } from "../../test-utils";
+import { createTestDb, spyOnExecutedSql } from "../../test-utils";
 import type { DB } from "../schema";
 import { createAutomationRunsRepository } from "./automation-runs";
 import { createScheduledTaskRepository } from "./scheduled-tasks";
@@ -175,5 +175,49 @@ describe("getRunSummaries", () => {
     const result = await runs.getRunSummaries(["task-1"]);
 
     expect(result.get("task-1")).toEqual({ runCount: 3, lastRunStatus: "failed" });
+  });
+
+  it("keeps a last run status when several runs share the newest started_at", async () => {
+    await seedRun("task-1", "2026-04-10T10:00:00.000Z", "completed");
+    await seedRun("task-1", "2026-04-10T12:00:00.000Z", "running");
+    await seedRun("task-1", "2026-04-10T12:00:00.000Z", "failed");
+
+    const result = await runs.getRunSummaries(["task-1"]);
+
+    expect(result.get("task-1")?.runCount).toBe(3);
+    expect(["failed", "running"]).toContain(result.get("task-1")?.lastRunStatus);
+  });
+
+  it("resolves the newest run in a long single-task history", async () => {
+    for (let index = 0; index < 300; index += 1) {
+      const hour = String(10 + Math.floor(index / 60)).padStart(2, "0");
+      const minute = String(index % 60).padStart(2, "0");
+      await seedRun("task-1", `2026-04-10T${hour}:${minute}:00.000Z`, index === 299 ? "failed" : "completed");
+    }
+    await seedRun("task-2", "2026-04-10T09:00:00.000Z", "running");
+
+    const result = await runs.getRunSummaries(["task-1", "task-2"]);
+
+    expect(result.get("task-1")).toEqual({ runCount: 300, lastRunStatus: "failed" });
+    expect(result.get("task-2")).toEqual({ runCount: 1, lastRunStatus: "running" });
+  });
+
+  it("does not resolve the newest run with a per-row correlated max() subquery", async () => {
+    await seedRun("task-1", "2026-04-10T10:00:00.000Z", "completed");
+    await seedRun("task-1", "2026-04-10T11:00:00.000Z", "failed");
+
+    const spy = spyOnExecutedSql(db);
+    try {
+      await runs.getRunSummaries(["task-1", "task-2"]);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // `started_at = (SELECT max(started_at) ... WHERE task_id = r1.task_id)` is evaluated
+    // once per run row, so its cost grew with the square of the busiest task's history
+    // (85s per automations-list request at 22k runs). Keep the summary free of it.
+    for (const statement of spy.sqls) {
+      expect(statement).not.toMatch(/=\s*\(\s*select\s+max\(/i);
+    }
   });
 });

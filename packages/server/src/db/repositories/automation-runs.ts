@@ -104,16 +104,27 @@ export function createAutomationRunsRepository(db: Kysely<DB>) {
         result.set(row.task_id, { runCount: Number(row.run_count), lastRunStatus: null });
       }
 
+      // Resolve the newest run per task with one grouped aggregate joined back to the
+      // run rows instead of the correlated `started_at = (SELECT max(...) ...)` form.
+      // Postgres evaluated that sub-plan once per run row, so the cost of a single
+      // summary grew with the square of a busy automation's history: with one task
+      // holding 22k of 30k runs it needed ~85s and 70M buffer hits per request, which
+      // made the automations list (polled every 5s) and the workflows API unusable.
+      // The grouped join is a hash aggregate over the same rows and stays in the
+      // tens of milliseconds on that data set, on SQLite and Postgres alike.
+      const latestStartedAt = db
+        .selectFrom("automation_runs")
+        .select(({ fn }) => ["task_id", fn.max("started_at").as("max_started_at")])
+        .where("task_id", "in", taskIds)
+        .groupBy("task_id");
+
       const latest = await db
         .selectFrom("automation_runs as r1")
+        .innerJoin(latestStartedAt.as("latest"), (join) =>
+          join.onRef("latest.task_id", "=", "r1.task_id").onRef("latest.max_started_at", "=", "r1.started_at"),
+        )
         .select(["r1.task_id", "r1.status"])
         .where("r1.task_id", "in", taskIds)
-        .where("r1.started_at", "=", (eb) =>
-          eb
-            .selectFrom("automation_runs as r2")
-            .select((ebi) => ebi.fn.max("r2.started_at").as("max_started"))
-            .whereRef("r2.task_id", "=", "r1.task_id"),
-        )
         .execute();
 
       for (const row of latest) {
