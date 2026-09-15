@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.11] -- 2026-09-15
+
+- Adds Manage option to the WhatsApp card's ⋯ menu on the Channels page, opening the same `ManageConnectorDialog` used by Files with status, group scope, member labels, and Sync now; wires `GenericScopeEditor` to accept an optional `onIndexingStarted` handler so scope-save redirects to Files for progress tracking.
+- Adds per-connector LinkedIn chunk engine toggle in the Manage dialog (`LinkedinAimfoxScopeConfig.chunkEngine`) and a re-index button that queues legacy conversations for refetch from Aimfox, re-cutting, archival, and completion in one transaction; fixes the worker to request exactly one sync per productive drain instead of polling every 5 seconds, retries 403s on the existing ladder, and makes `stop()` fire-and-forget so deploys mid-reindex hit no ECS timeout.
+- Adds `LINKEDIN_CHUNK_REINDEX_HISTORY_ON_STARTUP` env flag (default false) that queues legacy LinkedIn conversations for history re-indexing on deploy through the same entry point as the re-index button.
+- Fixes automations list, workflow list, and workflow detail endpoints timing out by replacing the correlated `max(started_at)` subquery in `getRunSummaries` with a grouped aggregate join; migration 241 adds an `automation_runs (task_id, started_at)` composite index so aggregate reads go through an index instead of scanning per run row.
+- Runs the consolidated enrichment loop shadow *before* the legacy chain at both call sites so both extractors start from the same graph state and neither sees the other's fresh decisions for the same file; shadow failure remains caught and never blocks legacy enrichment.
+- Adds `--existing` flag to the consolidated loop evaluator that compares `loop-v1` `extraction_stages` rows already in the database against legacy output with no model call; adds a `consolidated-loop-report` module with per-loop resolution kind, target, hold reason, legacy disposition, and stale-stage skipping rendered as Markdown.
+
 ## [1.7.10] -- 2026-09-14
 
 - Allows users to manage Slack connector settings directly from the Channels page, opening the same dialog used by Files with history window, Sync now, and Index history now actions that route to Files for progress tracking.
