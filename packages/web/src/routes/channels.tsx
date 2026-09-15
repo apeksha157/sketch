@@ -398,8 +398,10 @@ function WhatsAppChannelStatus({ channel }: { channel: ChannelStatus }) {
 
 function WhatsAppCard({ channel, canManage }: { channel: ChannelStatus; canManage: boolean }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showPairDialog, setShowPairDialog] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
+  const [showManageDialog, setShowManageDialog] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
 
   /**
@@ -408,6 +410,19 @@ function WhatsAppCard({ channel, canManage }: { channel: ChannelStatus; canManag
    * when an admin needs it.
    */
   const isConnected = channel.configured;
+
+  /**
+   * The group-indexing settings live in the Files page dialog; Channels opens the same component
+   * rather than growing its own copy, so it needs the same connector row. A paired number alone
+   * does not imply the row exists — it is created when indexing is first configured — so Manage
+   * is gated on the row, not on `isConnected`.
+   */
+  const { data: connectorsData } = useQuery({
+    queryKey: ["integrations"],
+    queryFn: () => api.integrations.list(),
+    enabled: canManage && isConnected,
+  });
+  const whatsappConnector = connectorsData?.connectors.find((c) => c.connectorType === "whatsapp") ?? null;
 
   const handlePairConnected = () => {
     setShowPairDialog(false);
@@ -461,6 +476,9 @@ function WhatsAppCard({ channel, canManage }: { channel: ChannelStatus; canManag
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {whatsappConnector && (
+                    <DropdownMenuItem onClick={() => setShowManageDialog(true)}>Manage</DropdownMenuItem>
+                  )}
                   <DropdownMenuItem className="text-destructive" onClick={() => setShowDisconnectDialog(true)}>
                     Disconnect
                   </DropdownMenuItem>
@@ -476,6 +494,31 @@ function WhatsAppCard({ channel, canManage }: { channel: ChannelStatus; canManag
       </div>
 
       <WhatsAppPairDialog open={showPairDialog} onOpenChange={setShowPairDialog} onConnected={handlePairConnected} />
+
+      <ManageConnectorDialog
+        definition={getIntegration("whatsapp") ?? null}
+        connector={whatsappConnector}
+        open={showManageDialog}
+        onOpenChange={setShowManageDialog}
+        onDisconnected={() => {
+          queryClient.invalidateQueries({ queryKey: ["channels", "status"] });
+          queryClient.invalidateQueries({ queryKey: ["integrations"] });
+        }}
+        /**
+         * Reconnecting drops the connector row, and only the Files picker can recreate it —
+         * Channels has no affordance for that — so hand the admin off rather than leaving them
+         * on a card whose connector no longer exists. Same reason for indexing: sync progress
+         * is a Files view.
+         */
+        onReconnect={() => {
+          setShowManageDialog(false);
+          navigate({ to: "/files" });
+        }}
+        onIndexingStarted={() => {
+          setShowManageDialog(false);
+          navigate({ to: "/files" });
+        }}
+      />
 
       <AlertDialog open={showDisconnectDialog} onOpenChange={setShowDisconnectDialog}>
         <AlertDialogContent>

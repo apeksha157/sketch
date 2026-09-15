@@ -557,6 +557,7 @@ function ScopeEditorDispatch({
         noun={scopeLabel}
         allowEmptySelection={allowEmptySelection}
         onBrowsingChange={onBrowsingChange}
+        onIndexingStarted={onIndexingStarted}
       />
     </div>
   );

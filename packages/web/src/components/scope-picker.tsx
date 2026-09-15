@@ -353,6 +353,7 @@ export function GenericScopeEditor({
   noun = "items",
   allowEmptySelection = false,
   onBrowsingChange,
+  onIndexingStarted,
 }: {
   connectorId: string;
   scopeConfig: Record<string, unknown>;
@@ -361,6 +362,9 @@ export function GenericScopeEditor({
   noun?: string;
   allowEmptySelection?: boolean;
   onBrowsingChange?: (browsing: boolean) => void;
+  /** Fired when saving the scope kicks indexing, so a host outside Files can hand the user off
+   * to the page that actually shows sync progress. */
+  onIndexingStarted?: () => void;
 }) {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
@@ -437,6 +441,7 @@ export function GenericScopeEditor({
     onSuccess: () => {
       toast.success("Scope updated. Re-sync started.");
       setOverrides(new Map());
+      onIndexingStarted?.();
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
       queryClient.invalidateQueries({ queryKey: ["sync-progress"] });
       queryClient.invalidateQueries({ queryKey: ["file-counts-by-source"] });

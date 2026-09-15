@@ -455,6 +455,208 @@ describe("ChannelsPage", () => {
     }, 15000);
   });
 
+  describe("WhatsApp manage", () => {
+    /**
+     * The Channels card opens the same dialog the Files page uses, so the connector row has to
+     * look the way the API really shapes it. `canDisconnect` and `canUpdateCredentials` are both
+     * true for WhatsApp: the server derives them from `canManage && enabled` and only strips them
+     * for channel-provisioned connectors, which WhatsApp is not (SKE-510). Copying Slack's
+     * `false` here would make the fixture lie and leave the reconnect path untested.
+     */
+    function whatsappConnectorHandler() {
+      server.use(
+        http.get("/api/connectors", () =>
+          HttpResponse.json({
+            connectors: [
+              {
+                id: "whatsapp-conn",
+                connectorType: "whatsapp",
+                authType: "system",
+                scopeConfig: { groupIndexing: {} },
+                syncStatus: "active",
+                lastSyncedAt: null,
+                errorMessage: null,
+                createdBy: "admin-1",
+                createdAt: "2026-01-01T00:00:00Z",
+                fileCount: 5,
+                isOwner: true,
+                canManage: true,
+                canDisconnect: true,
+                canSync: true,
+                canChangeScope: true,
+                canUpdateCredentials: true,
+                canBrowseScope: false,
+                canEnrich: true,
+              },
+            ],
+            teamMemberCount: 1,
+            connectorMemberCounts: {},
+          }),
+        ),
+        http.get("/api/connectors/:id/browse", () =>
+          HttpResponse.json({
+            type: "flat",
+            items: [{ id: "120@g.us", name: "Design team" }],
+            scopeConfig: { groupIndexing: {} },
+          }),
+        ),
+        http.get("/api/connectors/:id/entity-count", () => HttpResponse.json({ entityCount: 0 })),
+      );
+    }
+
+    function pairedWhatsApp() {
+      return { configured: true, connected: true, phoneNumber: "+10000000000", state: "connected" as const };
+    }
+
+    it("opens the same shared connector dialog the Files page uses", async () => {
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+      whatsappConnectorHandler();
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText("Manage WhatsApp Groups")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: /Sync now/i })).toBeInTheDocument();
+      expect(await within(dialog).findByText("Design team")).toBeInTheDocument();
+      expect(await within(dialog).findByText(/Member labels/i)).toBeInTheDocument();
+    }, 15000);
+
+    it("sends the admin to the Files page after starting a sync", async () => {
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+      whatsappConnectorHandler();
+      const syncFn = vi.fn();
+      server.use(
+        http.post("/api/connectors/:id/syncs", () => {
+          syncFn();
+          return HttpResponse.json({ success: true });
+        }),
+      );
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+      await user.click(await screen.findByRole("button", { name: /Sync now/i }));
+
+      await waitFor(() => expect(syncFn).toHaveBeenCalled());
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));
+    }, 15000);
+
+    it("offers no Manage item when a paired number has no indexing connector", async () => {
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
+      expect(await screen.findByRole("menuitem", { name: "Disconnect" })).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: "Manage" })).not.toBeInTheDocument();
+    }, 15000);
+
+    it("offers no action menu at all to a member", async () => {
+      mockAuth.value = { ...mockAuth.value, role: "member" };
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+      whatsappConnectorHandler();
+
+      renderWithProviders(<ChannelsPage />);
+
+      await waitFor(() => expect(screen.getByText("WhatsApp")).toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: "WhatsApp actions" })).not.toBeInTheDocument();
+    }, 15000);
+
+    /**
+     * The card's Disconnect unpairs the number; the dialog's Disconnect deletes the connector and
+     * everything indexed from it. Both now sit in one menu, so pin which endpoint each one hits.
+     */
+    it("deletes the connector, not the pairing, when disconnecting from inside the dialog", async () => {
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+      whatsappConnectorHandler();
+      const connectorDelete = vi.fn();
+      const pairingDelete = vi.fn();
+      server.use(
+        http.delete("/api/connectors/:id", () => {
+          connectorDelete();
+          return HttpResponse.json({ success: true });
+        }),
+        http.delete("/api/channels/whatsapp/pair", () => {
+          pairingDelete();
+          return HttpResponse.json({ success: true });
+        }),
+      );
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+
+      const dialog = await screen.findByRole("dialog");
+      await user.click(within(dialog).getByRole("button", { name: /Disconnect/i }));
+      const confirm = await screen.findByRole("alertdialog");
+      await user.click(within(confirm).getByRole("button", { name: "Disconnect" }));
+
+      await waitFor(() => expect(connectorDelete).toHaveBeenCalled());
+      expect(pairingDelete).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    }, 15000);
+
+    it("sends the admin to the Files page after saving the indexed groups", async () => {
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+      whatsappConnectorHandler();
+      const scopeFn = vi.fn();
+      server.use(
+        http.patch("/api/connectors/:id/scope", () => {
+          scopeFn();
+          return HttpResponse.json({ connector: { id: "whatsapp-conn" } });
+        }),
+      );
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+
+      const dialog = await screen.findByRole("dialog");
+      await user.click(await within(dialog).findByText("Design team"));
+      await user.click(await within(dialog).findByRole("button", { name: /Save/i }));
+
+      await waitFor(() => expect(scopeFn).toHaveBeenCalled());
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));
+    }, 15000);
+
+    /**
+     * "Update credentials" deletes the connector row, and only the Files picker can recreate it,
+     * so Channels has to hand the admin off instead of stranding them on a dead card.
+     */
+    it("sends the admin to the Files page after a reconnect", async () => {
+      channelsHandler({ configured: false, connected: null }, pairedWhatsApp());
+      whatsappConnectorHandler();
+      const connectorDelete = vi.fn();
+      server.use(
+        http.delete("/api/connectors/:id", () => {
+          connectorDelete();
+          return HttpResponse.json({ success: true });
+        }),
+      );
+
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelsPage />);
+
+      await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
+      await user.click(await screen.findByRole("button", { name: /Update credentials/i }));
+
+      await waitFor(() => expect(connectorDelete).toHaveBeenCalled());
+      await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));
+    }, 15000);
+  });
+
   describe("Slack disconnect", () => {
     it("shows disconnect confirmation dialog from dropdown", async () => {
       channelsHandler({ configured: true, connected: true }, { configured: false, connected: null });
