@@ -195,6 +195,10 @@ function recordLlmUsageForFile(
   };
 }
 
+/**
+ * Runs the consolidated loop shadow before legacy enrichment so both
+ * extractors observe the same graph state for the current file.
+ */
 async function runConsolidatedLoopShadowIfEnabled(
   deps: EnrichmentDeps,
   file: FileContext,
@@ -222,6 +226,18 @@ async function runConsolidatedLoopShadowIfEnabled(
   } catch (err) {
     deps.logger.warn({ err, fileId: file.id }, "Consolidated loop shadow failed");
   }
+}
+
+async function runShadowThenSmartEnrichment(
+  deps: EnrichmentDeps,
+  smartEnrichmentDeps: Parameters<typeof smartEnrichFile>[0],
+  file: FileContext,
+  knownEntities: KnownEntityForPrompt[],
+  participantBlock: string,
+  personCandidateBlock: string,
+): Promise<void> {
+  await runConsolidatedLoopShadowIfEnabled(deps, file, knownEntities, participantBlock, personCandidateBlock);
+  await smartEnrichFile(smartEnrichmentDeps, file);
 }
 
 /**
@@ -724,7 +740,22 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
                 const personCandidateBlock = buildPersonCandidateBlock(deps.personCandidateScan, file.content, {
                   participantBlock,
                 });
-                await smartEnrichFile(
+                const smartFile = {
+                  id: file.id,
+                  fileName: file.file_name,
+                  content: file.content,
+                  threadContext,
+                  contentCategory: file.content_category,
+                  fileType: file.file_type,
+                  source: file.source_path?.split("/")[0] ?? "unknown",
+                  sourcePath: file.source_path,
+                  contentHash: file.content_hash,
+                  connectorConfigId: file.connector_config_id,
+                  sourceCreatedAt: file.source_created_at,
+                  sourceUpdatedAt: file.source_updated_at,
+                };
+                await runShadowThenSmartEnrichment(
+                  deps,
                   {
                     db,
                     logger,
@@ -739,20 +770,10 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
                     ensureFresh: () => ensureFileFresh(db, file.id, fileVersion),
                     recordLlmUsage: recordLlmUsageForFile(deps, file.id),
                   },
-                  {
-                    id: file.id,
-                    fileName: file.file_name,
-                    content: file.content,
-                    threadContext,
-                    contentCategory: file.content_category,
-                    fileType: file.file_type,
-                    source: file.source_path?.split("/")[0] ?? "unknown",
-                    sourcePath: file.source_path,
-                    contentHash: file.content_hash,
-                    connectorConfigId: file.connector_config_id,
-                    sourceCreatedAt: file.source_created_at,
-                    sourceUpdatedAt: file.source_updated_at,
-                  },
+                  smartFile,
+                  knownEntities,
+                  participantBlock,
+                  personCandidateBlock,
                 );
                 await ensureFileFresh(db, file.id, fileVersion);
                 const floor = await applyEngagementFloor(
@@ -1059,7 +1080,8 @@ async function enrichTextDocument(
         sourceCreatedAt: file.source_created_at,
         sourceUpdatedAt: file.source_updated_at,
       };
-      await smartEnrichFile(
+      await runShadowThenSmartEnrichment(
+        deps,
         {
           db,
           logger,
@@ -1075,9 +1097,11 @@ async function enrichTextDocument(
           recordLlmUsage: recordLlmUsageForFile(deps, file.id),
         },
         smartFile,
+        knownEntities,
+        participantBlock,
+        personCandidateBlock,
       );
       await ensureFileFresh(db, file.id, fileVersion);
-      await runConsolidatedLoopShadowIfEnabled(deps, smartFile, knownEntities, participantBlock, personCandidateBlock);
       const floor = await applyEngagementFloor(
         { db, logger },
         {
