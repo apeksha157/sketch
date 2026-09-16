@@ -1,9 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEnrichmentGenerator } from "./enrichment-providers";
+import { GeminiHttpError, resetGeminiControlsForTests, runGeminiRequest } from "./gemini-control";
+
+const MONTHLY_SPENDING_CAP_BODY = JSON.stringify({
+  error: {
+    code: 429,
+    message: "Your project has exceeded its monthly spending cap.",
+    status: "RESOURCE_EXHAUSTED",
+  },
+});
 
 describe("createEnrichmentGenerator", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetGeminiControlsForTests();
   });
 
   it("routes a per-call model override directly to OpenRouter before Gemini", async () => {
@@ -62,5 +72,32 @@ describe("createEnrichmentGenerator", () => {
 
     await generator?.generateJSON("Return JSON", { model: null, reasoningEffort: "high" }).catch(() => undefined);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to configured OpenRouter generation when Gemini is capped", async () => {
+    resetGeminiControlsForTests();
+    await expect(
+      runGeminiRequest(
+        "gemini-key",
+        async () => {
+          throw new GeminiHttpError(429, MONTHLY_SPENDING_CAP_BODY);
+        },
+        { maxRetries: 0, sleep: async () => {} },
+      ),
+    ).rejects.toBeInstanceOf(GeminiHttpError);
+
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ choices: [{ finish_reason: "stop", message: { content: "fallback text" } }] }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const generator = createEnrichmentGenerator({
+      geminiApiKey: "gemini-key",
+      openRouterApiKey: "openrouter-key",
+      logger: { warn: vi.fn() } as never,
+    });
+
+    await expect(generator?.generate("prompt")).resolves.toBe("fallback text");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("openrouter.ai");
   });
 });
