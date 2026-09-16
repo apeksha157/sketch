@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { up as repairSkippedSummaryOrphans } from "../db/migrations/240-repair-skipped-summary-orphans";
+import { up as repairSkippedSummaryOrphans } from "../db/migrations/242-repair-skipped-summary-orphans";
 import type { DB } from "../db/schema";
 import { createTestDb } from "../test-utils";
 import { SKIPPED_WITHOUT_CONTENT } from "./enrichment";
