@@ -418,7 +418,9 @@ describe("ChannelsPage", () => {
 
       await user.click(await screen.findByRole("button", { name: "Slack actions" }));
       await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
-      await user.click(await screen.findByRole("button", { name: /Sync now/i }));
+      const syncButton = await screen.findByRole("button", { name: /Sync now/i });
+      await waitFor(() => expect(syncButton).toBeEnabled());
+      await user.click(syncButton);
 
       await waitFor(() => expect(syncFn).toHaveBeenCalled());
       await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));
@@ -541,7 +543,9 @@ describe("ChannelsPage", () => {
 
       await user.click(await screen.findByRole("button", { name: "WhatsApp actions" }));
       await user.click(await screen.findByRole("menuitem", { name: "Manage" }));
-      await user.click(await screen.findByRole("button", { name: /Sync now/i }));
+      const syncButton = await screen.findByRole("button", { name: /Sync now/i });
+      await waitFor(() => expect(syncButton).toBeEnabled());
+      await user.click(syncButton);
 
       await waitFor(() => expect(syncFn).toHaveBeenCalled());
       await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({ to: "/files" }));

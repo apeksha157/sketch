@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import type { Logger } from "pino";
 import { describe, expect, it, vi } from "vitest";
+import { createGraphPassRunRepository } from "../db/repositories/graph-pass-runs";
 import { reconcileWorkCycles, upsertWorkCycle } from "../db/repositories/work-cycles";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
@@ -36,6 +37,28 @@ function inputs(
 }
 
 describe("post-sync coordinator", () => {
+  it("defers restored work until drain and preserves its durable run", async () => {
+    const db = await createTestDb();
+    const runs = createGraphPassRunRepository(db);
+    const snapshot = inputs(["file-a"], ["slack"]);
+    const runId = await runs.start({ kind: "post_sync", ...snapshot });
+    const runPipeline = vi.fn(async () => {});
+    const coordinator = createPostSyncCoordinator(runPipeline, runs);
+    const context = createContext(db);
+    try {
+      await coordinator.restoreUnfinished(context, { deferDrain: true });
+      expect(runPipeline).not.toHaveBeenCalled();
+      expect((await runs.get(runId))?.status).toBe("running");
+      await coordinator.drain(context);
+      expect(runPipeline).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(snapshot));
+      expect((await runs.get(runId))?.status).toBe("complete");
+      await coordinator.drain(context);
+      expect(runPipeline).toHaveBeenCalledOnce();
+    } finally {
+      await db.destroy();
+    }
+  });
+
   it("drains one deduplicated union after concurrent successful, partial, and slow connector workers settle", async () => {
     const runPipeline = vi.fn<(params: PostSyncGraphPipelineParams) => Promise<void>>().mockResolvedValue(undefined);
     const coordinator = createPostSyncCoordinator(runPipeline);

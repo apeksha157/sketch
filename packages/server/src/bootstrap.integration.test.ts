@@ -6,6 +6,7 @@ import { SLACK_CHANNEL_HISTORY_DENIED_TEXT, handleSlackChannelHistory } from "./
 import { UploadCollector } from "./agent/tools/types";
 import type { createServer } from "./bootstrap";
 import { seedSlackOrganizationDomain } from "./bootstrap";
+import * as postSyncCoordinator from "./connectors/post-sync-coordinator";
 import { createSettingsRepository } from "./db/repositories/settings";
 import { upsertSlackPersonEntity } from "./db/repositories/slack-entity-sync";
 import { createUserRepository } from "./db/repositories/users";
@@ -113,6 +114,35 @@ describe("bootstrap", () => {
     expect(h.whatsapp).toBeDefined();
     expect(typeof h.getSlack).toBe("function");
     expect(typeof h.shutdown).toBe("function");
+  });
+
+  it("starts HTTP while unfinished graph recovery is still running", async () => {
+    let finishRecovery = () => {};
+    const recovery = new Promise<void>((resolve) => {
+      finishRecovery = resolve;
+    });
+    const drain = vi.fn(() => recovery);
+    const restoreUnfinished = vi.fn(async (_context, options) => {
+      if (options?.deferDrain) return;
+      await drain();
+    });
+    const coordinatorSpy = vi.spyOn(postSyncCoordinator, "getPostSyncCoordinator").mockReturnValue({
+      restoreUnfinished,
+      drain,
+      enqueue: vi.fn(async () => {}),
+    });
+    const starting = boot({}, false, false);
+    try {
+      await vi.waitFor(() => expect(mockServeState.fetch).not.toBeNull(), { timeout: 1500 });
+      await starting;
+      expect((await request("/api/health")).status).toBe(200);
+      expect(restoreUnfinished).toHaveBeenCalledWith(expect.anything(), { deferDrain: true });
+      expect(drain).toHaveBeenCalledOnce();
+    } finally {
+      finishRecovery();
+      await starting;
+      coordinatorSpy.mockRestore();
+    }
   });
 
   it("has no Slack bot when tokens are not configured", async () => {

@@ -232,12 +232,15 @@ export async function createServer(config: Config, options?: CreateServerOptions
   });
 
   try {
-    await getPostSyncCoordinator(db).restoreUnfinished({
-      db,
-      logger,
-      coMentionContributesToThreshold: config.CO_MENTION_CONTRIBUTES_TO_THRESHOLD,
-      floorRetryMaxFilesPerDomain: config.FLOOR_RETRY_MAX_FILES_PER_DOMAIN,
-    });
+    await getPostSyncCoordinator(db).restoreUnfinished(
+      {
+        db,
+        logger,
+        coMentionContributesToThreshold: config.CO_MENTION_CONTRIBUTES_TO_THRESHOLD,
+        floorRetryMaxFilesPerDomain: config.FLOOR_RETRY_MAX_FILES_PER_DOMAIN,
+      },
+      { deferDrain: true },
+    );
   } catch (err) {
     logger.error({ err }, "Failed to restore unfinished post-sync graph passes");
   }
@@ -1540,6 +1543,19 @@ export async function createServer(config: Config, options?: CreateServerOptions
   localDeviceGateway.attach(server);
   logger.info({ port: config.PORT }, "HTTP server started");
 
+  const graphRecovery = backgroundWork
+    ? getPostSyncCoordinator(db)
+        .drain({
+          db,
+          logger,
+          coMentionContributesToThreshold: config.CO_MENTION_CONTRIBUTES_TO_THRESHOLD,
+          floorRetryMaxFilesPerDomain: config.FLOOR_RETRY_MAX_FILES_PER_DOMAIN,
+        })
+        .catch((err) => {
+          logger.error({ err }, "Failed to recover unfinished post-sync graph passes");
+        })
+    : Promise.resolve();
+
   const managedMemberReconciliationEnabled = backgroundWork && externalStartup;
   const managedMemberReconciliationTimer = managedMemberReconciliationEnabled
     ? setInterval(startManagedMemberReconciliation, 5 * 60 * 1000)
@@ -1621,6 +1637,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
       await inProcessWhatsAppLease?.release();
     }
     server.close();
+    await graphRecovery;
     await db.destroy();
   }
 
