@@ -8,7 +8,7 @@ import {
   WHATSAPP_CONNECTOR_TYPE,
   WHATSAPP_CONVERSATION_SLICE_FILE_TYPE,
 } from "../connectors/types";
-import { createEntityRepository, whereLiveEntity } from "../db/repositories/entities";
+import { createEntityRepository, normalizeContactPointValue, whereLiveEntity } from "../db/repositories/entities";
 import { createEntityDomainsRepository, domainMatchesName } from "../db/repositories/entity-domains";
 import { createEntityReviewRepo } from "../db/repositories/entity-review";
 import { createEntitySuppressionRepository } from "../db/repositories/entity-suppressions";
@@ -37,7 +37,14 @@ import {
 } from "./name-dedup";
 import { normalizeEntityMatchName } from "./name-keys";
 import { isPersonalOrSharedDomain } from "./personal-domains";
-import type { Entity, EntityLookup, ProposeEntityType, RankedCandidate } from "./propose";
+import type {
+  Entity,
+  EntityLookup,
+  MatchDecisionDeps,
+  PendingMatchRow,
+  ProposeEntityType,
+  RankedCandidate,
+} from "./propose";
 import { canUseEntityAsMatchTarget } from "./provenance";
 
 const DEFAULT_LLM_PROMOTION_THRESHOLD = 2;
@@ -393,7 +400,7 @@ async function countActiveLlmFilesIndexed(
  * reads must fall back to the legacy JS scans, which parse `raw` and so see rows
  * the not-yet-populated columns would miss.
  */
-async function isNormalizationBackfillComplete(db: Kysely<DB>): Promise<boolean> {
+export async function isNormalizationBackfillComplete(db: Kysely<DB>): Promise<boolean> {
   const row = await db
     .selectFrom("normalization_backfill_state")
     .select("status")
@@ -690,6 +697,176 @@ export function createEntityLookupFromIndex(opts: {
     };
   }
   return lookup;
+}
+
+function parsePendingCandidateIds(candidateEntityId: string | null, candidateEntityIds: string | null): string[] {
+  const ids = candidateEntityId ? [candidateEntityId] : [];
+  if (!candidateEntityIds) return ids;
+  try {
+    const parsed = JSON.parse(candidateEntityIds) as unknown;
+    if (Array.isArray(parsed)) {
+      for (const value of parsed) {
+        if (typeof value === "string" && value.length > 0) ids.push(value);
+      }
+    }
+  } catch {
+    return [...new Set(ids)];
+  }
+  return [...new Set(ids)];
+}
+
+export async function buildReadOnlyMatchDeps(
+  db: Kysely<DB>,
+  opts: { embeddingProvider?: EmbeddingProvider | null } = {},
+): Promise<MatchDecisionDeps> {
+  const index = await buildLookupIndex(db);
+  const normalizationBackfillComplete = await isNormalizationBackfillComplete(db);
+  const lookup = createEntityLookupFromIndex({
+    db,
+    index,
+    normalizationBackfillComplete,
+    embeddingProvider: opts.embeddingProvider,
+  });
+  const entityRows = await db
+    .selectFrom("entities")
+    .select([...ENTITY_INDEX_COLUMNS])
+    .where(whereLiveEntity())
+    .execute();
+  const entitiesById = new Map(entityRows.map((entity) => [entity.id, entity]));
+  const sourceRefRows = await db
+    .selectFrom("entity_source_refs")
+    .select(["entity_id", "source", "source_id"])
+    .execute();
+  const sourceRefs = new Map<string, IndexEntityRow>();
+  for (const row of sourceRefRows) {
+    const entity = entitiesById.get(row.entity_id);
+    if (entity) sourceRefs.set(`${row.source}:${row.source_id}`, entity);
+  }
+
+  const emails = new Map<string, IndexEntityRow[]>();
+  const addEmail = (email: string, entity: IndexEntityRow) => {
+    const normalized = normalizeContactPointValue("email", email);
+    const bucket = emails.get(normalized) ?? [];
+    if (!bucket.some((candidate) => candidate.id === entity.id)) bucket.push(entity);
+    emails.set(normalized, bucket);
+  };
+  for (const entity of entityRows) {
+    if (entity.source_type !== "person") continue;
+    const email = readPersonEmailFromMetadata(entity.metadata);
+    if (email) addEmail(email, entity);
+  }
+  const contactPointRows = await db
+    .selectFrom("entity_contact_points")
+    .select(["entity_id", "value"])
+    .where("kind", "=", "email")
+    .execute();
+  for (const row of contactPointRows) {
+    const entity = entitiesById.get(row.entity_id);
+    if (entity?.source_type === "person") addEmail(row.value, entity);
+  }
+  for (const bucket of emails.values()) bucket.sort((left, right) => left.id.localeCompare(right.id));
+
+  const aliasRows = await db
+    .selectFrom("entity_aliases")
+    .select(["entity_id", "alias", "provenance"])
+    .orderBy("normalized_alias", "asc")
+    .execute();
+  const aliasesByEntityId = new Map<
+    string,
+    Array<{ alias: string; provenance: (typeof aliasRows)[number]["provenance"] }>
+  >();
+  for (const row of aliasRows) {
+    const bucket = aliasesByEntityId.get(row.entity_id) ?? [];
+    bucket.push({ alias: row.alias, provenance: row.provenance });
+    aliasesByEntityId.set(row.entity_id, bucket);
+  }
+
+  const decisionRows = await db
+    .selectFrom("resolution_decisions")
+    .selectAll()
+    .where("status", "in", ["active", "stale"])
+    .orderBy("created_at", "asc")
+    .orderBy("id", "asc")
+    .execute();
+  const decisionsByKey = new Map<string, typeof decisionRows>();
+  for (const row of decisionRows) {
+    const key = `${row.normalized_mention_name}\u0000${row.entity_type}\u0000${row.scope}`;
+    const bucket = decisionsByKey.get(key) ?? [];
+    bucket.push(row);
+    decisionsByKey.set(key, bucket);
+  }
+
+  const rejectionRows = await db
+    .selectFrom("entity_alias_rejections")
+    .select(["entity_id", "normalized_rejected_name"])
+    .execute();
+  const rejectedNamesByEntityId = new Map<string, string[]>();
+  for (const row of rejectionRows) {
+    const bucket = rejectedNamesByEntityId.get(row.entity_id) ?? [];
+    bucket.push(row.normalized_rejected_name);
+    rejectedNamesByEntityId.set(row.entity_id, bucket);
+  }
+  const pendingRows = await db
+    .selectFrom("entity_review_queue")
+    .select(["id", "normalized_name", "entity_type", "candidate_entity_id", "candidate_entity_ids"])
+    .where("status", "=", "pending")
+    .orderBy("first_seen_at", "asc")
+    .orderBy("id", "asc")
+    .execute();
+  const pendingByKey = new Map<string, PendingMatchRow[]>();
+  for (const row of pendingRows) {
+    const key = `${row.normalized_name}\u0000${row.entity_type}`;
+    const bucket = pendingByKey.get(key) ?? [];
+    bucket.push({
+      reviewId: row.id,
+      candidateEntityIds: parsePendingCandidateIds(row.candidate_entity_id, row.candidate_entity_ids),
+    });
+    pendingByKey.set(key, bucket);
+  }
+
+  const domainRows = await db.selectFrom("entity_domains").select(["domain", "kind"]).execute();
+  const personalOrSharedDomains = new Set(
+    domainRows.filter((row) => row.kind === "personal" || row.kind === "shared").map((row) => row.domain.toLowerCase()),
+  );
+  const domainsRepo = createEntityDomainsRepository(db);
+
+  return {
+    lookup,
+    findSourceRef: async (source, sourceId) => sourceRefs.get(`${source}:${sourceId}`) ?? null,
+    findEmailMatches: async (email) => emails.get(normalizeContactPointValue("email", email)) ?? [],
+    readEntity: async (entityId) => entitiesById.get(entityId) ?? null,
+    listAliasRows: async (entityId) => aliasesByEntityId.get(entityId) ?? [],
+    findResolutionDecisions: async (normalizedName, entityType, scope) => {
+      const rows = decisionsByKey.get(`${normalizedName}\u0000${entityType}\u0000${scope}`) ?? [];
+      return {
+        link: rows.find((row) => row.verdict === "link") ?? null,
+        distinct: rows.filter((row) => row.verdict === "distinct" && row.status === "active"),
+        dismiss: rows.filter((row) => row.verdict === "dismiss" && row.status === "active"),
+      };
+    },
+    listRejectedNamesForEntities: async (entityIds) => {
+      const rejected = new Set<string>();
+      for (const entityId of entityIds) {
+        for (const name of rejectedNamesByEntityId.get(entityId) ?? []) rejected.add(`${entityId}:${name}`);
+      }
+      return rejected;
+    },
+    resolvePersonScope: async (email) => {
+      const domain = domainsRepo.normalizeEmailDomain(email);
+      if (!domain || isPersonalOrSharedDomain(domain) || personalOrSharedDomains.has(domain)) return null;
+      return personScopeKeyId(personScopeKeyForDomain(domain, index.companyIdsByDomain.get(domain) ?? []));
+    },
+    pendingLookup: async (normalizedName, entityType) => pendingByKey.get(`${normalizedName}\u0000${entityType}`) ?? [],
+    hasLiveEntityTypeName: async (entityType, normalizedName) =>
+      index.collisionNameKeysByType.get(entityType)?.has(normalizedName) ?? false,
+    findCorporateDomainMatchingName: async (name) => {
+      for (const domain of index.corporateDomains) {
+        if (domainMatchesName(domain, name)) return true;
+      }
+      return false;
+    },
+    readEmail: (entity) => readPersonEmailFromMetadata(entity.metadata),
+  };
 }
 
 export async function buildMaterializeDeps(

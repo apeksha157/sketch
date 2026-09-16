@@ -3,7 +3,18 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import { createExtractionStageRepository } from "../db/repositories/extraction-stages";
 import type { DB } from "../db/schema";
-import { candidateLookupView, entitySummaryView, fileContextView, pairwiseEvidenceView } from "../entities/judge-views";
+import { coerceMentionType, normalizeMentionType } from "../entities/graph";
+import { entitySummaryView, pairwiseEvidenceView } from "../entities/judge-views";
+import { buildReadOnlyMatchDeps } from "../entities/materialize-deps";
+import { normalizeEntityMatchName } from "../entities/name-keys";
+import {
+  type MatchCandidate,
+  type MatchDecision,
+  type MatchDecisionDeps,
+  type MatchInput,
+  type ProposeEntityType,
+  decideEntityMatch,
+} from "../entities/propose";
 import type { KnownEntityForPrompt } from "./file-scope-context";
 import type { GenerateMeta } from "./gemini-generate";
 import type { AgenticOptions, AgenticOutcome, AgenticTool, AgenticToolStep } from "./openrouter-generate";
@@ -15,7 +26,7 @@ import {
   extractionValidTypes,
 } from "./smart-enrichment";
 
-export const CONSOLIDATED_EXTRACTOR_VERSION = "loop-v1";
+export const CONSOLIDATED_EXTRACTOR_VERSION = "loop-v2";
 
 export interface ConsolidatedLoopAgenticGenerator {
   generateAgenticJSON<T>(prompt: string, opts: AgenticOptions): Promise<AgenticOutcome<T>>;
@@ -34,16 +45,26 @@ export interface ConsolidatedLoopShadowDeps {
   now?: () => number;
 }
 
+export interface ConsolidatedResolutionCandidate {
+  entityId: string;
+  name: string;
+  type?: string;
+  rung?: string;
+  score?: number;
+  note?: string;
+}
+
 type Resolution =
-  | { kind: "known"; entityId: string }
-  | { kind: "tool"; entityId: string }
-  | { kind: "new" }
-  | { kind: "hold"; reason: string; candidates: Array<{ entityId: string; name: string; note: string }> };
+  | { kind: "matched"; entityId: string }
+  | { kind: "judged"; entityId: string; reason: string }
+  | { kind: "new"; rejectedCandidates?: string[] }
+  | { kind: "hold"; reason: string; candidates: ConsolidatedResolutionCandidate[] };
 
 export interface ConsolidatedMention {
   mention: string;
   type: string;
   variations: string[];
+  facts: string[];
   resolution: Resolution;
 }
 
@@ -65,14 +86,27 @@ export interface ConsolidatedStagedDocument {
     validation: {
       droppedMentions: number;
       droppedRelations: number;
-      droppedEntityFacts: number;
+      invalidType: number;
+      droppedSingleTokenPerson: number;
+      schemaInvalid: number;
+      droppedSamples: Array<{ mention: string; type: string; reason: string }>;
+      malformedResolution: number;
+      malformedSamples: Array<{ mention: string; type: string; reason: string }>;
     };
   };
 }
 
 export interface ConsolidatedLoopGuard {
+  overriddenByMatcher: number;
   demotedUnoffered: number;
+  heldUnjudged: number;
+  heldPending: number;
+  newOverCandidates: number;
+  suppressed: number;
+  registryLinked: number;
   droppedFacts: number;
+  matchToolCalls: number;
+  matchToolCalled: boolean;
 }
 
 export interface ConsolidatedLoopShadowResult {
@@ -87,22 +121,32 @@ export interface ConsolidatedLoopShadowResult {
 const candidateSchema = z
   .object({
     entityId: z.string().min(1),
-    name: z.string().min(1),
-    note: z.string().default(""),
+    name: z.string().min(1).optional(),
+    type: z.string().optional(),
+    rung: z.string().optional(),
+    score: z.number().optional(),
+    note: z.string().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .transform((candidate) => ({ ...candidate, name: candidate.name ?? candidate.entityId }));
 const resolutionSchema = z.union([
-  z.object({ kind: z.literal("known"), entityId: z.string().min(1) }).passthrough(),
-  z.object({ kind: z.literal("tool"), entityId: z.string().min(1) }).passthrough(),
-  z.object({ kind: z.literal("new") }).passthrough(),
-  z.object({ kind: z.literal("hold"), reason: z.string().min(1), candidates: z.array(candidateSchema) }).passthrough(),
+  z.object({ kind: z.literal("matched"), entityId: z.string().min(1) }).passthrough(),
+  z.object({ kind: z.literal("judged"), entityId: z.string().min(1), reason: z.string().min(1) }).passthrough(),
+  z.object({ kind: z.literal("new"), rejectedCandidates: z.array(z.string().min(1)).optional() }).passthrough(),
+  z
+    .object({
+      kind: z.literal("hold"),
+      reason: z.string().min(1).default("model_hold"),
+      candidates: z.array(candidateSchema).default([]),
+    })
+    .passthrough(),
 ]);
-const mentionSchema = z
+const mentionEnvelopeSchema = z
   .object({
     mention: z.string().min(1),
     type: z.string().min(1),
     variations: z.array(z.string()).default([]),
-    resolution: resolutionSchema,
+    facts: z.array(z.string().min(1)).default([]),
   })
   .passthrough();
 const endpointSchema = z
@@ -121,22 +165,18 @@ const relationSchema = z
     context: z.string().optional(),
   })
   .passthrough();
-const entityFactSchema = z
-  .object({
-    entityId: z.string().min(1),
-    facts: z.array(z.string().min(1)),
-  })
-  .passthrough();
 const toolArgs = {
-  lookupCandidates: z.object({ name: z.string().min(1), entityType: z.string().min(1) }).passthrough(),
+  matchMentions: z
+    .object({
+      mentions: z.array(z.object({ name: z.string().min(1).max(64), type: z.string().min(1) }).passthrough()),
+    })
+    .passthrough(),
   entitySummary: z.object({ entityId: z.string().min(1) }).passthrough(),
   pairwiseEvidence: z.object({ entityIds: z.array(z.string().min(1)).min(1) }).passthrough(),
-  fileContext: z.object({ fileId: z.string().min(1) }).passthrough(),
 };
 
-function renderKnownWithIds(entity: KnownEntityForPrompt, index: number): string {
-  const authority = entity.entityId ?? (entity.reviewId ? `review:${entity.reviewId}` : (entity.id ?? "unresolved"));
-  const parts = [`- [K${index + 1}] ${entity.name} (${entity.type}) id=${authority}`];
+function renderKnownHint(entity: KnownEntityForPrompt, index: number): string {
+  const parts = [`- [K${index + 1}] ${entity.name} (${entity.type})`];
   if (entity.description) parts.push(` - ${entity.description}`);
   const tags: string[] = [];
   if (typeof entity.mentionCount === "number" && entity.mentionCount > 0)
@@ -146,29 +186,160 @@ function renderKnownWithIds(entity: KnownEntityForPrompt, index: number): string
   return parts.join("");
 }
 
-function collectOfferedIdsFromJson(result: string, offeredIds: Set<string>): void {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result);
-  } catch {
-    return;
-  }
+interface OfferedMatch {
+  status: MatchDecision["status"];
+  entityId?: string;
+  candidateIds: Set<string>;
+  complete: boolean;
+}
 
-  function walk(value: unknown): void {
-    if (Array.isArray(value)) {
-      for (const item of value) walk(item);
-      return;
-    }
-    if (!value || typeof value !== "object") return;
-    for (const [key, child] of Object.entries(value)) {
-      if ((key === "id" || key === "entityId" || key === "otherId") && typeof child === "string") {
-        offeredIds.add(child);
-      }
-      walk(child);
-    }
-  }
+interface MatchToolResult {
+  key: string;
+  name: string;
+  type: string;
+  status: MatchDecision["status"];
+  entityId?: string;
+  entityName?: string;
+  rung?: string;
+  candidates?: MatchCandidate[];
+  candidateCount?: number;
+  candidatesTruncated?: boolean;
+  reason?: string;
+}
 
-  walk(parsed);
+interface RegistryLinkedDecision {
+  status: "linked";
+  entityId: string;
+  entityName: string;
+  entityType: "product" | "project";
+  rung: "registry";
+}
+
+type LoopMatchDecision = MatchDecision | RegistryLinkedDecision;
+
+function isRegistryLinkedDecision(decision: LoopMatchDecision): decision is RegistryLinkedDecision {
+  return decision.status === "linked" && !("link" in decision);
+}
+
+function canonicalMentionType(name: string, type: string): ProposeEntityType | null {
+  return normalizeMentionType(coerceMentionType(name, type));
+}
+
+function registryDecision(
+  knownEntities: KnownEntityForPrompt[] | undefined,
+  name: string,
+  type: ProposeEntityType,
+): RegistryLinkedDecision | null {
+  if (type !== "product" && type !== "project") return null;
+  const normalized = normalizeEntityMatchName(type, name);
+  for (const entity of knownEntities ?? []) {
+    const entityId = entity.entityId ?? entity.id;
+    if (!entityId || canonicalMentionType(entity.name, entity.type) !== type) continue;
+    const knownNames = [entity.name, ...(entity.aliases ?? [])];
+    if (!knownNames.some((knownName) => normalizeEntityMatchName(type, knownName) === normalized)) continue;
+    return { status: "linked", entityId, entityName: entity.name, entityType: type, rung: "registry" };
+  }
+  return null;
+}
+
+function mentionKey(name: string, type: ProposeEntityType): string {
+  return `${normalizeEntityMatchName(type, name)}\t${type}`;
+}
+
+function matchInput(file: FileContext, name: string, type: ProposeEntityType): MatchInput {
+  const key = mentionKey(name, type);
+  return {
+    name,
+    entityType: type,
+    source: "consolidated_loop",
+    sourceId: `${file.id}:${key}`,
+    subtype: "external",
+    evidence: [],
+    triggeredByUserId: "consolidated_loop",
+  };
+}
+
+async function decideLoopMention(
+  deps: MatchDecisionDeps,
+  file: FileContext,
+  knownEntities: KnownEntityForPrompt[] | undefined,
+  name: string,
+  type: ProposeEntityType,
+): Promise<LoopMatchDecision> {
+  return registryDecision(knownEntities, name, type) ?? decideEntityMatch(deps, matchInput(file, name, type));
+}
+
+async function matchToolResult(
+  deps: MatchDecisionDeps,
+  file: FileContext,
+  knownEntities: KnownEntityForPrompt[] | undefined,
+  name: string,
+  type: ProposeEntityType,
+): Promise<MatchToolResult> {
+  const decision = await decideLoopMention(deps, file, knownEntities, name, type);
+  const base = { key: mentionKey(name, type), name, type, status: decision.status };
+  if (decision.status === "linked") {
+    const entityName = isRegistryLinkedDecision(decision)
+      ? decision.entityName
+      : (await deps.readEntity?.(decision.entityId))?.name;
+    return {
+      ...base,
+      entityId: decision.entityId,
+      entityName,
+      rung: decision.rung,
+    };
+  }
+  if (decision.status === "ambiguous" || decision.status === "pending") {
+    const candidates = decision.candidates.slice(0, 3);
+    return {
+      ...base,
+      candidates,
+      candidateCount: decision.candidates.length,
+      candidatesTruncated: candidates.length < decision.candidates.length,
+      ...(decision.status === "ambiguous" ? { reason: decision.reason } : { reason: "pending_proposal" }),
+    };
+  }
+  return decision.status === "suppressed" ? { ...base, reason: decision.reason } : base;
+}
+
+function serializeMatchResults(results: MatchToolResult[]): string {
+  let serialized = JSON.stringify({ results });
+  while (serialized.length > 1900) {
+    const result = [...results].reverse().find((row) => (row.candidates?.length ?? 0) > 0);
+    if (!result?.candidates) break;
+    result.candidates.pop();
+    result.candidatesTruncated = true;
+    serialized = JSON.stringify({ results });
+  }
+  if (serialized.length > 1900) {
+    const compactResults = results.map(
+      (result): MatchToolResult => ({
+        key: result.key,
+        name: result.name,
+        type: result.type,
+        status: result.status,
+        ...(result.entityId === undefined ? {} : { entityId: result.entityId }),
+        ...(result.rung === undefined ? {} : { rung: result.rung }),
+        ...(result.candidates === undefined ? {} : { candidates: result.candidates }),
+        ...(result.candidateCount === undefined ? {} : { candidateCount: result.candidateCount }),
+        ...(result.candidatesTruncated === undefined ? {} : { candidatesTruncated: result.candidatesTruncated }),
+      }),
+    );
+    serialized = JSON.stringify({ results: compactResults });
+  }
+  return serialized;
+}
+
+function recordOfferedMatches(serialized: string, offered: Map<string, OfferedMatch>): void {
+  const parsed = JSON.parse(serialized) as { results?: MatchToolResult[] };
+  for (const result of parsed.results ?? []) {
+    offered.set(result.key, {
+      status: result.status,
+      entityId: result.entityId,
+      candidateIds: new Set((result.candidates ?? []).map((candidate) => candidate.entityId)),
+      complete: result.candidatesTruncated !== true,
+    });
+  }
 }
 
 async function viewTool<T extends z.ZodType>(
@@ -176,37 +347,72 @@ async function viewTool<T extends z.ZodType>(
   schema: T,
   args: unknown,
   run: (input: z.infer<T>) => Promise<string>,
-  offeredIds: Set<string>,
 ): Promise<string> {
   const parsed = schema.safeParse(args);
   if (!parsed.success) return JSON.stringify({ error: `${name}_invalid_args` });
-  const result = await run(parsed.data);
-  collectOfferedIdsFromJson(result, offeredIds);
-  return result;
+  return run(parsed.data);
 }
 
-function buildTools(db: Kysely<DB>, fileId: string, offeredIds: Set<string>): AgenticTool[] {
+function buildTools(
+  db: Kysely<DB>,
+  file: FileContext,
+  matchDeps: MatchDecisionDeps,
+  knownEntities: KnownEntityForPrompt[] | undefined,
+  offered: Map<string, OfferedMatch>,
+): AgenticTool[] {
+  const validTypes = extractionValidTypes(file.fileType);
   return [
     {
-      name: "lookup_candidates",
+      name: "match_mentions",
       description:
-        "Look up candidate entities by mention name and entity type. Returns entity ids that may be used for tool resolutions or hold candidates.",
+        "Match up to six proposed mentions against the graph. Call repeatedly until every mention has a result.",
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string" },
-          entityType: { type: "string" },
+          mentions: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string", maxLength: 64 },
+                type: { type: "string", enum: [...validTypes] },
+              },
+              required: ["name", "type"],
+            },
+          },
         },
-        required: ["name", "entityType"],
+        required: ["mentions"],
       },
-      run: (args) =>
-        viewTool(
-          "lookup_candidates",
-          toolArgs.lookupCandidates,
-          args,
-          (input) => candidateLookupView(db, input),
-          offeredIds,
-        ),
+      run: async (args) => {
+        const parsed = toolArgs.matchMentions.safeParse(args);
+        if (!parsed.success) return JSON.stringify({ error: "match_mentions_invalid_args" });
+        if (parsed.data.mentions.length > 6) {
+          return JSON.stringify({
+            error: "batch_too_large",
+            maxMentions: 6,
+            received: parsed.data.mentions.length,
+          });
+        }
+        const results: MatchToolResult[] = [];
+        for (const mention of parsed.data.mentions) {
+          const type = canonicalMentionType(mention.name, mention.type);
+          if (!type || !validTypes.has(type)) {
+            const rawType = mention.type.trim().toLowerCase();
+            results.push({
+              key: `${normalizeEntityMatchName(rawType, mention.name)}\t${rawType}`,
+              name: mention.name,
+              type: rawType,
+              status: "suppressed",
+              reason: "invalid_type",
+            });
+            continue;
+          }
+          results.push(await matchToolResult(matchDeps, file, knownEntities, mention.name, type));
+        }
+        const serialized = serializeMatchResults(results);
+        recordOfferedMatches(serialized, offered);
+        return serialized;
+      },
     },
     {
       name: "entity_summary",
@@ -219,13 +425,7 @@ function buildTools(db: Kysely<DB>, fileId: string, offeredIds: Set<string>): Ag
         required: ["entityId"],
       },
       run: (args) =>
-        viewTool(
-          "entity_summary",
-          toolArgs.entitySummary,
-          args,
-          (input) => entitySummaryView(db, input.entityId),
-          offeredIds,
-        ),
+        viewTool("entity_summary", toolArgs.entitySummary, args, (input) => entitySummaryView(db, input.entityId)),
     },
     {
       name: "pairwise_evidence",
@@ -238,27 +438,9 @@ function buildTools(db: Kysely<DB>, fileId: string, offeredIds: Set<string>): Ag
         required: ["entityIds"],
       },
       run: (args) =>
-        viewTool(
-          "pairwise_evidence",
-          toolArgs.pairwiseEvidence,
-          args,
-          (input) => pairwiseEvidenceView(db, input.entityIds),
-          offeredIds,
+        viewTool("pairwise_evidence", toolArgs.pairwiseEvidence, args, (input) =>
+          pairwiseEvidenceView(db, input.entityIds),
         ),
-    },
-    {
-      name: "file_context",
-      description:
-        "Fetch compact graph context already linked to this file. Use the provided file id unless comparing a tool result's nearby evidence.",
-      parameters: {
-        type: "object",
-        properties: {
-          fileId: { type: "string", enum: [fileId] },
-        },
-        required: ["fileId"],
-      },
-      run: (args) =>
-        viewTool("file_context", toolArgs.fileContext, args, (input) => fileContextView(db, input.fileId), offeredIds),
     },
   ];
 }
@@ -266,14 +448,14 @@ function buildTools(db: Kysely<DB>, fileId: string, offeredIds: Set<string>): Ag
 function buildPrompt(deps: ConsolidatedLoopShadowDeps, file: FileContext): string {
   const truncatedContent = file.content.slice(0, MAX_CONTENT_CHARS);
   const orgSection = deps.orgContext?.description
-    ? `\nBackground on the organization that operates this system (${deps.orgContext.orgName ?? "Unknown"}${deps.orgContext.industry ? `, industry: ${deps.orgContext.industry}` : ""}). This is context for disambiguation only - do NOT extract an entity merely because it is named in this background. Extract only entities the document content below actually refers to:\n${deps.orgContext.description}\n`
+    ? `\nBackground on the organization that operates this system (${deps.orgContext.orgName ?? "Unknown"}${deps.orgContext.industry ? `, industry: ${deps.orgContext.industry}` : ""}). This is context for disambiguation only. Extract the organization's own products, projects, and people when the document content itself refers to them, including in a speaker line, as an assignee, in an issue header, or as the product being changed. Do not extract entities that appear only in this background text:\n${deps.orgContext.description}\n`
     : "";
   const disambiguationSection = deps.orgContext?.disambiguationGuidance
     ? `\nProduct/disambiguation guidance:\n${deps.orgContext.disambiguationGuidance}\n`
     : "";
   const knownSection =
     deps.knownEntities && deps.knownEntities.length > 0
-      ? `\nKnown entities likely to appear in this file - each has a handle like [K1] and a real id. Match these to mentions instead of creating duplicates, and prefer them as relationship endpoints. Product entries here are the injected known-products list; map product mentions to those entries instead of inventing product names. Do not use tools for confident registry hits. Entries whose id starts with "review:" are pending proposals, not live entities - never use a review: id as a resolution entityId; when a mention matches one, use { "kind": "hold" } and list the review: id in candidates instead.\n${deps.knownEntities.map(renderKnownWithIds).join("\n")}\n`
+      ? `\nKnown entities likely to appear in this file are extraction hints only. They carry no id authority: every emitted mention still goes through match_mentions. Known entries have no ids here; to resolve one you must still send it through match_mentions and copy the id from that result. When the document content refers to one of these entities, emit a mention for it using the known name and prefer it as a relationship endpoint. Product entries here are the injected known-products list; use the known name instead of inventing a product name.\n${deps.knownEntities.map(renderKnownHint).join("\n")}\n`
       : "";
   const participantSection = deps.participantBlock && deps.participantBlock.length > 0 ? deps.participantBlock : "";
   const personCandidateSection =
@@ -357,13 +539,20 @@ Do not extract "member_of", "deal_for", or "primary_contact" from prose; those a
 
 When a "Meeting participants" block is present above and lists attendees from multiple companies, the cross-company link is itself relationship evidence even when the prose never names the external company. Emit \`engaged_with\` edges from home-company participants who are marked \`[action-item owner]\` to each external company present in the participants block. Treat silent external attendees (no action items) with caution - only emit when the prose corroborates it. Use the participant name and the external company name exactly as they appear in the block as the relation endpoints.
 
+Resolution workflow:
+1. First make the mention list complete: list every qualifying mention with its canonical type and mention-scoped facts. Never omit a qualifying mention to reduce the number of match_mentions batches.
+2. Call match_mentions in batches of at most six until every mention has a result. Repeat across tool rounds as needed.
+3. For ambiguous results, use entity_summary and pairwise_evidence as needed, then judge only among candidates match_mentions actually returned.
+4. Write the final JSON document.
+
 Resolution rules:
-- For a confident match to the Known entities registry, set resolution to { "kind": "known", "entityId": "<registry entityId>" }. Do not use tools for registry hits.
-- Use tools only for mentions not confidently matched against the registry.
-- If a tool result supports a confident existing entity, set resolution to { "kind": "tool", "entityId": "<tool result entity id>" }.
-- Every resolution entityId must be copied verbatim from the registry above or from a tool result in this conversation. Never write an entityId from memory or guesswork - people and other entities you recognize but have no id for resolve as "new" (or via lookup_candidates first).
-- If you are confident the mention is a new entity, set resolution to { "kind": "new" }.
-- If you cannot settle the mention, set resolution to { "kind": "hold", "reason": "<short reason>", "candidates": [{ "entityId": "<candidate id>", "name": "<candidate name>", "note": "<why considered>" }] }. Holds must list the candidates you considered; an empty list is allowed only when lookup returned nothing.
+- Copy ids only from match_mentions results. Never use an id from memory or from the Known entities hints.
+- A linked result becomes { "kind": "matched", "entityId": "<linked id>" }.
+- For an ambiguous result, select one visible candidate with { "kind": "judged", "entityId": "<candidate id>", "reason": "<short evidence-based reason>" }.
+- Use { "kind": "new" } only when match_mentions said new.
+- To reject every candidate from an ambiguous result as genuinely new, match_mentions must say candidatesTruncated is false and resolution must be { "kind": "new", "rejectedCandidates": ["<every returned candidate id>"] }.
+- An ambiguous result you cannot settle and a pending result both use { "kind": "hold", "reason": "<short reason>", "candidates": [{ "entityId": "<candidate id>", "name": "<candidate name>", "type": "<candidate type>", "rung": "<candidate rung>", "score": 0.0 }] }. Copy the candidate objects exactly as match_mentions returned them, or use "candidates": [] when it returned none. An id beginning with "review:" stays in candidates and is never used as the resolution's entityId.
+- Facts belong inside the mention they describe.
 
 Write a 2-3 sentence summary focusing on: what this document is about, key decisions or outcomes, and topics discussed. Be specific - use names, numbers, dates. Do not start with "This document".
 
@@ -374,7 +563,19 @@ Return exactly one JSON object with this shape:
       "mention": "Sarah Chen",
       "type": "person",
       "variations": ["Sarah", "S. Chen"],
-      "resolution": { "kind": "known", "entityId": "ent_123" }
+      "facts": ["Sarah Chen leads Project Atlas"],
+      "resolution": { "kind": "matched", "entityId": "ent_123" }
+    },
+    {
+      "mention": "Sarah Cheng",
+      "type": "person",
+      "variations": [],
+      "facts": ["Sarah Cheng attended the meeting"],
+      "resolution": {
+        "kind": "hold",
+        "reason": "ambiguous person",
+        "candidates": [{ "entityId": "ent_456", "name": "Sarah Chen", "type": "person" }]
+      }
     }
   ],
   "relations": [
@@ -386,40 +587,85 @@ Return exactly one JSON object with this shape:
       "context": "Sarah Chen leads Project Atlas"
     }
   ],
-  "entityFacts": [
-    { "entityId": "ent_123", "facts": ["Sarah Chen leads Project Atlas"] }
-  ],
   "summary": "2-3 sentence summary here."
 }
 
 Valid types: ${validTypesPrompt}
 
-If no notable entities, relations, or facts are found, return { "mentions": [], "relations": [], "entityFacts": [], "summary": "<2-3 sentence summary>" }.
+If no notable entities, relations, or facts are found, return { "mentions": [], "relations": [], "summary": "<2-3 sentence summary>" }.
 
 <content>
 ${truncatedContent}
 </content>`;
 }
 
-function sanitizeRows<T>(rows: unknown, schema: z.ZodType<T>): { values: T[]; dropped: number } {
-  if (!Array.isArray(rows)) return { values: [], dropped: 0 };
-  const values: T[] = [];
-  let dropped = 0;
-  for (const row of rows) {
-    const parsed = schema.safeParse(row);
-    if (parsed.success) values.push(parsed.data);
-    else dropped += 1;
-  }
-  return { values, dropped };
-}
-
-function validateDocument(raw: unknown): {
+interface ValidatedDocument {
   mentions: ConsolidatedMention[];
   relations: ExtractedRelation[];
-  entityFacts: ConsolidatedEntityFacts[];
   summary: string;
+  droppedKeys: Set<string>;
+  droppedFacts: number;
   validation: ConsolidatedStagedDocument["meta"]["validation"];
-} {
+}
+
+function appendUnique(target: string[], values: string[]): void {
+  const seen = new Set(target);
+  for (const value of values) {
+    if (!seen.has(value)) {
+      target.push(value);
+      seen.add(value);
+    }
+  }
+}
+
+function resolutionCandidates(resolution: Resolution): ConsolidatedResolutionCandidate[] {
+  if (resolution.kind === "hold") return resolution.candidates;
+  if (resolution.kind === "matched" || resolution.kind === "judged") {
+    return [{ entityId: resolution.entityId, name: resolution.entityId }];
+  }
+  return (resolution.rejectedCandidates ?? []).map((entityId) => ({ entityId, name: entityId }));
+}
+
+function mergeCandidates(
+  left: ConsolidatedResolutionCandidate[],
+  right: ConsolidatedResolutionCandidate[],
+): ConsolidatedResolutionCandidate[] {
+  const byId = new Map<string, ConsolidatedResolutionCandidate>();
+  for (const candidate of [...left, ...right]) {
+    if (!byId.has(candidate.entityId)) byId.set(candidate.entityId, candidate);
+  }
+  return [...byId.values()];
+}
+
+function rawMentionKey(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.mention !== "string" || typeof record.type !== "string") return null;
+  const type = canonicalMentionType(record.mention, record.type);
+  return type ? mentionKey(record.mention, type) : null;
+}
+
+function rawFactsCount(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const facts = (value as Record<string, unknown>).facts;
+  return Array.isArray(facts) ? facts.filter((fact) => typeof fact === "string" && fact.length > 0).length : 0;
+}
+
+function addDroppedSample(
+  samples: Array<{ mention: string; type: string; reason: string }>,
+  value: unknown,
+  reason: string,
+): void {
+  if (samples.length >= 5) return;
+  const record = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  samples.push({
+    mention: typeof record.mention === "string" ? record.mention : "?",
+    type: typeof record.type === "string" ? record.type : "?",
+    reason,
+  });
+}
+
+function validateDocument(raw: unknown, file: FileContext): ValidatedDocument {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error("consolidated loop response must be a JSON object");
   }
@@ -428,85 +674,338 @@ function validateDocument(raw: unknown): {
   if (typeof record.summary !== "string" || record.summary.trim().length === 0) {
     throw new Error("consolidated loop response missing summary");
   }
-  const mentions = sanitizeRows(record.mentions, mentionSchema);
-  const relations = sanitizeRows(record.relations, relationSchema);
-  const entityFacts = sanitizeRows(record.entityFacts, entityFactSchema);
+
+  const validTypes = extractionValidTypes(file.fileType);
+  const byKey = new Map<string, ConsolidatedMention>();
+  const droppedKeys = new Set<string>();
+  let droppedMentions = 0;
+  let invalidType = 0;
+  let schemaInvalid = 0;
+  let malformedResolution = 0;
+  let droppedFacts = 0;
+  const droppedSamples: Array<{ mention: string; type: string; reason: string }> = [];
+  const malformedSamples: Array<{ mention: string; type: string; reason: string }> = [];
+  for (const row of record.mentions) {
+    const parsedEnvelope = mentionEnvelopeSchema.safeParse(row);
+    if (!parsedEnvelope.success) {
+      droppedMentions += 1;
+      schemaInvalid += 1;
+      droppedFacts += rawFactsCount(row);
+      addDroppedSample(droppedSamples, row, parsedEnvelope.error.issues[0]?.path.join(".") || "?");
+      const key = rawMentionKey(row);
+      if (key) droppedKeys.add(key);
+      continue;
+    }
+    const type = canonicalMentionType(parsedEnvelope.data.mention, parsedEnvelope.data.type);
+    if (!type || !validTypes.has(type)) {
+      droppedMentions += 1;
+      invalidType += 1;
+      droppedFacts += parsedEnvelope.data.facts.length;
+      addDroppedSample(droppedSamples, row, "invalid_type");
+      if (type) droppedKeys.add(mentionKey(parsedEnvelope.data.mention, type));
+      continue;
+    }
+    const rawResolution =
+      row && typeof row === "object" && !Array.isArray(row) ? (row as Record<string, unknown>).resolution : undefined;
+    const parsedResolution = resolutionSchema.safeParse(rawResolution);
+    const resolution: Resolution = parsedResolution.success
+      ? parsedResolution.data
+      : { kind: "hold", reason: "malformed_resolution", candidates: [] };
+    if (!parsedResolution.success) {
+      malformedResolution += 1;
+      addDroppedSample(malformedSamples, row, parsedResolution.error.issues[0]?.path.join(".") || "?");
+    }
+    const key = mentionKey(parsedEnvelope.data.mention, type);
+    const mention: ConsolidatedMention = { ...parsedEnvelope.data, type, resolution };
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, mention);
+      continue;
+    }
+    appendUnique(existing.variations, mention.variations);
+    appendUnique(existing.facts, mention.facts);
+    if (JSON.stringify(existing.resolution) !== JSON.stringify(mention.resolution)) {
+      existing.resolution = {
+        kind: "hold",
+        reason: "key_collision",
+        candidates: mergeCandidates(
+          resolutionCandidates(existing.resolution),
+          resolutionCandidates(mention.resolution),
+        ),
+      };
+    }
+  }
+
+  const relationRows = Array.isArray(record.relations) ? record.relations : [];
+  const relations: ExtractedRelation[] = [];
+  let droppedRelations = 0;
+  for (const row of relationRows) {
+    const parsed = relationSchema.safeParse(row);
+    if (!parsed.success) {
+      droppedRelations += 1;
+      continue;
+    }
+    const sourceType = canonicalMentionType(parsed.data.source.name, parsed.data.source.type);
+    const targetType = canonicalMentionType(parsed.data.target.name, parsed.data.target.type);
+    if (!sourceType || !targetType || !validTypes.has(sourceType) || !validTypes.has(targetType)) {
+      droppedRelations += 1;
+      continue;
+    }
+    relations.push({
+      ...parsed.data,
+      source: { ...parsed.data.source, type: sourceType },
+      target: { ...parsed.data.target, type: targetType },
+    });
+  }
+
   return {
-    mentions: mentions.values,
-    relations: relations.values,
-    entityFacts: entityFacts.values,
+    mentions: [...byKey.values()],
+    relations,
     summary: record.summary.trim(),
+    droppedKeys,
+    droppedFacts,
     validation: {
-      droppedMentions: mentions.dropped,
-      droppedRelations: relations.dropped,
-      droppedEntityFacts: entityFacts.dropped,
+      droppedMentions,
+      droppedRelations,
+      invalidType,
+      droppedSingleTokenPerson: 0,
+      schemaInvalid,
+      droppedSamples,
+      malformedResolution,
+      malformedSamples,
     },
   };
 }
 
-function applyLinkAuthorityGuard(
-  doc: Pick<ConsolidatedStagedDocument, "mentions" | "entityFacts">,
-  offeredIds: Set<string>,
-): ConsolidatedLoopGuard {
-  let demotedUnoffered = 0;
-  let droppedFacts = 0;
-  for (const mention of doc.mentions) {
-    if (
-      (mention.resolution.kind === "known" || mention.resolution.kind === "tool") &&
-      !offeredIds.has(mention.resolution.entityId)
-    ) {
-      mention.resolution = { kind: "hold", reason: "unoffered_target", candidates: [] };
-      demotedUnoffered += 1;
-    }
+function decisionCandidates(decision: LoopMatchDecision): ConsolidatedResolutionCandidate[] {
+  if (decision.status !== "ambiguous" && decision.status !== "pending") return [];
+  return decision.candidates.map((candidate) => ({
+    entityId: candidate.entityId,
+    name: candidate.name,
+    type: candidate.type,
+    rung: candidate.rung,
+    score: candidate.score,
+  }));
+}
+
+async function linkedDecisionCandidates(
+  deps: MatchDecisionDeps,
+  decision: Extract<LoopMatchDecision, { status: "linked" }>,
+): Promise<ConsolidatedResolutionCandidate[]> {
+  if (isRegistryLinkedDecision(decision)) {
+    return [{ entityId: decision.entityId, name: decision.entityName, type: decision.entityType, rung: decision.rung }];
   }
-  const retainedFacts = doc.entityFacts.filter((row) => {
-    if (offeredIds.has(row.entityId)) return true;
-    droppedFacts += 1;
-    return false;
+  const entity = await deps.readEntity?.(decision.entityId);
+  return [
+    {
+      entityId: decision.entityId,
+      name: entity?.name ?? decision.entityId,
+      type: entity?.source_type,
+      rung: decision.rung,
+    },
+  ];
+}
+
+function isSingleTokenPerson(mention: ConsolidatedMention): boolean {
+  return mention.type === "person" && mention.mention.trim().length > 0 && !/\s/.test(mention.mention.trim());
+}
+
+function acceptedEntityId(resolution: Resolution): string | null {
+  return resolution.kind === "matched" || resolution.kind === "judged" ? resolution.entityId : null;
+}
+
+async function reconcileDocument(
+  validated: ValidatedDocument,
+  file: FileContext,
+  matchDeps: MatchDecisionDeps,
+  knownEntities: KnownEntityForPrompt[] | undefined,
+  offered: Map<string, OfferedMatch>,
+  matchToolCalls: number,
+): Promise<{
+  mentions: ConsolidatedMention[];
+  relations: ExtractedRelation[];
+  entityFacts: ConsolidatedEntityFacts[];
+  guard: ConsolidatedLoopGuard;
+}> {
+  const guard: ConsolidatedLoopGuard = {
+    overriddenByMatcher: 0,
+    demotedUnoffered: 0,
+    heldUnjudged: 0,
+    heldPending: 0,
+    newOverCandidates: 0,
+    suppressed: 0,
+    registryLinked: 0,
+    droppedFacts: validated.droppedFacts,
+    matchToolCalls,
+    matchToolCalled: matchToolCalls > 0,
+  };
+  const mentions: ConsolidatedMention[] = [];
+  const droppedKeys = new Set(validated.droppedKeys);
+  const factsByEntityId = new Map<string, string[]>();
+
+  for (const mention of validated.mentions) {
+    const type = mention.type as ProposeEntityType;
+    const key = mentionKey(mention.mention, type);
+    const decision = await decideLoopMention(matchDeps, file, knownEntities, mention.mention, type);
+    if (isRegistryLinkedDecision(decision)) guard.registryLinked += 1;
+    const modelResolution = mention.resolution;
+    let resolution: Resolution | null = null;
+
+    if (
+      decision.status === "linked" &&
+      !isRegistryLinkedDecision(decision) &&
+      (decision.link.via === "alias_authoritative" || decision.link.via === "ledger")
+    ) {
+      resolution = { kind: "matched", entityId: decision.entityId };
+      if (modelResolution.kind !== "matched" || modelResolution.entityId !== decision.entityId) {
+        guard.overriddenByMatcher += 1;
+      }
+    } else if (decision.status === "pending") {
+      resolution = {
+        kind: "hold",
+        reason: "pending_proposal",
+        candidates: mergeCandidates(
+          decisionCandidates(decision),
+          decision.reviewIds.map((reviewId) => ({ entityId: `review:${reviewId}`, name: "Pending proposal" })),
+        ),
+      };
+      guard.heldPending += 1;
+    } else if (decision.status === "suppressed") {
+      droppedKeys.add(key);
+      guard.suppressed += 1;
+    } else if (isSingleTokenPerson(mention)) {
+      if (modelResolution.kind === "new") {
+        droppedKeys.add(key);
+        validated.validation.droppedMentions += 1;
+        validated.validation.droppedSingleTokenPerson += 1;
+      } else {
+        const candidates =
+          decision.status === "linked"
+            ? await linkedDecisionCandidates(matchDeps, decision)
+            : decisionCandidates(decision);
+        resolution = { kind: "hold", reason: "single_token_person", candidates };
+      }
+    } else if (decision.status === "linked") {
+      resolution = { kind: "matched", entityId: decision.entityId };
+      if (modelResolution.kind !== "matched" || modelResolution.entityId !== decision.entityId) {
+        guard.overriddenByMatcher += 1;
+      }
+    } else if (decision.status === "ambiguous") {
+      const candidates = decisionCandidates(decision);
+      const candidateIds = new Set(decision.candidates.map((candidate) => candidate.entityId));
+      const offeredMatch = offered.get(key);
+      if (modelResolution.kind === "judged") {
+        if (
+          candidateIds.has(modelResolution.entityId) &&
+          offeredMatch?.status === "ambiguous" &&
+          offeredMatch.candidateIds.has(modelResolution.entityId)
+        ) {
+          resolution = modelResolution;
+        } else {
+          resolution = { kind: "hold", reason: "unoffered_target", candidates };
+          guard.demotedUnoffered += 1;
+        }
+      } else if (modelResolution.kind === "matched") {
+        resolution = { kind: "hold", reason: "protocol_matched_on_ambiguous", candidates };
+        guard.demotedUnoffered += 1;
+      } else if (modelResolution.kind === "new") {
+        const rejected = new Set(modelResolution.rejectedCandidates ?? []);
+        const rejectedEveryOffered =
+          offeredMatch?.status === "ambiguous" &&
+          offeredMatch.complete &&
+          [...offeredMatch.candidateIds].every((entityId) => rejected.has(entityId));
+        if (rejectedEveryOffered) {
+          resolution = { kind: "new", rejectedCandidates: [...(modelResolution.rejectedCandidates ?? [])] };
+          guard.newOverCandidates += 1;
+        } else {
+          resolution = { kind: "hold", reason: "unjudged_candidates", candidates };
+          guard.heldUnjudged += 1;
+        }
+      } else {
+        resolution = {
+          kind: "hold",
+          reason: modelResolution.reason,
+          candidates: mergeCandidates(modelResolution.candidates, candidates),
+        };
+      }
+    } else if (modelResolution.kind === "matched" || modelResolution.kind === "judged") {
+      resolution = { kind: "hold", reason: "unoffered_target", candidates: [] };
+      guard.demotedUnoffered += 1;
+    } else if (modelResolution.kind === "new") {
+      resolution = { kind: "new" };
+    } else {
+      resolution = modelResolution;
+    }
+
+    if (!resolution) {
+      guard.droppedFacts += mention.facts.length;
+      continue;
+    }
+    const reconciled = { ...mention, resolution };
+    mentions.push(reconciled);
+    const entityId = acceptedEntityId(resolution);
+    if (!entityId) {
+      guard.droppedFacts += mention.facts.length;
+      continue;
+    }
+    const facts = factsByEntityId.get(entityId) ?? [];
+    appendUnique(facts, mention.facts);
+    factsByEntityId.set(entityId, facts);
+  }
+
+  const relations = validated.relations.filter((relation) => {
+    const sourceType = relation.source.type as ProposeEntityType;
+    const targetType = relation.target.type as ProposeEntityType;
+    const dropped =
+      droppedKeys.has(mentionKey(relation.source.name, sourceType)) ||
+      droppedKeys.has(mentionKey(relation.target.name, targetType));
+    if (dropped) validated.validation.droppedRelations += 1;
+    return !dropped;
   });
-  doc.entityFacts.splice(0, doc.entityFacts.length, ...retainedFacts);
-  return { demotedUnoffered, droppedFacts };
+  const entityFacts = [...factsByEntityId].map(([entityId, facts]) => ({ entityId, facts }));
+  return { mentions, relations, entityFacts, guard };
 }
 
 export async function runConsolidatedLoopShadow(
   deps: ConsolidatedLoopShadowDeps,
   file: FileContext,
 ): Promise<ConsolidatedLoopShadowResult> {
-  const offeredIds = new Set<string>();
-  for (const entity of deps.knownEntities ?? []) {
-    if (entity.entityId) offeredIds.add(entity.entityId);
-  }
+  const matchDeps = await buildReadOnlyMatchDeps(deps.db);
+  const offered = new Map<string, OfferedMatch>();
   const toolSteps: Array<Pick<AgenticToolStep, "name" | "durationMs" | "cached">> = [];
+  let matchToolCalls = 0;
   const outcome = await deps.agenticGenerator.generateAgenticJSON<unknown>(buildPrompt(deps, file), {
     maxTokens: 16_384,
     label: `consolidatedLoop:${file.id}`,
-    tools: buildTools(deps.db, file.id, offeredIds),
-    maxToolRounds: 6,
+    tools: buildTools(deps.db, file, matchDeps, deps.knownEntities, offered),
+    maxToolRounds: 4,
     onToolStep: (step) => {
       toolSteps.push({ name: step.name, durationMs: step.durationMs, cached: step.cached });
+      if (step.name === "match_mentions") matchToolCalls += 1;
       deps.logger.debug(
         { fileId: file.id, name: step.name, durationMs: step.durationMs },
         "consolidated loop tool step",
       );
     },
   });
-  const validated = validateDocument(outcome.value);
-  if (
-    validated.validation.droppedMentions > 0 ||
-    validated.validation.droppedRelations > 0 ||
-    validated.validation.droppedEntityFacts > 0
-  ) {
-    deps.logger.warn({ fileId: file.id, ...validated.validation }, "consolidated loop dropped malformed rows");
+  const validated = validateDocument(outcome.value, file);
+  const reconciled = await reconcileDocument(validated, file, matchDeps, deps.knownEntities, offered, matchToolCalls);
+  if (validated.validation.droppedMentions > 0 || validated.validation.droppedRelations > 0) {
+    const { droppedMentions, droppedRelations, invalidType, droppedSingleTokenPerson, schemaInvalid } =
+      validated.validation;
+    deps.logger.warn(
+      { fileId: file.id, droppedMentions, droppedRelations, invalidType, droppedSingleTokenPerson, schemaInvalid },
+      "consolidated loop dropped malformed rows",
+    );
   }
-  const guard = applyLinkAuthorityGuard(validated, offeredIds);
   const stagedDocument: ConsolidatedStagedDocument = {
-    mentions: validated.mentions,
-    relations: validated.relations,
-    entityFacts: validated.entityFacts,
+    mentions: reconciled.mentions,
+    relations: reconciled.relations,
+    entityFacts: reconciled.entityFacts,
     summary: validated.summary,
     meta: {
       toolSteps,
-      guard,
+      guard: reconciled.guard,
       registrySize: deps.knownEntities?.length ?? 0,
       model: outcome.meta.model,
       validation: validated.validation,
@@ -531,7 +1030,7 @@ export async function runConsolidatedLoopShadow(
     stageId: stage.id,
     mentionCount: stagedDocument.mentions.length,
     holdCount: stagedDocument.mentions.filter((mention) => mention.resolution.kind === "hold").length,
-    guard,
+    guard: reconciled.guard,
     meta: outcome.meta,
   };
 }

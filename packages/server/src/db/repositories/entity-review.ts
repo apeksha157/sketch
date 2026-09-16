@@ -538,6 +538,18 @@ export function createEntityReviewRepo(db: Kysely<DB>) {
         .executeTakeFirst();
     },
 
+    async getPendingByNormalizedName(normalizedName: string, entityType: string) {
+      return db
+        .selectFrom("entity_review_queue")
+        .selectAll()
+        .where("normalized_name", "=", normalizedName)
+        .where("entity_type", "=", entityType)
+        .where("status", "=", "pending")
+        .orderBy("first_seen_at", "asc")
+        .orderBy("id", "asc")
+        .execute();
+    },
+
     async listRejectionsForEntity(entityId: string) {
       return db.selectFrom("entity_alias_rejections").selectAll().where("entity_id", "=", entityId).execute();
     },

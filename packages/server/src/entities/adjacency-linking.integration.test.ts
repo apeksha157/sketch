@@ -1,22 +1,29 @@
 import { randomUUID } from "node:crypto";
-import type { Kysely } from "kysely";
-import { afterEach, describe, expect, it } from "vitest";
+import { type Kysely, sql } from "kysely";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createEntityRepository } from "../db/repositories/entities";
 import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/machine-principal";
 import type { DB } from "../db/schema";
-import { createTestPgDb, spyOnExecutedSql } from "../test-utils";
+import { getSharedPgDb, spyOnExecutedSql } from "../test-utils";
 import { buildMaterializeDeps } from "./materialize-deps";
 import { normalizeEntityMatchName } from "./name-keys";
-import { proposeEntity } from "./propose";
+import { decideEntityMatch, proposeEntity, toMatchDeps } from "./propose";
 
 const NOW = "2026-08-29T00:00:00.000Z";
 
 describe("adjacency proposal linking", () => {
-  let db: Kysely<DB> | undefined;
+  let db: Kysely<DB>;
+
+  beforeAll(async () => {
+    db = await getSharedPgDb();
+  }, 30000);
+
+  beforeEach(async () => {
+    await sql`BEGIN`.execute(db);
+  });
 
   afterEach(async () => {
-    await db?.destroy();
-    db = undefined;
+    await sql`ROLLBACK`.execute(db);
   });
 
   async function seedBase(db: Kysely<DB>): Promise<void> {
@@ -104,7 +111,6 @@ describe("adjacency proposal linking", () => {
   }
 
   it("links a unique edge winner and replays the file-scoped decision when adjacency is suppressed", async () => {
-    db = await createTestPgDb();
     await seedBase(db);
     await seedFile(db, "file-link");
 
@@ -132,7 +138,36 @@ describe("adjacency proposal linking", () => {
     await mention(db, company.id, "file-link");
     await edge(db, jain.id, company.id);
 
-    const linked = await proposePerson(db, "Vishal", "vishal-link", "file-link");
+    const decisionDeps = await buildMaterializeDeps(db);
+    const decisionInput = {
+      name: "Vishal",
+      email: null,
+      entityType: "person" as const,
+      subtype: "external" as const,
+      source: "test",
+      sourceId: "vishal-link",
+      evidence: [{ indexedFileId: "file-link" }],
+      contextFileId: "file-link",
+      triggeredByUserId: "user-1",
+      provenanceTier: "inferred" as const,
+    };
+    const decisionSpy = spyOnExecutedSql(db);
+    const decision = await decideEntityMatch(toMatchDeps(decisionDeps), decisionInput);
+    expect(decision).toMatchObject({
+      status: "linked",
+      entityId: jain.id,
+      link: { via: "adjacency" },
+      intents: [{ kind: "record_adjacency", contextFileId: "file-link" }],
+    });
+    expect(decisionSpy.sqls.some((sql) => /^\s*(insert|update|delete)\b/i.test(sql))).toBe(false);
+    const withoutAdjacency = await decideEntityMatch(
+      { ...toMatchDeps(decisionDeps), readAdjacency: undefined },
+      decisionInput,
+    );
+    expect(withoutAdjacency.status).toBe("ambiguous");
+    decisionSpy.mockRestore();
+
+    const linked = await proposeEntity(decisionDeps, decisionInput);
 
     expect(linked.kind).toBe("linked");
     if (linked.kind !== "linked") throw new Error("unreachable");
@@ -173,10 +208,10 @@ describe("adjacency proposal linking", () => {
     if (replayed.kind !== "linked") throw new Error("unreachable");
     expect(replayed.entity.id).toBe(jain.id);
     expect(spy.sqls.some((sql) => sql.includes("entity_relationships"))).toBe(false);
+    spy.mockRestore();
   });
 
   it("queues vetoes, no-signal single-token people, and alias-only non-person hits", async () => {
-    db = await createTestPgDb();
     await seedBase(db);
     await seedFile(db, "file-veto");
     await seedFile(db, "file-other");
@@ -259,7 +294,6 @@ describe("adjacency proposal linking", () => {
   });
 
   it("links one-edit person candidates only through adjacency context", async () => {
-    db = await createTestPgDb();
     await seedBase(db);
     await seedFile(db, "file-edit");
 

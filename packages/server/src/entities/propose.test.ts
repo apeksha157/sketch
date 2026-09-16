@@ -9,7 +9,14 @@ import { createTestDb, spyOnExecutedSql } from "../test-utils";
 import { buildLookupIndex, buildMaterializeDeps, createEntityLookupFromIndex } from "./materialize-deps";
 import type { IndexEntityRow } from "./materialize-types";
 import { normalizeEntityMatchName, normalizeName } from "./name-keys";
-import { type Entity, type EntityLookup, type ProposeEntityType, proposeEntity } from "./propose";
+import {
+  type Entity,
+  type EntityLookup,
+  type ProposeEntityType,
+  decideEntityMatch,
+  proposeEntity,
+  toMatchDeps,
+} from "./propose";
 
 async function fetchPersonEntities(db: Kysely<DB>): Promise<Entity[]> {
   return db.selectFrom("entities").selectAll().where("source_type", "=", "person").execute();
@@ -362,15 +369,17 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Simran",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "fireflies:2",
       evidence: [{ indexedFileId: "file-5" }],
       triggeredByUserId: "user-1",
-    });
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({ status: "ambiguous" });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("queued");
     const queue = await db.selectFrom("entity_review_queue").selectAll().execute();
@@ -409,15 +418,17 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Simran Suri Neeli",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "fireflies:3",
       evidence: [{ indexedFileId: "file-doesnt-exist" }],
       triggeredByUserId: "user-1",
-    });
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({ status: "new" });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("created");
     const queue = await db.selectFrom("entity_review_queue").selectAll().execute();
@@ -608,15 +619,17 @@ describe("proposeEntity", () => {
 
     // Propose again with a candidate that would normally rewrite the fields.
     // The mid-review row should preserve its snapshot.
-    await proposeEntity(deps, {
+    const repeatedInput = {
       name: "Simran Suri Neeli",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "fireflies:8b",
       evidence: [{ indexedFileId: "file-8" }],
       triggeredByUserId: "user-2",
-    });
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), repeatedInput)).resolves.toMatchObject({ status: "ambiguous" });
+    await proposeEntity(deps, repeatedInput);
 
     const after = await db
       .selectFrom("entity_review_queue")
@@ -674,15 +687,17 @@ describe("proposeEntity", () => {
       .executeTakeFirstOrThrow();
 
     // Late-arriving propose for the same name. Should be a complete no-op.
-    await proposeEntity(deps, {
+    const lateInput = {
       name: "Simran Suri Neeli",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "fireflies:9b",
       evidence: [{ indexedFileId: "file-9" }],
       triggeredByUserId: "user-1",
-    });
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), lateInput)).resolves.toMatchObject({ status: "ambiguous" });
+    await proposeEntity(deps, lateInput);
 
     const evidenceAfter = await db.selectFrom("entity_review_evidence").selectAll().execute();
     const queueAfter = await db
@@ -726,15 +741,20 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Saurabh Kumar",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "fireflies:meeting-1",
       evidence: [{ indexedFileId: "file-does-not-need-to-exist" }],
       triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "linked",
+      entityId: sk.id,
     });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("linked");
     if (result.kind !== "linked") throw new Error("unreachable");
@@ -877,15 +897,20 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Simran Suri Neeli",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "fireflies:alias-1",
       evidence: [],
       triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "ambiguous",
+      candidates: [{ entityId: ss.id, rung: "alias-exact" }],
     });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("queued");
 
@@ -941,6 +966,41 @@ describe("proposeEntity", () => {
     expect(result.entity.id).toBe(ss.id);
   });
 
+  it("links a sole authoritative alias in both the read-only decision and applied proposal", async () => {
+    const entityRepo = createEntityRepository(db);
+    const entity = await entityRepo.upsertPersonEntity({
+      name: "Canonical Person",
+      subtype: "external",
+      source: "seed",
+      sourceId: "seed:canonical-person",
+    });
+    await entityRepo.appendAlias(entity.id, "Adjudicated Alias", "human_confirmed", "user-1");
+    const people = await fetchPersonEntities(db);
+    const deps = {
+      db,
+      entityRepo,
+      reviewRepo: createEntityReviewRepo(db),
+      lookup: makeLookup(() => people),
+      readEmail,
+    };
+    const input = {
+      name: "Adjudicated Alias",
+      entityType: "person" as const,
+      subtype: "external" as const,
+      source: "fireflies",
+      sourceId: "fireflies:adjudicated-alias",
+      evidence: [],
+      triggeredByUserId: "user-1",
+    };
+
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "linked",
+      entityId: entity.id,
+      link: { via: "alias_authoritative" },
+    });
+    await expect(proposeEntity(deps, input)).resolves.toMatchObject({ kind: "linked", entity: { id: entity.id } });
+  });
+
   it("15. company fuzzy collision queues without calling person upsert", async () => {
     const entityRepo = createEntityRepository(db);
     const existing = await entityRepo.upsertEntity({
@@ -959,15 +1019,20 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Canvas",
-      entityType: "company",
-      subtype: "external",
+      entityType: "company" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "company:canvas",
       evidence: [{ indexedFileId: "file-15" }],
       triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "ambiguous",
+      candidates: [{ entityId: existing.id, rung: "token-superset" }],
     });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("queued");
     const queue = await db.selectFrom("entity_review_queue").selectAll().executeTakeFirstOrThrow();
@@ -1139,32 +1204,43 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const linked = await proposeEntity(deps, {
+    const exactInput = {
       name: "Sarah Chen",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "llm:sarah",
       evidence: [],
       triggeredByUserId: "user-1",
       precomputedCandidates: [{ entity: fuzzy, score: 12 }],
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), exactInput)).resolves.toMatchObject({
+      status: "linked",
+      entityId: exact.id,
     });
+    const linked = await proposeEntity(deps, exactInput);
 
     expect(linked.kind).toBe("linked");
     if (linked.kind !== "linked") throw new Error("unreachable");
     expect(linked.entity.id).toBe(exact.id);
 
     await insertTestFile(db, "file-17");
-    const queued = await proposeEntity(deps, {
+    const ambiguousInput = {
       name: "Sarah Cheng",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "llm:sarah-cheng",
       evidence: [{ indexedFileId: "file-17" }],
       triggeredByUserId: "user-1",
       precomputedCandidates: [{ entity: fuzzy, score: 12 }],
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), ambiguousInput)).resolves.toMatchObject({
+      status: "ambiguous",
+      reason: "llm-ambiguous",
+      candidates: [{ entityId: fuzzy.id }],
     });
+    const queued = await proposeEntity(deps, ambiguousInput);
 
     expect(queued.kind).toBe("queued");
     const queue = await db
@@ -1198,6 +1274,7 @@ describe("proposeEntity", () => {
       source: "manual",
     });
     const entities = await db.selectFrom("entities").selectAll().execute();
+    const onEntityResolved = vi.fn();
     const deps = {
       entityRepo,
       reviewRepo: createEntityReviewRepo(db),
@@ -1206,21 +1283,29 @@ describe("proposeEntity", () => {
         getCompanyIdsByDomain: (domain: string) => (domain === "canvas.example" ? [canvas.id] : []),
       },
       readEmail,
+      onEntityResolved,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Canvas",
-      entityType: "company",
-      subtype: "external",
+      entityType: "company" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "company:canvas-domain",
       evidence: [],
       triggeredByUserId: "user-1",
       evidenceDomain: "canvas.example",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "linked",
+      entityId: canvas.id,
+      link: { via: "domain" },
     });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("linked");
     if (result.kind === "linked") expect(result.entity.id).toBe(canvas.id);
+    expect(onEntityResolved).not.toHaveBeenCalled();
     const queue = await db.selectFrom("entity_review_queue").selectAll().execute();
     expect(queue).toHaveLength(0);
   });
@@ -1253,16 +1338,22 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Canvas",
-      entityType: "company",
-      subtype: "external",
+      entityType: "company" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "company:canvas-ambiguous-domain",
       evidence: [{ indexedFileId: "file-19" }],
       triggeredByUserId: "user-1",
       evidenceDomain: "canvas.example",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "linked",
+      entityId: first.id,
+      link: { via: "domain" },
     });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("linked");
     if (result.kind === "linked") expect(result.entity.id).toBe(first.id);
@@ -1429,15 +1520,21 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const result = await proposeEntity(deps, {
+    const input = {
       name: "Acme",
-      entityType: "company",
-      subtype: "external",
+      entityType: "company" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "company:acme-strong",
       evidence: [],
       triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "linked",
+      entityId: "acme-hot",
+      link: { via: "canonical" },
     });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("linked");
     if (result.kind === "linked") expect(result.entity.id).toBe("acme-hot");
@@ -1739,24 +1836,27 @@ describe("proposeEntity", () => {
     });
     const materializeDeps = await buildMaterializeDeps(db);
 
-    const result = await proposeEntity(
-      {
-        entityRepo: materializeDeps.entityRepo,
-        reviewRepo: materializeDeps.reviewRepo,
-        lookup: materializeDeps.lookup,
-        readEmail: materializeDeps.readEmail,
-        onEntityResolved: materializeDeps.onEntityResolved,
-      },
-      {
-        name: "Zitan, Ohoud",
-        entityType: "person",
-        subtype: "external",
-        source: "llm",
-        sourceId: "mention-zitan-ohoud",
-        evidence: [],
-        triggeredByUserId: "user-1",
-      },
-    );
+    const deps = {
+      entityRepo: materializeDeps.entityRepo,
+      reviewRepo: materializeDeps.reviewRepo,
+      lookup: materializeDeps.lookup,
+      readEmail: materializeDeps.readEmail,
+      onEntityResolved: materializeDeps.onEntityResolved,
+    };
+    const input = {
+      name: "Zitan, Ohoud",
+      entityType: "person" as const,
+      subtype: "external" as const,
+      source: "llm",
+      sourceId: "mention-zitan-ohoud",
+      evidence: [],
+      triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "ambiguous",
+      candidates: [{ entityId: ohoud.id, rung: "token-set" }],
+    });
+    const result = await proposeEntity(deps, input);
 
     expect(result.kind).toBe("queued");
     if (result.kind !== "queued") throw new Error("unreachable");
@@ -1816,24 +1916,27 @@ describe("proposeEntity", () => {
     });
     const materializeDeps = await buildMaterializeDeps(db);
 
-    const result = await proposeEntity(
-      {
-        entityRepo: materializeDeps.entityRepo,
-        reviewRepo: materializeDeps.reviewRepo,
-        domainsRepo: materializeDeps.domainsRepo,
-        lookup: materializeDeps.lookup,
-        readEmail: materializeDeps.readEmail,
-      },
-      {
-        name: "STR Global",
-        entityType: "product",
-        subtype: "external",
-        source: "llm_extraction",
-        sourceId: "product:str-global",
-        evidence: [],
-        triggeredByUserId: "user-1",
-      },
-    );
+    const deps = {
+      entityRepo: materializeDeps.entityRepo,
+      reviewRepo: materializeDeps.reviewRepo,
+      domainsRepo: materializeDeps.domainsRepo,
+      lookup: materializeDeps.lookup,
+      readEmail: materializeDeps.readEmail,
+    };
+    const input = {
+      name: "STR Global",
+      entityType: "product" as const,
+      subtype: "external" as const,
+      source: "llm_extraction",
+      sourceId: "product:str-global",
+      evidence: [],
+      triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), input)).resolves.toMatchObject({
+      status: "suppressed",
+      reason: "third_party_vendor_collision",
+    });
+    const result = await proposeEntity(deps, input);
 
     expect(result).toEqual({ kind: "suppressed", reason: "third_party_vendor_collision" });
     const queue = await db.selectFrom("entity_review_queue").selectAll().execute();
@@ -2016,33 +2119,50 @@ describe("proposeEntity", () => {
       readEmail,
     };
 
-    const normal = await proposeEntity(deps, {
+    const normalInput = {
       name: "HO",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "person:ho",
       evidence: [],
       triggeredByUserId: "user-1",
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), normalInput)).resolves.toMatchObject({
+      status: "ambiguous",
+      reason: "embedding",
+      candidates: [{ entityId: husnu.id }],
     });
-    const skipFuzzy = await proposeEntity(deps, {
+    const normal = await proposeEntity(deps, normalInput);
+    const skipFuzzyInput = {
       name: "OW",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "person:ow",
       evidence: [],
       triggeredByUserId: "user-1",
       skipFuzzy: true,
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), skipFuzzyInput)).resolves.toMatchObject({
+      status: "ambiguous",
+      reason: "embedding",
+      candidates: [{ entityId: oliver.id }],
     });
+    const skipFuzzy = await proposeEntity(deps, skipFuzzyInput);
 
     expect(normal.kind).toBe("queued");
     expect(skipFuzzy.kind).toBe("queued");
     if (normal.kind !== "queued" || skipFuzzy.kind !== "queued") throw new Error("unreachable");
     expect(normal.candidateEntityId).toBe(husnu.id);
     expect(skipFuzzy.candidateEntityId).toBe(oliver.id);
-    expect(retrieveEmbeddingCandidates).toHaveBeenCalledTimes(2);
-    expect(retrieveEmbeddingCandidates.mock.calls.map((call) => call[0])).toEqual(["person", "person"]);
+    expect(retrieveEmbeddingCandidates).toHaveBeenCalledTimes(4);
+    expect(retrieveEmbeddingCandidates.mock.calls.map((call) => call[0])).toEqual([
+      "person",
+      "person",
+      "person",
+      "person",
+    ]);
 
     const queue = await db.selectFrom("entity_review_queue").selectAll().orderBy("proposed_name", "asc").execute();
     expect(queue.map((row) => [row.proposed_name, row.candidate_entity_id, row.candidate_reason])).toEqual([
@@ -2115,15 +2235,17 @@ describe("proposeEntity", () => {
       birthGateDryRun: true,
     };
 
-    const project = await proposeEntity(deps, {
+    const projectInput = {
       name: "Atlas Migration",
-      entityType: "project",
-      subtype: "external",
+      entityType: "project" as const,
+      subtype: "external" as const,
       source: "llm_extraction",
       sourceId: "project:atlas-migration",
       evidence: [{ indexedFileId: "file-34a" }],
       triggeredByUserId: "user-1",
-    });
+    };
+    await expect(decideEntityMatch(toMatchDeps(deps), projectInput)).resolves.toMatchObject({ status: "new" });
+    const project = await proposeEntity(deps, projectInput);
     const product = await proposeEntity(deps, {
       name: "Canvas Copilot",
       entityType: "product",

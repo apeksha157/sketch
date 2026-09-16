@@ -5,7 +5,9 @@ import { createEntityDomainsRepository } from "../db/repositories/entity-domains
 import { createIndexedFileFactRepository } from "../db/repositories/indexed-file-facts";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestLogger } from "../test-utils";
+import { buildMaterializeDeps } from "./materialize-deps";
 import { materializeUnmaterializedFacts } from "./materialize-replay";
+import { decideEntityMatch, proposeEntity, toMatchDeps } from "./propose";
 
 const ADMIN_ID = "admin-1";
 const CONNECTOR_ID = "cfg-person-scope";
@@ -307,5 +309,46 @@ describe("materializePersonSeed company-scoped dedup", () => {
 
     expect(summary.queued).toBe(3);
     expect(await db.selectFrom("entity_review_queue").selectAll().execute()).toHaveLength(3);
+  });
+
+  it("keeps read-only and applied person-scope decisions aligned for matching and distinct domains", async () => {
+    await createCompanyWithDomain(db, "company-acme", "Acme", "acme.com");
+    await createCompanyWithDomain(db, "company-globex", "Globex", "globex.com");
+    const entityRepo = createEntityRepository(db);
+    const existing = await entityRepo.createPersonEntity({
+      name: "Ashish Banka",
+      email: "ashish@acme.com",
+      subtype: "external",
+      source: "existing",
+      sourceId: "ashish-existing",
+    });
+    const deps = await buildMaterializeDeps(db);
+    const matchingInput = {
+      name: "Ashish Banka",
+      email: "ashish.alt@acme.com",
+      entityType: "person" as const,
+      subtype: "external" as const,
+      source: "connector",
+      sourceId: "ashish-matching",
+      evidence: [],
+      triggeredByUserId: ADMIN_ID,
+      strictPersonScopeGate: true,
+    };
+    const matchingDecision = await decideEntityMatch(toMatchDeps(deps), matchingInput);
+    expect(matchingDecision).toMatchObject({ status: "linked", entityId: existing.id, link: { via: "scope" } });
+    await expect(proposeEntity(deps, matchingInput)).resolves.toMatchObject({
+      kind: "linked",
+      entity: { id: existing.id },
+    });
+
+    const distinctInput = {
+      ...matchingInput,
+      email: "ashish@globex.com",
+      sourceId: "ashish-distinct",
+      strictPersonScopeGate: false,
+    };
+    const distinctDecision = await decideEntityMatch(toMatchDeps(deps), distinctInput);
+    expect(distinctDecision.status).toBe("new");
+    await expect(proposeEntity(deps, distinctInput)).resolves.toMatchObject({ kind: "created" });
   });
 });

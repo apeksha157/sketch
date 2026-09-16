@@ -7,10 +7,10 @@ import { createIndexedFileFactRepository } from "../db/repositories/indexed-file
 import { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
 import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/users";
 import type { DB } from "../db/schema";
-import { createTestLogger, createTestPgDb } from "../test-utils";
+import { createTestLogger, createTestPgDb, spyOnExecutedSql } from "../test-utils";
 import { buildMaterializeDeps } from "./materialize-deps";
 import { normalizeEntityMatchName } from "./name-keys";
-import { proposeEntity } from "./propose";
+import { decideEntityMatch, proposeEntity, toMatchDeps } from "./propose";
 import { strongestProvenanceTier, toProvenanceTier } from "./provenance";
 import { recreateEntityGraph, resetDerivedEntityData } from "./recreate";
 import { confirmReview, linkReviewRowToExistingEntity, rejectReview } from "./resolve";
@@ -219,15 +219,26 @@ describe("resolution decisions", () => {
     });
 
     let deps = await buildMaterializeDeps(db);
-    const healed = await proposeEntity(deps, {
+    const healedInput = {
       name: "Ledger Alias",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "descriptor-healed",
       evidence: [{ indexedFileId: "descriptor-file" }],
       triggeredByUserId: "reviewer",
+    };
+    const healedSpy = spyOnExecutedSql(db);
+    const healedDecision = await decideEntityMatch(toMatchDeps(deps), healedInput);
+    expect(healedDecision).toMatchObject({
+      status: "linked",
+      entityId: liveTarget.id,
+      link: { via: "ledger" },
+      intents: [{ kind: "heal_target", targetEntityId: liveTarget.id }],
     });
+    expect(healedSpy.sqls.some((sql) => /^\s*(insert|update|delete)\b/i.test(sql))).toBe(false);
+    healedSpy.mockRestore();
+    const healed = await proposeEntity(deps, healedInput);
     expect(healed).toMatchObject({ kind: "linked", entity: { id: liveTarget.id } });
     await expect(
       db
@@ -249,16 +260,22 @@ describe("resolution decisions", () => {
       sourceId: "stale-link",
     });
     deps = await buildMaterializeDeps(db);
-    const staleFallthrough = await proposeEntity(deps, {
+    const staleInput = {
       name: "Ledger Alias Two",
-      entityType: "person",
-      subtype: "external",
+      entityType: "person" as const,
+      subtype: "external" as const,
       source: "fireflies",
       sourceId: "descriptor-stale",
       evidence: [{ indexedFileId: "descriptor-file" }],
       triggeredByUserId: "reviewer",
       queueInsteadOfCreate: true,
-    });
+    };
+    const staleSpy = spyOnExecutedSql(db);
+    const staleDecision = await decideEntityMatch(toMatchDeps(deps), staleInput);
+    expect(staleDecision.intents).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "mark_stale" })]));
+    expect(staleSpy.sqls.some((sql) => /^\s*(insert|update|delete)\b/i.test(sql))).toBe(false);
+    staleSpy.mockRestore();
+    const staleFallthrough = await proposeEntity(deps, staleInput);
     if (staleFallthrough.kind !== "queued") throw new Error(`expected queued, got ${staleFallthrough.kind}`);
     await expect(
       db

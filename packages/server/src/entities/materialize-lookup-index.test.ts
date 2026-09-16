@@ -12,7 +12,7 @@ import { materializeLlmExtractedFact } from "./materialize-llm-mentions";
 import { materializeStructuralSeed } from "./materialize-structural";
 import type { IndexEntityRow } from "./materialize-types";
 import { normalizeEntityMatchName } from "./name-keys";
-import { proposeEntity } from "./propose";
+import { decideEntityMatch, proposeEntity, toMatchDeps } from "./propose";
 
 async function seedEntity(
   db: Kysely<DB>,
@@ -400,44 +400,38 @@ describe("lookup index row sharing", () => {
       },
     };
 
-    const nameLinked = await proposeEntity(
-      {
-        entityRepo: deps.entityRepo,
-        reviewRepo: deps.reviewRepo,
-        domainsRepo: deps.domainsRepo,
-        lookup,
-        readEmail: deps.readEmail,
-        onEntityResolved: deps.onEntityResolved,
-      },
-      {
-        name: "GPT4",
-        entityType: "product",
-        subtype: "external",
-        source: "llm_extraction",
-        sourceId: "product:gpt4-exact",
-        evidence: [],
-        triggeredByUserId: "owner-1",
-      },
-    );
-    const aliasLinked = await proposeEntity(
-      {
-        entityRepo: deps.entityRepo,
-        reviewRepo: deps.reviewRepo,
-        domainsRepo: deps.domainsRepo,
-        lookup,
-        readEmail: deps.readEmail,
-        onEntityResolved: deps.onEntityResolved,
-      },
-      {
-        name: "Vision9",
-        entityType: "product",
-        subtype: "external",
-        source: "llm_extraction",
-        sourceId: "product:vision9-exact",
-        evidence: [],
-        triggeredByUserId: "owner-1",
-      },
-    );
+    const proposeDeps = {
+      entityRepo: deps.entityRepo,
+      reviewRepo: deps.reviewRepo,
+      domainsRepo: deps.domainsRepo,
+      lookup,
+      readEmail: deps.readEmail,
+      onEntityResolved: deps.onEntityResolved,
+    };
+    const nameInput = {
+      name: "GPT4",
+      entityType: "product" as const,
+      subtype: "external" as const,
+      source: "llm_extraction",
+      sourceId: "product:gpt4-exact",
+      evidence: [],
+      triggeredByUserId: "owner-1",
+    };
+    const nameDecision = await decideEntityMatch(toMatchDeps(proposeDeps), nameInput);
+    expect(nameDecision).toMatchObject({ status: "linked", entityId: product.id });
+    const nameLinked = await proposeEntity(proposeDeps, nameInput);
+    const aliasInput = {
+      name: "Vision9",
+      entityType: "product" as const,
+      subtype: "external" as const,
+      source: "llm_extraction",
+      sourceId: "product:vision9-exact",
+      evidence: [],
+      triggeredByUserId: "owner-1",
+    };
+    const aliasDecision = await decideEntityMatch(toMatchDeps(proposeDeps), aliasInput);
+    expect(aliasDecision).toMatchObject({ status: "ambiguous", candidates: [{ entityId: product.id }] });
+    const aliasLinked = await proposeEntity(proposeDeps, aliasInput);
 
     expect(nameLinked.kind).toBe("linked");
     expect(aliasLinked.kind).toBe("queued");

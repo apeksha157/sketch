@@ -226,6 +226,7 @@ describe("existing consolidated loop report", () => {
       legacyTokens: 120,
       loopTokens: 75,
       resolvedLegacyQueuedCount: 1,
+      guard: { registryLinked: 0 },
       mentionDiagnostics: [
         { mention: acmeName, resolutionKind: "known", legacy: { kind: "linked", entityName: acmeName } },
         { mention: bobName, resolutionKind: "tool", legacy: { kind: "queued", status: "pending" } },
@@ -245,5 +246,99 @@ describe("existing consolidated loop report", () => {
     expect(markdown).toContain("Loop-resolved mentions queued by legacy: 1");
     expect(markdown).toContain(`legacy linked -> ${acmeName}`);
     expect(markdown).toContain("legacy queued (pending)");
+  });
+
+  it("uses updated_at for same-day since filtering and includes loop-v1 and loop-v2 stages", async () => {
+    const suffix = randomUUID();
+    const userId = `report-since-user-${suffix}`;
+    const connectorId = `report-since-connector-${suffix}`;
+    const entityId = `report-since-entity-${suffix}`;
+    await db
+      .insertInto("users")
+      .values({ id: userId, name: "Report User", email: `${userId}@example.com` })
+      .execute();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: connectorId,
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: userId,
+      })
+      .execute();
+    await db
+      .insertInto("entities")
+      .values({
+        id: entityId,
+        name: "Versioned Entity",
+        source_type: "company",
+        status: "confirmed",
+        hotness: 0,
+        created_at: NOW,
+        updated_at: NOW,
+      })
+      .execute();
+    const stageRepo = createExtractionStageRepository(db);
+    for (const [version, resolution] of [
+      ["loop-v1", { kind: "known", entityId }],
+      ["loop-v2", { kind: "matched", entityId }],
+    ] as const) {
+      const fileId = `report-since-${version}-${suffix}`;
+      await db
+        .insertInto("indexed_files")
+        .values({
+          id: fileId,
+          connector_config_id: connectorId,
+          provider_file_id: fileId,
+          file_name: `${version}.txt`,
+          file_type: "document",
+          content_category: "document",
+          content: "Versioned Entity",
+          summary: "Legacy summary.",
+          source: "google_drive",
+          content_hash: `hash-${version}-${suffix}`,
+          summary_status: "done",
+          synced_at: NOW,
+        })
+        .execute();
+      const stage = await stageRepo.stageExtraction({
+        indexedFileId: fileId,
+        contentHash: `hash-${version}-${suffix}`,
+        extractorVersion: version,
+        stagedJson: JSON.stringify({
+          mentions: [
+            {
+              mention: "Versioned Entity",
+              type: "company",
+              variations: [],
+              facts: [],
+              resolution,
+            },
+          ],
+          relations: [],
+          entityFacts: [],
+          summary: `${version} summary.`,
+          meta: { guard: { demotedUnoffered: 0, droppedFacts: 0 } },
+        }),
+      });
+      await db
+        .updateTable("extraction_stages")
+        .set({ updated_at: "2026-09-15 12:00:00", created_at: "2026-09-14 12:00:00" })
+        .where("id", "=", stage.id)
+        .execute();
+    }
+
+    const selections = await selectExistingConsolidatedLoopStages(db, { since: "2026-09-15 00:00:00" });
+    const selected = selections.filter((selection) => selection.file.id.endsWith(suffix));
+    expect(selected.map((selection) => selection.stage.extractor_version).sort()).toEqual(["loop-v1", "loop-v2"]);
+    const rows = await Promise.all(
+      selected.map((selection) => evaluateConsolidatedLoopStage(db, selection.file, selection.stage)),
+    );
+    expect(
+      rows
+        .flatMap((row) => (row.stale ? [] : row.mentionDiagnostics.map((diagnostic) => diagnostic.resolutionKind)))
+        .sort(),
+    ).toEqual(["known", "matched"]);
   });
 });

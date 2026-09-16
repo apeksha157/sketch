@@ -57,7 +57,7 @@ function isoDate(value: string | null): string | null {
   if (!/^\d{4}-\d{2}-\d{2}(?:T.*)?$/.test(value)) throw new Error("--since must be a valid ISO date");
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new Error("--since must be a valid ISO date");
-  return parsed.toISOString();
+  return parsed.toISOString().slice(0, 19).replace("T", " ");
 }
 
 function parseCli() {
@@ -104,7 +104,7 @@ async function runAndEvaluateFile(
   file: ConsolidatedLoopReportFile,
 ): Promise<ConsolidatedLoopReportRow> {
   if (!file.content) throw new Error(`file ${file.id} has no content`);
-  const settings = await createSettingsRepository(db).get();
+  const settings = await createSettingsRepository(db, process.env.ENCRYPTION_KEY).get();
   const parsedOrg = settings?.org_context ? parseOrgContext(settings.org_context) : null;
   const orgContext = parsedOrg
     ? {
@@ -186,7 +186,7 @@ async function evaluateWithModel(
   rows: ConsolidatedLoopReportRow[];
   failures: Array<{ fileId: string; error: string }>;
 }> {
-  const settings = await createSettingsRepository(db).get();
+  const settings = await createSettingsRepository(db, process.env.ENCRYPTION_KEY).get();
   const openRouter = resolveOpenRouterEnrichmentConfig(settings, process.env.OPENROUTER_API_KEY);
   if (!openRouter.openRouterApiKey) throw new Error("OpenRouter API key is required");
   const model =
@@ -247,6 +247,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  if (message.includes("ENCRYPTION_KEY")) {
+    console.error("set ENCRYPTION_KEY to the tenant's key to read encrypted settings");
+  }
   process.exitCode = 1;
 });

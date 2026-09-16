@@ -1,15 +1,15 @@
 import type { Kysely } from "kysely";
 import { describe, expect, it } from "vitest";
-import type { ConsolidatedMention } from "../connectors/consolidated-loop";
 import type { ExtractionStage } from "../db/repositories/extraction-stages";
 import type { DB } from "../db/schema";
 import {
   type ConsolidatedLoopReportFile,
+  type ReportLoopMention,
   classifyLoopMentions,
   evaluateConsolidatedLoopStage,
 } from "./consolidated-loop-report";
 
-const mentions: ConsolidatedMention[] = [
+const mentions: ReportLoopMention[] = [
   {
     mention: "Acme Corp",
     type: "company",
@@ -20,7 +20,7 @@ const mentions: ConsolidatedMention[] = [
     mention: "Bob Jones",
     type: "person",
     variations: [],
-    resolution: { kind: "tool", entityId: "entity-bob" },
+    resolution: { kind: "judged", entityId: "entity-bob", reason: "matched evidence" },
   },
   {
     mention: "Fresh Product",
@@ -99,7 +99,7 @@ describe("consolidated loop report classification", () => {
       {
         mention: "Bob Jones",
         type: "person",
-        resolutionKind: "tool",
+        resolutionKind: "judged",
         targetEntityId: "entity-bob",
         targetEntityName: "Robert Jones",
         holdReason: null,
@@ -136,7 +136,7 @@ describe("consolidated loop report classification", () => {
     expect(row).toEqual({
       fileId: "file-1",
       source: "docs",
-      stageCreatedAt: "2026-09-14T00:00:00.000Z",
+      stageUpdatedAt: "2026-09-14T00:00:00.000Z",
       stale: true,
       staleNote:
         "stale: stage content hash old-hash does not match current content hash current-hash; comparison skipped",

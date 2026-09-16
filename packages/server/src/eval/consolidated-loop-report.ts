@@ -1,8 +1,8 @@
 import { type Kysely, sql } from "kysely";
 import {
   CONSOLIDATED_EXTRACTOR_VERSION,
-  type ConsolidatedMention,
-  type ConsolidatedStagedDocument,
+  type ConsolidatedLoopGuard,
+  type ConsolidatedResolutionCandidate,
 } from "../connectors/consolidated-loop";
 import { type ExtractionStage, createExtractionStageRepository } from "../db/repositories/extraction-stages";
 import type { DB } from "../db/schema";
@@ -46,7 +46,7 @@ export type LegacyMentionClassification =
 export interface LoopMentionDiagnostic {
   mention: string;
   type: string;
-  resolutionKind: ConsolidatedMention["resolution"]["kind"];
+  resolutionKind: LoopResolutionKind;
   targetEntityId: string | null;
   targetEntityName: string | null;
   holdReason: string | null;
@@ -56,7 +56,7 @@ export interface LoopMentionDiagnostic {
 interface ReportRowBase {
   fileId: string;
   source: string;
-  stageCreatedAt: string;
+  stageUpdatedAt: string;
 }
 
 export interface StaleReportRow extends ReportRowBase {
@@ -80,7 +80,17 @@ export interface ComparedReportRow extends ReportRowBase {
   loopSummary: string;
   holdCount: number;
   holdsWithCandidates: number;
-  guard: { demotedUnoffered: number; droppedFacts: number };
+  guard: Pick<
+    ConsolidatedLoopGuard,
+    | "overriddenByMatcher"
+    | "demotedUnoffered"
+    | "heldUnjudged"
+    | "heldPending"
+    | "newOverCandidates"
+    | "registryLinked"
+    | "droppedFacts"
+    | "matchToolCalls"
+  >;
   legacyCostUsd: number | null;
   loopCostUsd: number | null;
   legacyTokens: number | null;
@@ -103,11 +113,37 @@ export interface ConsolidatedLoopReportTotals {
   meanLoopCostUsd: number | null;
   medianLoopCostUsd: number | null;
   resolvedLegacyQueuedCount: number;
+  overriddenByMatcher: number;
+  demotedUnoffered: number;
 }
 
 export interface ExistingStageSelection {
   file: ConsolidatedLoopReportFile;
   stage: ExtractionStage;
+}
+
+export const SUPPORTED_CONSOLIDATED_EXTRACTOR_VERSIONS = ["loop-v1", "loop-v2"] as const;
+
+export type LoopResolutionKind = "known" | "tool" | "matched" | "judged" | "new" | "hold";
+
+export interface ReportLoopMention {
+  mention: string;
+  type: string;
+  variations: string[];
+  facts?: string[];
+  resolution:
+    | { kind: "known" | "tool" | "matched"; entityId: string }
+    | { kind: "judged"; entityId: string; reason: string }
+    | { kind: "new"; rejectedCandidates?: string[] }
+    | { kind: "hold"; reason: string; candidates: ConsolidatedResolutionCandidate[] };
+}
+
+interface ReportStagedDocument {
+  mentions: ReportLoopMention[];
+  relations: unknown[];
+  entityFacts: Array<{ entityId: string; facts: string[] }>;
+  summary: string;
+  meta: { guard: Partial<ConsolidatedLoopGuard> };
 }
 
 function bucketFor(file: Pick<ConsolidatedLoopReportFile, "source" | "file_type" | "content_category">): string {
@@ -206,15 +242,18 @@ export async function selectExistingConsolidatedLoopStages(
   let query = db
     .selectFrom("extraction_stages")
     .selectAll()
-    .where("extractor_version", "=", CONSOLIDATED_EXTRACTOR_VERSION)
+    .where("extractor_version", "in", [...SUPPORTED_CONSOLIDATED_EXTRACTOR_VERSIONS])
     .where("status", "=", "staged");
   if (options.fileIds) query = query.where("indexed_file_id", "in", options.fileIds);
-  if (options.since) query = query.where("created_at", ">=", options.since);
-  const stages = await query
-    .orderBy("updated_at", "desc")
-    .orderBy("created_at", "desc")
-    .orderBy("id", "desc")
-    .execute();
+  const rows = await query.orderBy("updated_at", "desc").orderBy("created_at", "desc").orderBy("id", "desc").execute();
+  const orderedRows = [...rows].sort(
+    (left, right) =>
+      normalizeTimestamp(right.updated_at).localeCompare(normalizeTimestamp(left.updated_at)) ||
+      normalizeTimestamp(right.created_at).localeCompare(normalizeTimestamp(left.created_at)) ||
+      right.id.localeCompare(left.id),
+  );
+  const since = options.since ? normalizeTimestamp(options.since) : null;
+  const stages = since ? orderedRows.filter((stage) => normalizeTimestamp(stage.updated_at) >= since) : orderedRows;
   const latestByFile = new Map<string, ExtractionStage>();
   for (const stage of stages) {
     if (!latestByFile.has(stage.indexed_file_id)) latestByFile.set(stage.indexed_file_id, stage);
@@ -234,13 +273,23 @@ export async function selectExistingConsolidatedLoopStages(
     .sort((left, right) => left.file.id.localeCompare(right.file.id));
 }
 
+function normalizeTimestamp(value: string): string {
+  const parsed = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 19).replace("T", " ");
+  return value
+    .replace("T", " ")
+    .replace(/\.\d{3}Z?$/, "")
+    .replace(/Z$/, "")
+    .slice(0, 19);
+}
+
 function normalizedMentionKey(name: string, type: string): string {
   const normalizedType = type.trim().toLowerCase();
   return `${normalizeEntityMatchName(normalizedType, name)}\t${normalizedType}`;
 }
 
 export function classifyLoopMentions(
-  mentions: ConsolidatedMention[],
+  mentions: ReportLoopMention[],
   linkedCandidates: LinkedMentionCandidate[],
   queuedCandidates: QueuedMentionCandidate[],
   targetEntityNames: ReadonlyMap<string, string>,
@@ -262,7 +311,9 @@ export function classifyLoopMentions(
     const linked = linkedByMention.get(key);
     const queued = queuedByMention.get(key);
     const resolution = mention.resolution;
-    const targetEntityId = resolution.kind === "known" || resolution.kind === "tool" ? resolution.entityId : null;
+    const targetEntityId = ["known", "tool", "matched", "judged"].includes(resolution.kind)
+      ? (resolution as { entityId: string }).entityId
+      : null;
     const legacy: LegacyMentionClassification = linked
       ? { kind: "linked", entityId: linked.entityId, entityName: linked.entityName }
       : queued
@@ -284,11 +335,14 @@ export function staleReportRow(file: ConsolidatedLoopReportFile, stage: Extracti
   if (stage.content_hash === file.content_hash) return null;
   const stageHash = stage.content_hash ?? "null";
   const currentHash = file.content_hash ?? "null";
-  const staleNote = `stale: stage content hash ${stageHash} does not match current content hash ${currentHash}; comparison skipped`;
+  const staleNote = [
+    `stale: stage content hash ${stageHash} does not match current content hash ${currentHash};`,
+    "comparison skipped",
+  ].join(" ");
   return {
     fileId: file.id,
     source: bucketFor(file),
-    stageCreatedAt: stage.created_at,
+    stageUpdatedAt: stage.updated_at,
     stale: true,
     staleNote,
     stageContentHash: stage.content_hash,
@@ -370,7 +424,13 @@ async function legacyUsage(db: Kysely<DB>, fileId: string): Promise<{ costUsd: n
     .selectFrom("llm_usage_events")
     .select([
       sql<number>`SUM(cost_usd)`.as("cost_usd"),
-      sql<number>`SUM(COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0))`.as("tokens"),
+      sql<number>`SUM(
+        CASE
+          WHEN prompt_tokens IS NOT NULL OR completion_tokens IS NOT NULL
+          THEN COALESCE(prompt_tokens, 0) + COALESCE(completion_tokens, 0)
+          ELSE NULL
+        END
+      )`.as("tokens"),
     ])
     .where("indexed_file_id", "=", fileId)
     .where("context", "like", "enrichment:%")
@@ -384,7 +444,7 @@ async function legacyUsage(db: Kysely<DB>, fileId: string): Promise<{ costUsd: n
 async function loadMentionClassifications(
   db: Kysely<DB>,
   fileId: string,
-  mentions: ConsolidatedMention[],
+  mentions: ReportLoopMention[],
 ): Promise<LoopMentionDiagnostic[]> {
   const linkedRows = await db
     .selectFrom("entity_mentions")
@@ -419,7 +479,9 @@ async function loadMentionClassifications(
   const targetEntityIds = [
     ...new Set(
       mentions.flatMap((mention) =>
-        mention.resolution.kind === "known" || mention.resolution.kind === "tool" ? [mention.resolution.entityId] : [],
+        ["known", "tool", "matched", "judged"].includes(mention.resolution.kind)
+          ? [(mention.resolution as { entityId: string }).entityId]
+          : [],
       ),
     ),
   ];
@@ -442,7 +504,7 @@ export async function evaluateConsolidatedLoopStage(
 ): Promise<ConsolidatedLoopReportRow> {
   const stale = staleReportRow(file, stage);
   if (stale) return stale;
-  const staged = JSON.parse(stage.staged_json) as ConsolidatedStagedDocument;
+  const staged = JSON.parse(stage.staged_json) as ReportStagedDocument;
   const legacyMentions = await legacyMentionRows(db, file.id);
   const loopMentionRows = staged.mentions.flatMap((mention) =>
     mention.type !== "team" ? [keysForMention(mention.mention, mention.variations, mention.type)] : [],
@@ -461,7 +523,7 @@ export async function evaluateConsolidatedLoopStage(
   return {
     fileId: file.id,
     source: bucketFor(file),
-    stageCreatedAt: stage.created_at,
+    stageUpdatedAt: stage.updated_at,
     stale: false,
     mentionRecall: legacyMentions.length === 0 ? null : common / legacyMentions.length,
     mentionPrecision: loopMentionRows.length === 0 ? null : loopMatched / loopMentionRows.length,
@@ -478,8 +540,14 @@ export async function evaluateConsolidatedLoopStage(
       (mention) => mention.resolution.kind === "hold" && mention.resolution.candidates.length > 0,
     ).length,
     guard: {
-      demotedUnoffered: staged.meta.guard.demotedUnoffered,
-      droppedFacts: staged.meta.guard.droppedFacts,
+      overriddenByMatcher: staged.meta.guard.overriddenByMatcher ?? 0,
+      demotedUnoffered: staged.meta.guard.demotedUnoffered ?? 0,
+      heldUnjudged: staged.meta.guard.heldUnjudged ?? 0,
+      heldPending: staged.meta.guard.heldPending ?? 0,
+      newOverCandidates: staged.meta.guard.newOverCandidates ?? 0,
+      registryLinked: staged.meta.guard.registryLinked ?? 0,
+      droppedFacts: staged.meta.guard.droppedFacts ?? 0,
+      matchToolCalls: staged.meta.guard.matchToolCalls ?? 0,
     },
     legacyCostUsd: legacy.costUsd,
     loopCostUsd: stage.cost_usd == null ? null : Number(stage.cost_usd),
@@ -488,7 +556,7 @@ export async function evaluateConsolidatedLoopStage(
     mentionDiagnostics,
     resolvedLegacyQueuedCount: mentionDiagnostics.filter(
       (diagnostic) =>
-        (diagnostic.resolutionKind === "known" || diagnostic.resolutionKind === "tool") &&
+        ["known", "tool", "matched", "judged"].includes(diagnostic.resolutionKind) &&
         diagnostic.legacy.kind === "queued",
     ).length,
   };
@@ -540,6 +608,8 @@ export function aggregateConsolidatedLoopReport(rows: ConsolidatedLoopReportRow[
     meanLoopCostUsd: mean(loopCosts),
     medianLoopCostUsd: median(loopCosts),
     resolvedLegacyQueuedCount: compared.reduce((sum, row) => sum + row.resolvedLegacyQueuedCount, 0),
+    overriddenByMatcher: compared.reduce((sum, row) => sum + row.guard.overriddenByMatcher, 0),
+    demotedUnoffered: compared.reduce((sum, row) => sum + row.guard.demotedUnoffered, 0),
   };
 }
 
@@ -564,9 +634,10 @@ export function renderConsolidatedLoopReportMarkdown(
   rows: ConsolidatedLoopReportRow[],
   totals: ConsolidatedLoopReportTotals,
 ): string {
-  const tableHeader =
-    "| file | source | recall | precision | mentions legacy/loop | relations legacy/loop | facts legacy/loop " +
-    "| holds | guard | cost legacy/loop | tokens legacy/loop | summaries |";
+  const tableHeader = [
+    "| file | source | recall | precision | mentions legacy/loop | relations legacy/loop | facts legacy/loop",
+    "| holds | guard | cost legacy/loop | tokens legacy/loop | summaries |",
+  ].join(" ");
   const lines = [
     `# Consolidated Loop Eval ${runId}`,
     "",
@@ -575,6 +646,9 @@ export function renderConsolidatedLoopReportMarkdown(
     `Legacy cost mean/median: ${totals.meanLegacyCostUsd ?? "n/a"} / ${totals.medianLegacyCostUsd ?? "n/a"}`,
     `Loop cost mean/median: ${totals.meanLoopCostUsd ?? "n/a"} / ${totals.medianLoopCostUsd ?? "n/a"}`,
     `Loop-resolved mentions queued by legacy: ${totals.resolvedLegacyQueuedCount}`,
+    `overriddenByMatcher: ${totals.overriddenByMatcher}`,
+    `demotedUnoffered: ${totals.demotedUnoffered}`,
+    "Legacy usage is all recorded usage for this file; run-level pairing is not available.",
     "",
     tableHeader,
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | --- |",
@@ -584,6 +658,16 @@ export function renderConsolidatedLoopReportMarkdown(
       lines.push(`| ${row.fileId} | ${row.source} | stale | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |`);
       continue;
     }
+    const guardSummary = [
+      `${row.guard.overriddenByMatcher} overridden`,
+      `${row.guard.demotedUnoffered} demoted`,
+      `${row.guard.heldUnjudged} unjudged`,
+      `${row.guard.heldPending} pending`,
+      `${row.guard.newOverCandidates} new-over-candidates`,
+      `${row.guard.registryLinked} registry-linked`,
+      `${row.guard.matchToolCalls} match calls`,
+      `${row.guard.droppedFacts} facts dropped`,
+    ].join(", ");
     lines.push(
       `| ${[
         row.fileId,
@@ -594,7 +678,7 @@ export function renderConsolidatedLoopReportMarkdown(
         `${row.legacyRelationCount}/${row.loopRelationCount}`,
         `${row.legacyFactCount}/${row.loopFactCount}`,
         `${row.holdCount} (${row.holdsWithCandidates} with candidates)`,
-        `${row.guard.demotedUnoffered} demoted, ${row.guard.droppedFacts} facts dropped`,
+        guardSummary,
         `${row.legacyCostUsd ?? "n/a"}/${row.loopCostUsd ?? "n/a"}`,
         `${row.legacyTokens ?? "n/a"}/${row.loopTokens ?? "n/a"}`,
         `${markdownInline(row.legacySummary)} / ${markdownInline(row.loopSummary)}`,

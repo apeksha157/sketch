@@ -25,9 +25,12 @@ import { isSoloLinkAliasProvenance, listAliasRows } from "../db/repositories/ent
 import type { EntityDomainsRepository } from "../db/repositories/entity-domains";
 import type { EntityReviewRepository } from "../db/repositories/entity-review";
 import { MACHINE_PRINCIPAL_USER_ID } from "../db/repositories/machine-principal";
-import type { createResolutionDecisionRepository } from "../db/repositories/resolution-decisions";
-import type { DB, EntitiesTable } from "../db/schema";
-import { decideAdjacency, loadAdjacencySignals } from "./adjacency";
+import type {
+  ResolutionDecisionLookup,
+  createResolutionDecisionRepository,
+} from "../db/repositories/resolution-decisions";
+import type { DB, EntitiesTable, EntityAliasProvenance } from "../db/schema";
+import { type AdjacencyDecision, decideAdjacency, loadAdjacencySignals } from "./adjacency";
 import { isTrustedPersonScopeKey, personScopeKey, personScopeKeyId } from "./affiliations";
 import { TOOL_NAME_DENYLIST } from "./graph";
 import type { IndexEntityRow } from "./materialize-types";
@@ -172,10 +175,151 @@ export interface ProposeDeps {
   onEntityResolved?: (entity: IndexEntityRow) => void | Promise<void>;
 }
 
+export type MatchInput = ProposeInput;
+
+export interface MatchCandidate {
+  entityId: string;
+  name: string;
+  type: string;
+  rung: CandidateReason;
+  score: number;
+}
+
+export interface LinkDescriptor {
+  via:
+    | "source_ref"
+    | "email"
+    | "exact"
+    | "alias_authoritative"
+    | "ledger"
+    | "dedup"
+    | "adjacency"
+    | "domain"
+    | "canonical"
+    | "scope"
+    | "fuzzy";
+  attachEmail?: string;
+  reconcileSubtype?: "internal" | "external";
+  sourceRef?: { source: string; sourceId: string; conflict: "none" | "keep" };
+  addAliases?: string[];
+  refetch: boolean;
+}
+
+const RESOLVED_INDEX_REFRESH_VIAS = new Set<LinkDescriptor["via"]>([
+  "source_ref",
+  "email",
+  "exact",
+  "alias_authoritative",
+  "dedup",
+  "adjacency",
+  "canonical",
+  "scope",
+  "fuzzy",
+]);
+
+export type MatchIntent =
+  | { kind: "heal_target"; decisionId: string; targetEntityId: string }
+  | { kind: "mark_stale"; decisionId: string }
+  | {
+      kind: "record_adjacency";
+      normalizedMentionName: string;
+      entityType: ProposeEntityType;
+      contextFileId: string;
+    };
+
+export type MatchDecision =
+  | {
+      status: "linked";
+      entityId: string;
+      rung: string;
+      link: LinkDescriptor;
+      intents: MatchIntent[];
+    }
+  | {
+      status: "ambiguous";
+      candidates: MatchCandidate[];
+      reason: CandidateReason;
+      intents: MatchIntent[];
+    }
+  | { status: "pending"; reviewIds: string[]; candidates: MatchCandidate[]; intents: MatchIntent[] }
+  | { status: "suppressed"; reason: string; intents: MatchIntent[] }
+  | { status: "new"; intents: MatchIntent[] };
+
+export interface PendingMatchRow {
+  reviewId: string;
+  candidateEntityIds: string[];
+}
+
+export interface MatchDecisionDeps {
+  lookup: EntityLookup;
+  findSourceRef?: (source: string, sourceId: string) => Promise<IndexEntityRow | null>;
+  findEmailMatches?: (email: string) => Promise<IndexEntityRow[]>;
+  readEntity?: (entityId: string) => Promise<IndexEntityRow | null>;
+  listAliasRows?: (entityId: string) => Promise<Array<{ alias: string; provenance: EntityAliasProvenance }>>;
+  findResolutionDecisions?: (
+    normalizedName: string,
+    entityType: ProposeEntityType,
+    scope: string,
+  ) => Promise<ResolutionDecisionLookup>;
+  listRejectedNamesForEntities: (entityIds: string[]) => Promise<Set<string>>;
+  resolvePersonScope?: (email: string | null | undefined) => Promise<string | null>;
+  readAdjacency?: (candidateIds: string[], contextFileId: string) => Promise<AdjacencyDecision | null>;
+  pendingLookup?: (normalizedName: string, entityType: ProposeEntityType) => Promise<PendingMatchRow[]>;
+  hasLiveEntityTypeName?: (
+    entityType: Extract<ProposeEntityType, "company" | "tool">,
+    normalizedName: string,
+  ) => Promise<boolean>;
+  findCorporateDomainMatchingName?: (name: string) => Promise<boolean>;
+  logger?: Logger;
+  readEmail: (entity: IndexEntityRow) => string | null;
+}
+
 export interface RankedCandidate {
   entity: IndexEntityRow;
   score: number;
   reason: CandidateReason;
+}
+
+export function toMatchDeps(deps: ProposeDeps): MatchDecisionDeps {
+  const db = deps.db;
+  const resolutionLedger = deps.resolutionLedger;
+  const domainsRepo = deps.domainsRepo;
+  return {
+    lookup: deps.lookup,
+    findSourceRef: async (source, sourceId) => (await deps.entityRepo.getEntityBySourceRef(source, sourceId)) ?? null,
+    findEmailMatches: (email) => deps.entityRepo.getPersonEntitiesByEmail(email),
+    readEntity: async (entityId) => (await deps.entityRepo.getEntity(entityId)) ?? null,
+    listAliasRows: db ? (entityId) => listAliasRows(db, entityId) : undefined,
+    findResolutionDecisions: resolutionLedger
+      ? (normalizedName, entityType, scope) => resolutionLedger.findActiveForMention(normalizedName, entityType, scope)
+      : undefined,
+    listRejectedNamesForEntities: (entityIds) => deps.reviewRepo.listRejectedNamesForEntities(entityIds),
+    resolvePersonScope: domainsRepo
+      ? async (email) => {
+          const scope = await personScopeKey(email, domainsRepo);
+          return scope ? personScopeKeyId(scope) : null;
+        }
+      : undefined,
+    readAdjacency: db
+      ? async (candidateIds, contextFileId) => {
+          const contextIds = await loadContextEntityIds(db, contextFileId, new Set(candidateIds));
+          if (contextIds.size === 0) return null;
+          const signals = await loadAdjacencySignals(db, candidateIds, contextIds, contextFileId);
+          return decideAdjacency(candidateIds, contextIds, contextFileId, signals);
+        }
+      : undefined,
+    hasLiveEntityTypeName: async (entityType, normalizedName) => {
+      const indexed = deps.lookup.hasLiveTypeName?.(entityType, normalizedName);
+      if (indexed !== undefined && indexed !== null) return indexed;
+      const entities = await deps.entityRepo.getEntitiesBySourceType(entityType);
+      return entities.some((entity) => normalizeEntityMatchName(entityType, entity.name) === normalizedName);
+    },
+    findCorporateDomainMatchingName: domainsRepo
+      ? async (name) => Boolean(await domainsRepo.findCorporateDomainMatchingName(name))
+      : undefined,
+    logger: deps.logger,
+    readEmail: deps.readEmail,
+  };
 }
 
 /**
@@ -204,29 +348,14 @@ function hasTokenOverlap(a: string[], b: string[]): boolean {
   return a.some((token) => bSet.has(token));
 }
 
-async function repoHasEntityTypeName(
-  deps: ProposeDeps,
-  entityType: Extract<ProposeEntityType, "company" | "tool">,
-  normalized: string,
-): Promise<boolean> {
-  const entities = await deps.entityRepo.getEntitiesBySourceType(entityType);
-  return entities.some((entity) => normalizeEntityMatchName(entityType, entity.name) === normalized);
-}
-
-/**
- * `null` from the optional lookup methods means the current index was scoped
- * too narrowly to answer. In that case the old repository scan remains the
- * source of truth; boolean false means the index had the full relevant bucket
- * and found no collision.
- */
 async function hasLiveEntityTypeName(
-  deps: ProposeDeps,
+  deps: MatchDecisionDeps,
   entityType: Extract<ProposeEntityType, "company" | "tool">,
   normalized: string,
 ): Promise<boolean> {
   const indexed = deps.lookup.hasLiveTypeName?.(entityType, normalized);
   if (indexed !== undefined && indexed !== null) return indexed;
-  return repoHasEntityTypeName(deps, entityType, normalized);
+  return (await deps.hasLiveEntityTypeName?.(entityType, normalized)) ?? false;
 }
 
 function hasTrailingApiSdkToken(name: string): boolean {
@@ -234,7 +363,7 @@ function hasTrailingApiSdkToken(name: string): boolean {
 }
 
 async function productCollidesWithThirdParty(
-  deps: ProposeDeps,
+  deps: MatchDecisionDeps,
   name: string,
 ): Promise<{ hit: boolean; signal?: string }> {
   const companyNormalized = normalizeEntityMatchName("company", name);
@@ -250,7 +379,7 @@ async function productCollidesWithThirdParty(
   const indexedDomainMatch = deps.lookup.matchesCorporateDomain?.(name);
   if (indexedDomainMatch === true) return { hit: true, signal: "corporate_domain" };
   if (indexedDomainMatch === undefined || indexedDomainMatch === null) {
-    const matchingDomain = await deps.domainsRepo?.findCorporateDomainMatchingName(name);
+    const matchingDomain = await deps.findCorporateDomainMatchingName?.(name);
     if (matchingDomain) return { hit: true, signal: "corporate_domain" };
   }
 
@@ -280,7 +409,7 @@ function isSingleTokenPersonMention(entityType: ProposeEntityType, name: string)
 }
 
 function createRejectedCandidateFilter(
-  deps: ProposeDeps,
+  deps: MatchDecisionDeps,
   rejectionKey: string,
   excludedEntityIds: Set<string> = new Set(),
 ): (ranked: RankedCandidate[]) => Promise<RankedCandidate[]> {
@@ -289,7 +418,7 @@ function createRejectedCandidateFilter(
     const missingIds = [...new Set(ranked.map((candidate) => candidate.entity.id))].filter(
       (entityId) => !rejectedByEntityId.has(entityId),
     );
-    const rejected = await deps.reviewRepo.listRejectedNamesForEntities(missingIds);
+    const rejected = await deps.listRejectedNamesForEntities(missingIds);
     for (const entityId of missingIds) rejectedByEntityId.set(entityId, rejected.has(`${entityId}:${rejectionKey}`));
     return ranked.filter(
       (candidate) => !excludedEntityIds.has(candidate.entity.id) && !rejectedByEntityId.get(candidate.entity.id),
@@ -308,54 +437,151 @@ function isAliasCandidateTarget(input: Pick<ProposeInput, "entityType">, entity:
   return canUseEntityAsMatchTarget(entity.source_type, entity.provenance_tier);
 }
 
+function matchCandidate(candidate: RankedCandidate): MatchCandidate {
+  return {
+    entityId: candidate.entity.id,
+    name: candidate.entity.name,
+    type: candidate.entity.source_type,
+    rung: candidate.reason,
+    score: candidate.score,
+  };
+}
+
+function aliasesForDedupLink(input: MatchInput, entity: IndexEntityRow): string[] {
+  return [input.name, ...(input.aliases ?? [])].filter(
+    (alias) => alias.trim() && alias.trim().toLowerCase() !== entity.name.trim().toLowerCase(),
+  );
+}
+
+function linkDescriptor(
+  input: MatchInput,
+  entity: IndexEntityRow,
+  via: LinkDescriptor["via"],
+  existingSourceRef: IndexEntityRow | null,
+  options: {
+    addAliases?: string[];
+    persistEmail?: boolean;
+    persistSourceRef?: boolean;
+  } = {},
+): LinkDescriptor {
+  const sourceRefConflict: "none" | "keep" = existingSourceRef && existingSourceRef.id !== entity.id ? "keep" : "none";
+  return {
+    via,
+    ...(input.entityType === "person" ? { reconcileSubtype: input.subtype } : {}),
+    ...(options.persistEmail !== false && input.entityType === "person" && input.email
+      ? { attachEmail: input.email }
+      : {}),
+    ...(options.persistSourceRef === false
+      ? {}
+      : {
+          sourceRef: {
+            source: input.source,
+            sourceId: input.sourceId,
+            conflict: sourceRefConflict,
+          },
+        }),
+    ...(options.addAliases && options.addAliases.length > 0 ? { addAliases: options.addAliases } : {}),
+    refetch: input.entityType === "person" || Boolean(options.addAliases?.length),
+  };
+}
+
+function linkedDecision(
+  input: MatchInput,
+  entity: IndexEntityRow,
+  rung: string,
+  via: LinkDescriptor["via"],
+  existingSourceRef: IndexEntityRow | null,
+  intents: MatchIntent[],
+  options: {
+    addAliases?: string[];
+    persistEmail?: boolean;
+    persistSourceRef?: boolean;
+  } = {},
+): MatchDecision {
+  return {
+    status: "linked",
+    entityId: entity.id,
+    rung,
+    link: linkDescriptor(input, entity, via, existingSourceRef, options),
+    intents,
+  };
+}
+
 async function replayResolutionDecisionForScope(
-  deps: ProposeDeps,
-  input: ProposeInput,
+  deps: MatchDecisionDeps,
+  input: MatchInput,
   normalized: string,
   excludedEntityIds: Set<string>,
   scope: string,
-): Promise<ProposeResult | null> {
-  if (!deps.resolutionLedger) return null;
-  const decisions = await deps.resolutionLedger.findActiveForMention(normalized, input.entityType, scope);
+  existingSourceRef: IndexEntityRow | null,
+  intents: MatchIntent[],
+): Promise<MatchDecision | null> {
+  if (!deps.findResolutionDecisions) return null;
+  const decisions = await deps.findResolutionDecisions(normalized, input.entityType, scope);
   for (const row of decisions.distinct) {
     if (row.target_entity_id) excludedEntityIds.add(row.target_entity_id);
   }
-  if (decisions.dismiss.length > 0) return { kind: "suppressed", reason: "resolution_decision_dismissed" };
+  if (decisions.dismiss.length > 0) {
+    return { status: "suppressed", reason: "resolution_decision_dismissed", intents };
+  }
   const link = decisions.link;
   if (!link || link.status !== "active") return null;
   const targetId = link.target_entity_id;
-  const target = targetId ? await deps.entityRepo.getEntity(targetId) : null;
+  const target = targetId ? await deps.readEntity?.(targetId) : null;
   if (target && !excludedEntityIds.has(target.id) && isEligibleMatchTarget(input, target)) {
-    const { entity } = await persistEntity(deps, input, target);
-    return { kind: "linked", entity };
+    return linkedDecision(input, target, "ledger", "ledger", existingSourceRef, intents);
   }
   if (!link.target_name) {
-    await deps.resolutionLedger.markStale(link.id);
+    intents.push({ kind: "mark_stale", decisionId: link.id });
     return null;
   }
   const targetNormalized = normalizeEntityMatchName(input.entityType, link.target_name);
-  const descriptorMatches = deps.lookup
+  let descriptorMatches = deps.lookup
     .getByNormalizedName(targetNormalized)
     .filter((entity) => !excludedEntityIds.has(entity.id) && isEligibleMatchTarget(input, entity));
-  if (descriptorMatches.length === 1) {
-    const { entity } = await persistEntity(deps, input, descriptorMatches[0]);
-    await deps.resolutionLedger.healTarget(link.id, entity.id);
-    return { kind: "linked", entity };
+  if (link.target_email) {
+    const targetEmail = link.target_email.trim().toLowerCase();
+    descriptorMatches = descriptorMatches.filter(
+      (entity) => deps.readEmail(entity)?.trim().toLowerCase() === targetEmail,
+    );
   }
-  await deps.resolutionLedger.markStale(link.id);
+  if (descriptorMatches.length === 1) {
+    const entity = descriptorMatches[0];
+    intents.push({ kind: "heal_target", decisionId: link.id, targetEntityId: entity.id });
+    return linkedDecision(input, entity, "ledger", "ledger", existingSourceRef, intents);
+  }
+  intents.push({ kind: "mark_stale", decisionId: link.id });
   return null;
 }
 
 async function replayResolutionDecision(
-  deps: ProposeDeps,
-  input: ProposeInput,
+  deps: MatchDecisionDeps,
+  input: MatchInput,
   normalized: string,
   excludedEntityIds: Set<string>,
-): Promise<ProposeResult | null> {
-  const global = await replayResolutionDecisionForScope(deps, input, normalized, excludedEntityIds, "global");
+  existingSourceRef: IndexEntityRow | null,
+  intents: MatchIntent[],
+): Promise<MatchDecision | null> {
+  const global = await replayResolutionDecisionForScope(
+    deps,
+    input,
+    normalized,
+    excludedEntityIds,
+    "global",
+    existingSourceRef,
+    intents,
+  );
   if (global) return global;
   if (!input.contextFileId) return null;
-  return replayResolutionDecisionForScope(deps, input, normalized, excludedEntityIds, `file:${input.contextFileId}`);
+  return replayResolutionDecisionForScope(
+    deps,
+    input,
+    normalized,
+    excludedEntityIds,
+    `file:${input.contextFileId}`,
+    existingSourceRef,
+    intents,
+  );
 }
 
 /**
@@ -475,28 +701,6 @@ async function persistEntity(
 }
 
 /**
- * Heuristic machine alias writes deliberately use the §3 `mint_model` tier.
- * A narrower `auto_dedup` tier would be more descriptive, but adding it here
- * would widen the durable-memory enum ahead of the agentic-resolution plan.
- */
-async function linkNameDedupCandidate(
-  deps: ProposeDeps,
-  input: ProposeInput,
-  matched: IndexEntityRow,
-): Promise<ProposeResult> {
-  const { entity } = await persistEntity(deps, input, matched);
-  const aliasesToAppend = [input.name, ...(input.aliases ?? [])].filter(
-    (alias) => alias.trim() && alias.trim().toLowerCase() !== matched.name.trim().toLowerCase(),
-  );
-  for (const alias of aliasesToAppend) {
-    await deps.entityRepo.appendAlias(entity.id, alias, "mint_model", input.source);
-  }
-  const refreshed = (await deps.entityRepo.getEntity(entity.id)) ?? entity;
-  await deps.onEntityResolved?.(refreshed);
-  return { kind: "linked", entity: refreshed };
-}
-
-/**
  * Tie-break among confirmed duplicate candidates so dedup gaps in production
  * data don't silently stall relation materialization. Production corpora
  * accumulate near-duplicates ("Oliver Wyman" / "OW" / "Oliverwyman") across
@@ -561,14 +765,14 @@ async function queueProposal(
   deps: ProposeDeps,
   input: ProposeInput,
   normalized: string,
-  ranked: RankedCandidate[],
+  candidates: MatchCandidate[],
   reason: CandidateReason,
 ): Promise<ProposeResult> {
   if (input.linkOnly) return { kind: "suppressed", reason: "link_only_no_confident_match" };
-  const isSingle = ranked.length === 1;
-  const candidateEntityId = isSingle ? ranked[0].entity.id : null;
-  const candidateScore = isSingle ? ranked[0].score : null;
-  const candidateEntityIds = ranked.length > 1 ? ranked.map((candidate) => candidate.entity.id) : null;
+  const isSingle = candidates.length === 1;
+  const candidateEntityId = isSingle ? candidates[0].entityId : null;
+  const candidateScore = isSingle ? candidates[0].score : null;
+  const candidateEntityIds = candidates.length > 1 ? candidates.map((candidate) => candidate.entityId) : null;
 
   const upsertResult = await deps.reviewRepo.upsertQueueRow({
     proposedName: input.name,
@@ -633,27 +837,6 @@ async function birthGateOrCreate(
   return { kind: "created", entity };
 }
 
-async function embeddingCandidatesThenCreate(
-  deps: ProposeDeps,
-  input: ProposeInput,
-  normalized: string,
-  filterRejectedCandidates: (ranked: RankedCandidate[]) => Promise<RankedCandidate[]>,
-  createReason: "skipFuzzy" | "ranked_empty",
-): Promise<ProposeResult> {
-  if ((input.entityType === "person" || input.entityType === "company") && deps.lookup.retrieveEmbeddingCandidates) {
-    try {
-      const retrieved = await deps.lookup.retrieveEmbeddingCandidates(input.entityType, input.name);
-      const ranked = await filterRejectedCandidates(
-        retrieved.filter((candidate) => isEligibleMatchTarget(input, candidate.entity)),
-      );
-      if (ranked.length > 0) return queueProposal(deps, input, normalized, ranked, "embedding");
-    } catch (err) {
-      deps.logger?.warn({ err, entityType: input.entityType }, "embedding candidate retrieval failed open");
-    }
-  }
-  return birthGateOrCreate(deps, input, normalized, createReason);
-}
-
 function uniqueRankedCandidates(candidates: RankedCandidate[]): RankedCandidate[] {
   const byId = new Map<string, RankedCandidate>();
   for (const candidate of candidates) {
@@ -679,141 +862,85 @@ async function loadContextEntityIds(
   return new Set(rows.map((row) => row.entity_id).filter((entityId) => !excludedEntityIds.has(entityId)));
 }
 
-async function tryContextAdjacency(
-  deps: ProposeDeps,
-  input: ProposeInput,
-  normalized: string,
-  ranked: RankedCandidate[],
-): Promise<ProposeResult | null> {
-  if (input.entityType !== "person" || input.suppressContextLinking || !input.contextFileId || !deps.db) return null;
-  const contextFileId = input.contextFileId;
-  const rankedById = new Map(ranked.map((candidate) => [candidate.entity.id, candidate]));
-  const candidateIds = [...rankedById.keys()];
-  const contextIds = await loadContextEntityIds(deps.db, contextFileId, new Set(candidateIds));
-  if (contextIds.size === 0) return null;
-  const signals = await loadAdjacencySignals(deps.db, candidateIds, contextIds, contextFileId);
-  const decision = decideAdjacency(candidateIds, contextIds, contextFileId, signals);
-  if (decision.kind === "link") {
-    const winner = rankedById.get(decision.winnerId)?.entity;
-    if (!winner) return null;
-    const { entity } = await persistEntity(deps, input, winner);
-    await deps.onEntityResolved?.(entity);
-    await deps.resolutionLedger?.recordLink({
-      normalizedMentionName: normalized,
-      entityType: input.entityType,
-      scope: `file:${contextFileId}`,
-      targetEntityId: entity.id,
-      targetName: entity.name,
-      targetEmail: deps.readEmail(entity),
-      decider: "adjacency",
-      decidedBy: MACHINE_PRINCIPAL_USER_ID,
-      source: input.source,
-      sourceId: input.sourceId,
-      evidenceFileIds: [contextFileId],
-    });
-    return { kind: "linked", entity };
-  }
-  /**
-   * Contested and vetoed outcomes queue, but never on the strength of an
-   * edit-distance candidate alone: edit-distance stays decision-inert outside
-   * a T2 link, so a queue row (which demotes creation) must be reproducible by
-   * the suppressed disposition during recreate — and that disposition drops
-   * edit-distance candidates.
-   */
-  if (decision.kind === "contested") {
-    const contested = decision.scoredIds
-      .flatMap((entityId) => {
-        const candidate = rankedById.get(entityId);
-        return candidate ? [candidate] : [];
-      })
-      .filter((candidate) => candidate.reason !== "edit-distance");
-    if (contested.length > 0) return queueProposal(deps, input, normalized, contested, "adjacency");
-    return null;
-  }
-  if (decision.vetoed) {
-    const reviewable = ranked.filter((candidate) => candidate.reason !== "edit-distance");
-    if (reviewable.length > 0) return queueProposal(deps, input, normalized, reviewable, "adjacency");
-  }
-  return null;
+function ambiguousDecision(ranked: RankedCandidate[], reason: CandidateReason, intents: MatchIntent[]): MatchDecision {
+  return { status: "ambiguous", candidates: ranked.map(matchCandidate), reason, intents };
 }
 
-async function decideScopedPersonCandidates(
-  deps: ProposeDeps,
-  input: ProposeInput,
-  normalized: string,
+async function decideScopedPersonMatch(
+  deps: MatchDecisionDeps,
+  input: MatchInput,
   ranked: RankedCandidate[],
-): Promise<ProposeResult> {
-  if (!deps.domainsRepo) {
-    if (input.email) {
-      if (input.linkOnly) return { kind: "suppressed", reason: "link_only_no_confident_match" };
-      const { entity } = await persistEntity(deps, input);
-      return { kind: "created", entity };
-    }
+  existingSourceRef: IndexEntityRow | null,
+  intents: MatchIntent[],
+  via: LinkDescriptor["via"],
+): Promise<MatchDecision> {
+  if (!deps.resolvePersonScope) {
+    if (input.email) return { status: "new", intents };
     if (
       ranked.length === 1 &&
       isSingleStrictPersonReference(ranked) &&
       canAutoLinkNameDedupCandidate(input, ranked[0])
     ) {
-      return linkNameDedupCandidate(deps, input, ranked[0].entity);
+      return linkedDecision(input, ranked[0].entity, ranked[0].reason, via, existingSourceRef, intents, {
+        addAliases: aliasesForDedupLink(input, ranked[0].entity),
+      });
     }
-    return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
+    return ambiguousDecision(ranked, ranked[0]?.reason ?? "exact-ambiguous", intents);
   }
-  const incomingScope = deps.domainsRepo ? await personScopeKey(input.email ?? null, deps.domainsRepo) : null;
-  if (!incomingScope) {
+
+  const incomingScopeId = await deps.resolvePersonScope(input.email);
+  if (!incomingScopeId) {
     if (!input.strictPersonScopeGate && ranked.length === 1 && canAutoLinkScopedPersonCandidate(input, ranked[0])) {
-      return linkNameDedupCandidate(deps, input, ranked[0].entity);
+      return linkedDecision(input, ranked[0].entity, ranked[0].reason, via, existingSourceRef, intents, {
+        addAliases: aliasesForDedupLink(input, ranked[0].entity),
+      });
     }
     if (input.email && !input.strictPersonScopeGate && !input.queueInsteadOfCreate) {
-      if (input.linkOnly) return { kind: "suppressed", reason: "link_only_no_confident_match" };
-      const { entity } = await persistEntity(deps, input);
-      return { kind: "created", entity };
+      return { status: "new", intents };
     }
-    return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
+    return ambiguousDecision(ranked, ranked[0]?.reason ?? "exact-ambiguous", intents);
   }
-  const incomingScopeId = personScopeKeyId(incomingScope);
-  const candidatesWithScopes = ranked.map((candidate) => {
-    const scopeKeys = new Set(deps.lookup.getPersonScopeKeys?.(candidate.entity.id) ?? []);
-    return { candidate, scopeKeys };
-  });
+
+  const candidatesWithScopes = ranked.map((candidate) => ({
+    candidate,
+    scopeKeys: new Set(deps.lookup.getPersonScopeKeys?.(candidate.entity.id) ?? []),
+  }));
   const matching = candidatesWithScopes.filter(({ scopeKeys }) => scopeKeys.has(incomingScopeId));
   if (matching.length === 1) {
-    const match = matching[0];
-    if (canAutoLinkScopedPersonCandidate(input, match.candidate)) {
-      return linkNameDedupCandidate(deps, input, match.candidate.entity);
+    const match = matching[0].candidate;
+    if (canAutoLinkScopedPersonCandidate(input, match)) {
+      return linkedDecision(input, match.entity, match.reason, "scope", existingSourceRef, intents, {
+        addAliases: aliasesForDedupLink(input, match.entity),
+      });
     }
-    if (input.email && !input.queueInsteadOfCreate) {
-      if (input.linkOnly) return { kind: "suppressed", reason: "link_only_no_confident_match" };
-      const { entity } = await persistEntity(deps, input);
-      return { kind: "created", entity };
-    }
-    return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
+    if (input.email && !input.queueInsteadOfCreate) return { status: "new", intents };
+    return ambiguousDecision(ranked, ranked[0]?.reason ?? "exact-ambiguous", intents);
   }
   if (matching.length >= 2) {
-    return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
+    return ambiguousDecision(ranked, ranked[0]?.reason ?? "exact-ambiguous", intents);
   }
   const allCandidatesTrusted = candidatesWithScopes.every(
     ({ scopeKeys }) => scopeKeys.size > 0 && [...scopeKeys].some(isTrustedPersonScopeKey),
   );
-  if (allCandidatesTrusted) {
-    if (input.queueInsteadOfCreate) {
-      return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
-    }
-    if (input.linkOnly) return { kind: "suppressed", reason: "link_only_no_confident_match" };
-    const { entity } = await persistEntity(deps, input);
-    return { kind: "created", entity };
-  }
-  return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
+  if (allCandidatesTrusted && !input.queueInsteadOfCreate) return { status: "new", intents };
+  return ambiguousDecision(ranked, ranked[0]?.reason ?? "exact-ambiguous", intents);
 }
 
-async function decideNameCandidates(
-  deps: ProposeDeps,
-  input: ProposeInput,
-  normalized: string,
+async function decideNameMatch(
+  deps: MatchDecisionDeps,
+  input: MatchInput,
   ranked: RankedCandidate[],
-): Promise<ProposeResult> {
-  if (input.entityType === "person") return decideScopedPersonCandidates(deps, input, normalized, ranked);
+  existingSourceRef: IndexEntityRow | null,
+  intents: MatchIntent[],
+  via: LinkDescriptor["via"],
+): Promise<MatchDecision> {
+  if (input.entityType === "person") {
+    return decideScopedPersonMatch(deps, input, ranked, existingSourceRef, intents, via);
+  }
   if (ranked.length === 1 && canAutoLinkNameDedupCandidate(input, ranked[0])) {
-    return linkNameDedupCandidate(deps, input, ranked[0].entity);
+    return linkedDecision(input, ranked[0].entity, ranked[0].reason, via, existingSourceRef, intents, {
+      addAliases: aliasesForDedupLink(input, ranked[0].entity),
+    });
   }
   const winner = pickConfirmedCanonical(
     ranked.filter((candidate) => canAutoLinkNameDedupCandidate(input, candidate)).map((candidate) => candidate.entity),
@@ -821,17 +948,80 @@ async function decideNameCandidates(
     deps.lookup,
   );
   if (winner) {
-    const { entity } = await persistEntity(deps, input, winner);
-    return { kind: "linked", entity };
+    return linkedDecision(
+      input,
+      winner,
+      ranked[0]?.reason ?? "exact-ambiguous",
+      "canonical",
+      existingSourceRef,
+      intents,
+      {
+        addAliases: aliasesForDedupLink(input, winner),
+      },
+    );
   }
-  return queueProposal(deps, input, normalized, ranked, ranked[0]?.reason ?? "exact-ambiguous");
+  return ambiguousDecision(ranked, ranked[0]?.reason ?? "exact-ambiguous", intents);
 }
 
-export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
+async function applyPendingPrecedence(
+  deps: MatchDecisionDeps,
+  input: MatchInput,
+  normalized: string,
+  decision: MatchDecision,
+): Promise<MatchDecision> {
+  if ((decision.status !== "ambiguous" && decision.status !== "new") || !deps.pendingLookup) return decision;
+  const pending = await deps.pendingLookup(normalized, input.entityType);
+  if (pending.length === 0) return decision;
+  const candidateIds = [...new Set(pending.flatMap((row) => row.candidateEntityIds))];
+  const candidates: MatchCandidate[] = [];
+  for (const entityId of candidateIds) {
+    const fromDecision =
+      decision.status === "ambiguous" ? decision.candidates.find((row) => row.entityId === entityId) : null;
+    if (fromDecision) {
+      candidates.push(fromDecision);
+      continue;
+    }
+    const entity = await deps.readEntity?.(entityId);
+    if (entity) candidates.push(matchCandidate({ entity, score: 1, reason: "exact-ambiguous" }));
+  }
+  return {
+    status: "pending",
+    reviewIds: pending.map((row) => row.reviewId),
+    candidates,
+    intents: decision.intents,
+  };
+}
+
+async function embeddingMatchOrNew(
+  deps: MatchDecisionDeps,
+  input: MatchInput,
+  normalized: string,
+  filterRejectedCandidates: (ranked: RankedCandidate[]) => Promise<RankedCandidate[]>,
+  intents: MatchIntent[],
+): Promise<MatchDecision> {
+  if ((input.entityType === "person" || input.entityType === "company") && deps.lookup.retrieveEmbeddingCandidates) {
+    try {
+      const retrieved = await deps.lookup.retrieveEmbeddingCandidates(input.entityType, input.name);
+      const ranked = await filterRejectedCandidates(
+        retrieved.filter((candidate) => isEligibleMatchTarget(input, candidate.entity)),
+      );
+      if (ranked.length > 0) {
+        const decision = ambiguousDecision(ranked, "embedding", intents);
+        return applyPendingPrecedence(deps, input, normalized, decision);
+      }
+    } catch (err) {
+      deps.logger?.warn({ err, entityType: input.entityType }, "embedding candidate retrieval failed open");
+    }
+  }
+  return applyPendingPrecedence(deps, input, normalized, { status: "new", intents });
+}
+
+export async function decideEntityMatch(deps: MatchDecisionDeps, input: MatchInput): Promise<MatchDecision> {
   const normalized = normalizeEntityMatchName(input.entityType, input.name);
   const rejectionKey = normalizeName(input.name);
   const excludedEntityIds = new Set<string>();
   const filterRejectedCandidates = createRejectedCandidateFilter(deps, rejectionKey, excludedEntityIds);
+  const intents: MatchIntent[] = [];
 
   if (input.entityType === "product") {
     const collision = await productCollidesWithThirdParty(deps, input.name);
@@ -840,61 +1030,33 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
         { entityName: input.name, signal: collision.signal },
         "Suppressed product proposal due to third-party vendor collision",
       );
-      return { kind: "suppressed", reason: "third_party_vendor_collision" };
+      return { status: "suppressed", reason: "third_party_vendor_collision", intents };
     }
   }
 
-  if (input.source && input.sourceId) {
-    const found = await deps.entityRepo.getEntityBySourceRef(input.source, input.sourceId);
-    if (found && isEligibleMatchTarget(input, found)) {
-      const reconciled =
-        input.entityType === "person"
-          ? await deps.entityRepo.reconcilePersonSubtype(found.id, input.subtype, input.provenanceTier)
-          : found;
-      await deps.entityRepo.upsertSourceRef({
-        entityId: reconciled.id,
-        source: input.source,
-        sourceId: input.sourceId,
-      });
-      if (reconciled.name.trim().toLowerCase() !== input.name.trim().toLowerCase()) {
-        await deps.entityRepo.appendAlias(reconciled.id, input.name, "mint_model", input.source);
-      }
-      const entity = (await deps.entityRepo.getEntityBySourceRef(input.source, input.sourceId)) ?? reconciled;
-      await deps.onEntityResolved?.(entity);
-      return { kind: "linked", entity };
-    }
+  const existingSourceRef =
+    input.source && input.sourceId ? await deps.findSourceRef?.(input.source, input.sourceId) : null;
+  if (existingSourceRef && isEligibleMatchTarget(input, existingSourceRef)) {
+    const addAliases =
+      existingSourceRef.name.trim().toLowerCase() === input.name.trim().toLowerCase() ? [] : [input.name];
+    return linkedDecision(input, existingSourceRef, "source_ref", "source_ref", existingSourceRef, intents, {
+      addAliases,
+      persistEmail: false,
+      persistSourceRef: false,
+    });
   }
 
-  // 1) Email fast-path — exact, ambiguity-aware match against contact points.
   if (input.entityType === "person" && input.email) {
-    const emailMatches = await deps.entityRepo.getPersonEntitiesByEmail(input.email);
+    const emailMatches = (await deps.findEmailMatches?.(input.email)) ?? [];
     if (emailMatches.length === 1) {
       const candidate = emailMatches[0];
-      const existingSourceRef = await deps.entityRepo.getEntityBySourceRef(input.source, input.sourceId);
-      if (!existingSourceRef || existingSourceRef.id === candidate.id) {
-        await deps.entityRepo.upsertSourceRef({
-          entityId: candidate.id,
-          source: input.source,
-          sourceId: input.sourceId,
-        });
-      }
-      const reconciled = await deps.entityRepo.reconcilePersonSubtype(
-        candidate.id,
-        input.subtype,
-        input.provenanceTier,
-      );
-      if (candidate.name.trim().toLowerCase() !== input.name.trim().toLowerCase()) {
-        await deps.entityRepo.appendAlias(reconciled.id, input.name, "mint_model", input.source);
-      }
-      const entity = (await deps.entityRepo.getEntity(reconciled.id)) ?? reconciled;
-      await deps.onEntityResolved?.(entity);
-      return { kind: "linked", entity };
+      const addAliases = candidate.name.trim().toLowerCase() === input.name.trim().toLowerCase() ? [] : [input.name];
+      return linkedDecision(input, candidate, "email", "email", existingSourceRef ?? null, intents, {
+        addAliases,
+      });
     }
   }
 
-  // 3) Exact-name fast-path — an entity already shares this canonical name.
-  //    Alias-only matches are recall candidates below, never solo-link
-  //    authority.
   const nameMatches = deps.lookup.getByNormalizedName(normalized);
   const aliasMatches = deps.lookup.getByAlias?.(normalized) ?? [];
   const exactNameById = new Map<string, IndexEntityRow>();
@@ -902,15 +1064,26 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
   const demoteExactName = isSingleTokenPersonMention(input.entityType, input.name);
   if (exactNameById.size === 1 && !demoteExactName) {
     const matched = exactNameById.values().next().value as IndexEntityRow;
-    return decideNameCandidates(deps, input, normalized, [{ entity: matched, score: 1, reason: "exact-ambiguous" }]);
-  }
-  if (exactNameById.size > 1 && !demoteExactName) {
-    return decideNameCandidates(
+    const decision = await decideNameMatch(
       deps,
       input,
-      normalized,
-      [...exactNameById.values()].map((entity) => ({ entity, score: 1, reason: "exact-ambiguous" })),
+      [{ entity: matched, score: 1, reason: "exact-ambiguous" }],
+      existingSourceRef ?? null,
+      intents,
+      "exact",
     );
+    return applyPendingPrecedence(deps, input, normalized, decision);
+  }
+  if (exactNameById.size > 1 && !demoteExactName) {
+    const decision = await decideNameMatch(
+      deps,
+      input,
+      [...exactNameById.values()].map((entity) => ({ entity, score: 1, reason: "exact-ambiguous" })),
+      existingSourceRef ?? null,
+      intents,
+      "exact",
+    );
+    return applyPendingPrecedence(deps, input, normalized, decision);
   }
   const aliasExactCandidates: RankedCandidate[] = uniqueRankedCandidates(
     aliasMatches
@@ -921,29 +1094,39 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
     ? [...exactNameById.values()].map((entity): RankedCandidate => ({ entity, score: 1, reason: "exact-ambiguous" }))
     : [];
 
-  /**
-   * Authoritative-alias fast-path: an alias taught by an adjudicated action
-   * (merge / judge / human confirm) keeps yesterday's solo-link behavior when
-   * it names exactly one same-type entity. Provenance lives in the
-   * entity_aliases rows, not the lookup index, so this is a targeted per-hit
-   * query. Blob-only aliases with no row fail the check and stay candidates.
-   */
   const sameTypeAliasTargets = uniqueRankedCandidates(
     aliasMatches
       .filter((entity) => isEligibleMatchTarget(input, entity) && !exactNameById.has(entity.id))
       .map((entity): RankedCandidate => ({ entity, score: 1, reason: "exact-ambiguous" })),
   );
-  if (exactNameById.size === 0 && sameTypeAliasTargets.length === 1 && deps.db) {
-    const aliasRows = await listAliasRows(deps.db, sameTypeAliasTargets[0].entity.id);
+  if (exactNameById.size === 0 && sameTypeAliasTargets.length === 1 && deps.listAliasRows) {
+    const aliasRows = await deps.listAliasRows(sameTypeAliasTargets[0].entity.id);
     const authoritative = aliasRows.some(
       (row) =>
         isSoloLinkAliasProvenance(row.provenance) &&
         normalizeEntityMatchName(input.entityType, row.alias) === normalized,
     );
-    if (authoritative) return decideNameCandidates(deps, input, normalized, sameTypeAliasTargets);
+    if (authoritative) {
+      const decision = await decideNameMatch(
+        deps,
+        input,
+        sameTypeAliasTargets,
+        existingSourceRef ?? null,
+        intents,
+        "alias_authoritative",
+      );
+      return applyPendingPrecedence(deps, input, normalized, decision);
+    }
   }
 
-  const replayed = await replayResolutionDecision(deps, input, normalized, excludedEntityIds);
+  const replayed = await replayResolutionDecision(
+    deps,
+    input,
+    normalized,
+    excludedEntityIds,
+    existingSourceRef ?? null,
+    intents,
+  );
   if (replayed) return replayed;
 
   const rawDedupCandidates: RankedCandidate[] = (
@@ -976,18 +1159,40 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
     if (adjacencyCandidates.length > 0) {
       adjacencyCandidates = await filterRejectedCandidates(adjacencyCandidates);
       if (adjacencyCandidates.length > 0) {
-        const adjacencyResult = await tryContextAdjacency(deps, input, normalized, adjacencyCandidates);
-        if (adjacencyResult) return adjacencyResult;
-        /**
-         * T2 did not decide. Only the candidate classes whose solo-link
-         * authority this rung revoked (demoted single-token exact hits,
-         * alias-only hits — plus a single-token mention's fuzzy candidates,
-         * since single-token persons must never reach the scoped solo-link
-         * paths below) convert to a review row. Multi-token mentions whose
-         * union holds only the pre-existing dedup pool fall through so the
-         * rungs below behave exactly as before this rung existed;
-         * edit-distance candidates stay decision-inert and are dropped.
-         */
+        const adjacency =
+          !input.suppressContextLinking && input.contextFileId && deps.readAdjacency
+            ? await deps.readAdjacency(
+                adjacencyCandidates.map((candidate) => candidate.entity.id),
+                input.contextFileId,
+              )
+            : null;
+        if (adjacency?.kind === "link") {
+          const winner = adjacencyCandidates.find((candidate) => candidate.entity.id === adjacency.winnerId)?.entity;
+          if (winner && input.contextFileId) {
+            intents.push({
+              kind: "record_adjacency",
+              normalizedMentionName: normalized,
+              entityType: input.entityType,
+              contextFileId: input.contextFileId,
+            });
+            return linkedDecision(input, winner, "adjacency", "adjacency", existingSourceRef ?? null, intents);
+          }
+        }
+        if (adjacency?.kind === "contested") {
+          const scoredIds = new Set(adjacency.scoredIds);
+          const contested = adjacencyCandidates.filter(
+            (candidate) => scoredIds.has(candidate.entity.id) && candidate.reason !== "edit-distance",
+          );
+          if (contested.length > 0) {
+            return applyPendingPrecedence(deps, input, normalized, ambiguousDecision(contested, "adjacency", intents));
+          }
+        }
+        if (adjacency?.kind === "abstain" && adjacency.vetoed) {
+          const reviewable = adjacencyCandidates.filter((candidate) => candidate.reason !== "edit-distance");
+          if (reviewable.length > 0) {
+            return applyPendingPrecedence(deps, input, normalized, ambiguousDecision(reviewable, "adjacency", intents));
+          }
+        }
         const reviewCandidates = adjacencyCandidates.filter((candidate) => candidate.reason !== "edit-distance");
         const queueWorthy =
           reviewCandidates.length > 0 &&
@@ -996,7 +1201,12 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
               (candidate) => candidate.reason === "alias-exact" || candidate.reason === "exact-ambiguous",
             ));
         if (queueWorthy) {
-          return queueProposal(deps, input, normalized, reviewCandidates, reviewCandidates[0].reason);
+          return applyPendingPrecedence(
+            deps,
+            input,
+            normalized,
+            ambiguousDecision(reviewCandidates, reviewCandidates[0].reason, intents),
+          );
         }
       }
     }
@@ -1015,21 +1225,22 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
         );
 
       if (domainMatches.length === 1) {
-        const { entity } = await persistEntity(deps, input, domainMatches[0]);
-        return { kind: "linked", entity };
+        return linkedDecision(input, domainMatches[0], "domain", "domain", existingSourceRef ?? null, intents);
       }
       if (domainMatches.length > 1) {
         const winner = pickConfirmedCanonical(domainMatches, input, deps.lookup);
         if (winner) {
-          const { entity } = await persistEntity(deps, input, winner);
-          return { kind: "linked", entity };
+          return linkedDecision(input, winner, "domain", "domain", existingSourceRef ?? null, intents);
         }
-        return queueProposal(
+        return applyPendingPrecedence(
           deps,
           input,
           normalized,
-          domainMatches.map((entity) => ({ entity, score: 1, reason: "exact-ambiguous" })),
-          "exact-ambiguous",
+          ambiguousDecision(
+            domainMatches.map((entity) => ({ entity, score: 1, reason: "exact-ambiguous" })),
+            "exact-ambiguous",
+            intents,
+          ),
         );
       }
     }
@@ -1043,7 +1254,9 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
    */
   if (input.entityType !== "person" && aliasExactCandidates.length > 0) {
     const ranked = await filterRejectedCandidates(aliasExactCandidates);
-    if (ranked.length > 0) return queueProposal(deps, input, normalized, ranked, "alias-exact");
+    if (ranked.length > 0) {
+      return applyPendingPrecedence(deps, input, normalized, ambiguousDecision(ranked, "alias-exact", intents));
+    }
   }
 
   /**
@@ -1057,7 +1270,10 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
   if (dedupCandidates.length > 0) {
     let ranked: RankedCandidate[] = dedupCandidates;
     ranked = await filterRejectedCandidates(ranked);
-    if (ranked.length > 0) return decideNameCandidates(deps, input, normalized, ranked);
+    if (ranked.length > 0) {
+      const decision = await decideNameMatch(deps, input, ranked, existingSourceRef ?? null, intents, "dedup");
+      return applyPendingPrecedence(deps, input, normalized, decision);
+    }
   }
 
   if (input.precomputedCandidates && input.precomputedCandidates.length > 0) {
@@ -1070,27 +1286,136 @@ export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Pro
       }));
     ranked = await filterRejectedCandidates(ranked);
     if (ranked.length > 0) {
-      return queueProposal(deps, input, normalized, ranked, "llm-ambiguous");
+      return applyPendingPrecedence(deps, input, normalized, ambiguousDecision(ranked, "llm-ambiguous", intents));
     }
   }
 
   if (input.skipFuzzy) {
-    return embeddingCandidatesThenCreate(deps, input, normalized, filterRejectedCandidates, "skipFuzzy");
+    return embeddingMatchOrNew(deps, input, normalized, filterRejectedCandidates, intents);
   }
 
-  // 4) Fuzzy-rank against same-type entities.
   const candidates = deps.lookup.listByType(input.entityType).filter((entity) => isEligibleMatchTarget(input, entity));
   let ranked = rank(input.entityType, input.name, candidates);
 
-  // 5) Drop candidates that have a sticky rejection for this normalized name.
   if (ranked.length > 0) {
     ranked = await filterRejectedCandidates(ranked);
   }
 
-  // 6) Decide.
   if (ranked.length === 0) {
-    return embeddingCandidatesThenCreate(deps, input, normalized, filterRejectedCandidates, "ranked_empty");
+    return embeddingMatchOrNew(deps, input, normalized, filterRejectedCandidates, intents);
   }
-  if (input.entityType === "person") return decideScopedPersonCandidates(deps, input, normalized, ranked);
-  return queueProposal(deps, input, normalized, ranked, ranked[0].reason);
+  if (input.entityType === "person") {
+    const decision = await decideScopedPersonMatch(deps, input, ranked, existingSourceRef ?? null, intents, "fuzzy");
+    return applyPendingPrecedence(deps, input, normalized, decision);
+  }
+  return applyPendingPrecedence(deps, input, normalized, ambiguousDecision(ranked, ranked[0].reason, intents));
+}
+
+async function applyMatchIntents(
+  deps: ProposeDeps,
+  input: ProposeInput,
+  decision: MatchDecision,
+  linkedEntity?: IndexEntityRow,
+): Promise<void> {
+  for (const intent of decision.intents) {
+    if (intent.kind === "mark_stale") {
+      await deps.resolutionLedger?.markStale(intent.decisionId);
+      continue;
+    }
+    if (intent.kind === "heal_target") {
+      await deps.resolutionLedger?.healTarget(intent.decisionId, intent.targetEntityId);
+      continue;
+    }
+    if (!linkedEntity) continue;
+    await deps.resolutionLedger?.recordLink({
+      normalizedMentionName: intent.normalizedMentionName,
+      entityType: intent.entityType,
+      scope: `file:${intent.contextFileId}`,
+      targetEntityId: linkedEntity.id,
+      targetName: linkedEntity.name,
+      targetEmail: deps.readEmail(linkedEntity),
+      decider: "adjacency",
+      decidedBy: MACHINE_PRINCIPAL_USER_ID,
+      source: input.source,
+      sourceId: input.sourceId,
+      evidenceFileIds: [intent.contextFileId],
+    });
+  }
+}
+
+async function executeLinkDescriptor(
+  deps: ProposeDeps,
+  input: ProposeInput,
+  decision: Extract<MatchDecision, { status: "linked" }>,
+): Promise<IndexEntityRow> {
+  const matched = await deps.entityRepo.getEntity(decision.entityId);
+  if (!matched) throw new Error(`matched entity ${decision.entityId} is no longer live`);
+  let entity: IndexEntityRow = matched;
+  if (decision.link.reconcileSubtype) {
+    entity = await deps.entityRepo.reconcilePersonSubtype(
+      entity.id,
+      decision.link.reconcileSubtype,
+      input.provenanceTier,
+    );
+  }
+  if (decision.link.sourceRef?.conflict === "none") {
+    await deps.entityRepo.upsertSourceRef({
+      entityId: entity.id,
+      source: decision.link.sourceRef.source,
+      sourceId: decision.link.sourceRef.sourceId,
+    });
+  }
+  if (decision.link.attachEmail) {
+    await deps.entityRepo.attachEmailIfAbsent(entity.id, decision.link.attachEmail);
+    await deps.entityRepo.appendAlias(entity.id, decision.link.attachEmail, "mint_model", input.source);
+  }
+  for (const alias of decision.link.addAliases ?? []) {
+    await deps.entityRepo.appendAlias(entity.id, alias, "mint_model", input.source);
+  }
+  if (decision.link.refetch) entity = (await deps.entityRepo.getEntity(entity.id)) ?? entity;
+  if (RESOLVED_INDEX_REFRESH_VIAS.has(decision.link.via)) await deps.onEntityResolved?.(entity);
+  return entity;
+}
+
+export async function applyProposeEffects(
+  deps: ProposeDeps,
+  input: ProposeInput,
+  decision: MatchDecision,
+): Promise<ProposeResult> {
+  if (decision.status === "linked") {
+    const entity = await executeLinkDescriptor(deps, input, decision);
+    await applyMatchIntents(deps, input, decision, entity);
+    return { kind: "linked", entity };
+  }
+
+  await applyMatchIntents(deps, input, decision);
+  if (decision.status === "suppressed") return { kind: "suppressed", reason: decision.reason };
+  if (decision.status === "pending") {
+    return {
+      kind: "queued",
+      reviewId: decision.reviewIds[0],
+      candidateEntityId: decision.candidates.length === 1 ? decision.candidates[0].entityId : null,
+    };
+  }
+  if (decision.status === "new") {
+    return birthGateOrCreate(
+      deps,
+      input,
+      normalizeEntityMatchName(input.entityType, input.name),
+      input.skipFuzzy ? "skipFuzzy" : "ranked_empty",
+    );
+  }
+
+  return queueProposal(
+    deps,
+    input,
+    normalizeEntityMatchName(input.entityType, input.name),
+    decision.candidates,
+    decision.reason,
+  );
+}
+
+export async function proposeEntity(deps: ProposeDeps, input: ProposeInput): Promise<ProposeResult> {
+  const decision = await decideEntityMatch(toMatchDeps(deps), input);
+  return applyProposeEffects(deps, input, decision);
 }
