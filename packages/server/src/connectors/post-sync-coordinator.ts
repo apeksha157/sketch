@@ -22,7 +22,7 @@ type GraphPassRunRepository = ReturnType<typeof createGraphPassRunRepository>;
 export interface PostSyncCoordinator {
   enqueue(inputs: PostSyncGraphInputs, context: ScheduledPostSyncContext): Promise<void>;
   drain(context: ScheduledPostSyncContext): Promise<void>;
-  restoreUnfinished(context: ScheduledPostSyncContext): Promise<void>;
+  restoreUnfinished(context: ScheduledPostSyncContext, options?: { deferDrain?: boolean }): Promise<void>;
 }
 
 /**
@@ -83,7 +83,7 @@ export function createPostSyncCoordinator(
     drain(context) {
       return scheduleDrain(context);
     },
-    async restoreUnfinished(context) {
+    async restoreUnfinished(context, options) {
       if (!runs) return;
       const unfinished = (await runs.listUnfinished()).filter((run) => run.inputSnapshot.kind === "post_sync");
       for (const run of unfinished) {
@@ -92,7 +92,7 @@ export function createPostSyncCoordinator(
         restoredRunIds.push(run.id);
         dirty = true;
       }
-      if (unfinished.length > 0) {
+      if (unfinished.length > 0 && !options?.deferDrain) {
         await scheduleDrain(context);
       }
     },
