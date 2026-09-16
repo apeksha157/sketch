@@ -65,6 +65,16 @@ export function createSlackIndexingConnector(): Connector {
         generate: slackChunkerGenerate,
         channelKnobs: knobs.channel,
         threadKnobs: knobs.thread,
+        backfillGraphKnobs: {
+          pendingSlicesMax:
+            appConfig?.SLACK_BACKFILL_GRAPH_PENDING_SLICES_MAX ??
+            configDefault("SLACK_BACKFILL_GRAPH_PENDING_SLICES_MAX"),
+          pendingFilesMax:
+            appConfig?.SLACK_BACKFILL_GRAPH_PENDING_FILES_MAX ??
+            configDefault("SLACK_BACKFILL_GRAPH_PENDING_FILES_MAX"),
+          openFactsMax:
+            appConfig?.SLACK_BACKFILL_GRAPH_OPEN_FACTS_MAX ?? configDefault("SLACK_BACKFILL_GRAPH_OPEN_FACTS_MAX"),
+        },
       });
       logger.info(backfillGraph, "Completed Slack backfill graph admission run");
       await runSlackChunkEngine({

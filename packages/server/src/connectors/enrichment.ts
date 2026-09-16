@@ -65,6 +65,24 @@ const NEWEST_BATCHES_PER_OLDEST_SLICE = 5;
  */
 export const MAX_ENRICHMENT_STAGE_ATTEMPTS = 8;
 
+/**
+ * Terminal state for a file with nothing to enrich — no extractable content, or
+ * an image with no provider able to embed it.
+ *
+ * Both statuses are set together because neither stage can ever run: every
+ * summary branch in the scheduled fetch requires `embedding_status = 'done'`,
+ * and the manual path refuses to claim a skipped file. Leaving the summary at
+ * its `pending` default stranded these files outside the worker's reach while
+ * they still counted as pipeline backpressure, which pinned history backfill
+ * shut on tenants holding videos or binaries.
+ */
+export const SKIPPED_WITHOUT_CONTENT = {
+  embedding_status: "skipped",
+  summary_status: "skipped",
+  summary_attempts: 0,
+  summary_next_retry_at: null,
+} as const;
+
 const PROJECT_BASELINE_LIMIT = 200;
 const ENRICHMENT_BACKOFF_MS = [
   30 * 60 * 1000,
@@ -880,10 +898,7 @@ async function runEnrichmentInner(deps: EnrichmentDeps): Promise<EnrichmentResul
         } else if (file.content) {
           await enrichTextDocument(file as typeof file & { content: string }, isStructured, deps, threadContext);
         } else {
-          const skippedQuery = db
-            .updateTable("indexed_files")
-            .set({ embedding_status: "skipped" })
-            .where("id", "=", file.id);
+          const skippedQuery = db.updateTable("indexed_files").set(SKIPPED_WITHOUT_CONTENT).where("id", "=", file.id);
           const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
           assertFreshUpdate(skippedResult, file.id);
           result.filesSkipped++;
@@ -1368,14 +1383,14 @@ async function enrichImage(
   const fileVersion = contentVersionOf(file);
 
   if (!embeddingProvider?.supportsImages || !embeddingProvider.embedImage) {
-    const skippedQuery = db.updateTable("indexed_files").set({ embedding_status: "skipped" }).where("id", "=", file.id);
+    const skippedQuery = db.updateTable("indexed_files").set(SKIPPED_WITHOUT_CONTENT).where("id", "=", file.id);
     const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
     assertFreshUpdate(skippedResult, file.id);
     return;
   }
 
   if (!downloadImage) {
-    const skippedQuery = db.updateTable("indexed_files").set({ embedding_status: "skipped" }).where("id", "=", file.id);
+    const skippedQuery = db.updateTable("indexed_files").set(SKIPPED_WITHOUT_CONTENT).where("id", "=", file.id);
     const skippedResult = await applyContentVersionWhere(skippedQuery, fileVersion).executeTakeFirst();
     assertFreshUpdate(skippedResult, file.id);
     return;

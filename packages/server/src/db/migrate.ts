@@ -242,6 +242,7 @@ import * as m238 from "./migrations/238-slack-history-backfill";
 import * as m239 from "./migrations/239-fact-materialization-deferred-at";
 import * as m240 from "./migrations/240-linkedin-reindex-conversations";
 import * as m241 from "./migrations/241-automation-runs-task-started-at-index";
+import * as m242 from "./migrations/242-repair-skipped-summary-orphans";
 import type { DB } from "./schema";
 
 /**
@@ -493,6 +494,7 @@ export function createMigrator(db: Kysely<DB>): Migrator {
           "239-fact-materialization-deferred-at": m239,
           "240-linkedin-reindex-conversations": m240,
           "241-automation-runs-task-started-at-index": m241,
+          "242-repair-skipped-summary-orphans": m242,
         };
       },
     },

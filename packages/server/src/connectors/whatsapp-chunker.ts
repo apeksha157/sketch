@@ -17,6 +17,7 @@ import type { ChunkEngineKnobs } from "./chunk-engine";
 import { runStreamTick, withProviderBackoff } from "./chunk-engine-runner";
 import { estimateTokens } from "./chunking";
 import { resolveChunkEngineKnobs } from "./config-default";
+import { MAX_ENRICHMENT_STAGE_ATTEMPTS } from "./enrichment";
 import { purgeConversationalFactsForFile } from "./smart-enrichment";
 import { runWithConcurrency } from "./sync-utils";
 import { ATTACHMENT_PLACEHOLDER_TEXT, parseAttachmentsJson } from "./transcript";
@@ -610,19 +611,115 @@ export function resolveWhatsAppBackfillGraphKnobs(
   };
 }
 
-export async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<WhatsAppBackfillGraphBacklog> {
+/**
+ * Identifies whose backlog a gate is allowed to gate on.
+ *
+ * The grain is the connector *type*, not a connector config id: Slack is a
+ * bootstrap singleton but WhatsApp is not, and its groups are listed
+ * tenant-wide rather than per config, so two WhatsApp configs would each see
+ * half the real backlog if this keyed on the id. Slices carry no connector at
+ * all, so they scope by the platform that maps to the same type.
+ */
+export interface WhatsAppBackfillGraphScope {
+  connectorType: string;
+  platform: string;
+}
+
+export const WHATSAPP_BACKFILL_GRAPH_SCOPE: WhatsAppBackfillGraphScope = {
+  connectorType: "whatsapp",
+  platform: "whatsapp",
+};
+
+/**
+ * Files and facts reach a connector only through `connector_config_id`, so both
+ * legs join `connector_configs` to reach the type.
+ *
+ * A file always has one (the column is NOT NULL), so its join drops nothing. A
+ * fact may not: manual and local-source facts never had a connector, and
+ * deleting a connector nulls the column rather than the row. Both cases count
+ * against no connector, which is what an inner join gives — there is no
+ * connector left whose admission they could fairly throttle.
+ */
+export async function readWhatsAppBackfillGraphBacklog(
+  db: Kysely<DB>,
+  scope: WhatsAppBackfillGraphScope,
+): Promise<WhatsAppBackfillGraphBacklog> {
+  const openFactsQuery = (deferred: "is" | "is not") =>
+    db
+      .selectFrom("indexed_file_facts")
+      .innerJoin("connector_configs", "connector_configs.id", "indexed_file_facts.connector_config_id")
+      .select((eb) => eb.fn.countAll().as("count"))
+      .where("connector_configs.connector_type", "=", scope.connectorType)
+      .where("indexed_file_facts.deleted_at", "is", null)
+      .where("indexed_file_facts.materialized_at", "is", null)
+      .where("indexed_file_facts.materialization_attempts", "<", MAX_MATERIALIZATION_ATTEMPTS)
+      .where("indexed_file_facts.materialization_deferred_at", deferred, null)
+      .executeTakeFirst();
+
   const [pendingSlices, pendingFiles, openFacts, parkedFacts] = await Promise.all([
     db
       .selectFrom("conversation_slices")
+      .innerJoin("conversations", "conversations.id", "conversation_slices.conversation_id")
       .select((eb) => eb.fn.countAll().as("count"))
-      .where("salience_verdict", "is", null)
+      .where("conversations.platform", "=", scope.platform)
+      .where("conversation_slices.salience_verdict", "is", null)
       .executeTakeFirst(),
+    db
+      .selectFrom("indexed_files")
+      .innerJoin("connector_configs", "connector_configs.id", "indexed_files.connector_config_id")
+      .select((eb) => eb.fn.countAll().as("count"))
+      .where("connector_configs.connector_type", "=", scope.connectorType)
+      .where("indexed_files.is_archived", "=", 0)
+      .where((eb) =>
+        eb.or([
+          eb("indexed_files.embedding_status", "=", "pending"),
+          eb.and([
+            eb("indexed_files.embedding_status", "=", "failed"),
+            eb("indexed_files.embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
+          ]),
+          eb("indexed_files.summary_status", "=", "pending"),
+          eb.and([
+            eb("indexed_files.summary_status", "=", "failed"),
+            eb("indexed_files.summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS),
+          ]),
+        ]),
+      )
+      .executeTakeFirst(),
+    openFactsQuery("is"),
+    openFactsQuery("is not"),
+  ]);
+  return {
+    pendingSlices: Number(pendingSlices?.count ?? 0),
+    pendingFiles: Number(pendingFiles?.count ?? 0),
+    openFacts: Number(openFacts?.count ?? 0),
+    parkedFacts: Number(parkedFacts?.count ?? 0),
+  };
+}
+
+/**
+ * Tenant-wide backlog, gated on by nothing and logged beside the scoped
+ * counts. Removing the global ceiling removed the only place a genuine
+ * pipeline-wide overload would have been visible; this keeps that signal.
+ *
+ * It carries the same attempts cap as the scoped read so the two numbers in a
+ * single log line stay comparable — a tenant total that counted abandoned
+ * files could otherwise sit above the sum of every connector's pressure.
+ */
+export async function readWhatsAppBackfillGraphTenantTotals(
+  db: Kysely<DB>,
+): Promise<Pick<WhatsAppBackfillGraphBacklog, "pendingFiles" | "openFacts">> {
+  const [pendingFiles, openFacts] = await Promise.all([
     db
       .selectFrom("indexed_files")
       .select((eb) => eb.fn.countAll().as("count"))
       .where("is_archived", "=", 0)
       .where((eb) =>
-        eb.or([eb("embedding_status", "in", ["pending", "failed"]), eb("summary_status", "in", ["pending", "failed"])]),
+        eb.or([
+          eb("embedding_status", "=", "pending"),
+          eb.and([eb("embedding_status", "=", "failed"), eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS)]),
+          eb("summary_status", "=", "pending"),
+          eb.and([eb("summary_status", "=", "failed"), eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS)]),
+        ]),
       )
       .executeTakeFirst(),
     db
@@ -633,20 +730,10 @@ export async function readWhatsAppBackfillGraphBacklog(db: Kysely<DB>): Promise<
       .where("materialization_attempts", "<", MAX_MATERIALIZATION_ATTEMPTS)
       .where("materialization_deferred_at", "is", null)
       .executeTakeFirst(),
-    db
-      .selectFrom("indexed_file_facts")
-      .select((eb) => eb.fn.countAll().as("count"))
-      .where("deleted_at", "is", null)
-      .where("materialized_at", "is", null)
-      .where("materialization_attempts", "<", MAX_MATERIALIZATION_ATTEMPTS)
-      .where("materialization_deferred_at", "is not", null)
-      .executeTakeFirst(),
   ]);
   return {
-    pendingSlices: Number(pendingSlices?.count ?? 0),
     pendingFiles: Number(pendingFiles?.count ?? 0),
     openFacts: Number(openFacts?.count ?? 0),
-    parkedFacts: Number(parkedFacts?.count ?? 0),
   };
 }
 
@@ -996,12 +1083,15 @@ async function admitWhatsAppBackfillGraphPages(options: ChunkWhatsAppGroupsOptio
       excludedGroupJids: servedGroupJids,
     });
     if (!candidate) break;
-    const backlog = await readWhatsAppBackfillGraphBacklog(options.db);
+    const backlog = await readWhatsAppBackfillGraphBacklog(options.db, WHATSAPP_BACKFILL_GRAPH_SCOPE);
     if (exceedsWhatsAppBackfillGraphPressure(backlog, knobs)) {
       skippedForPressure = true;
+      const tenantTotals = await readWhatsAppBackfillGraphTenantTotals(options.db);
       options.logger.info(
         {
           ...backlog,
+          tenantPendingFiles: tenantTotals.pendingFiles,
+          tenantOpenFacts: tenantTotals.openFacts,
           pendingSlicesMax: knobs.pendingSlicesMax,
           pendingFilesMax: knobs.pendingFilesMax,
           openFactsMax: knobs.openFactsMax,

@@ -10,10 +10,17 @@ import { createSlackHistoryChunkAdapter, slackHistoryStreamKey } from "./slack-c
 import { SLACK_CHANNEL_STREAM_KEY } from "./slack-chunk-messages";
 import {
   type WhatsAppBackfillGraphKnobs,
+  type WhatsAppBackfillGraphScope,
   exceedsWhatsAppBackfillGraphPressure,
   readWhatsAppBackfillGraphBacklog,
+  readWhatsAppBackfillGraphTenantTotals,
   resolveWhatsAppBackfillGraphKnobs,
 } from "./whatsapp-chunker";
+
+const SLACK_BACKFILL_GRAPH_SCOPE: WhatsAppBackfillGraphScope = {
+  connectorType: "slack",
+  platform: "slack",
+};
 
 export interface AdmitSlackBackfillGraphOptions {
   db: Kysely<DB>;
@@ -157,10 +164,21 @@ export async function admitSlackBackfillGraphPages(
   while (summary.messagesRead < knobs.cycleMessages) {
     const range = await ranges.findNextGraphCandidate({ excludedConversationIds: servedConversationIds });
     if (!range) break;
-    const backlog = await readWhatsAppBackfillGraphBacklog(options.db);
+    const backlog = await readWhatsAppBackfillGraphBacklog(options.db, SLACK_BACKFILL_GRAPH_SCOPE);
     if (exceedsWhatsAppBackfillGraphPressure(backlog, knobs)) {
       summary.skippedForPressure = true;
-      options.logger.info({ ...backlog }, "Skipped Slack backfill graph admission under pipeline backpressure");
+      const tenantTotals = await readWhatsAppBackfillGraphTenantTotals(options.db);
+      options.logger.info(
+        {
+          ...backlog,
+          tenantPendingFiles: tenantTotals.pendingFiles,
+          tenantOpenFacts: tenantTotals.openFacts,
+          pendingSlicesMax: knobs.pendingSlicesMax,
+          pendingFilesMax: knobs.pendingFilesMax,
+          openFactsMax: knobs.openFactsMax,
+        },
+        "Skipped Slack backfill graph admission under pipeline backpressure",
+      );
       break;
     }
     servedConversationIds.push(range.conversation_id);
