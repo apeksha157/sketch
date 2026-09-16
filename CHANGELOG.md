@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.13] -- 2026-09-16
+
+- Adds consolidated-loop shadow v2 propose→match→judge core: model lists mentions and calls a read-only `match_mentions` tool to resolve them deterministically, with a post-hoc reconcile pass ensuring the matcher wins on disagreements; splits `proposeEntity` into `decideEntityMatch` and `applyProposeEffects`, adds diagnostics like `overriddenByMatcher` and `demotedUnoffered`, and sets `CONSOLIDATED_EXTRACTOR_VERSION = "loop-v2"`.
+- Fixes consolidated-loop shadow v1 false-new duplicates and link-authority guard failures by preventing the model from inventing entity ids, batching matches with compact candidate sets, and retaining `rejectedCandidates` for audit; v2 on 36 files cuts cost and tool calls while linking more entities correctly.
+- Updates `eval-consolidated-loop.ts` and report module to compare v1 and v2 rows, normalize `--since`, read encrypted settings with `ENCRYPTION_KEY`, and key results on `updated_at`.
+
 ## [1.7.12] -- 2026-09-16
 
 - Fixes scheduled-run latency by keeping locally live outputs alive: `AgentOutputRunQueue` now reference-counts live tasks per output across queued, executing, and cancel-in-flight work, and `isRunningStale` only expires an output when it is older than 30 minutes and no local task owns it, preventing duplicate runs and false staleness recovery.
