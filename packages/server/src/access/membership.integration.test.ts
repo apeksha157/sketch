@@ -2,7 +2,7 @@ import type { Kysely } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "../db/schema";
 import { createTestDb, createTestPgDb } from "../test-utils";
-import { authorizedTargets } from "./membership";
+import { authorizedTargets, listAuthorizedSlackChannels } from "./membership";
 
 const slackTarget = (targetId: string) => ({ platform: "slack" as const, targetId });
 const whatsappTarget = (targetId: string) => ({ platform: "whatsapp" as const, targetId });
@@ -175,6 +175,52 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       await expect(authorizedTargets(db, [{ type: "email", value: "member@example.com" }], targets)).resolves.toEqual(
         new Set(),
       );
+    });
+
+    describe("listAuthorizedSlackChannels", () => {
+      it("lists channels matched by a Slack user principal", async () => {
+        await insertSlackParticipant(db, "C-MINE", "U-VIEWER");
+        await insertSlackParticipant(db, "C-THEIRS", "U-OTHER");
+
+        await expect(listAuthorizedSlackChannels(db, [{ type: "slack_user", value: "U-VIEWER" }])).resolves.toEqual([
+          "C-MINE",
+        ]);
+      });
+
+      it("lists channels matched by an email principal through sync state", async () => {
+        await insertSlackParticipant(db, "C-EMAIL", "U-EMAIL");
+        await insertSlackUserSyncState(db, "U-EMAIL", "member@example.com");
+
+        await expect(
+          listAuthorizedSlackChannels(db, [{ type: "email", value: "Member@Example.com" }]),
+        ).resolves.toEqual(["C-EMAIL"]);
+      });
+
+      it("excludes an email principal whose sync state is inactive", async () => {
+        await insertSlackParticipant(db, "C-INACTIVE", "U-INACTIVE");
+        await insertSlackUserSyncState(db, "U-INACTIVE", "gone@example.com", {
+          inactiveAt: "2026-01-01T00:00:00.000Z",
+        });
+
+        await expect(listAuthorizedSlackChannels(db, [{ type: "email", value: "gone@example.com" }])).resolves.toEqual(
+          [],
+        );
+      });
+
+      it("excludes an email principal synced under a different team", async () => {
+        await insertSlackParticipant(db, "C-OTHER-TEAM", "U-OTHER-TEAM");
+        await insertSlackUserSyncState(db, "U-OTHER-TEAM", "other@example.com", { teamId: "T2" });
+
+        await expect(listAuthorizedSlackChannels(db, [{ type: "email", value: "other@example.com" }])).resolves.toEqual(
+          [],
+        );
+      });
+
+      it("returns nothing when the viewer has no principals", async () => {
+        await insertSlackParticipant(db, "C-MINE", "U-VIEWER");
+
+        await expect(listAuthorizedSlackChannels(db, [])).resolves.toEqual([]);
+      });
     });
   });
 }

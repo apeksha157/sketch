@@ -274,6 +274,7 @@ describe("SlackMembershipReconciler", () => {
       providerConversationId: "CKNOWN",
     });
     const slack = {
+      getBotUserId: vi.fn(() => null),
       listChannels: vi.fn().mockRejectedValue(new Error("rate limited")),
       listChannelMembers: vi.fn(async () => ["U1"]),
     };
@@ -286,6 +287,7 @@ describe("SlackMembershipReconciler", () => {
     const started = deferred();
     const resume = deferred();
     const slack = {
+      getBotUserId: vi.fn(() => null),
       listChannels: vi.fn(async () => []),
       listChannelMembers: vi.fn(async (id: string) => {
         if (id === "C1") {

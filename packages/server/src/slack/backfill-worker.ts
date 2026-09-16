@@ -9,7 +9,7 @@ import type { DB } from "../db/schema";
 import type { Logger } from "../logger";
 import { SYSTEM_MESSAGE_SUBTYPES } from "./bot";
 import { loadSlackHistoryLookbackDays } from "./history-lookback";
-import type { SlackHistoryMessage, SlackIndexingFacade } from "./indexing-facade";
+import { type SlackHistoryMessage, type SlackIndexingFacade, readRetryAfterMs } from "./indexing-facade";
 import { isSlackConversationControlMessage, mapSlackBotReplyToInsert, mapSlackMessageToInsert } from "./message-mapper";
 
 export const SLACK_BACKFILL_TICK_MS = 5_000;
@@ -48,6 +48,29 @@ function errorCode(error: unknown): string | null {
   const data = record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : null;
   const code = data?.error ?? record.code;
   return typeof code === "string" ? code : null;
+}
+
+/**
+ * Slack throttles surface in three shapes. `ratelimited` is the platform error
+ * payload; `slack_webapi_rate_limited_error` is the coded client error, thrown
+ * only when `rejectRateLimitedCalls` is set. By default web-api sleeps and
+ * retries internally, then rethrows p-retry's last error — a bare `Error` whose
+ * only evidence is the message text, so that case must be matched too or every
+ * throttle is miscounted as a range failure.
+ */
+/** Reads `retry-after: N` out of web-api's rethrown message text. */
+function readRetryAfterMsFromMessage(message: string): number {
+  const match = /retry-after:\s*(\d+)/i.exec(message);
+  if (!match) return 0;
+  const seconds = Number(match[1]);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+}
+
+function isSlackRateLimited(error: unknown): boolean {
+  const code = errorCode(error);
+  if (code === "ratelimited" || code === "rate_limited") return true;
+  if ((error as { code?: unknown } | null)?.code === "slack_webapi_rate_limited_error") return true;
+  return /rate limit was exceeded/i.test(errorMessage(error));
 }
 
 function errorMessage(error: unknown): string {
@@ -339,6 +362,20 @@ export class SlackBackfillWorker {
       return false;
     } catch (error) {
       const code = errorCode(error);
+      if (isSlackRateLimited(error)) {
+        const retryAfterMs =
+          readRetryAfterMs(error) || readRetryAfterMsFromMessage(errorMessage(error)) || SLACK_BACKFILL_RETRY_BASE_MS;
+        await this.ranges.deferRetry({
+          id: range.id,
+          retryAt: new Date(this.now() + retryAfterMs).toISOString(),
+          now: nowIso,
+        });
+        this.options.logger.info(
+          { rangeId: range.id, channelId: range.channel_id, retryAfterMs },
+          "Slack backfill page throttled; deferred without counting an attempt",
+        );
+        return false;
+      }
       if (code && FATAL_SLACK_ERRORS.has(code)) {
         await this.ranges.markFailed(range.id, code, nowIso);
         this.options.logger.warn(

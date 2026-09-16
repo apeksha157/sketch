@@ -1,4 +1,5 @@
 import { type Expression, type Insertable, type Kysely, type Selectable, type Transaction, sql } from "kysely";
+import { IN_CLAUSE_CHUNK_SIZE, chunk } from "../../connectors/sync-utils";
 import type { Attachment } from "../../files";
 import { effectiveWhatsAppMessageTimestamp } from "../../whatsapp/provider-timestamp";
 import { isPg } from "../dialect";
@@ -532,6 +533,32 @@ export function createConversationRepository(db: ConversationDb) {
         .where("kind", "=", ref.kind)
         .where("provider_conversation_id", "=", ref.providerConversationId)
         .executeTakeFirstOrThrow();
+    },
+
+    /**
+     * Display names for already-authorized Slack channel ids.
+     *
+     * Membership comes from `slack_channel_participants`; this only decorates
+     * those ids with a human label. A channel Sketch has synced but never seen
+     * a message in has no row here, so it falls back to its id rather than
+     * disappearing from the list.
+     */
+    async nameSlackChannels(channelIds: string[]): Promise<Array<{ id: string; name: string }>> {
+      if (channelIds.length === 0) return [];
+      const names = new Map<string, string | null>();
+      for (const idChunk of chunk(channelIds, IN_CLAUSE_CHUNK_SIZE)) {
+        const rows = await db
+          .selectFrom("conversations")
+          .select(["provider_conversation_id", "display_name"])
+          .where("platform", "=", "slack")
+          .where("kind", "=", "channel")
+          .where("provider_conversation_id", "in", idChunk)
+          .execute();
+        for (const row of rows) names.set(row.provider_conversation_id, row.display_name);
+      }
+      return channelIds
+        .map((id) => ({ id, name: names.get(id) ?? id }))
+        .sort((left, right) => left.name.localeCompare(right.name));
     },
 
     async find(ref: ConversationRef): Promise<ConversationRow | undefined> {

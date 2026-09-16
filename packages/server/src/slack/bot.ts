@@ -17,6 +17,7 @@
 import { App, verifySlackRequest } from "@slack/bolt";
 import type { Receiver } from "@slack/bolt";
 import type { Logger } from "../logger";
+import { SLACK_RETRY_CONFIG } from "./indexing-facade";
 
 const SLACK_LOADING_MESSAGE_LIMIT = 50;
 
@@ -213,6 +214,7 @@ export class SlackBot {
         token: config.botToken,
         appToken: config.appToken,
         socketMode: true,
+        clientOptions: { retryConfig: SLACK_RETRY_CONFIG },
       });
     } else {
       if (!config.signingSecret) {
@@ -221,6 +223,7 @@ export class SlackBot {
       this.app = new App({
         token: config.botToken,
         receiver: new NoOpReceiver(),
+        clientOptions: { retryConfig: SLACK_RETRY_CONFIG },
       });
       this.seenEventsTimer = setInterval(
         () => {

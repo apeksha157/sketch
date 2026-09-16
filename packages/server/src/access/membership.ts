@@ -1,4 +1,4 @@
-import type { Kysely } from "kysely";
+import { type Kysely, sql } from "kysely";
 import type { Logger } from "pino";
 import { IN_CLAUSE_CHUNK_SIZE, chunk } from "../connectors/sync-utils";
 import { type AccessPrincipal, normalizeAccessPrincipals } from "../connectors/types";
@@ -49,6 +49,72 @@ export async function authorizedTargets(
     return new Set();
   }
   return granted;
+}
+
+/**
+ * Slack channels the viewer belongs to, read straight from the synced roster.
+ *
+ * The roster is the answer on its own: a row exists only for a channel Sketch
+ * has access to and has synced, so there is nothing to enumerate from Slack and
+ * nothing further to authorize against.
+ *
+ * The viewer filter runs in SQL rather than over a full table read — the roster
+ * grows with the whole org while a viewer's share of it does not. The JS pass
+ * below still re-checks every row against the normalized principal keys.
+ */
+export async function listAuthorizedSlackChannels(
+  db: Kysely<DB>,
+  principals: AccessPrincipal[],
+  logger?: MembershipLogger,
+): Promise<string[]> {
+  const normalizedPrincipals = normalizeAccessPrincipals(principals);
+  if (normalizedPrincipals.length === 0) return [];
+  const principalKeys = new Set(normalizedPrincipals.map((principal) => `${principal.type}\0${principal.value}`));
+  const slackUserIds = normalizedPrincipals
+    .filter((principal) => principal.type === "slack_user")
+    .map((principal) => principal.value);
+  const emails = normalizedPrincipals
+    .filter((principal) => principal.type === "email")
+    .map((principal) => principal.value);
+  if (slackUserIds.length === 0 && emails.length === 0) return [];
+  try {
+    const activeTeamId = (
+      await db.selectFrom("settings").select("slack_team_id").where("id", "=", "default").executeTakeFirst()
+    )?.slack_team_id;
+    const rows = await db
+      .selectFrom("slack_channel_participants")
+      .leftJoin("slack_user_sync_state", (join) =>
+        join
+          .onRef("slack_user_sync_state.slack_user_id", "=", "slack_channel_participants.slack_user_id")
+          .on("slack_user_sync_state.team_id", "=", activeTeamId ?? "")
+          .on("slack_user_sync_state.inactive_at", "is", null),
+      )
+      .select([
+        "slack_channel_participants.channel_id as channelId",
+        "slack_channel_participants.slack_user_id as slackUserId",
+        "slack_user_sync_state.slack_user_id as syncedSlackUserId",
+        "slack_user_sync_state.email as syncedEmail",
+      ])
+      .where((eb) =>
+        eb.or([
+          ...(slackUserIds.length > 0 ? [eb("slack_channel_participants.slack_user_id", "in", slackUserIds)] : []),
+          ...(emails.length > 0 ? [eb(sql<string>`lower(slack_user_sync_state.email)`, "in", emails)] : []),
+        ]),
+      )
+      .execute();
+    const channelIds = new Set<string>();
+    for (const row of rows) {
+      const slackUserKey = principalKey("slack_user", normalizeSlackIdentityUserId(row.slackUserId));
+      const emailKey = principalKey("email", row.syncedEmail);
+      if ((slackUserKey && principalKeys.has(slackUserKey)) || (emailKey && principalKeys.has(emailKey))) {
+        channelIds.add(row.channelId);
+      }
+    }
+    return [...channelIds];
+  } catch (error) {
+    logger?.warn({ err: error }, "Slack channel listing failed closed");
+    return [];
+  }
 }
 
 async function resolveSlackTargets(

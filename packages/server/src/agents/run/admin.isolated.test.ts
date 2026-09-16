@@ -35,6 +35,7 @@ import {
   seedIndexedFile,
   seedMention,
   seedPersonEntity,
+  seedSlackChannelNames,
   seedSlackConversationMessage,
   slackSource,
   sourceRoute,
@@ -47,6 +48,14 @@ describe("AgentRunService", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
+    await seedSlackChannelNames(db, [
+      { id: "C_A", name: "alpha" },
+      { id: "C_B", name: "beta" },
+      { id: "C_ADMIN", name: "admin-source" },
+      { id: "C_MEMBER", name: "member-source" },
+      { id: "U_AGENT", name: "user-like-channel" },
+      { id: "C_DAILY", name: "daily" },
+    ]);
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
   });
@@ -409,6 +418,7 @@ describe("AgentRunService", () => {
     const isUserInChannel = vi.fn(async () => false);
     const service = createService(db, [], {
       getSlack: () => ({
+        getBotUserId: vi.fn(() => null),
         listChannels: vi.fn(async () => [
           { id: "C_PRIVATE", name: "private-room", type: "private_channel", isMember: true },
         ]),

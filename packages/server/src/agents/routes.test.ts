@@ -1000,6 +1000,7 @@ describe("agentRoutes", () => {
         runAgent,
         runScheduledAgent: runAgent,
         getSlack: () => ({
+          getBotUserId: vi.fn(() => null),
           listChannels: vi.fn(async () => [
             { id: "C_A", name: "alpha", type: "public_channel", isMember: true },
             { id: "C_B", name: "beta", type: "public_channel", isMember: true },
@@ -1054,6 +1055,7 @@ describe("agentRoutes", () => {
           throw new Error("runScheduledAgent should not be called");
         }) as unknown as AgentRunServiceDeps["runScheduledAgent"],
         getSlack: () => ({
+          getBotUserId: vi.fn(() => null),
           listChannels: vi.fn(async () => [{ id: "C_SOURCE", name: "source", type: "public_channel", isMember: true }]),
           isUserInChannel: vi.fn(async () => true),
         }),

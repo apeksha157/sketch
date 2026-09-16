@@ -1,8 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { sql } from "kysely";
 import { z } from "zod/v4";
-import { authorizedTargets } from "../../access/membership";
+import { authorizedTargets, listAuthorizedSlackChannels } from "../../access/membership";
 import { resolveMembershipPrincipals } from "../../access/principals";
+import { createConversationRepository } from "../../db/repositories/conversations";
 import type { SketchMcpDeps, ToolResult } from "./types";
 
 const searchDeliveryTargetsSchema = {
@@ -113,15 +114,10 @@ export async function handleSearchDeliveryTargets(
   if ((!platform || platform === "slack") && (!targetType || targetType === "channel")) {
     const slack = deps.getSlack?.() ?? null;
     if (slack) {
-      const channels = await slack.listChannels();
-      const authorized = await authorizedTargets(
-        deps.db,
-        viewerPrincipals,
-        channels.map((channel) => ({ platform: "slack" as const, targetId: channel.id })),
-        deps.logger,
-      );
+      const channelIds = await listAuthorizedSlackChannels(deps.db, viewerPrincipals, deps.logger);
+      const channels = await createConversationRepository(deps.db).nameSlackChannels(channelIds);
       for (const channel of channels) {
-        if (!channel.isMember || !authorized.has(`slack:${channel.id}`) || !matchesQuery(channel.name, query)) continue;
+        if (!matchesQuery(channel.name, query)) continue;
         matches.push({
           platform: "slack",
           targetType: "channel",

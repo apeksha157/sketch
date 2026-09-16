@@ -56,6 +56,7 @@ function makeApp(
 ) {
   let whatsappConnected = options.whatsappConnected ?? true;
   const slack = {
+    getBotUserId: vi.fn(() => null),
     listChannels: vi.fn().mockResolvedValue([]),
   } as unknown as SlackBot;
   const whatsapp = {

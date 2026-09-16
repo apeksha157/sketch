@@ -405,7 +405,7 @@ export class AgentRunGenerationLayer extends AgentRunOutputLayer {
       if (
         source.platform !== "slack" ||
         source.targetType !== "channel" ||
-        !(await slack.isUserInChannel(source.targetId, member.slack_user_id))
+        !(await this.isSlackUserInChannel(source.targetId, member.slack_user_id))
       ) {
         throw new AgentDeliveryTargetError("Recipient is not a member of every source");
       }
@@ -427,8 +427,8 @@ export class AgentRunGenerationLayer extends AgentRunOutputLayer {
       const slack = this.deps.getSlack?.() ?? null;
       if (!slack) throw new AgentDeliveryTargetError("Slack is not connected");
 
-      const channel = (await slack.listChannels()).find((candidate) => candidate.id === destination.targetId);
-      if (!channel?.isMember) {
+      const channel = await this.findSlackChannel(slack, destination.targetId);
+      if (!channel) {
         throw new AgentDeliveryTargetError("Slack channel is not available for delivery");
       }
       return {

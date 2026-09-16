@@ -99,8 +99,15 @@ type SharedSlackConnection = {
 
 const sharedConnectionsByToken = new Map<string, SharedSlackConnection>();
 
+/**
+ * `@slack/web-api` defaults to `tenRetriesInAboutThirtyMinutes`, so a single
+ * rate-limited page can hold the workspace quota for half an hour. Cap it so a
+ * throttled caller yields instead of monopolising the bucket.
+ */
+export const SLACK_RETRY_CONFIG = { retries: 3, maxTimeout: 30_000 };
+
 function defaultClientFactory(token: string): SlackIndexingClient {
-  return new WebClient(token);
+  return new WebClient(token, { retryConfig: SLACK_RETRY_CONFIG });
 }
 
 export function normalizeSlackProviderUpdatedAt(value: number | string | null | undefined): string | null {
@@ -114,7 +121,7 @@ export function normalizeSlackProviderUpdatedAt(value: number | string | null | 
   return String(epochSeconds).padStart(20, "0");
 }
 
-function readRetryAfterMs(error: unknown): number {
+export function readRetryAfterMs(error: unknown): number {
   if (!error || typeof error !== "object") return 0;
   const record = error as Record<string, unknown>;
   const data = record.data && typeof record.data === "object" ? (record.data as Record<string, unknown>) : null;

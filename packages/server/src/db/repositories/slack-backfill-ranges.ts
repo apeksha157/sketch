@@ -202,6 +202,20 @@ export function createSlackBackfillRangeRepository(db: BackfillDb) {
       return exhausted ? "exhausted" : (range.phase as SlackBackfillRangePhase);
     },
 
+    /**
+     * Reschedules a range after a Slack throttle without touching `attempts`.
+     * A 429 says "not now", not "this range is broken" — counting it toward
+     * SLACK_BACKFILL_MAX_ATTEMPTS retires healthy channels permanently, since
+     * only a restart re-arms an exhausted range.
+     */
+    async deferRetry(input: { id: string; retryAt: string; now: string }): Promise<void> {
+      await db
+        .updateTable("slack_backfill_ranges")
+        .set({ next_retry_at: input.retryAt, updated_at: input.now })
+        .where("id", "=", input.id)
+        .execute();
+    },
+
     async rearmExhausted(now: string): Promise<number> {
       const result = await db
         .updateTable("slack_backfill_ranges")

@@ -98,6 +98,7 @@ describe("AgentRunService", () => {
       runAgent: runAgent as unknown as AgentRunServiceDeps["runAgent"],
       outputDelivery,
       getSlack: () => ({
+        getBotUserId: vi.fn(() => null),
         listChannels: vi.fn(async () => [
           { id: "C_A", name: "alpha", type: "public_channel", isMember: true },
           { id: "C_B", name: "beta", type: "public_channel", isMember: true },
@@ -209,7 +210,7 @@ describe("AgentRunService", () => {
     const service = createService(db, tasks, {
       runAgent: runAgent as unknown as AgentRunServiceDeps["runAgent"],
       outputDelivery,
-      getSlack: () => ({ listChannels, isUserInChannel }),
+      getSlack: () => ({ getBotUserId: vi.fn(() => null), listChannels, isUserInChannel }),
       getWhatsApp: () => ({ groupMetadata }),
     });
 

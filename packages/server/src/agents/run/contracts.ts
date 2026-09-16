@@ -46,7 +46,7 @@ export interface AgentRunServiceDeps {
   loadIntegrationProvider?: () => Promise<IntegrationProvider | null>;
   queueManager?: QueueManager;
   outputDelivery?: AgentOutputDeliveryPublisher;
-  getSlack?: () => Pick<SlackBot, "isUserInChannel" | "listChannels"> | null;
+  getSlack?: () => Pick<SlackBot, "getBotUserId" | "isUserInChannel"> | null;
   getWhatsApp?: () =>
     | (Pick<WhatsAppSocketFacade, "groupMetadata"> & {
         resolveLid?: (jid: string) => Promise<string | null>;

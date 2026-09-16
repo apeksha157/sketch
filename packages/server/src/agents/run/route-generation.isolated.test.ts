@@ -34,6 +34,7 @@ import {
   seedIndexedFile,
   seedMention,
   seedPersonEntity,
+  seedSlackChannelNames,
   seedSlackConversationMessage,
   slackSource,
   sourceRoute,
@@ -46,6 +47,13 @@ describe("AgentRunService", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
+    await seedSlackChannelNames(db, [
+      { id: "C_A", name: "alpha" },
+      { id: "C_B", name: "beta" },
+      { id: "C_DEST", name: "leadership" },
+      { id: "C_SPOOFED", name: "spoofed" },
+      { id: "C_DAILY", name: "daily" },
+    ]);
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
   });
@@ -303,6 +311,7 @@ describe("AgentRunService", () => {
       runAgent: runAgent as unknown as AgentRunServiceDeps["runAgent"],
       outputDelivery,
       getSlack: () => ({
+        getBotUserId: vi.fn(() => null),
         listChannels: vi.fn(async () => [
           { id: "C_A", name: "alpha", type: "public_channel", isMember: true },
           { id: "C_B", name: "beta", type: "public_channel", isMember: true },
@@ -399,12 +408,22 @@ describe("AgentRunService", () => {
     );
     const isUserInChannel = vi.fn(async (channelId: string, slackUserId: string) => {
       if (channelId === "C_DEST") throw new Error("Channel route destination should not check user membership");
-      return channelId === "C_A" && slackUserId === "U_AGENT";
+      return channelId === "C_A" && (slackUserId === "U_AGENT" || slackUserId === "U_BOT");
     });
+    await db
+      .insertInto("slack_channel_participants")
+      .values([
+        { channel_id: "C_A", slack_user_id: "U_BOT" },
+        { channel_id: "C_A", slack_user_id: "U_AGENT" },
+        { channel_id: "C_DEST", slack_user_id: "U_BOT" },
+        { channel_id: "C_B", slack_user_id: "U_BOT" },
+        { channel_id: "C_B", slack_user_id: "U_AGENT" },
+      ])
+      .execute();
     const service = createService(db, tasks, {
       runAgent: runAgent as unknown as AgentRunServiceDeps["runAgent"],
       outputDelivery,
-      getSlack: () => ({ listChannels, isUserInChannel }),
+      getSlack: () => ({ getBotUserId: vi.fn(() => "U_BOT"), listChannels, isUserInChannel }),
     });
 
     await service.updateConfigForUser(CONVERSATION_SUMMARY_AGENT_KEY, user.id, {

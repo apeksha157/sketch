@@ -231,6 +231,8 @@ function makeDeps(overrides: Partial<SlackAdapterDeps> = {}): SlackAdapterDeps {
       slackChannelParticipants: {
         upsert: vi.fn().mockResolvedValue(undefined),
         remove: vi.fn().mockResolvedValue(undefined),
+        hasParticipant: vi.fn().mockResolvedValue(false),
+        hasRoster: vi.fn().mockResolvedValue(false),
         clearAll: vi.fn().mockResolvedValue(undefined),
         replaceChannelRoster: vi.fn().mockResolvedValue(undefined),
       },

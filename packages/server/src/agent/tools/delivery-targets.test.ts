@@ -45,10 +45,23 @@ function parseMatches(result: Awaited<ReturnType<typeof handleSearchDeliveryTarg
   }>;
 }
 
-async function seedSlackMemberships(ids: string[]): Promise<void> {
+async function seedSlackMemberships(ids: string[], names: Record<string, string> = {}): Promise<void> {
   await db
     .insertInto("slack_channel_participants")
     .values(ids.map((channel_id) => ({ channel_id, slack_user_id: "U-REQUESTER" })))
+    .execute();
+  const named = ids.filter((id) => names[id]);
+  if (named.length === 0) return;
+  await db
+    .insertInto("conversations")
+    .values(
+      named.map((id) => ({
+        platform: "slack",
+        kind: "channel",
+        provider_conversation_id: id,
+        display_name: names[id],
+      })),
+    )
     .execute();
 }
 
@@ -63,7 +76,7 @@ describe("handleSearchDeliveryTargets", () => {
         { id: "CRANDOM", name: "random", type: "public_channel", isMember: false },
       ],
     } as SlackBot;
-    await seedSlackMemberships(["CGENERAL", "CENG"]);
+    await seedSlackMemberships(["CGENERAL", "CENG"], { CGENERAL: "general", CENG: "engineering" });
 
     const matches = parseMatches(
       await handleSearchDeliveryTargets({ platform: "slack" }, { db, getSlack: () => slack, ...requesterPrincipals }),
@@ -73,15 +86,15 @@ describe("handleSearchDeliveryTargets", () => {
       {
         platform: "slack",
         targetType: "channel",
-        targetId: "CGENERAL",
-        label: "#general",
+        targetId: "CENG",
+        label: "#engineering",
         canDeliver: true,
       },
       {
         platform: "slack",
         targetType: "channel",
-        targetId: "CENG",
-        label: "#engineering",
+        targetId: "CGENERAL",
+        label: "#general",
         canDeliver: true,
       },
     ]);
@@ -93,7 +106,7 @@ describe("handleSearchDeliveryTargets", () => {
     const slack = {
       listChannels: async () => [{ id: "CGENERAL", name: "general", type: "public_channel", isMember: true }],
     } as SlackBot;
-    await seedSlackMemberships(["CGENERAL"]);
+    await seedSlackMemberships(["CGENERAL"], { CGENERAL: "general" });
 
     const matches = parseMatches(
       await handleSearchDeliveryTargets({ platform: "slack" }, { db, getSlack: () => slack, ...requesterPrincipals }),
@@ -127,7 +140,11 @@ describe("handleSearchDeliveryTargets", () => {
           isMember: true,
         })),
     } as SlackBot;
-    await seedSlackMemberships(Array.from({ length: 12 }, (_, index) => `C${String(index + 1).padStart(2, "0")}`));
+    const paginationIds = Array.from({ length: 12 }, (_, index) => `C${String(index + 1).padStart(2, "0")}`);
+    await seedSlackMemberships(
+      paginationIds,
+      Object.fromEntries(paginationIds.map((id, index) => [id, `channel-${String(index + 1).padStart(2, "0")}`])),
+    );
 
     const firstPage = parseResult(
       await handleSearchDeliveryTargets(
@@ -210,7 +227,7 @@ describe("handleSearchDeliveryTargets", () => {
         { id: "CENGPRIVATE", name: "engineering-private", type: "private_channel", isMember: false },
       ],
     } as SlackBot;
-    await seedSlackMemberships(["CENG"]);
+    await seedSlackMemberships(["CENG"], { CENG: "engineering" });
 
     const matches = parseMatches(
       await handleSearchDeliveryTargets(
@@ -287,7 +304,7 @@ describe("handleSearchDeliveryTargets", () => {
         platform: "slack",
         targetType: "channel",
         targetId: channelId,
-        label: "#quiet-private",
+        label: `#${channelId}`,
         canDeliver: true,
       };
 

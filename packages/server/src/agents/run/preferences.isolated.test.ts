@@ -34,6 +34,7 @@ import {
   seedIndexedFile,
   seedMention,
   seedPersonEntity,
+  seedSlackChannelNames,
   seedSlackConversationMessage,
   slackSource,
   sourceRoute,
@@ -46,6 +47,11 @@ describe("AgentRunService", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
+    await seedSlackChannelNames(db, [
+      { id: "C_A", name: "alpha" },
+      { id: "C_TASKS", name: "tasks" },
+      { id: "C_DAILY", name: "daily" },
+    ]);
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
   });

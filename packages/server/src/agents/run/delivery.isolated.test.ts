@@ -35,6 +35,7 @@ import {
   seedIndexedFile,
   seedMention,
   seedPersonEntity,
+  seedSlackChannelNames,
   seedSlackConversationMessage,
   slackSource,
   sourceRoute,
@@ -47,6 +48,11 @@ describe("AgentRunService", () => {
 
   beforeEach(async () => {
     db = await createTestDb();
+    await seedSlackChannelNames(db, [
+      { id: "C_DAILY", name: "daily" },
+      { id: "C_SPOOFED", name: "spoofed" },
+      { id: "C_PRIVATE", name: "private-room" },
+    ]);
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
   });
@@ -62,6 +68,7 @@ describe("AgentRunService", () => {
     await users.create({ name: "Bob", email: "bob@example.com", slackUserId: "U_BOB" });
     const service = createService(db, [], {
       getSlack: () => ({
+        getBotUserId: vi.fn(() => null),
         listChannels: vi.fn(async () => []),
         isUserInChannel: vi.fn(async () => false),
       }),
@@ -110,7 +117,7 @@ describe("AgentRunService", () => {
     const listChannels = vi.fn(async () => [{ id: "C_DAILY", name: "daily", type: "private_channel", isMember: true }]);
     const isUserInChannel = vi.fn(async () => false);
     const service = createService(db, [], {
-      getSlack: () => ({ listChannels, isUserInChannel }),
+      getSlack: () => ({ getBotUserId: vi.fn(() => null), listChannels, isUserInChannel }),
     });
 
     await expect(
@@ -149,6 +156,7 @@ describe("AgentRunService", () => {
     const isUserInChannel = vi.fn(async (_channelId: string, slackUserId: string) => slackUserId !== "U_MISSING");
     const service = createService(db, [], {
       getSlack: () => ({
+        getBotUserId: vi.fn(() => null),
         listChannels: vi.fn(async () => [{ id: "C_DAILY", name: "daily", type: "private_channel", isMember: true }]),
         isUserInChannel,
       }),
@@ -389,7 +397,7 @@ describe("AgentRunService", () => {
       runAgent: runAgent as unknown as AgentRunServiceDeps["runAgent"],
       runScheduledAgent: runAgent as unknown as AgentRunServiceDeps["runScheduledAgent"],
       queueManager: createPausedQueueManager(tasks),
-      getSlack: () => ({ listChannels, isUserInChannel }),
+      getSlack: () => ({ getBotUserId: vi.fn(() => null), listChannels, isUserInChannel }),
     });
     await service.updateConfigForUser(CONVERSATION_SUMMARY_AGENT_KEY, user.id, {
       sources: [

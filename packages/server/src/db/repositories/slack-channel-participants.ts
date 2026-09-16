@@ -19,6 +19,31 @@ export function createSlackChannelParticipantsRepository(db: Kysely<DB>) {
         .execute();
     },
 
+    /**
+     * DB-backed replacement for `SlackBot.isUserInChannel`, which paginates
+     * `conversations.members` live. The roster here is what `authorizedTargets`
+     * already trusts for access decisions.
+     */
+    async hasParticipant(channelId: string, slackUserId: string): Promise<boolean> {
+      const row = await db
+        .selectFrom("slack_channel_participants")
+        .select("channel_id")
+        .where("channel_id", "=", channelId)
+        .where("slack_user_id", "=", slackUserId)
+        .executeTakeFirst();
+      return row !== undefined;
+    },
+
+    /** True when any roster row exists for the channel, i.e. it has been synced. */
+    async hasRoster(channelId: string): Promise<boolean> {
+      const row = await db
+        .selectFrom("slack_channel_participants")
+        .select("channel_id")
+        .where("channel_id", "=", channelId)
+        .executeTakeFirst();
+      return row !== undefined;
+    },
+
     async remove(channelId: string, slackUserId: string): Promise<void> {
       await db
         .deleteFrom("slack_channel_participants")

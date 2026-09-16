@@ -8,6 +8,8 @@ import type {
   AgentSourceConfig,
   AgentSourceKey,
 } from "../../db/repositories/agent-outputs";
+import { createConversationRepository } from "../../db/repositories/conversations";
+import { createSlackChannelParticipantsRepository } from "../../db/repositories/slack-channel-participants";
 import type { NormalizedGroupMetadata } from "../../whatsapp/facade-contract";
 import { getAgentDefinition, requireAgentDefinition } from "../registry";
 import type { AgentDefinition, AgentSourceConfigDef } from "../types";
@@ -196,11 +198,11 @@ export class AgentRunTargetLayer extends AgentRunConfigLayer {
         };
       }
 
-      const channel = (await slack.listChannels()).find((candidate) => candidate.id === delivery.targetId);
-      if (!channel?.isMember) {
+      const channel = await this.findSlackChannel(slack, delivery.targetId);
+      if (!channel) {
         throw new AgentDeliveryTargetError("Slack channel is not available for delivery");
       }
-      if (!(await slack.isUserInChannel(delivery.targetId, user.slack_user_id))) {
+      if (!(await this.isSlackUserInChannel(delivery.targetId, user.slack_user_id))) {
         throw new AgentDeliveryTargetError("Slack channel is not available for this user");
       }
       const normalized = {
@@ -256,7 +258,10 @@ export class AgentRunTargetLayer extends AgentRunConfigLayer {
     const requester = await this.deps.users.findById(userId);
     if (!requester?.slack_user_id) return [];
     for (const source of sources) {
-      if (source.targetType !== "channel" || !(await slack.isUserInChannel(source.targetId, requester.slack_user_id))) {
+      if (
+        source.targetType !== "channel" ||
+        !(await this.isSlackUserInChannel(source.targetId, requester.slack_user_id))
+      ) {
         return [];
       }
     }
@@ -266,7 +271,10 @@ export class AgentRunTargetLayer extends AgentRunConfigLayer {
       if (!user.slack_user_id) continue;
       let eligible = true;
       for (const source of sources) {
-        if (source.targetType !== "channel" || !(await slack.isUserInChannel(source.targetId, user.slack_user_id))) {
+        if (
+          source.targetType !== "channel" ||
+          !(await this.isSlackUserInChannel(source.targetId, user.slack_user_id))
+        ) {
           eligible = false;
           break;
         }
@@ -316,6 +324,45 @@ export class AgentRunTargetLayer extends AgentRunConfigLayer {
     return members;
   }
 
+  /**
+   * Resolves one Slack channel without paginating `conversations.list` across
+   * the whole workspace to find a single id.
+   *
+   * Membership is the gate, and `slack_channel_participants` is the source for
+   * it — the same roster `authorizedTargets` trusts. The `conversations` row is
+   * consulted only for a display name, so a channel Sketch has not yet indexed
+   * a message from is still a valid target.
+   */
+  protected async findSlackChannel(
+    slack: { getBotUserId: () => string | null },
+    channelId: string,
+  ): Promise<{ id: string; name: string } | undefined> {
+    const botUserId = slack.getBotUserId();
+    if (botUserId && !(await this.isSlackUserInChannel(channelId, botUserId))) return undefined;
+    const row = await createConversationRepository(this.deps.db).find({
+      platform: "slack",
+      kind: "channel",
+      providerConversationId: channelId,
+    });
+    return { id: channelId, name: row?.display_name ?? channelId };
+  }
+
+  /**
+   * Membership from the synced roster, which is what `authorizedTargets`
+   * already trusts. Falls back to a single bounded Slack lookup only when the
+   * channel has no roster at all — a tenant whose first reconciler sweep has
+   * not landed yet must not fail closed. That call is per-channel, never a
+   * workspace enumeration, and stops once the roster is populated.
+   */
+  protected async isSlackUserInChannel(channelId: string, slackUserId: string): Promise<boolean> {
+    const participants = createSlackChannelParticipantsRepository(this.deps.db);
+    if (await participants.hasRoster(channelId)) {
+      return participants.hasParticipant(channelId, slackUserId);
+    }
+    const slack = this.deps.getSlack?.() ?? null;
+    return slack ? slack.isUserInChannel(channelId, slackUserId) : false;
+  }
+
   private async resolveDeliveryMentions(
     delivery: AgentDeliveryConfig,
     context: { whatsappGroup?: NormalizedGroupMetadata | null } = {},
@@ -339,7 +386,7 @@ export class AgentRunTargetLayer extends AgentRunConfigLayer {
         if (delivery.targetType === "channel") {
           const slack = this.deps.getSlack?.() ?? null;
           if (!slack) throw new AgentDeliveryTargetError("Slack is not connected");
-          if (!(await slack.isUserInChannel(delivery.targetId, user.slack_user_id))) {
+          if (!(await this.isSlackUserInChannel(delivery.targetId, user.slack_user_id))) {
             throw new AgentDeliveryTargetError("Slack mention target is not in the delivery channel");
           }
         }
@@ -429,9 +476,9 @@ export class AgentRunTargetLayer extends AgentRunConfigLayer {
       if (!user.slack_user_id) throw new AgentSourceTargetError("Slack sources are not available for this user");
       const slack = this.deps.getSlack?.() ?? null;
       if (!slack) throw new AgentSourceTargetError("Slack is not connected");
-      const channel = (await slack.listChannels()).find((candidate) => candidate.id === source.targetId);
-      if (!channel?.isMember) throw new AgentSourceTargetError("Slack channel is not available as a source");
-      if (!(await slack.isUserInChannel(source.targetId, user.slack_user_id))) {
+      const channel = await this.findSlackChannel(slack, source.targetId);
+      if (!channel) throw new AgentSourceTargetError("Slack channel is not available as a source");
+      if (!(await this.isSlackUserInChannel(source.targetId, user.slack_user_id))) {
         throw new AgentSourceTargetError("Slack channel is not available for this user");
       }
       return {

@@ -131,6 +131,26 @@ function createWritingService(
   });
 }
 
+/**
+ * Gives Slack channels a display name in the database.
+ *
+ * Delivery labels come from `conversations` now that the agent path no longer
+ * enumerates Slack, and a channel with no ingested messages has no row — so
+ * fixtures that assert on `#name` have to seed one.
+ */
+export async function seedSlackChannelNames(
+  db: Kysely<DB>,
+  channels: Array<{ id: string; name: string }>,
+): Promise<void> {
+  const conversations = createConversationRepository(db);
+  for (const channel of channels) {
+    await conversations.getOrCreate(
+      { platform: "slack", kind: "channel", providerConversationId: channel.id },
+      channel.name,
+    );
+  }
+}
+
 function allowSlackDelivery(
   channels: Array<{ id: string; name: string }> = [{ id: "C_DAILY", name: "daily" }],
   isUserInChannel = vi.fn(async () => true),
@@ -140,6 +160,7 @@ function allowSlackDelivery(
   return {
     isUserInChannel,
     getSlack: () => ({
+      getBotUserId: vi.fn(() => null),
       listChannels: vi.fn(async () =>
         channels.map((channel) => ({ ...channel, type: "public_channel", isMember: true })),
       ),
