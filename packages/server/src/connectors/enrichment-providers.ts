@@ -2,7 +2,7 @@ import type { Logger } from "pino";
 import { type EmbeddingProvider, createEmbeddingProvider, createQueryEmbedder } from "./embeddings";
 import { type GeminiGenerator, type GenerateOptions, createGeminiGenerator } from "./gemini-generate";
 import { createOpenRouterGenerator } from "./openrouter-generate";
-import { isRetryableProviderError, withProviderFallback } from "./provider-fallback";
+import { shouldUseProviderFallback, withProviderFallback } from "./provider-fallback";
 
 export type EmbeddingProviderName = "openrouter" | "gemini";
 
@@ -128,7 +128,7 @@ export function createEnrichmentGenerator(config: EnrichmentProviderConfig): Gem
     try {
       return await primaryCall();
     } catch (err) {
-      if (!isRetryableProviderError(err)) throw err;
+      if (!shouldUseProviderFallback(err)) throw err;
       primaryDisabled = true;
       config.logger?.warn({ err, operation }, "Primary enrichment provider disabled for this run");
       try {

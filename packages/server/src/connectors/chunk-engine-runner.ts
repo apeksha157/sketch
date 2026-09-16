@@ -19,7 +19,7 @@ import {
   type ChunkStreamAdapter,
   runChunkingPass,
 } from "./chunk-engine";
-import { isRetryableProviderError } from "./provider-fallback";
+import { shouldRetryProviderOperation } from "./provider-fallback";
 
 const BURST_SCAN_MAX_PAGES = 4;
 const MAX_PROVIDER_ATTEMPTS = 3;
@@ -42,7 +42,7 @@ export async function withProviderBackoff<T>(
     try {
       return await run();
     } catch (error) {
-      if (!isRetryableProviderError(error) || attempt >= MAX_PROVIDER_ATTEMPTS - 1) throw error;
+      if (!shouldRetryProviderOperation(error) || attempt >= MAX_PROVIDER_ATTEMPTS - 1) throw error;
       const waitMs = Math.min(100 * 2 ** attempt, 1000);
       options.logger.warn({ ...options.logContext, attempt: attempt + 1, waitMs }, options.message);
       await new Promise((resolve) => setTimeout(resolve, waitMs));

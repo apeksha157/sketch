@@ -367,8 +367,17 @@ export abstract class AgentRunOutputLayer extends AgentRunTargetLayer {
     return [...dueByPeriodKey.values()];
   }
 
+  /**
+   * Age alone is not death. Only an output this process no longer owns is
+   * eligible for replacement; queued, executing, and cancel-in-flight work all
+   * keep the output live so a 30-minute-old run is not duplicated.
+   */
   private isRunningStale(output: AgentOutputRow, now: Date): boolean {
-    return output.status === "running" && isOlderThan(output.created_at, now, RUNNING_STALE_AFTER_MS);
+    return (
+      output.status === "running" &&
+      isOlderThan(output.created_at, now, RUNNING_STALE_AFTER_MS) &&
+      !this.runQueue.hasLiveRun(output.id)
+    );
   }
 
   private async reuseRunningOutput(

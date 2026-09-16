@@ -42,6 +42,10 @@ async function dumpCall(
  *  count thinking tokens against this budget depending on API version. */
 const DEFAULT_MAX_TOKENS = 8192;
 
+/** Per-request transport bound for a generation call, matching the OpenRouter
+ *  generation default. The SDK arms its abort timeout only when supplied. */
+const GENERATE_TIMEOUT_MS = 60_000;
+
 /**
  * Raw call metadata handed to `GenerateOptions.onMeta`. `outcome` is
  * "http_error" when the provider answered non-OK (rawText then carries the
@@ -103,7 +107,13 @@ export function createGeminiGenerator(apiKey: string, options?: GeminiClientOpti
   async function getClient(): Promise<import("@google/genai").GoogleGenAI> {
     if (!ai) {
       const { GoogleGenAI } = await import("@google/genai");
-      ai = new GoogleGenAI({ apiKey });
+      /**
+       * Bound each generation HTTP request with the same order of magnitude as
+       * the OpenRouter generation default (60s). The SDK only arms an abort
+       * timeout when one is supplied, so without this a stuck request would keep
+       * a recovery probe pending indefinitely.
+       */
+      ai = new GoogleGenAI({ apiKey, httpOptions: { timeout: GENERATE_TIMEOUT_MS } });
     }
     return ai;
   }

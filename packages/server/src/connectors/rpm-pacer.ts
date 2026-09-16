@@ -10,6 +10,13 @@ export interface RpmPacerOptions {
   maxRpm: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /**
+   * Invoked inside the serialized slot callback, before sleeping and again
+   * after the wait. Throwing aborts this waiter without starting a second
+   * sleep or advancing the shared schedule, so a caller that learned it can
+   * no longer make a request stops consuming paced waiting time.
+   */
+  checkAllowed?: () => void;
 }
 
 type Limiter = {
@@ -32,6 +39,7 @@ export async function acquireRpmSlot(quotaIdentity: string, options: RpmPacerOpt
   const intervalMs = Math.ceil(60000 / maxRpm);
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
+  const checkAllowed = options.checkAllowed;
   let limiter = limiterByQuotaIdentity.get(quotaIdentity);
   if (!limiter) {
     limiter = { nextAt: 0, tail: Promise.resolve() };
@@ -39,8 +47,10 @@ export async function acquireRpmSlot(quotaIdentity: string, options: RpmPacerOpt
   }
 
   const run = limiter.tail.then(async () => {
+    checkAllowed?.();
     const waitMs = Math.max(0, limiter.nextAt - now());
     if (waitMs > 0) await sleep(waitMs);
+    checkAllowed?.();
     limiter.nextAt = now() + intervalMs;
   });
   limiter.tail = run.catch(() => {});
