@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.14] -- 2026-09-16
+
+- Fixes backfill admission gate scoping pressure to the admitting connector instead of the whole tenant's pipeline backlog, preventing one connector's history (e.g. Google Drive) from starving another's (e.g. Slack); also pairs `embedding_status = skipped` with `summary_status = skipped` via `SKIPPED_WITHOUT_CONTENT` so contentless files no longer count as open pressure, scopes retry-abandoned files from the pressure metric, wires `SLACK_BACKFILL_GRAPH_*` env vars to the existing `backfillGraphKnobs` seam, and adds migration 240 to repair existing orphaned rows.
+- Fixes Slack enumeration on the agent read path by replacing `slack.listChannels()` calls with database roster lookups from `slack_channel_participants` and `conversations`, capping both Slack client retry budgets to 3 retries, and fixing throttle detection in the backfill worker to match the platform's rethrown bare `Error` message text so 429s defer correctly instead of marking ranges exhausted.
+- Fixes deployments failing health checks during graph recovery by restoring unfinished inputs at boot then draining them asynchronously after HTTP starts, preserving the existing durable run for recovery to complete at shutdown without blocking startup.
+
 ## [1.7.13] -- 2026-09-16
 
 - Adds consolidated-loop shadow v2 propose→match→judge core: model lists mentions and calls a read-only `match_mentions` tool to resolve them deterministically, with a post-hoc reconcile pass ensuring the matcher wins on disagreements; splits `proposeEntity` into `decideEntityMatch` and `applyProposeEffects`, adds diagnostics like `overriddenByMatcher` and `demotedUnoffered`, and sets `CONSOLIDATED_EXTRACTOR_VERSION = "loop-v2"`.
