@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.12] -- 2026-09-16
+
+- Fixes scheduled-run latency by keeping locally live outputs alive: `AgentOutputRunQueue` now reference-counts live tasks per output across queued, executing, and cancel-in-flight work, and `isRunningStale` only expires an output when it is older than 30 minutes and no local task owns it, preventing duplicate runs and false staleness recovery.
+- Fixes Gemini monthly spending cap handling to fail fast: matches the terminal cap 429 distinctly from transient rate limits, caches refusal per quota identity and credential for five minutes, admits exactly one recovery probe at cooldown with a 10-minute lease, adds pacer guards to unwind queued waiters, and discards stale settlements via monotonic state versions; also adds a 60s transport timeout for generation calls.
+
 ## [1.7.11] -- 2026-09-15
 
 - Adds Manage option to the WhatsApp card's ⋯ menu on the Channels page, opening the same `ManageConnectorDialog` used by Files with status, group scope, member labels, and Sync now; wires `GenericScopeEditor` to accept an optional `onIndexingStarted` handler so scope-save redirects to Files for progress tracking.
