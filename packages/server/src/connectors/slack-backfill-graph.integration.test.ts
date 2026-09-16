@@ -61,6 +61,19 @@ async function insertRow(
   return captured.row.id;
 }
 
+async function seedSlackConnector(db: Kysely<DB>): Promise<void> {
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "slack-connector",
+      connector_type: "slack",
+      auth_type: "system",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .execute();
+}
+
 function admit(db: Kysely<DB>) {
   return admitSlackBackfillGraphPages({
     db,
@@ -281,19 +294,86 @@ describe("Slack backfill graph admission", () => {
    * sighting sat above the 5,000 open-fact ceiling, so a fully fetched year of
    * Slack history was never admitted at all — not slowly, never.
    */
+  /**
+   * Positive control for the production scope constant. The unit tests build
+   * their own scope literal, so without this a typo in the shipped constant
+   * would leave the Slack gate permanently open with every suite green.
+   */
+  it("still blocks on its own unparked facts", async () => {
+    const { conversationId, rangeId } = await seedRange(db);
+    await insertRow(db, { conversationId, ts: "1788000000.000100", source: "history", rangeId });
+    await seedSlackConnector(db);
+    await db
+      .insertInto("indexed_file_facts")
+      .values({
+        id: "slack-open-fact",
+        fact_key: "slack-open-fact",
+        source: "test",
+        fact_type: "test",
+        relation: "test",
+        raw: "{}",
+        connector_config_id: "slack-connector",
+      })
+      .execute();
+
+    const summary = await admitSlackBackfillGraphPages({
+      db,
+      logger: createTestLogger(),
+      generate: undefined,
+      channelKnobs: knobs.channel,
+      threadKnobs: knobs.thread,
+      backfillGraphKnobs: { openFactsMax: 0 },
+      now: NOW,
+    });
+
+    expect(summary.skippedForPressure).toBe(true);
+    expect(summary.messagesRead).toEqual(0);
+  });
+
+  /**
+   * The configured ceiling has to reach the gate — the knobs seam existed but
+   * nothing passed it, so Slack ran on hardcoded defaults no operator could
+   * change.
+   */
+  it("honours a raised ceiling from the caller's knobs", async () => {
+    const { conversationId, rangeId } = await seedRange(db);
+    await insertRow(db, { conversationId, ts: "1788000000.000100", source: "history", rangeId });
+    await seedSlackConnector(db);
+    for (let index = 0; index < 3; index += 1) {
+      await db
+        .insertInto("indexed_file_facts")
+        .values({
+          id: `raised-${index}`,
+          fact_key: `raised-${index}`,
+          source: "test",
+          fact_type: "test",
+          relation: "test",
+          raw: "{}",
+          connector_config_id: "slack-connector",
+        })
+        .execute();
+    }
+
+    const base = {
+      db,
+      logger: createTestLogger(),
+      generate: undefined,
+      channelKnobs: knobs.channel,
+      threadKnobs: knobs.thread,
+      now: NOW,
+    };
+    const blocked = await admitSlackBackfillGraphPages({ ...base, backfillGraphKnobs: { openFactsMax: 1 } });
+    expect(blocked.skippedForPressure).toBe(true);
+
+    const admitted = await admitSlackBackfillGraphPages({ ...base, backfillGraphKnobs: { openFactsMax: 10 } });
+    expect(admitted.skippedForPressure).toBe(false);
+    expect(admitted.messagesRead).toEqual(1);
+  });
+
   it("admits history when every open fact is parked well past the pressure ceiling", async () => {
     const { conversationId, rangeId } = await seedRange(db);
     await insertRow(db, { conversationId, ts: "1788000000.000100", source: "history", rangeId });
-    await db
-      .insertInto("connector_configs")
-      .values({
-        id: "slack-connector",
-        connector_type: "slack",
-        auth_type: "system",
-        credentials: "{}",
-        created_by: "admin",
-      })
-      .execute();
+    await seedSlackConnector(db);
     for (let index = 0; index < 6_000; index += 1) {
       await db
         .insertInto("indexed_file_facts")

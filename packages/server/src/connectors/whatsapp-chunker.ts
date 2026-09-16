@@ -632,9 +632,13 @@ export const WHATSAPP_BACKFILL_GRAPH_SCOPE: WhatsAppBackfillGraphScope = {
 
 /**
  * Files and facts reach a connector only through `connector_config_id`, so both
- * legs join `connector_configs` to reach the type. Rows with a null config —
- * manual and local-source facts — belong to no connector and so count against
- * none of them.
+ * legs join `connector_configs` to reach the type.
+ *
+ * A file always has one (the column is NOT NULL), so its join drops nothing. A
+ * fact may not: manual and local-source facts never had a connector, and
+ * deleting a connector nulls the column rather than the row. Both cases count
+ * against no connector, which is what an inner join gives — there is no
+ * connector left whose admission they could fairly throttle.
  */
 export async function readWhatsAppBackfillGraphBacklog(
   db: Kysely<DB>,
@@ -696,6 +700,10 @@ export async function readWhatsAppBackfillGraphBacklog(
  * Tenant-wide backlog, gated on by nothing and logged beside the scoped
  * counts. Removing the global ceiling removed the only place a genuine
  * pipeline-wide overload would have been visible; this keeps that signal.
+ *
+ * It carries the same attempts cap as the scoped read so the two numbers in a
+ * single log line stay comparable — a tenant total that counted abandoned
+ * files could otherwise sit above the sum of every connector's pressure.
  */
 export async function readWhatsAppBackfillGraphTenantTotals(
   db: Kysely<DB>,
@@ -706,7 +714,12 @@ export async function readWhatsAppBackfillGraphTenantTotals(
       .select((eb) => eb.fn.countAll().as("count"))
       .where("is_archived", "=", 0)
       .where((eb) =>
-        eb.or([eb("embedding_status", "in", ["pending", "failed"]), eb("summary_status", "in", ["pending", "failed"])]),
+        eb.or([
+          eb("embedding_status", "=", "pending"),
+          eb.and([eb("embedding_status", "=", "failed"), eb("embedding_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS)]),
+          eb("summary_status", "=", "pending"),
+          eb.and([eb("summary_status", "=", "failed"), eb("summary_attempts", "<", MAX_ENRICHMENT_STAGE_ATTEMPTS)]),
+        ]),
       )
       .executeTakeFirst(),
     db
