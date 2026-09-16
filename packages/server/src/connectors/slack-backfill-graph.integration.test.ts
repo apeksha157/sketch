@@ -284,6 +284,16 @@ describe("Slack backfill graph admission", () => {
   it("admits history when every open fact is parked well past the pressure ceiling", async () => {
     const { conversationId, rangeId } = await seedRange(db);
     await insertRow(db, { conversationId, ts: "1788000000.000100", source: "history", rangeId });
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: "slack-connector",
+        connector_type: "slack",
+        auth_type: "system",
+        credentials: "{}",
+        created_by: "admin",
+      })
+      .execute();
     for (let index = 0; index < 6_000; index += 1) {
       await db
         .insertInto("indexed_file_facts")
@@ -294,6 +304,7 @@ describe("Slack backfill graph admission", () => {
           fact_type: "test",
           relation: "test",
           raw: "{}",
+          connector_config_id: "slack-connector",
           materialization_deferred_at: "2026-07-01T00:00:00.000Z",
         })
         .execute();

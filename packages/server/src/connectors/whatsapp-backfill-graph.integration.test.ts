@@ -745,16 +745,7 @@ describe("WhatsApp backfill graph admission scheduling", () => {
       label: "pending enrichment files",
       threshold: { pendingFilesMax: 0 },
       seed: async (db: Kysely<DB>) => {
-        await db
-          .insertInto("connector_configs")
-          .values({
-            id: "pressure-connector",
-            connector_type: "test",
-            auth_type: "system",
-            credentials: "{}",
-            created_by: "admin",
-          })
-          .execute();
+        await seedPressureConnector(db);
         await db
           .insertInto("indexed_files")
           .values({
@@ -779,6 +770,7 @@ describe("WhatsApp backfill graph admission scheduling", () => {
       label: "open materialization facts",
       threshold: { openFactsMax: 0 },
       seed: async (db: Kysely<DB>) => {
+        await seedPressureConnector(db);
         await db
           .insertInto("indexed_file_facts")
           .values({
@@ -788,6 +780,7 @@ describe("WhatsApp backfill graph admission scheduling", () => {
             fact_type: "test",
             relation: "test",
             raw: "{}",
+            connector_config_id: "pressure-connector",
           })
           .execute();
       },
@@ -821,6 +814,7 @@ describe("WhatsApp backfill graph admission scheduling", () => {
   it("admits history when the open facts are all parked, and still counts unswept ones", async () => {
     const seeded = await seedGraphChat(db, { groupJid: "parked@g.us" });
     await insertHistory(db, seeded.conversationId, seeded.rangeId, "parked-history", "2026-07-01T09:00:00.000Z");
+    await seedPressureConnector(db);
     await insertFact(db, "parked-fact", { deferredAt: "2026-07-01T00:00:00.000Z" });
     const testLogger = logger();
 
@@ -856,6 +850,20 @@ describe("WhatsApp backfill graph admission scheduling", () => {
   });
 });
 
+async function seedPressureConnector(db: Kysely<DB>): Promise<void> {
+  await db
+    .insertInto("connector_configs")
+    .values({
+      id: "pressure-connector",
+      connector_type: "whatsapp",
+      auth_type: "system",
+      credentials: "{}",
+      created_by: "admin",
+    })
+    .onConflict((oc) => oc.column("id").doNothing())
+    .execute();
+}
+
 async function insertFact(db: Kysely<DB>, id: string, opts: { deferredAt?: string }): Promise<void> {
   await db
     .insertInto("indexed_file_facts")
@@ -866,6 +874,7 @@ async function insertFact(db: Kysely<DB>, id: string, opts: { deferredAt?: strin
       fact_type: "test",
       relation: "test",
       raw: "{}",
+      connector_config_id: "pressure-connector",
       ...(opts.deferredAt ? { materialization_deferred_at: opts.deferredAt } : {}),
     })
     .execute();

@@ -3116,7 +3116,23 @@ export function connectorRoutes(
     // half a caller actually asked for. runEnrichment's fileIds path already
     // treats an explicit rerun as a manual override for embedding_status;
     // this makes summary_status agree.
-    await db.updateTable("indexed_files").set({ summary_status: "pending" }).where("id", "=", fileId).execute();
+    //
+    // A file skipped for having no content must be reopened on both stages at
+    // once: clearing the summary alone leaves an orphan the worker can never
+    // claim, since every summary path requires a finished embedding.
+    await db
+      .updateTable("indexed_files")
+      .set((eb) => ({
+        summary_status: "pending",
+        embedding_status: eb
+          .case()
+          .when("embedding_status", "=", "skipped")
+          .then("pending")
+          .else(eb.ref("embedding_status"))
+          .end(),
+      }))
+      .where("id", "=", fileId)
+      .execute();
 
     const dumpStamp = new Date().toISOString().replace(/[:.]/g, "-");
     const debugDumpDir = `data/llm-dumps/${fileId}__${dumpStamp}`;
