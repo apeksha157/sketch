@@ -1,6 +1,6 @@
 import type { Kysely } from "kysely";
 import pino from "pino";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConnectorRepository, readSourceMeta } from "../db/repositories/connectors";
 import { createConversationSlicesRepository } from "../db/repositories/conversation-slices";
 import { createConversationRepository } from "../db/repositories/conversations";
@@ -18,6 +18,7 @@ import {
   archiveAllSlackChannelFiles,
   emitSlackSyncedItems,
   reconcileSlackChannelAcls,
+  resetSlackChannelVisibilityCache,
 } from "./slack-emission";
 import { createSlackIndexingConnector } from "./slack-indexing";
 import { ensureSlackConnectorConfig } from "./slack-provisioning";
@@ -50,6 +51,7 @@ function fakeFacade(overrides: Partial<SlackIndexingFacade> = {}): SlackIndexing
     isConfigured: async () => true,
     listMemberChannels: async () => [{ id: "C1", name: "general" }],
     listChannelMembers: async () => ["U0TEAM"],
+    getChannelInfo: async (channelId: string) => ({ id: channelId, name: "general" }),
     getUserInfo: async () => ({
       name: "priya",
       realName: "Priya",
@@ -1241,6 +1243,7 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
         .where("id", "=", slice.row.id)
         .execute();
 
+      resetSlackChannelVisibilityCache();
       const summary = await reconcileSlackChannelAcls({
         db,
         logger,
@@ -1275,6 +1278,44 @@ function runSuite(label: string, createDb: () => Promise<Kysely<DB>>) {
       expect(goneSlice.indexed_file_id).toBeNull();
     });
 
+    it("reuses the channel visibility walk within the TTL and refetches after it", async () => {
+      await ensureSlackConnectorConfig({ db, logger });
+      const config = await db
+        .selectFrom("connector_configs")
+        .select("id")
+        .where("connector_type", "=", "slack")
+        .executeTakeFirstOrThrow();
+      await createConnectorRepository(db).upsertAccessScope(config.id, {
+        scopeType: "slack_channel",
+        providerScopeId: "C1",
+        label: "#general",
+        members: ["roopak@example.com"],
+      });
+      const listMemberChannels = vi.fn(async () => [{ id: "C1", name: "general" }]);
+      const facade = fakeFacade({ listMemberChannels });
+      resetSlackChannelVisibilityCache();
+
+      const run = (nowMs: number) =>
+        reconcileSlackChannelAcls({
+          db,
+          logger,
+          facade,
+          connectorConfigId: config.id,
+          slackEntitySyncEnabled: false,
+          nowMs,
+        });
+
+      await run(0);
+      await run(60_000);
+      expect(listMemberChannels).toHaveBeenCalledTimes(1);
+
+      await run(31 * 60_000);
+      expect(listMemberChannels).toHaveBeenCalledTimes(2);
+
+      resetSlackChannelVisibilityCache();
+      await run(31 * 60_000);
+      expect(listMemberChannels).toHaveBeenCalledTimes(3);
+    });
     it("keeps differential Slack facts unique and live across tier one, tier one, tier two growth", async () => {
       await ensureSlackConnectorConfig({ db, logger });
       const config = await db

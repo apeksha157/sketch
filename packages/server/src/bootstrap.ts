@@ -37,6 +37,7 @@ import { createOpenRouterGenerator } from "./connectors/openrouter-generate";
 import { getPostSyncCoordinator } from "./connectors/post-sync-coordinator";
 import { repairSlackChunkStreamsOnStartup } from "./connectors/slack-chunk-adapters";
 import { archiveAllSlackChannelFiles } from "./connectors/slack-emission";
+import { resetSlackChannelVisibilityCache } from "./connectors/slack-emission";
 import { ensureSlackConnectorConfig } from "./connectors/slack-provisioning";
 import { runConnectorSync, startSyncScheduler } from "./connectors/sync";
 import { createWeeklyMintService } from "./connectors/weekly-mint";
@@ -1245,9 +1246,9 @@ export async function createServer(config: Config, options?: CreateServerOptions
     recordSlackChannelParticipantLeft: (channelId: string, slackUserId: string) =>
       slackMembershipReconciler.recordParticipantLeft(channelId, slackUserId),
     refreshSlackChannelMembership: (channelId: string) => slackMembershipReconciler.refreshChannel(channelId),
-    onSlackChannelDiscovered: () => {
-      void slackMembershipReconciler.wake().catch((err) => {
-        logger.warn({ err }, "Slack membership reconciliation failed after channel discovery");
+    onSlackChannelDiscovered: (channelId: string) => {
+      void slackMembershipReconciler.refreshChannel(channelId).catch((err) => {
+        logger.warn({ err, channelId }, "Slack membership refresh failed after channel discovery");
       });
     },
     onSlackBotJoinedChannel: async (channelId: string) => {
@@ -1462,6 +1463,7 @@ export async function createServer(config: Config, options?: CreateServerOptions
     automationRunsRepo,
     queueManager,
     onSlackTokensUpdated: async (tokens) => {
+      resetSlackChannelVisibilityCache();
       await startSlackBotIfConfigured(tokens);
       void slackMembershipReconciler.wake().catch((err) => {
         logger.warn({ err }, "Slack membership reconciliation failed after token update");

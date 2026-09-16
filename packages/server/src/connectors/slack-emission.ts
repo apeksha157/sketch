@@ -582,18 +582,57 @@ export async function refreshSlackChannelName(options: {
   return true;
 }
 
+/**
+ * Throttles the channel-visibility walk to one per interval per connector.
+ *
+ * `listMemberChannels()` is a full `conversations.list` walk — Tier 2, roughly
+ * 20 calls a minute for the whole workspace, six pages on a thousand-channel
+ * org. It runs at the end of every sync, which is harmless on the normal
+ * half-hourly cadence, but the history backfill requests a sync after every
+ * drain that fetched a range, so a first-time index turns it into a continuous
+ * loop that starves every other Slack caller.
+ *
+ * Reusing the previous map only delays noticing that a channel is gone, and the
+ * map decides which scopes get archived, so the window is an access one: worst
+ * case a channel stays readable for the sync interval plus this TTL rather than
+ * the sync interval alone. Membership events the bot can observe — it joining
+ * or leaving, and a token change — clear the cache immediately; an archived
+ * channel has no event and waits out the TTL.
+ */
+const channelVisibilityCache = new Map<string, { fetchedAtMs: number; visible: Map<string, string> }>();
+
+const CHANNEL_VISIBILITY_TTL_MS = 30 * 60 * 1000;
+
+export function resetSlackChannelVisibilityCache(connectorConfigId?: string): void {
+  if (connectorConfigId === undefined) channelVisibilityCache.clear();
+  else channelVisibilityCache.delete(connectorConfigId);
+}
+
+async function loadVisibleChannels(
+  facade: SlackIndexingFacade,
+  connectorConfigId: string,
+  nowMs: number,
+): Promise<Map<string, string>> {
+  const cached = channelVisibilityCache.get(connectorConfigId);
+  if (cached && nowMs - cached.fetchedAtMs < CHANNEL_VISIBILITY_TTL_MS) return cached.visible;
+  const visible = new Map((await facade.listMemberChannels()).map((channel) => [channel.id, channel.name]));
+  channelVisibilityCache.set(connectorConfigId, { fetchedAtMs: nowMs, visible });
+  return visible;
+}
+
 export async function reconcileSlackChannelAcls(options: {
   db: Kysely<DB>;
   logger: Logger;
   facade: SlackIndexingFacade;
   connectorConfigId: string;
   slackEntitySyncEnabled?: boolean;
+  nowMs?: number;
 }): Promise<{ scopesRefreshed: number; scopesArchived: number; filesArchived: number }> {
   const repo = createConnectorRepository(options.db);
   const scopes = await repo.listAccessScopesForConnector(options.connectorConfigId, "slack_channel");
   if (scopes.length === 0) return { scopesRefreshed: 0, scopesArchived: 0, filesArchived: 0 };
 
-  const visible = new Map((await options.facade.listMemberChannels()).map((channel) => [channel.id, channel.name]));
+  const visible = await loadVisibleChannels(options.facade, options.connectorConfigId, options.nowMs ?? Date.now());
   let scopesRefreshed = 0;
   let scopesArchived = 0;
   let filesArchived = 0;

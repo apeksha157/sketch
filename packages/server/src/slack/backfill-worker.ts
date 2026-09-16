@@ -250,19 +250,22 @@ export class SlackBackfillWorker {
   }
 
   /**
-   * Best-effort: a failed lookup must never cost the join its range, since
-   * once live rows land startup reconciliation no longer covers the channel.
-   * An unnamed conversation is named by the next ACL pass.
+   * Looks a channel name up by id. This used to iterate every channel in the
+   * workspace to find one, which on a large org meant a full `conversations.list`
+   * walk per joined channel; `conversations.info` is one bounded request.
+   *
+   * Best-effort: a failed lookup must never cost the join its range, since once
+   * live rows land startup reconciliation no longer covers the channel. An
+   * unnamed conversation is named by the next ACL pass.
    */
   private async findChannelName(channelId: string): Promise<string | undefined> {
     try {
-      for await (const channel of this.options.facade.iterateChannels()) {
-        if (channel.id === channelId) return channel.name;
-      }
+      const channel = await this.options.facade.getChannelInfo(channelId);
+      return channel?.name;
     } catch (error) {
       this.options.logger.warn({ error, channelId }, "Slack channel name lookup failed");
+      return undefined;
     }
-    return undefined;
   }
 
   /**

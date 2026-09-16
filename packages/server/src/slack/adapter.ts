@@ -51,6 +51,7 @@ import {
 } from "../commands";
 import type { Config } from "../config";
 import { refreshSlackChannelName } from "../connectors/slack-emission";
+import { resetSlackChannelVisibilityCache } from "../connectors/slack-emission";
 import type { createAutomationRunsRepository } from "../db/repositories/automation-runs";
 import type { createAutomationStepContentRepository } from "../db/repositories/automation-step-content";
 import type { createChannelRepository } from "../db/repositories/channels";
@@ -197,7 +198,7 @@ export interface SlackAdapterDeps {
   inboxMessagesRepo?: InboxMessagesRepository;
   slackEntitySync?: SlackEntitySyncService;
   isInternalSlackUser?: (slackUserId: string, email: string | null) => Promise<boolean>;
-  onSlackChannelDiscovered?: () => void;
+  onSlackChannelDiscovered?: (channelId: string) => void;
   refreshSlackChannelMembership?: (channelId: string) => Promise<void>;
   onSlackBotJoinedChannel?: (channelId: string) => Promise<void>;
   recordSlackChannelParticipantJoined?: (channelId: string, slackUserId: string) => Promise<void>;
@@ -376,6 +377,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
     try {
       await recordSlackChannelParticipantJoined(channelId, slackUserId);
     } finally {
+      if (isBot) resetSlackChannelVisibilityCache();
       if (isBot && deps.refreshSlackChannelMembership) {
         void deps.refreshSlackChannelMembership(channelId).catch((err) => {
           logger.warn({ err, channelId }, "Slack membership refresh failed after bot join");
@@ -405,6 +407,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
   });
   slackBot.onMemberLeftChannel(async ({ channelId, slackUserId, teamId }) => {
     await recordSlackChannelParticipantLeft(channelId, slackUserId);
+    if (slackUserId === slackBot.getBotUserId()) resetSlackChannelVisibilityCache();
     await deps.slackEntitySync?.handleMemberLeftChannel({
       channelId,
       slackUserId,
@@ -985,7 +988,7 @@ export function createConfiguredSlackBot(tokens: { botToken: string; appToken?: 
         ? existingConversation
         : await repos.conversations.getOrCreate(conversationRef, params.displayName);
     if (!existingConversation && conversation.platform === "slack" && conversation.kind === "channel") {
-      deps.onSlackChannelDiscovered?.();
+      deps.onSlackChannelDiscovered?.(conversation.provider_conversation_id);
     }
 
     if (isConversationControlMessage(message.text)) {

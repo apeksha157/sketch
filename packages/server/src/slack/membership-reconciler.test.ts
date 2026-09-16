@@ -350,6 +350,26 @@ describe("SlackMembershipReconciler", () => {
     expect(await db.selectFrom("slack_channel_participants").selectAll().execute()).toEqual([]);
   });
 
+  it("enumerates once per interval, and again for a new connection", async () => {
+    const listChannels = vi.fn(async () => []);
+    const listChannelMembers = vi.fn(async () => ["U1"]);
+    const slack = { listChannels, listChannelMembers };
+    const reconciler = new SlackMembershipReconciler({
+      db,
+      logger: createTestLogger(),
+      getSlack: () => slack,
+      intervalMs: 60_000,
+    });
+
+    await reconciler.wake();
+    await reconciler.wake();
+    expect(listChannels).toHaveBeenCalledTimes(1);
+
+    await reconciler.clearAllParticipants();
+    await reconciler.wake();
+    expect(listChannels).toHaveBeenCalledTimes(2);
+  });
+
   it("does no work while Slack is disconnected", async () => {
     const reconciler = new SlackMembershipReconciler({
       db,

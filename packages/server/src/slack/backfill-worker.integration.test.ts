@@ -59,6 +59,7 @@ function createFakeSlack(input: {
     listChannels: async () => channels,
     listMemberChannels: async () => channels,
     listChannelMembers: async () => [],
+    getChannelInfo: async (channelId: string) => channels.find((channel) => channel.id === channelId) ?? null,
     getUserInfo: async (userId: string) => ({
       slackUserId: userId,
       name: userId,
@@ -417,8 +418,7 @@ describe("Slack history backfill worker", () => {
     const slack = createFakeSlack({ historyPages: [] });
     const facade = {
       ...slack.facade,
-      iterateChannels: async function* () {
-        yield* [];
+      getChannelInfo: async () => {
         throw new Error("slack_unavailable");
       },
     } as unknown as SlackIndexingFacade;

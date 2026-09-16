@@ -244,6 +244,7 @@ export interface SlackIndexingFacade {
   listChannels(): Promise<SlackIndexingChannel[]>;
   listMemberChannels(): Promise<SlackIndexingChannel[]>;
   listChannelMembers(channelId: string): Promise<string[]>;
+  getChannelInfo(channelId: string): Promise<SlackIndexingChannel | null>;
   getUserInfo(userId: string, options?: { fresh?: boolean }): Promise<SlackIndexingUser>;
 }
 
@@ -546,6 +547,19 @@ function createSlackIndexingFacadeWithState(
 
     async listChannelMembers(channelId: string) {
       return collectAsync(iterateChannelMembers(channelId));
+    },
+
+    /** One channel by id. Bounded, unlike walking `conversations.list` to find it. */
+    async getChannelInfo(channelId: string) {
+      const result = await request((api) => api.conversations.info({ channel: channelId }));
+      const channel = result.channel;
+      if (!channel?.id) return null;
+      return {
+        id: channel.id,
+        name: channel.name ?? channel.id,
+        isPrivate: channel.is_private === true,
+        isMember: channel.is_member === true,
+      };
     },
 
     async getUserInfo(userId: string, options?: { fresh?: boolean }) {

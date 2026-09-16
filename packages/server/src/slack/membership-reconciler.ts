@@ -15,6 +15,8 @@ export class SlackMembershipReconciler {
   private readonly channelMutations = new Map<string, Promise<void>>();
   private readonly channelVersions = new Map<string, number>();
   private readonly activeSnapshotStartedAt = new Map<string, number>();
+  private lastEnumerationAtMs: number | null = null;
+  private enumerationRequested = false;
   private connectionVersion = 0;
   private readonly participants;
 
@@ -32,6 +34,7 @@ export class SlackMembershipReconciler {
   start(): void {
     if (this.timer) return;
     const startWake = () => {
+      this.enumerationRequested = true;
       void this.wake().catch((err) => {
         this.deps.logger.warn({ err }, "Slack membership reconciliation failed");
       });
@@ -39,6 +42,27 @@ export class SlackMembershipReconciler {
     this.timer = setInterval(startWake, this.deps.intervalMs ?? SLACK_MEMBERSHIP_RECONCILIATION_INTERVAL_MS);
     this.timer.unref();
     startWake();
+  }
+
+  /**
+   * The interval timer and a reconnect always enumerate; everything else is
+   * throttled to once per interval.
+   *
+   * Comparing elapsed time alone would let the startup sweep's own stamp
+   * suppress the first timer tick, since the timer fires exactly one interval
+   * after `start()` but the stamp lands a few milliseconds later. The backstop
+   * has to be the one thing that cannot be skipped.
+   *
+   * The stamp is taken before the walk, not after, so a rate-limited
+   * enumeration is not retried until the next interval. That is deliberate
+   * backpressure — it also means silent channels can go undiscovered for a
+   * further interval after a throttled attempt.
+   */
+  private shouldEnumerate(): boolean {
+    if (this.enumerationRequested) return true;
+    if (this.lastEnumerationAtMs === null) return true;
+    const intervalMs = this.deps.intervalMs ?? SLACK_MEMBERSHIP_RECONCILIATION_INTERVAL_MS;
+    return Date.now() - this.lastEnumerationAtMs >= intervalMs;
   }
 
   wake(): Promise<void> {
@@ -92,12 +116,24 @@ export class SlackMembershipReconciler {
 
   async clearAllParticipants(): Promise<void> {
     this.connectionVersion += 1;
+    this.lastEnumerationAtMs = null;
     this.sweepRequested = false;
     this.requestedChannels.clear();
     await Promise.allSettled(this.channelMutations.values());
     await this.participants.clearAll();
   }
 
+  /**
+   * Discovery always reads the conversations Sketch already knows about, and
+   * enumerates Slack at most once per reconciliation interval.
+   *
+   * The enumeration is what finds a channel the bot sits in silently, so it has
+   * to stay — but `conversations.list` pages at 200 channels, and every page
+   * that hits the workspace rate limit costs a full retry budget. Running it on
+   * every `wake()` meant a channel-discovery event could restart the walk
+   * before the last one finished, so on a large org it never completed and held
+   * the quota against everything else.
+   */
   private async run(channelIds: Set<string>, discover: boolean): Promise<void> {
     const slack = this.deps.getSlack();
     if (!slack) return;
@@ -112,12 +148,16 @@ export class SlackMembershipReconciler {
         .where("kind", "=", "channel")
         .execute();
       for (const row of rows) channelIds.add(row.provider_conversation_id);
-      try {
-        for (const channel of await slack.listChannels()) {
-          if (channel.isMember) channelIds.add(channel.id);
+      if (this.shouldEnumerate()) {
+        this.enumerationRequested = false;
+        this.lastEnumerationAtMs = Date.now();
+        try {
+          for (const channel of await slack.listChannels()) {
+            if (channel.isMember) channelIds.add(channel.id);
+          }
+        } catch (err) {
+          this.deps.logger.warn({ err }, "Slack membership channel discovery failed");
         }
-      } catch (err) {
-        this.deps.logger.warn({ err }, "Slack membership channel discovery failed");
       }
     }
     let refreshed = 0;

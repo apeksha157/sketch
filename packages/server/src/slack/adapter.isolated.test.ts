@@ -270,6 +270,7 @@ function freshMockBot() {
     onChannelRenamed: vi.fn(),
     onMemberJoinedChannel: vi.fn(),
     onMemberLeftChannel: vi.fn(),
+    getBotUserId: vi.fn(() => "UBOT"),
     onTeamJoin: vi.fn(),
     onUserChange: vi.fn(),
     onThreadMessage: vi.fn(),
@@ -350,6 +351,7 @@ vi.mock("./api", () => ({
 
 vi.mock("../connectors/slack-emission", () => ({
   refreshSlackChannelName: vi.fn().mockResolvedValue(true),
+  resetSlackChannelVisibilityCache: vi.fn(),
 }));
 
 function getHandlers() {
@@ -1513,6 +1515,7 @@ describe("slack/adapter", () => {
       await channel({ ...message, ts: "2" });
 
       expect(onSlackChannelDiscovered).toHaveBeenCalledOnce();
+      expect(onSlackChannelDiscovered).toHaveBeenCalledWith("C1");
       expect(recordSlackChannelParticipantObserved).toHaveBeenNthCalledWith(1, "C1", "S1");
       expect(recordSlackChannelParticipantObserved).toHaveBeenNthCalledWith(2, "C1", "S1");
     });
