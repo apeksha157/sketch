@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [1.7.15] -- 2026-09-17
+
+- #710: feat(dev-tools): compare legacy enrichment with consolidated-loop output
+- #713: fix(slack): refresh the discovered channel, not the whole workspace
+
 ## [1.7.14] -- 2026-09-16
 
 - Fixes backfill admission gate scoping pressure to the admitting connector instead of the whole tenant's pipeline backlog, preventing one connector's history (e.g. Google Drive) from starving another's (e.g. Slack); also pairs `embedding_status = skipped` with `summary_status = skipped` via `SKIPPED_WITHOUT_CONTENT` so contentless files no longer count as open pressure, scopes retry-abandoned files from the pressure metric, wires `SLACK_BACKFILL_GRAPH_*` env vars to the existing `backfillGraphKnobs` seam, and adds migration 240 to repair existing orphaned rows.
