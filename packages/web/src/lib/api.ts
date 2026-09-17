@@ -1671,6 +1671,206 @@ export interface DevTraceRunHeader {
   truncated: boolean;
 }
 
+export type LoopCompareSourceBucket = "fireflies" | "email" | "slack" | "whatsapp" | "docs";
+
+export type ConsolidatedLoopExtractorVersion = "loop-v1" | "loop-v2";
+
+export type LoopResolutionKind = "known" | "tool" | "matched" | "judged" | "new" | "hold";
+
+export interface ConsolidatedResolutionCandidate {
+  entityId: string;
+  name: string;
+  type?: string;
+  rung?: string;
+  score?: number;
+  note?: string;
+}
+
+export interface ConsolidatedLoopGuard {
+  overriddenByMatcher: number;
+  demotedUnoffered: number;
+  heldUnjudged: number;
+  heldPending: number;
+  newOverCandidates: number;
+  suppressed: number;
+  registryLinked: number;
+  droppedFacts: number;
+  matchToolCalls: number;
+  matchToolCalled: boolean;
+}
+
+export interface ReportStageValidation {
+  droppedMentions: number;
+  droppedRelations: number;
+  invalidType: number;
+  droppedSingleTokenPerson: number;
+  schemaInvalid: number;
+  droppedSamples: Array<{ mention: string; type: string; reason: string }>;
+  malformedResolution: number;
+  malformedSamples: Array<{ mention: string; type: string; reason: string }>;
+}
+
+export interface ReportStageToolStep {
+  name: string;
+  durationMs: number;
+  cached: boolean;
+}
+
+export interface ReportLoopMention {
+  mention: string;
+  type: string;
+  variations: string[];
+  facts?: string[];
+  resolution:
+    | { kind: "known" | "tool" | "matched"; entityId: string }
+    | { kind: "judged"; entityId: string; reason: string }
+    | { kind: "new"; rejectedCandidates?: string[] }
+    | { kind: "hold"; reason: string; candidates: ConsolidatedResolutionCandidate[] };
+}
+
+export interface ReportStagedDocument {
+  mentions: ReportLoopMention[];
+  relations: unknown[];
+  entityFacts: Array<{ entityId: string; facts: string[] }>;
+  summary: string;
+  meta: {
+    guard?: Partial<ConsolidatedLoopGuard>;
+    validation?: Partial<ReportStageValidation>;
+    toolSteps?: ReportStageToolStep[];
+    model?: string;
+    registrySize?: number;
+  };
+}
+
+export type LoopCompareVerdict =
+  | "same_target"
+  | "different_target"
+  | "loop_resolved_legacy_queued"
+  | "loop_resolved_legacy_unresolved"
+  | "loop_hold_legacy_linked"
+  | "loop_new_legacy_linked"
+  | "loop_new_legacy_queued"
+  | "loop_only"
+  | "legacy_only"
+  | "both_unresolved"
+  | "indeterminate";
+
+/** The legacy pipeline keeps no per-mention trace, so this is rebuilt from the rows it left behind. */
+export interface LegacyCompareMention {
+  key: string;
+  name: string;
+  type: string;
+  status: "linked" | "queued" | "ambiguous" | "none";
+  entityId?: string;
+  entityName?: string;
+  reviewId?: string;
+  reviewStatus?: string;
+  entityIds?: string[];
+  reviewIds?: string[];
+}
+
+export interface LoopCompareMention {
+  name: string;
+  type: string;
+  variations: string[];
+  facts: string[];
+  kind: "resolved" | "new" | "hold";
+  originalKind: LoopResolutionKind;
+  entityId?: string;
+  entityName?: string;
+  live?: boolean;
+  mergedIntoEntityId?: string;
+  reason?: string;
+  candidates?: Array<{ entityId: string; name: string; live?: boolean }>;
+  rejectedCandidates?: Array<{ entityId: string; name: string }>;
+}
+
+export interface AlignedMention {
+  key: string;
+  name: string;
+  type: string;
+  legacy?: Omit<LegacyCompareMention, "key" | "name" | "type">;
+  loop?: Pick<
+    LoopCompareMention,
+    | "kind"
+    | "originalKind"
+    | "entityId"
+    | "entityName"
+    | "live"
+    | "mergedIntoEntityId"
+    | "reason"
+    | "candidates"
+    | "rejectedCandidates"
+  >;
+  verdict: LoopCompareVerdict;
+}
+
+export interface LoopCompareListRow {
+  fileId: string;
+  fileName: string;
+  source: string;
+  sourceBucket: LoopCompareSourceBucket;
+  fileType: string | null;
+  extractorVersion: ConsolidatedLoopExtractorVersion;
+  stageUpdatedAt: string;
+  stale: boolean;
+  loopMentionCount: number;
+  holdCount: number;
+  legacyMentionCount: number;
+  guard: Pick<ConsolidatedLoopGuard, "overriddenByMatcher" | "demotedUnoffered" | "registryLinked">;
+  validation: Pick<ReportStageValidation, "schemaInvalid" | "malformedResolution">;
+}
+
+export interface LoopCompareDetail {
+  file: {
+    id: string;
+    fileName: string;
+    source: string;
+    sourceBucket: LoopCompareSourceBucket;
+    fileType: string | null;
+    sourceCreatedAt: string | null;
+    contentHash: string | null;
+    enrichmentStatus: string;
+    summary: string | null;
+  };
+  stage: {
+    id: string;
+    extractorVersion: ConsolidatedLoopExtractorVersion;
+    updatedAt: string;
+    stale: boolean;
+    staleNote?: string;
+    model: string | null;
+    costUsd: number | null;
+    tokens: { input: number | null; output: number | null };
+    toolSteps: ReportStageToolStep[];
+    guard: ConsolidatedLoopGuard;
+    validation: ReportStageValidation;
+  };
+  legacy: {
+    summary: string | null;
+    mentions: LegacyCompareMention[];
+    relationCount: number;
+    factCount: number;
+    costUsd: number | null;
+    tokens: number | null;
+    reconstructed: true;
+  };
+  loop: {
+    summary: string;
+    mentions: LoopCompareMention[];
+    relations: unknown[];
+    entityFacts: Array<{ entityId: string; entityName: string; facts: string[] }>;
+    staged: ReportStagedDocument;
+  };
+  aligned: AlignedMention[];
+  totals: {
+    legacyMentions: number;
+    loopMentions: number;
+    holds: number;
+    verdicts: Record<LoopCompareVerdict, number>;
+  };
+}
+
 export interface EmailAddr {
   name?: string | null;
   email: string;
@@ -4214,6 +4414,31 @@ export const api = {
       return request<{ synthesis: DevSearchSynthesis }>(`/api/dev/search-traces/${traceId}/syntheses`, {
         method: "POST",
       });
+    },
+    /** Read-only shadow comparison: the legacy result rebuilt from current rows next to the loop's staged output. */
+    loopStages(
+      params: {
+        since?: string;
+        limit?: number;
+        bucket?: LoopCompareSourceBucket;
+        version?: ConsolidatedLoopExtractorVersion;
+      } = {},
+    ) {
+      const qs = new URLSearchParams();
+      if (params.since !== undefined) qs.set("since", params.since);
+      if (params.limit !== undefined) qs.set("limit", String(params.limit));
+      if (params.bucket !== undefined) qs.set("bucket", params.bucket);
+      if (params.version !== undefined) qs.set("version", params.version);
+      const query = qs.toString();
+      return request<{ stages: LoopCompareListRow[] }>(`/api/dev/loop-stages${query ? `?${query}` : ""}`);
+    },
+    loopStage(fileId: string, version?: ConsolidatedLoopExtractorVersion) {
+      const qs = new URLSearchParams();
+      if (version !== undefined) qs.set("version", version);
+      const query = qs.toString();
+      return request<{ detail: LoopCompareDetail }>(
+        `/api/dev/loop-stages/${encodeURIComponent(fileId)}${query ? `?${query}` : ""}`,
+      );
     },
   },
   workspace: {

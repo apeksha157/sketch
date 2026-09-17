@@ -54,7 +54,7 @@ export interface ConsolidatedResolutionCandidate {
   note?: string;
 }
 
-type Resolution =
+export type ConsolidatedResolution =
   | { kind: "matched"; entityId: string }
   | { kind: "judged"; entityId: string; reason: string }
   | { kind: "new"; rejectedCandidates?: string[] }
@@ -65,7 +65,7 @@ export interface ConsolidatedMention {
   type: string;
   variations: string[];
   facts: string[];
-  resolution: Resolution;
+  resolution: ConsolidatedResolution;
 }
 
 export interface ConsolidatedEntityFacts {
@@ -618,7 +618,7 @@ function appendUnique(target: string[], values: string[]): void {
   }
 }
 
-function resolutionCandidates(resolution: Resolution): ConsolidatedResolutionCandidate[] {
+function resolutionCandidates(resolution: ConsolidatedResolution): ConsolidatedResolutionCandidate[] {
   if (resolution.kind === "hold") return resolution.candidates;
   if (resolution.kind === "matched" || resolution.kind === "judged") {
     return [{ entityId: resolution.entityId, name: resolution.entityId }];
@@ -708,7 +708,7 @@ function validateDocument(raw: unknown, file: FileContext): ValidatedDocument {
     const rawResolution =
       row && typeof row === "object" && !Array.isArray(row) ? (row as Record<string, unknown>).resolution : undefined;
     const parsedResolution = resolutionSchema.safeParse(rawResolution);
-    const resolution: Resolution = parsedResolution.success
+    const resolution: ConsolidatedResolution = parsedResolution.success
       ? parsedResolution.data
       : { kind: "hold", reason: "malformed_resolution", candidates: [] };
     if (!parsedResolution.success) {
@@ -810,7 +810,7 @@ function isSingleTokenPerson(mention: ConsolidatedMention): boolean {
   return mention.type === "person" && mention.mention.trim().length > 0 && !/\s/.test(mention.mention.trim());
 }
 
-function acceptedEntityId(resolution: Resolution): string | null {
+function acceptedEntityId(resolution: ConsolidatedResolution): string | null {
   return resolution.kind === "matched" || resolution.kind === "judged" ? resolution.entityId : null;
 }
 
@@ -849,7 +849,7 @@ async function reconcileDocument(
     const decision = await decideLoopMention(matchDeps, file, knownEntities, mention.mention, type);
     if (isRegistryLinkedDecision(decision)) guard.registryLinked += 1;
     const modelResolution = mention.resolution;
-    let resolution: Resolution | null = null;
+    let resolution: ConsolidatedResolution | null = null;
 
     if (
       decision.status === "linked" &&

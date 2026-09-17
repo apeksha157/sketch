@@ -26,6 +26,7 @@ import { useState } from "react";
 import { dashboardRoute, useDashboardAuth } from "../dashboard";
 import { RunStatusBadge } from "./enrichment-trace";
 import { GraphVerdicts } from "./graph-verdicts";
+import LoopCompare from "./loop-compare";
 import { MintingQueue } from "./minting-queue";
 import { SearchTraces } from "./search-traces";
 import { TraceDialog } from "./trace-dialog";
@@ -41,7 +42,7 @@ function DevToolsPage() {
   const [traceFile, setTraceFile] = useState<{ id: string; name: string } | null>(null);
   const [traceKind, setTraceKind] = useState<DevTraceRunKind>("enrichment");
   const [openRun, setOpenRun] = useState<{ id: string; kind: DevTraceRunKind } | null>(null);
-  const [tab, setTab] = useState<"enrichment" | "search" | "minting" | "graph-verdicts">("enrichment");
+  const [tab, setTab] = useState<"enrichment" | "search" | "minting" | "graph-verdicts" | "loop-compare">("enrichment");
   const isAdmin = auth.role === "admin";
 
   /**
@@ -98,6 +99,7 @@ function DevToolsPage() {
               onClick={() => setTab("graph-verdicts")}
               label="Graph verdicts"
             />
+            <TabButton active={tab === "loop-compare"} onClick={() => setTab("loop-compare")} label="Loop compare" />
           </div>
 
           {tab === "search" ? (
@@ -106,6 +108,8 @@ function DevToolsPage() {
             <MintingQueue />
           ) : tab === "graph-verdicts" ? (
             <GraphVerdicts />
+          ) : tab === "loop-compare" ? (
+            <LoopCompare />
           ) : (
             <EnrichmentTab
               runs={runsQuery.data?.runs ?? []}

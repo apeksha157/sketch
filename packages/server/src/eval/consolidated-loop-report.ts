@@ -23,6 +23,7 @@ export interface ConsolidatedLoopReportFile {
   content_hash: string | null;
   source_created_at: string | null;
   source_updated_at: string | null;
+  enrichment_status: string;
 }
 
 export interface LinkedMentionCandidate {
@@ -41,6 +42,7 @@ export interface QueuedMentionCandidate {
 export type LegacyMentionClassification =
   | { kind: "linked"; entityId: string; entityName: string }
   | { kind: "queued"; status: string }
+  | { kind: "ambiguous"; entityIds: string[]; reviewIds: string[] }
   | { kind: "none" };
 
 export interface LoopMentionDiagnostic {
@@ -87,9 +89,11 @@ export interface ComparedReportRow extends ReportRowBase {
     | "heldUnjudged"
     | "heldPending"
     | "newOverCandidates"
+    | "suppressed"
     | "registryLinked"
     | "droppedFacts"
     | "matchToolCalls"
+    | "matchToolCalled"
   >;
   legacyCostUsd: number | null;
   loopCostUsd: number | null;
@@ -126,6 +130,10 @@ export const SUPPORTED_CONSOLIDATED_EXTRACTOR_VERSIONS = ["loop-v1", "loop-v2"] 
 
 export type LoopResolutionKind = "known" | "tool" | "matched" | "judged" | "new" | "hold";
 
+export type ConsolidatedLoopExtractorVersion = (typeof SUPPORTED_CONSOLIDATED_EXTRACTOR_VERSIONS)[number];
+
+export type LoopCompareSourceBucket = "fireflies" | "email" | "slack" | "whatsapp" | "docs";
+
 export interface ReportLoopMention {
   mention: string;
   type: string;
@@ -138,15 +146,198 @@ export interface ReportLoopMention {
     | { kind: "hold"; reason: string; candidates: ConsolidatedResolutionCandidate[] };
 }
 
-interface ReportStagedDocument {
+export interface ReportStageValidation {
+  droppedMentions: number;
+  droppedRelations: number;
+  invalidType: number;
+  droppedSingleTokenPerson: number;
+  schemaInvalid: number;
+  droppedSamples: Array<{ mention: string; type: string; reason: string }>;
+  malformedResolution: number;
+  malformedSamples: Array<{ mention: string; type: string; reason: string }>;
+}
+
+export interface ReportStageToolStep {
+  name: string;
+  durationMs: number;
+  cached: boolean;
+}
+
+export interface ReportStagedDocument {
   mentions: ReportLoopMention[];
   relations: unknown[];
   entityFacts: Array<{ entityId: string; facts: string[] }>;
   summary: string;
-  meta: { guard: Partial<ConsolidatedLoopGuard> };
+  meta: {
+    guard?: Partial<ConsolidatedLoopGuard>;
+    validation?: Partial<ReportStageValidation>;
+    toolSteps?: ReportStageToolStep[];
+    model?: string;
+    registrySize?: number;
+  };
 }
 
-function bucketFor(file: Pick<ConsolidatedLoopReportFile, "source" | "file_type" | "content_category">): string {
+export interface SummarizedConsolidatedLoopStage {
+  loopMentionCount: number;
+  holdCount: number;
+  guard: ConsolidatedLoopGuard;
+  validation: ReportStageValidation;
+  toolSteps: ReportStageToolStep[];
+  model: string | null;
+  registrySize: number;
+}
+
+export interface LoopCompareListParams {
+  fileIds?: string[] | null;
+  since?: string | null;
+  limit?: number | null;
+  bucket?: LoopCompareSourceBucket | null;
+  version?: ConsolidatedLoopExtractorVersion | null;
+}
+
+export type LoopCompareVerdict =
+  | "same_target"
+  | "different_target"
+  | "loop_resolved_legacy_queued"
+  | "loop_resolved_legacy_unresolved"
+  | "loop_hold_legacy_linked"
+  | "loop_new_legacy_linked"
+  | "loop_new_legacy_queued"
+  | "loop_only"
+  | "legacy_only"
+  | "both_unresolved"
+  | "indeterminate";
+
+export type LegacyMentionStatus =
+  | { status: "linked"; entityId: string; entityName: string }
+  | { status: "queued"; reviewId: string; reviewStatus: string }
+  | { status: "ambiguous"; entityIds: string[]; reviewIds: string[] }
+  | { status: "none" };
+
+export interface LegacyCompareMention {
+  key: string;
+  name: string;
+  type: string;
+  status: LegacyMentionStatus["status"];
+  entityId?: string;
+  entityName?: string;
+  reviewId?: string;
+  reviewStatus?: string;
+  entityIds?: string[];
+  reviewIds?: string[];
+}
+
+export interface LoopCompareEntityName {
+  name: string;
+  live: boolean;
+  mergedIntoEntityId?: string;
+}
+
+export interface LoopCompareMention {
+  name: string;
+  type: string;
+  variations: string[];
+  facts: string[];
+  kind: "resolved" | "new" | "hold";
+  originalKind: LoopResolutionKind;
+  entityId?: string;
+  entityName?: string;
+  live?: boolean;
+  mergedIntoEntityId?: string;
+  reason?: string;
+  candidates?: Array<{ entityId: string; name: string; live?: boolean }>;
+  rejectedCandidates?: Array<{ entityId: string; name: string }>;
+}
+
+export interface AlignedMention {
+  key: string;
+  name: string;
+  type: string;
+  legacy?: Omit<LegacyCompareMention, "key" | "name" | "type">;
+  loop?: Pick<
+    LoopCompareMention,
+    | "kind"
+    | "originalKind"
+    | "entityId"
+    | "entityName"
+    | "live"
+    | "mergedIntoEntityId"
+    | "reason"
+    | "candidates"
+    | "rejectedCandidates"
+  >;
+  verdict: LoopCompareVerdict;
+}
+
+export interface LoopCompareListRow {
+  fileId: string;
+  fileName: string;
+  source: string;
+  sourceBucket: LoopCompareSourceBucket;
+  fileType: string | null;
+  extractorVersion: ConsolidatedLoopExtractorVersion;
+  stageUpdatedAt: string;
+  stale: boolean;
+  loopMentionCount: number;
+  holdCount: number;
+  legacyMentionCount: number;
+  guard: Pick<ConsolidatedLoopGuard, "overriddenByMatcher" | "demotedUnoffered" | "registryLinked">;
+  validation: Pick<ReportStageValidation, "schemaInvalid" | "malformedResolution">;
+}
+
+export interface LoopCompareDetail {
+  file: {
+    id: string;
+    fileName: string;
+    source: string;
+    sourceBucket: LoopCompareSourceBucket;
+    fileType: string | null;
+    sourceCreatedAt: string | null;
+    contentHash: string | null;
+    enrichmentStatus: string;
+    summary: string | null;
+  };
+  stage: {
+    id: string;
+    extractorVersion: ConsolidatedLoopExtractorVersion;
+    updatedAt: string;
+    stale: boolean;
+    staleNote?: string;
+    model: string | null;
+    costUsd: number | null;
+    tokens: { input: number | null; output: number | null };
+    toolSteps: ReportStageToolStep[];
+    guard: ConsolidatedLoopGuard;
+    validation: ReportStageValidation;
+  };
+  legacy: {
+    summary: string | null;
+    mentions: LegacyCompareMention[];
+    relationCount: number;
+    factCount: number;
+    costUsd: number | null;
+    tokens: number | null;
+    reconstructed: true;
+  };
+  loop: {
+    summary: string;
+    mentions: LoopCompareMention[];
+    relations: unknown[];
+    entityFacts: Array<{ entityId: string; entityName: string; facts: string[] }>;
+    staged: ReportStagedDocument;
+  };
+  aligned: AlignedMention[];
+  totals: {
+    legacyMentions: number;
+    loopMentions: number;
+    holds: number;
+    verdicts: Record<LoopCompareVerdict, number>;
+  };
+}
+
+export function sourceBucketFor(
+  file: Pick<ConsolidatedLoopReportFile, "source" | "file_type" | "content_category">,
+): LoopCompareSourceBucket {
   const value = `${file.source} ${file.file_type ?? ""} ${file.content_category}`.toLowerCase();
   if (value.includes("fireflies")) return "fireflies";
   if (value.includes("email") || value.includes("outlook")) return "email";
@@ -175,6 +366,7 @@ export async function selectConsolidatedLoopSampleFiles(
       "content_hash",
       "source_created_at",
       "source_updated_at",
+      "enrichment_status",
     ])
     .where("summary_status", "=", "done")
     .where("content", "is not", null)
@@ -192,7 +384,7 @@ export async function selectConsolidatedLoopSampleFiles(
     .execute();
   const buckets = new Map<string, ConsolidatedLoopReportFile[]>();
   for (const row of rows) {
-    const bucket = bucketFor(row);
+    const bucket = sourceBucketFor(row);
     buckets.set(bucket, [...(buckets.get(bucket) ?? []), row]);
   }
   const selected: ConsolidatedLoopReportFile[] = [];
@@ -228,15 +420,17 @@ export async function selectConsolidatedLoopFilesById(
       "content_hash",
       "source_created_at",
       "source_updated_at",
+      "enrichment_status",
     ])
     .where("id", "in", ids)
     .orderBy("id", "asc")
     .execute();
 }
 
+/** The dev-tools selector loads all matching stages before deduplication and limiting. */
 export async function selectExistingConsolidatedLoopStages(
   db: Kysely<DB>,
-  options: { fileIds?: string[] | null; since?: string | null; limit?: number | null },
+  options: LoopCompareListParams,
 ): Promise<ExistingStageSelection[]> {
   if (options.fileIds?.length === 0) return [];
   let query = db
@@ -245,36 +439,97 @@ export async function selectExistingConsolidatedLoopStages(
     .where("extractor_version", "in", [...SUPPORTED_CONSOLIDATED_EXTRACTOR_VERSIONS])
     .where("status", "=", "staged");
   if (options.fileIds) query = query.where("indexed_file_id", "in", options.fileIds);
+  if (options.version) query = query.where("extractor_version", "=", options.version);
   const rows = await query.orderBy("updated_at", "desc").orderBy("created_at", "desc").orderBy("id", "desc").execute();
-  const orderedRows = [...rows].sort(
+  const since = options.since ? normalizeTimestamp(options.since) : null;
+  const eligibleRows = since ? rows.filter((row) => normalizeTimestamp(row.updated_at) >= since) : rows;
+  const orderedRows = [...eligibleRows].sort(
     (left, right) =>
       normalizeTimestamp(right.updated_at).localeCompare(normalizeTimestamp(left.updated_at)) ||
       normalizeTimestamp(right.created_at).localeCompare(normalizeTimestamp(left.created_at)) ||
       right.id.localeCompare(left.id),
   );
-  const since = options.since ? normalizeTimestamp(options.since) : null;
-  const stages = since ? orderedRows.filter((stage) => normalizeTimestamp(stage.updated_at) >= since) : orderedRows;
   const latestByFile = new Map<string, ExtractionStage>();
-  for (const stage of stages) {
+  for (const stage of orderedRows) {
     if (!latestByFile.has(stage.indexed_file_id)) latestByFile.set(stage.indexed_file_id, stage);
   }
   const latestStages = [...latestByFile.values()];
-  const selectedStages = options.limit == null ? latestStages : latestStages.slice(0, options.limit);
   const files = await selectConsolidatedLoopFilesById(
     db,
-    selectedStages.map((stage) => stage.indexed_file_id),
+    latestStages.map((stage) => stage.indexed_file_id),
   );
   const filesById = new Map(files.map((file) => [file.id, file]));
-  return selectedStages
+  const selections = latestStages
     .flatMap((stage) => {
       const file = filesById.get(stage.indexed_file_id);
       return file ? [{ file, stage }] : [];
     })
-    .sort((left, right) => left.file.id.localeCompare(right.file.id));
+    .filter((selection) => !options.bucket || sourceBucketFor(selection.file) === options.bucket)
+    .sort(
+      (left, right) =>
+        normalizeTimestamp(right.stage.updated_at).localeCompare(normalizeTimestamp(left.stage.updated_at)) ||
+        normalizeTimestamp(right.stage.created_at).localeCompare(normalizeTimestamp(left.stage.created_at)) ||
+        right.stage.id.localeCompare(left.stage.id),
+    );
+  return options.limit == null ? selections : selections.slice(0, options.limit);
+}
+
+export async function listConsolidatedLoopStagesForCompare(
+  db: Kysely<DB>,
+  params: LoopCompareListParams,
+): Promise<LoopCompareListRow[]> {
+  const selections = await selectExistingConsolidatedLoopStages(db, params);
+  const fileIds = selections.map((selection) => selection.file.id);
+  if (fileIds.length === 0) return [];
+  const factRows = await db
+    .selectFrom("indexed_file_facts")
+    .select(["indexed_file_id", "subject_name", "raw_mention_type", "mention_type", "raw"])
+    .where("indexed_file_id", "in", fileIds)
+    .where("fact_type", "=", "llm_extracted")
+    .where("deleted_at", "is", null)
+    .execute();
+  const legacyMentionCounts = new Map<string, number>();
+  const legacyMentionKeys = new Map<string, Set<string>>();
+  for (const row of factRows) {
+    if (!row.indexed_file_id) continue;
+    const mention = exactLegacyMentionFromFact(row);
+    if (!mention) continue;
+    const keys = legacyMentionKeys.get(row.indexed_file_id) ?? new Set<string>();
+    keys.add(mention.key);
+    legacyMentionKeys.set(row.indexed_file_id, keys);
+    legacyMentionCounts.set(row.indexed_file_id, keys.size);
+  }
+  return selections.map(({ file, stage }) => {
+    const summary = summarizeStage(JSON.parse(stage.staged_json) as ReportStagedDocument);
+    return {
+      fileId: file.id,
+      fileName: file.file_name,
+      source: file.source,
+      sourceBucket: sourceBucketFor(file),
+      fileType: file.file_type,
+      extractorVersion: stage.extractor_version as ConsolidatedLoopExtractorVersion,
+      stageUpdatedAt: stage.updated_at,
+      stale: stage.content_hash !== file.content_hash,
+      loopMentionCount: summary.loopMentionCount,
+      holdCount: summary.holdCount,
+      legacyMentionCount: legacyMentionCounts.get(file.id) ?? 0,
+      guard: {
+        overriddenByMatcher: summary.guard.overriddenByMatcher,
+        demotedUnoffered: summary.guard.demotedUnoffered,
+        registryLinked: summary.guard.registryLinked,
+      },
+      validation: {
+        schemaInvalid: summary.validation.schemaInvalid,
+        malformedResolution: summary.validation.malformedResolution,
+      },
+    };
+  });
 }
 
 function normalizeTimestamp(value: string): string {
-  const parsed = new Date(value.includes("T") ? value : `${value.replace(" ", "T")}Z`);
+  const isoLike = value.includes("T") ? value : value.includes(" ") ? value.replace(" ", "T") : `${value}T00:00:00`;
+  const offsetNormalized = isoLike.replace(/([+-]\d{2})$/, "$1:00").replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+  const parsed = new Date(/(?:Z|[+-]\d{2}:\d{2})$/i.test(offsetNormalized) ? offsetNormalized : `${offsetNormalized}Z`);
   if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 19).replace("T", " ");
   return value
     .replace("T", " ")
@@ -288,47 +543,38 @@ function normalizedMentionKey(name: string, type: string): string {
   return `${normalizeEntityMatchName(normalizedType, name)}\t${normalizedType}`;
 }
 
-export function classifyLoopMentions(
-  mentions: ReportLoopMention[],
-  linkedCandidates: LinkedMentionCandidate[],
-  queuedCandidates: QueuedMentionCandidate[],
-  targetEntityNames: ReadonlyMap<string, string>,
-): LoopMentionDiagnostic[] {
-  const linkedByMention = new Map<string, LinkedMentionCandidate>();
-  for (const candidate of linkedCandidates) {
-    for (const name of [candidate.entityName, ...(candidate.aliases ?? [])]) {
-      const key = normalizedMentionKey(name, candidate.entityType);
-      if (!linkedByMention.has(key)) linkedByMention.set(key, candidate);
-    }
-  }
-  const queuedByMention = new Map<string, QueuedMentionCandidate>();
-  for (const candidate of queuedCandidates) {
-    const key = `${candidate.normalizedName}\t${candidate.entityType.trim().toLowerCase()}`;
-    if (!queuedByMention.has(key)) queuedByMention.set(key, candidate);
-  }
-  return mentions.map((mention) => {
-    const key = normalizedMentionKey(mention.mention, mention.type);
-    const linked = linkedByMention.get(key);
-    const queued = queuedByMention.get(key);
-    const resolution = mention.resolution;
-    const targetEntityId = ["known", "tool", "matched", "judged"].includes(resolution.kind)
-      ? (resolution as { entityId: string }).entityId
-      : null;
-    const legacy: LegacyMentionClassification = linked
-      ? { kind: "linked", entityId: linked.entityId, entityName: linked.entityName }
-      : queued
-        ? { kind: "queued", status: queued.status }
-        : { kind: "none" };
-    return {
-      mention: mention.mention,
-      type: mention.type,
-      resolutionKind: resolution.kind,
-      targetEntityId,
-      targetEntityName: targetEntityId ? (targetEntityNames.get(targetEntityId) ?? null) : null,
-      holdReason: resolution.kind === "hold" ? resolution.reason : null,
-      legacy,
-    };
-  });
+export function summarizeStage(staged: ReportStagedDocument): SummarizedConsolidatedLoopStage {
+  const guard = staged.meta?.guard ?? {};
+  const validation = staged.meta?.validation ?? {};
+  return {
+    loopMentionCount: staged.mentions.filter((mention) => mention.type !== "team").length,
+    holdCount: staged.mentions.filter((mention) => mention.resolution.kind === "hold").length,
+    guard: {
+      overriddenByMatcher: guard.overriddenByMatcher ?? 0,
+      demotedUnoffered: guard.demotedUnoffered ?? 0,
+      heldUnjudged: guard.heldUnjudged ?? 0,
+      heldPending: guard.heldPending ?? 0,
+      newOverCandidates: guard.newOverCandidates ?? 0,
+      suppressed: guard.suppressed ?? 0,
+      registryLinked: guard.registryLinked ?? 0,
+      droppedFacts: guard.droppedFacts ?? 0,
+      matchToolCalls: guard.matchToolCalls ?? 0,
+      matchToolCalled: guard.matchToolCalled ?? false,
+    },
+    validation: {
+      droppedMentions: validation.droppedMentions ?? 0,
+      droppedRelations: validation.droppedRelations ?? 0,
+      invalidType: validation.invalidType ?? 0,
+      droppedSingleTokenPerson: validation.droppedSingleTokenPerson ?? 0,
+      schemaInvalid: validation.schemaInvalid ?? 0,
+      droppedSamples: validation.droppedSamples ?? [],
+      malformedResolution: validation.malformedResolution ?? 0,
+      malformedSamples: validation.malformedSamples ?? [],
+    },
+    toolSteps: staged.meta?.toolSteps ?? [],
+    model: staged.meta?.model ?? null,
+    registrySize: staged.meta?.registrySize ?? 0,
+  };
 }
 
 export function staleReportRow(file: ConsolidatedLoopReportFile, stage: ExtractionStage): StaleReportRow | null {
@@ -341,7 +587,7 @@ export function staleReportRow(file: ConsolidatedLoopReportFile, stage: Extracti
   ].join(" ");
   return {
     fileId: file.id,
-    source: bucketFor(file),
+    source: sourceBucketFor(file),
     stageUpdatedAt: stage.updated_at,
     stale: true,
     staleNote,
@@ -371,6 +617,42 @@ function keysForMention(name: string, variations: unknown, type: string): Set<st
 
 type LegacyMentionRow = { keys: Set<string> };
 
+export interface LegacyMentionFactProjection {
+  subject_name: string | null;
+  raw_mention_type: string | null;
+  mention_type: string | null;
+  raw: string | null;
+}
+
+export function exactLegacyMentionFromFact(
+  row: LegacyMentionFactProjection,
+): Pick<LegacyCompareMention, "key" | "name" | "type"> | null {
+  const raw = readJsonObject(row.raw);
+  const name = row.subject_name ?? (typeof raw.mention === "string" ? raw.mention : null);
+  const type = row.mention_type ?? row.raw_mention_type ?? (typeof raw.type === "string" ? raw.type : null);
+  if (!name || !type || type === "team") return null;
+  return { key: normalizedMentionKey(name, type), name, type };
+}
+
+export async function loadExactLegacyMentionRows(
+  db: Kysely<DB>,
+  fileId: string,
+): Promise<Array<Pick<LegacyCompareMention, "key" | "name" | "type">>> {
+  const rows = await db
+    .selectFrom("indexed_file_facts")
+    .select(["subject_name", "raw_mention_type", "mention_type", "raw"])
+    .where("indexed_file_id", "=", fileId)
+    .where("fact_type", "=", "llm_extracted")
+    .where("deleted_at", "is", null)
+    .execute();
+  const mentions = new Map<string, Pick<LegacyCompareMention, "key" | "name" | "type">>();
+  for (const row of rows) {
+    const mention = exactLegacyMentionFromFact(row);
+    if (mention && !mentions.has(mention.key)) mentions.set(mention.key, mention);
+  }
+  return [...mentions.values()];
+}
+
 async function legacyMentionRows(db: Kysely<DB>, fileId: string): Promise<LegacyMentionRow[]> {
   const rows = await db
     .selectFrom("indexed_file_facts")
@@ -380,11 +662,10 @@ async function legacyMentionRows(db: Kysely<DB>, fileId: string): Promise<Legacy
     .where("deleted_at", "is", null)
     .execute();
   return rows.flatMap((row) => {
+    const exact = exactLegacyMentionFromFact(row);
+    if (!exact) return [];
     const raw = readJsonObject(row.raw);
-    const name = row.subject_name ?? (typeof raw.mention === "string" ? raw.mention : null);
-    const type = row.mention_type ?? row.raw_mention_type ?? (typeof raw.type === "string" ? raw.type : null);
-    if (!name || !type || type === "team") return [];
-    return [{ keys: keysForMention(name, raw.variations, type) }];
+    return [{ keys: keysForMention(exact.name, raw.variations, exact.type) }];
   });
 }
 
@@ -441,11 +722,18 @@ async function legacyUsage(db: Kysely<DB>, fileId: string): Promise<{ costUsd: n
   return { costUsd, tokens };
 }
 
-async function loadMentionClassifications(
+function pushUniqueById<T extends { id: string }>(map: Map<string, T[]>, key: string, value: T): void {
+  const values = map.get(key) ?? [];
+  if (!values.some((candidate) => candidate.id === value.id)) values.push(value);
+  map.set(key, values);
+}
+
+/** Reconstructs legacy mention decisions from current mutable rows. */
+export async function loadLegacyMentionClassifications(
   db: Kysely<DB>,
   fileId: string,
-  mentions: ReportLoopMention[],
-): Promise<LoopMentionDiagnostic[]> {
+): Promise<LegacyCompareMention[]> {
+  const exactRows = await loadExactLegacyMentionRows(db, fileId);
   const linkedRows = await db
     .selectFrom("entity_mentions")
     .innerJoin("entities", "entities.id", "entity_mentions.entity_id")
@@ -456,45 +744,380 @@ async function loadMentionClassifications(
       "entities.aliases",
     ])
     .where("entity_mentions.indexed_file_id", "=", fileId)
+    .where("entity_mentions.relation", "=", "mentioned")
+    .where("entity_mentions.source", "in", ["llm_extraction", "llm_relation"])
     .orderBy("entities.name", "asc")
     .orderBy("entities.id", "asc")
     .execute();
-  const linkedCandidates = linkedRows.map((row) => ({
-    entityId: row.entityId,
-    entityName: row.entityName,
-    entityType: row.entityType,
-    aliases: parseAliasesString(row.aliases),
-  }));
-  const queuedCandidates = await db
+  const linkedByKey = new Map<string, Array<{ id: string; name: string }>>();
+  for (const row of linkedRows) {
+    for (const name of [row.entityName, ...parseAliasesString(row.aliases)]) {
+      pushUniqueById(linkedByKey, normalizedMentionKey(name, row.entityType), {
+        id: row.entityId,
+        name: row.entityName,
+      });
+    }
+  }
+  const queuedRows = await db
     .selectFrom("entity_review_evidence")
     .innerJoin("entity_review_queue", "entity_review_queue.id", "entity_review_evidence.review_id")
     .select([
+      "entity_review_queue.id as reviewId",
       "entity_review_queue.normalized_name as normalizedName",
       "entity_review_queue.entity_type as entityType",
-      "entity_review_queue.status as status",
+      "entity_review_queue.status as reviewStatus",
+      "entity_review_queue.resolved_entity_id as resolvedEntityId",
     ])
     .where("entity_review_evidence.indexed_file_id", "=", fileId)
+    .where("entity_review_evidence.source", "=", "llm_extraction")
     .orderBy("entity_review_queue.id", "asc")
     .execute();
-  const targetEntityIds = [
-    ...new Set(
-      mentions.flatMap((mention) =>
-        ["known", "tool", "matched", "judged"].includes(mention.resolution.kind)
-          ? [(mention.resolution as { entityId: string }).entityId]
-          : [],
-      ),
-    ),
-  ];
-  const targetEntities =
-    targetEntityIds.length === 0
-      ? []
-      : await db.selectFrom("entities").select(["id", "name"]).where("id", "in", targetEntityIds).execute();
-  return classifyLoopMentions(
-    mentions,
-    linkedCandidates,
-    queuedCandidates,
-    new Map(targetEntities.map((entity) => [entity.id, entity.name])),
+  const reviewsByKey = new Map<string, Array<{ id: string; status: string; resolvedEntityId: string | null }>>();
+  for (const row of queuedRows) {
+    pushUniqueById(reviewsByKey, normalizedMentionKey(row.normalizedName, row.entityType), {
+      id: row.reviewId,
+      status: row.reviewStatus,
+      resolvedEntityId: row.resolvedEntityId,
+    });
+  }
+  return exactRows.map((mention) => {
+    const entities = linkedByKey.get(mention.key) ?? [];
+    const reviews = reviewsByKey.get(mention.key) ?? [];
+    const remainingReviews =
+      entities.length === 1 ? reviews.filter((review) => review.resolvedEntityId !== entities[0].id) : reviews;
+    let classification: LegacyMentionStatus;
+    if (entities.length === 1 && remainingReviews.length === 0) {
+      classification = { status: "linked", entityId: entities[0].id, entityName: entities[0].name };
+    } else if (entities.length === 0 && remainingReviews.length === 1) {
+      classification = {
+        status: "queued",
+        reviewId: remainingReviews[0].id,
+        reviewStatus: remainingReviews[0].status,
+      };
+    } else if (
+      entities.length > 1 ||
+      remainingReviews.length > 1 ||
+      (entities.length > 0 && remainingReviews.length > 0)
+    ) {
+      classification = {
+        status: "ambiguous",
+        entityIds: entities.map((entity) => entity.id).sort(),
+        reviewIds: remainingReviews.map((review) => review.id).sort(),
+      };
+    } else {
+      classification = { status: "none" };
+    }
+    return { ...mention, ...classification };
+  });
+}
+
+async function loadEntityNamesById(
+  db: Kysely<DB>,
+  entityIds: Iterable<string>,
+): Promise<Map<string, LoopCompareEntityName>> {
+  const ids = [...new Set(entityIds)].filter((id) => !id.startsWith("review:"));
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .selectFrom("entities")
+    .select(["id", "name", "deleted_at", "merged_into_entity_id"])
+    .where("id", "in", ids)
+    .execute();
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        name: row.name,
+        live: row.deleted_at === null,
+        ...(row.merged_into_entity_id ? { mergedIntoEntityId: row.merged_into_entity_id } : {}),
+      },
+    ]),
   );
+}
+
+function loopEntityIds(staged: ReportStagedDocument): string[] {
+  return staged.mentions.flatMap((mention) => {
+    const resolution = mention.resolution;
+    if (["known", "tool", "matched", "judged"].includes(resolution.kind)) {
+      return [(resolution as { entityId: string }).entityId];
+    }
+    if (resolution.kind === "hold") return resolution.candidates.map((candidate) => candidate.entityId);
+    if (resolution.kind === "new") return resolution.rejectedCandidates ?? [];
+    return [];
+  });
+}
+
+export async function loadLoopCompareEntityNames(
+  db: Kysely<DB>,
+  staged: ReportStagedDocument,
+): Promise<Map<string, LoopCompareEntityName>> {
+  return loadEntityNamesById(db, [
+    ...loopEntityIds(staged),
+    ...staged.entityFacts.map((entityFact) => entityFact.entityId),
+  ]);
+}
+
+async function loadMentionClassifications(
+  db: Kysely<DB>,
+  fileId: string,
+  mentions: ReportLoopMention[],
+): Promise<LoopMentionDiagnostic[]> {
+  const legacyRows = await loadLegacyMentionClassifications(db, fileId);
+  const legacyByKey = new Map(legacyRows.map((row) => [row.key, row]));
+  const targetEntityIds = mentions.flatMap((mention) =>
+    ["known", "tool", "matched", "judged"].includes(mention.resolution.kind)
+      ? [(mention.resolution as { entityId: string }).entityId]
+      : [],
+  );
+  const targetEntityNames = await loadEntityNamesById(db, targetEntityIds);
+  return mentions.map((mention) => {
+    const resolution = mention.resolution;
+    const targetEntityId = ["known", "tool", "matched", "judged"].includes(resolution.kind)
+      ? (resolution as { entityId: string }).entityId
+      : null;
+    const reconstructed = legacyByKey.get(normalizedMentionKey(mention.mention, mention.type));
+    let legacy: LegacyMentionClassification;
+    if (reconstructed?.status === "linked") {
+      legacy = { kind: "linked", entityId: reconstructed.entityId ?? "", entityName: reconstructed.entityName ?? "" };
+    } else if (reconstructed?.status === "queued") {
+      legacy = { kind: "queued", status: reconstructed.reviewStatus ?? "" };
+    } else if (reconstructed?.status === "ambiguous") {
+      legacy = {
+        kind: "ambiguous",
+        entityIds: reconstructed.entityIds ?? [],
+        reviewIds: reconstructed.reviewIds ?? [],
+      };
+    } else {
+      legacy = { kind: "none" };
+    }
+    return {
+      mention: mention.mention,
+      type: mention.type,
+      resolutionKind: resolution.kind,
+      targetEntityId,
+      targetEntityName: targetEntityId ? (targetEntityNames.get(targetEntityId)?.name ?? null) : null,
+      holdReason: resolution.kind === "hold" ? resolution.reason : null,
+      legacy,
+    };
+  });
+}
+
+function normalizeLoopMention(
+  mention: ReportLoopMention,
+  names: ReadonlyMap<string, LoopCompareEntityName>,
+): LoopCompareMention {
+  const resolution = mention.resolution;
+  const base = {
+    name: mention.mention,
+    type: mention.type,
+    variations: mention.variations,
+    facts: mention.facts ?? [],
+    originalKind: resolution.kind,
+  };
+  if (["known", "tool", "matched", "judged"].includes(resolution.kind)) {
+    const entityId = (resolution as { entityId: string }).entityId;
+    const entity = names.get(entityId);
+    return {
+      ...base,
+      kind: "resolved",
+      entityId,
+      entityName: entity?.name ?? entityId,
+      ...(entity ? { live: entity.live } : {}),
+      ...(entity?.mergedIntoEntityId ? { mergedIntoEntityId: entity.mergedIntoEntityId } : {}),
+      ...(resolution.kind === "judged" ? { reason: resolution.reason } : {}),
+    };
+  }
+  if (resolution.kind === "hold") {
+    return {
+      ...base,
+      kind: "hold",
+      reason: resolution.reason,
+      candidates: resolution.candidates.map((candidate) => {
+        const entity = names.get(candidate.entityId);
+        return {
+          entityId: candidate.entityId,
+          name: entity?.name ?? candidate.name ?? candidate.entityId,
+          ...(entity ? { live: entity.live } : {}),
+        };
+      }),
+    };
+  }
+  const rejectedCandidates = resolution.kind === "new" ? resolution.rejectedCandidates : undefined;
+  return {
+    ...base,
+    kind: "new",
+    rejectedCandidates: (rejectedCandidates ?? []).map((entityId) => ({
+      entityId,
+      name: names.get(entityId)?.name ?? entityId,
+    })),
+  };
+}
+
+function alignedLegacy(mention: LegacyCompareMention): NonNullable<AlignedMention["legacy"]> {
+  const { key: _key, name: _name, type: _type, ...legacy } = mention;
+  return legacy;
+}
+
+function alignedLoop(mention: LoopCompareMention): NonNullable<AlignedMention["loop"]> {
+  return {
+    kind: mention.kind,
+    originalKind: mention.originalKind,
+    ...(mention.entityId ? { entityId: mention.entityId } : {}),
+    ...(mention.entityName ? { entityName: mention.entityName } : {}),
+    ...(mention.live == null ? {} : { live: mention.live }),
+    ...(mention.mergedIntoEntityId ? { mergedIntoEntityId: mention.mergedIntoEntityId } : {}),
+    ...(mention.reason ? { reason: mention.reason } : {}),
+    ...(mention.candidates ? { candidates: mention.candidates } : {}),
+    ...(mention.rejectedCandidates ? { rejectedCandidates: mention.rejectedCandidates } : {}),
+  };
+}
+
+function compareVerdict(
+  legacy: LegacyCompareMention | undefined,
+  loop: LoopCompareMention | undefined,
+): LoopCompareVerdict {
+  if (!legacy) return "loop_only";
+  if (!loop) return "legacy_only";
+  if (legacy.status === "ambiguous") return "indeterminate";
+  if (loop.kind === "resolved") {
+    if (legacy.status === "linked") return legacy.entityId === loop.entityId ? "same_target" : "different_target";
+    if (legacy.status === "queued") return "loop_resolved_legacy_queued";
+    return "loop_resolved_legacy_unresolved";
+  }
+  if (loop.kind === "hold") return legacy.status === "linked" ? "loop_hold_legacy_linked" : "both_unresolved";
+  if (legacy.status === "linked") return "loop_new_legacy_linked";
+  if (legacy.status === "queued") return "loop_new_legacy_queued";
+  return "both_unresolved";
+}
+
+export function alignMentions(
+  legacyRows: LegacyCompareMention[],
+  loopMentions: ReportLoopMention[],
+  names: ReadonlyMap<string, LoopCompareEntityName>,
+): AlignedMention[] {
+  const legacyByKey = new Map<string, LegacyCompareMention>();
+  for (const row of legacyRows) {
+    if (!legacyByKey.has(row.key)) legacyByKey.set(row.key, row);
+  }
+  const normalizedLoopMentions = loopMentions.map((mention) => normalizeLoopMention(mention, names));
+  const loopByKey = new Map<string, LoopCompareMention>();
+  for (const mention of normalizedLoopMentions) {
+    const key = normalizedMentionKey(mention.name, mention.type);
+    if (!loopByKey.has(key)) loopByKey.set(key, mention);
+  }
+  const keys = [...legacyByKey.keys(), ...[...loopByKey.keys()].filter((key) => !legacyByKey.has(key))];
+  return keys
+    .map((key) => {
+      const legacy = legacyByKey.get(key);
+      const loop = loopByKey.get(key);
+      return {
+        key,
+        name: loop?.name ?? legacy?.name ?? key.split("\t")[0],
+        type: loop?.type ?? legacy?.type ?? key.split("\t")[1],
+        ...(legacy ? { legacy: alignedLegacy(legacy) } : {}),
+        ...(loop ? { loop: alignedLoop(loop) } : {}),
+        verdict: compareVerdict(legacy, loop),
+      };
+    })
+    .sort((left, right) => left.key.localeCompare(right.key));
+}
+
+const LOOP_COMPARE_VERDICTS: LoopCompareVerdict[] = [
+  "same_target",
+  "different_target",
+  "loop_resolved_legacy_queued",
+  "loop_resolved_legacy_unresolved",
+  "loop_hold_legacy_linked",
+  "loop_new_legacy_linked",
+  "loop_new_legacy_queued",
+  "loop_only",
+  "legacy_only",
+  "both_unresolved",
+  "indeterminate",
+];
+
+export async function compareConsolidatedLoopStage(
+  db: Kysely<DB>,
+  file: ConsolidatedLoopReportFile,
+  stage: ExtractionStage,
+): Promise<LoopCompareDetail> {
+  const staged = JSON.parse(stage.staged_json) as ReportStagedDocument;
+  const stageSummary = summarizeStage(staged);
+  const [legacyMentions, names, relationCount, factCount, usage] = await Promise.all([
+    loadLegacyMentionClassifications(db, file.id),
+    loadLoopCompareEntityNames(db, staged),
+    legacyRelationCount(db, file.id),
+    legacyFactCount(db, file.id),
+    legacyUsage(db, file.id),
+  ]);
+  const loopMentions = staged.mentions.map((mention) => normalizeLoopMention(mention, names));
+  const aligned = alignMentions(legacyMentions, staged.mentions, names);
+  const verdicts = Object.fromEntries(LOOP_COMPARE_VERDICTS.map((verdict) => [verdict, 0])) as Record<
+    LoopCompareVerdict,
+    number
+  >;
+  for (const row of aligned) verdicts[row.verdict] += 1;
+  const stale = stage.content_hash !== file.content_hash;
+  return {
+    file: {
+      id: file.id,
+      fileName: file.file_name,
+      source: file.source,
+      sourceBucket: sourceBucketFor(file),
+      fileType: file.file_type,
+      sourceCreatedAt: file.source_created_at,
+      contentHash: file.content_hash,
+      enrichmentStatus: file.enrichment_status,
+      summary: file.summary,
+    },
+    stage: {
+      id: stage.id,
+      extractorVersion: stage.extractor_version as ConsolidatedLoopExtractorVersion,
+      updatedAt: stage.updated_at,
+      stale,
+      ...(stale
+        ? {
+            staleNote:
+              "stage content hash differs from the file's current content; legacy rows are from the current content",
+          }
+        : {}),
+      model: stageSummary.model ?? stage.model,
+      costUsd: stage.cost_usd == null ? null : Number(stage.cost_usd),
+      tokens: {
+        input: stage.input_tokens == null ? null : Number(stage.input_tokens),
+        output: stage.output_tokens == null ? null : Number(stage.output_tokens),
+      },
+      toolSteps: stageSummary.toolSteps,
+      guard: stageSummary.guard,
+      validation: stageSummary.validation,
+    },
+    legacy: {
+      summary: file.summary,
+      mentions: legacyMentions,
+      relationCount,
+      factCount,
+      costUsd: usage.costUsd,
+      tokens: usage.tokens,
+      reconstructed: true,
+    },
+    loop: {
+      summary: staged.summary,
+      mentions: loopMentions,
+      relations: staged.relations,
+      entityFacts: staged.entityFacts.map((row) => ({
+        entityId: row.entityId,
+        entityName: names.get(row.entityId)?.name ?? row.entityId,
+        facts: row.facts,
+      })),
+      staged,
+    },
+    aligned,
+    totals: {
+      legacyMentions: legacyMentions.length,
+      loopMentions: stageSummary.loopMentionCount,
+      holds: stageSummary.holdCount,
+      verdicts,
+    },
+  };
 }
 
 export async function evaluateConsolidatedLoopStage(
@@ -505,6 +1128,7 @@ export async function evaluateConsolidatedLoopStage(
   const stale = staleReportRow(file, stage);
   if (stale) return stale;
   const staged = JSON.parse(stage.staged_json) as ReportStagedDocument;
+  const stageSummary = summarizeStage(staged);
   const legacyMentions = await legacyMentionRows(db, file.id);
   const loopMentionRows = staged.mentions.flatMap((mention) =>
     mention.type !== "team" ? [keysForMention(mention.mention, mention.variations, mention.type)] : [],
@@ -522,33 +1146,24 @@ export async function evaluateConsolidatedLoopStage(
       : Number(stage.input_tokens ?? 0) + Number(stage.output_tokens ?? 0);
   return {
     fileId: file.id,
-    source: bucketFor(file),
+    source: sourceBucketFor(file),
     stageUpdatedAt: stage.updated_at,
     stale: false,
     mentionRecall: legacyMentions.length === 0 ? null : common / legacyMentions.length,
     mentionPrecision: loopMentionRows.length === 0 ? null : loopMatched / loopMentionRows.length,
     legacyMentionCount: legacyMentions.length,
-    loopMentionCount: loopMentionRows.length,
+    loopMentionCount: stageSummary.loopMentionCount,
     legacyRelationCount: await legacyRelationCount(db, file.id),
     loopRelationCount: staged.relations.length,
     legacyFactCount: await legacyFactCount(db, file.id),
     loopFactCount: staged.entityFacts.reduce((sum, row) => sum + row.facts.length, 0),
     legacySummary: (file.summary ?? "").slice(0, 200),
     loopSummary: staged.summary.slice(0, 200),
-    holdCount: holds.length,
+    holdCount: stageSummary.holdCount,
     holdsWithCandidates: holds.filter(
       (mention) => mention.resolution.kind === "hold" && mention.resolution.candidates.length > 0,
     ).length,
-    guard: {
-      overriddenByMatcher: staged.meta.guard.overriddenByMatcher ?? 0,
-      demotedUnoffered: staged.meta.guard.demotedUnoffered ?? 0,
-      heldUnjudged: staged.meta.guard.heldUnjudged ?? 0,
-      heldPending: staged.meta.guard.heldPending ?? 0,
-      newOverCandidates: staged.meta.guard.newOverCandidates ?? 0,
-      registryLinked: staged.meta.guard.registryLinked ?? 0,
-      droppedFacts: staged.meta.guard.droppedFacts ?? 0,
-      matchToolCalls: staged.meta.guard.matchToolCalls ?? 0,
-    },
+    guard: stageSummary.guard,
     legacyCostUsd: legacy.costUsd,
     loopCostUsd: stage.cost_usd == null ? null : Number(stage.cost_usd),
     legacyTokens: legacy.tokens,
@@ -556,10 +1171,20 @@ export async function evaluateConsolidatedLoopStage(
     mentionDiagnostics,
     resolvedLegacyQueuedCount: mentionDiagnostics.filter(
       (diagnostic) =>
-        ["known", "tool", "matched", "judged"].includes(diagnostic.resolutionKind) &&
-        diagnostic.legacy.kind === "queued",
+        ["known", "tool", "matched", "judged"].includes(diagnostic.resolutionKind) && isLegacyQueued(diagnostic.legacy),
     ).length,
   };
+}
+
+function isLegacyQueued(classification: LegacyMentionClassification): boolean {
+  switch (classification.kind) {
+    case "queued":
+      return true;
+    case "linked":
+    case "ambiguous":
+    case "none":
+      return false;
+  }
 }
 
 export async function evaluateCurrentConsolidatedLoopStage(
@@ -626,6 +1251,9 @@ function targetDescription(diagnostic: LoopMentionDiagnostic): string {
 function legacyDescription(classification: LegacyMentionClassification): string {
   if (classification.kind === "linked") return `linked -> ${markdownInline(classification.entityName)}`;
   if (classification.kind === "queued") return `queued (${classification.status})`;
+  if (classification.kind === "ambiguous") {
+    return `ambiguous (${classification.entityIds.length} entities, ${classification.reviewIds.length} reviews)`;
+  }
   return "none";
 }
 

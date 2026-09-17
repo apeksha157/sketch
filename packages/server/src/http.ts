@@ -21,6 +21,7 @@ import { type MagicLinkSender, authRoutes } from "./api/auth";
 import { channelRoutes } from "./api/channels";
 import { connectorRoutes } from "./api/connectors";
 import { devEnrichmentRoutes } from "./api/dev-enrichment";
+import { devLoopCompareRoutes } from "./api/dev-loop-compare";
 import { enrichmentRoutes } from "./api/enrichment";
 import { entityRoutes } from "./api/entities";
 import { graphPassRoutes } from "./api/graph-passes";
@@ -511,6 +512,7 @@ export function createApp(db: Kysely<DB>, config: Config, deps?: AppDeps) {
         taskMintingGenerator: deps?.taskMintingGenerator,
       }),
     );
+    app.route("/api/dev", devLoopCompareRoutes(db, logger));
   }
   app.route("/api/graph-passes", graphPassRoutes(db, logger));
   app.route("/api/graph-verdicts", graphVerdictRoutes(db, logger));

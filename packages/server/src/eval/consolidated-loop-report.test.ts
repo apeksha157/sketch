@@ -2,39 +2,7 @@ import type { Kysely } from "kysely";
 import { describe, expect, it } from "vitest";
 import type { ExtractionStage } from "../db/repositories/extraction-stages";
 import type { DB } from "../db/schema";
-import {
-  type ConsolidatedLoopReportFile,
-  type ReportLoopMention,
-  classifyLoopMentions,
-  evaluateConsolidatedLoopStage,
-} from "./consolidated-loop-report";
-
-const mentions: ReportLoopMention[] = [
-  {
-    mention: "Acme Corp",
-    type: "company",
-    variations: [],
-    resolution: { kind: "known", entityId: "entity-acme" },
-  },
-  {
-    mention: "Bob Jones",
-    type: "person",
-    variations: [],
-    resolution: { kind: "judged", entityId: "entity-bob", reason: "matched evidence" },
-  },
-  {
-    mention: "Fresh Product",
-    type: "product",
-    variations: [],
-    resolution: { kind: "new" },
-  },
-  {
-    mention: "Alex Smith",
-    type: "person",
-    variations: [],
-    resolution: { kind: "hold", reason: "two plausible people", candidates: [] },
-  },
-];
+import { type ConsolidatedLoopReportFile, evaluateConsolidatedLoopStage } from "./consolidated-loop-report";
 
 function reportFile(contentHash: string | null): ConsolidatedLoopReportFile {
   return {
@@ -51,6 +19,7 @@ function reportFile(contentHash: string | null): ConsolidatedLoopReportFile {
     content_hash: contentHash,
     source_created_at: null,
     source_updated_at: null,
+    enrichment_status: "enriched",
   };
 }
 
@@ -75,57 +44,6 @@ function extractionStage(contentHash: string | null): ExtractionStage {
 }
 
 describe("consolidated loop report classification", () => {
-  it("classifies linked, queued, and absent legacy mentions and surfaces hold reasons", () => {
-    const diagnostics = classifyLoopMentions(
-      mentions,
-      [{ entityId: "legacy-acme", entityName: "  ACME   CORP ", entityType: "company" }],
-      [{ normalizedName: "bob jones", entityType: "person", status: "pending" }],
-      new Map([
-        ["entity-acme", "Acme Corporation"],
-        ["entity-bob", "Robert Jones"],
-      ]),
-    );
-
-    expect(diagnostics).toEqual([
-      {
-        mention: "Acme Corp",
-        type: "company",
-        resolutionKind: "known",
-        targetEntityId: "entity-acme",
-        targetEntityName: "Acme Corporation",
-        holdReason: null,
-        legacy: { kind: "linked", entityId: "legacy-acme", entityName: "  ACME   CORP " },
-      },
-      {
-        mention: "Bob Jones",
-        type: "person",
-        resolutionKind: "judged",
-        targetEntityId: "entity-bob",
-        targetEntityName: "Robert Jones",
-        holdReason: null,
-        legacy: { kind: "queued", status: "pending" },
-      },
-      {
-        mention: "Fresh Product",
-        type: "product",
-        resolutionKind: "new",
-        targetEntityId: null,
-        targetEntityName: null,
-        holdReason: null,
-        legacy: { kind: "none" },
-      },
-      {
-        mention: "Alex Smith",
-        type: "person",
-        resolutionKind: "hold",
-        targetEntityId: null,
-        targetEntityName: null,
-        holdReason: "two plausible people",
-        legacy: { kind: "none" },
-      },
-    ]);
-  });
-
   it("marks a mismatched content hash stale without parsing or comparing the stage", async () => {
     const row = await evaluateConsolidatedLoopStage(
       {} as Kysely<DB>,

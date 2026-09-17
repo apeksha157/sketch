@@ -7,6 +7,7 @@
  */
 import type { DevSearchCandidate } from "@/lib/api";
 import { useState } from "react";
+import { FilterChip, Td, Th } from "./dev-table";
 
 type Filter = "all" | "returned" | "dropped";
 
@@ -104,26 +105,4 @@ function byFinalThenScore(a: DevSearchCandidate, b: DevSearchCandidate): number 
   if (a.finalPosition !== null) return -1;
   if (b.finalPosition !== null) return 1;
   return b.score - a.score;
-}
-
-function FilterChip({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-2.5 py-1 text-[11px] ${
-        active ? "border-foreground/30 bg-muted font-medium" : "border-border text-muted-foreground"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function Th({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <th className={`px-2.5 py-1.5 font-medium text-[10px] uppercase tracking-wide ${className}`}>{children}</th>;
-}
-
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <td className={`max-w-0 px-2.5 py-1.5 align-top ${className}`}>{children}</td>;
 }

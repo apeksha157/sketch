@@ -8,6 +8,8 @@ import { getSharedPgDb } from "../test-utils";
 import {
   aggregateConsolidatedLoopReport,
   evaluateConsolidatedLoopStage,
+  loadLegacyMentionClassifications,
+  loadLoopCompareEntityNames,
   renderConsolidatedLoopReportMarkdown,
   selectExistingConsolidatedLoopStages,
 } from "./consolidated-loop-report";
@@ -36,6 +38,7 @@ describe("existing consolidated loop report", () => {
     const fileId = `report-file-${suffix}`;
     const acmeName = `Acme Corp ${suffix}`;
     const bobName = `Bob Jones ${suffix}`;
+    const samName = `Sam Lee ${suffix}`;
     await db
       .insertInto("users")
       .values({ id: userId, name: "Report User", email: `${userId}@example.com` })
@@ -101,6 +104,30 @@ describe("existing consolidated loop report", () => {
           content_hash: `hash-${suffix}`,
         },
         {
+          id: `bob-mention-fact-${suffix}`,
+          indexed_file_id: fileId,
+          connector_config_id: connectorId,
+          source: "llm_extraction",
+          fact_type: "llm_extracted",
+          relation: "mentioned",
+          subject_name: bobName,
+          raw: JSON.stringify({ mention: bobName, type: "person", variations: [] }),
+          fact_key: `bob-mention-key-${suffix}`,
+          content_hash: `hash-${suffix}`,
+        },
+        {
+          id: `sam-mention-fact-${suffix}`,
+          indexed_file_id: fileId,
+          connector_config_id: connectorId,
+          source: "llm_extraction",
+          fact_type: "llm_extracted",
+          relation: "mentioned",
+          subject_name: samName,
+          raw: JSON.stringify({ mention: samName, type: "person", variations: [] }),
+          fact_key: `sam-mention-key-${suffix}`,
+          content_hash: `hash-${suffix}`,
+        },
+        {
           id: `relation-fact-${suffix}`,
           indexed_file_id: fileId,
           connector_config_id: connectorId,
@@ -116,23 +143,61 @@ describe("existing consolidated loop report", () => {
       .execute();
     await db
       .insertInto("entity_review_queue")
-      .values({
-        id: `review-${suffix}`,
-        proposed_name: bobName,
-        normalized_name: bobName.toLowerCase(),
-        entity_type: "person",
-        status: "pending",
-        triggered_by_user_id: userId,
-      })
+      .values([
+        {
+          id: `review-${suffix}`,
+          proposed_name: bobName,
+          normalized_name: bobName.toLowerCase(),
+          entity_type: "person",
+          status: "pending",
+          triggered_by_user_id: userId,
+          source: "test",
+          source_id: `bob-review-source-${suffix}`,
+        },
+        {
+          id: `sam-review-a-${suffix}`,
+          proposed_name: samName,
+          normalized_name: samName.toLowerCase(),
+          entity_type: "person",
+          status: "pending",
+          triggered_by_user_id: userId,
+          source: "test",
+          source_id: `sam-review-a-source-${suffix}`,
+        },
+        {
+          id: `sam-review-b-${suffix}`,
+          proposed_name: samName,
+          normalized_name: samName.toLowerCase(),
+          entity_type: "person",
+          status: "pending",
+          triggered_by_user_id: userId,
+          source: "test",
+          source_id: `sam-review-b-source-${suffix}`,
+        },
+      ])
       .execute();
     await db
       .insertInto("entity_review_evidence")
-      .values({
-        id: `evidence-${suffix}`,
-        review_id: `review-${suffix}`,
-        indexed_file_id: fileId,
-        source: "llm_extraction",
-      })
+      .values([
+        {
+          id: `evidence-${suffix}`,
+          review_id: `review-${suffix}`,
+          indexed_file_id: fileId,
+          source: "llm_extraction",
+        },
+        {
+          id: `sam-evidence-a-${suffix}`,
+          review_id: `sam-review-a-${suffix}`,
+          indexed_file_id: fileId,
+          source: "llm_extraction",
+        },
+        {
+          id: `sam-evidence-b-${suffix}`,
+          review_id: `sam-review-b-${suffix}`,
+          indexed_file_id: fileId,
+          source: "llm_extraction",
+        },
+      ])
       .execute();
     await db
       .insertInto("llm_usage_events")
@@ -179,6 +244,12 @@ describe("existing consolidated loop report", () => {
             variations: [],
             resolution: { kind: "tool", entityId: bob.id },
           },
+          {
+            mention: samName,
+            type: "person",
+            variations: [],
+            resolution: { kind: "new" },
+          },
         ],
         relations: [
           {
@@ -213,10 +284,10 @@ describe("existing consolidated loop report", () => {
 
     expect(row).toMatchObject({
       stale: false,
-      legacyMentionCount: 1,
-      loopMentionCount: 2,
+      legacyMentionCount: 3,
+      loopMentionCount: 3,
       mentionRecall: 1,
-      mentionPrecision: 0.5,
+      mentionPrecision: 1,
       legacyRelationCount: 1,
       loopRelationCount: 1,
       legacyFactCount: 1,
@@ -230,6 +301,15 @@ describe("existing consolidated loop report", () => {
       mentionDiagnostics: [
         { mention: acmeName, resolutionKind: "known", legacy: { kind: "linked", entityName: acmeName } },
         { mention: bobName, resolutionKind: "tool", legacy: { kind: "queued", status: "pending" } },
+        {
+          mention: samName,
+          resolutionKind: "new",
+          legacy: {
+            kind: "ambiguous",
+            entityIds: [],
+            reviewIds: [`sam-review-a-${suffix}`, `sam-review-b-${suffix}`],
+          },
+        },
       ],
     });
     const totals = aggregateConsolidatedLoopReport([row]);
@@ -237,8 +317,8 @@ describe("existing consolidated loop report", () => {
       files: 1,
       comparedFiles: 1,
       staleFiles: 0,
-      legacyMentionCount: 1,
-      loopMentionCount: 2,
+      legacyMentionCount: 3,
+      loopMentionCount: 3,
       aggregateRecall: 1,
       resolvedLegacyQueuedCount: 1,
     });
@@ -246,6 +326,7 @@ describe("existing consolidated loop report", () => {
     expect(markdown).toContain("Loop-resolved mentions queued by legacy: 1");
     expect(markdown).toContain(`legacy linked -> ${acmeName}`);
     expect(markdown).toContain("legacy queued (pending)");
+    expect(markdown).toContain("legacy ambiguous (0 entities, 2 reviews)");
   });
 
   it("uses updated_at for same-day since filtering and includes loop-v1 and loop-v2 stages", async () => {
@@ -324,7 +405,7 @@ describe("existing consolidated loop report", () => {
       });
       await db
         .updateTable("extraction_stages")
-        .set({ updated_at: "2026-09-15 12:00:00", created_at: "2026-09-14 12:00:00" })
+        .set({ updated_at: "2026-09-15 12:00:00.123+05:30", created_at: "2026-09-14 12:00:00" })
         .where("id", "=", stage.id)
         .execute();
     }
@@ -332,6 +413,8 @@ describe("existing consolidated loop report", () => {
     const selections = await selectExistingConsolidatedLoopStages(db, { since: "2026-09-15 00:00:00" });
     const selected = selections.filter((selection) => selection.file.id.endsWith(suffix));
     expect(selected.map((selection) => selection.stage.extractor_version).sort()).toEqual(["loop-v1", "loop-v2"]);
+    const afterSelections = await selectExistingConsolidatedLoopStages(db, { since: "2026-09-15T07:00:00Z" });
+    expect(afterSelections.filter((selection) => selection.file.id.endsWith(suffix))).toEqual([]);
     const rows = await Promise.all(
       selected.map((selection) => evaluateConsolidatedLoopStage(db, selection.file, selection.stage)),
     );
@@ -340,5 +423,160 @@ describe("existing consolidated loop report", () => {
         .flatMap((row) => (row.stale ? [] : row.mentionDiagnostics.map((diagnostic) => diagnostic.resolutionKind)))
         .sort(),
     ).toEqual(["known", "matched"]);
+  });
+
+  it("reconstructs exact legacy classifications and looks up deleted merged loop targets", async () => {
+    const suffix = randomUUID();
+    const userId = `report-compare-user-${suffix}`;
+    const connectorId = `report-compare-connector-${suffix}`;
+    const fileId = `report-compare-file-${suffix}`;
+    await db
+      .insertInto("users")
+      .values({ id: userId, name: "Report User", email: `${userId}@example.com` })
+      .execute();
+    await db
+      .insertInto("connector_configs")
+      .values({
+        id: connectorId,
+        connector_type: "google_drive",
+        auth_type: "oauth",
+        credentials: "{}",
+        created_by: userId,
+      })
+      .execute();
+    await db
+      .insertInto("indexed_files")
+      .values({
+        id: fileId,
+        connector_config_id: connectorId,
+        provider_file_id: fileId,
+        file_name: "compare.txt",
+        file_type: "document",
+        content_category: "document",
+        content: "classification fixture",
+        source: "google_drive",
+        content_hash: `hash-${suffix}`,
+        synced_at: NOW,
+      })
+      .execute();
+    const entityRepo = createEntityRepository(db);
+    const linked = await entityRepo.upsertEntity({
+      name: `Official ${suffix}`,
+      sourceType: "company",
+      status: "confirmed",
+    });
+    const survivor = await entityRepo.upsertEntity({
+      name: `Survivor ${suffix}`,
+      sourceType: "company",
+      status: "confirmed",
+    });
+    const deleted = await entityRepo.upsertEntity({
+      name: `Deleted ${suffix}`,
+      sourceType: "company",
+      status: "confirmed",
+    });
+    await db
+      .updateTable("entities")
+      .set({
+        aliases: JSON.stringify([`Alias ${suffix}`]),
+      })
+      .where("id", "=", linked.id)
+      .execute();
+    await db
+      .updateTable("entities")
+      .set({ deleted_at: NOW, merged_into_entity_id: survivor.id })
+      .where("id", "=", deleted.id)
+      .execute();
+    await entityRepo.createMention({
+      entityId: linked.id,
+      indexedFileId: fileId,
+      confidence: "EXTRACTED",
+      source: "llm_extraction",
+      relation: "mentioned",
+    });
+    const mentionFacts = [
+      [`alias-${suffix}`, `Alias ${suffix}`, "company"],
+      [`queued-${suffix}`, `Queued ${suffix}`, "person"],
+      [`ambiguous-${suffix}`, `Ambiguous ${suffix}`, "person"],
+    ] as const;
+    await db
+      .insertInto("indexed_file_facts")
+      .values(
+        mentionFacts.map(([id, name, type]) => ({
+          id,
+          indexed_file_id: fileId,
+          connector_config_id: connectorId,
+          source: "llm_extraction",
+          fact_type: "llm_extracted",
+          relation: "mentioned",
+          subject_name: name,
+          mention_type: type,
+          raw: JSON.stringify({ mention: name, type, variations: [] }),
+          fact_key: `key-${id}`,
+          content_hash: `hash-${suffix}`,
+        })),
+      )
+      .execute();
+    for (const [id, name] of [
+      [`queued-review-${suffix}`, `Queued ${suffix}`],
+      [`ambiguous-review-a-${suffix}`, `Ambiguous ${suffix}`],
+      [`ambiguous-review-b-${suffix}`, `Ambiguous ${suffix}`],
+    ] as const) {
+      await db
+        .insertInto("entity_review_queue")
+        .values({
+          id,
+          proposed_name: name,
+          normalized_name: name.toLowerCase(),
+          entity_type: "person",
+          status: "pending",
+          triggered_by_user_id: userId,
+          source: "test",
+          source_id: id,
+        })
+        .execute();
+      await db
+        .insertInto("entity_review_evidence")
+        .values({
+          id: `evidence-${id}`,
+          review_id: id,
+          indexed_file_id: fileId,
+          source: "llm_extraction",
+        })
+        .execute();
+    }
+
+    const classifications = await loadLegacyMentionClassifications(db, fileId);
+    expect(classifications).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: `Alias ${suffix}`, status: "linked", entityId: linked.id }),
+        expect.objectContaining({ name: `Queued ${suffix}`, status: "queued", reviewId: `queued-review-${suffix}` }),
+        expect.objectContaining({
+          name: `Ambiguous ${suffix}`,
+          status: "ambiguous",
+          reviewIds: [`ambiguous-review-a-${suffix}`, `ambiguous-review-b-${suffix}`],
+        }),
+      ]),
+    );
+
+    const names = await loadLoopCompareEntityNames(db, {
+      mentions: [
+        {
+          mention: `Deleted ${suffix}`,
+          type: "company",
+          variations: [],
+          resolution: { kind: "matched", entityId: deleted.id },
+        },
+      ],
+      relations: [],
+      entityFacts: [{ entityId: deleted.id, facts: [] }],
+      summary: "summary",
+      meta: {},
+    });
+    expect(names.get(deleted.id)).toEqual({
+      name: `Deleted ${suffix}`,
+      live: false,
+      mergedIntoEntityId: survivor.id,
+    });
   });
 });
