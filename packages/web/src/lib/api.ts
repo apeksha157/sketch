@@ -226,7 +226,7 @@ export interface ScheduledTaskConversationsResponse {
   taskId: string;
   conversations: ScheduledTaskConversationSummary[];
   builderLock: ScheduledTaskConversationLock;
-  transcriptAccess: "owner" | "admin" | "viewer";
+  transcriptAccess: "owner" | "admin" | "editor" | "viewer";
 }
 
 export type WebhookAuthentication = "none" | "hmac_sha256";

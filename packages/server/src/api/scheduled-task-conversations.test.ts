@@ -311,7 +311,7 @@ describe("scheduled task conversation API", () => {
     });
   });
 
-  it("shows every transcript to the owner with names and keeps member access viewer-scoped", async () => {
+  it("shows every transcript to the owner and a granted editor read-only, while keeping their mutations self-scoped", async () => {
     await seedAdmin(db);
     const owner = await createUserRepository(db).create({ name: "Owner", email: "owner-all-transcripts@test.com" });
     const member = await createUserRepository(db).create({ name: "Maya", email: "maya-all-transcripts@test.com" });
@@ -386,19 +386,26 @@ describe("scheduled task conversation API", () => {
     });
     expect(adminRead.status).toBe(200);
 
-    // The granted member still sees only their own transcript.
+    // The granted member is an editor: they now see every builder chat and can
+    // open a teammate's transcript read-only.
     const memberList = await app.request("/api/scheduled-tasks/all-transcripts-task/conversations", {
       headers: { Cookie: memberCookieValue },
     });
     expect(memberList.status).toBe(200);
     await expect(memberList.json()).resolves.toMatchObject({
-      transcriptAccess: "viewer",
-      conversations: [expect.objectContaining({ conversationId: "maya-chat" })],
+      transcriptAccess: "editor",
+      conversations: expect.arrayContaining([
+        expect.objectContaining({ conversationId: "owner-chat", transcriptUserName: "Owner" }),
+        expect.objectContaining({ conversationId: "maya-chat", transcriptUserName: "Maya" }),
+      ]),
     });
     const memberReadOwner = await app.request("/api/scheduled-tasks/all-transcripts-task/conversations/owner-chat", {
       headers: { Cookie: memberCookieValue },
     });
-    expect(memberReadOwner.status).toBe(404);
+    expect(memberReadOwner.status).toBe(200);
+    await expect(memberReadOwner.json()).resolves.toMatchObject({
+      conversation: { conversationId: "owner-chat", transcriptUserName: "Owner" },
+    });
 
     // Member mutations stay viewer-scoped: the owner's transcript is not a
     // valid target even though the member can read the task.
@@ -773,17 +780,17 @@ describe("scheduled task conversation API", () => {
       messages: [expect.objectContaining({ id: "msg-1" }), expect.objectContaining({ id: "msg-2" })],
     });
 
-    // A granted member cannot read the owner's transcript content (viewer scope).
+    // A granted member is an editor: they read the owner's transcript read-only.
     const memberRes = await app.request("/api/scheduled-tasks/messages-task/conversations/owner-chat/messages", {
       headers: { Cookie: await memberCookie(db, member.id) },
     });
-    expect(memberRes.status).toBe(404);
+    expect(memberRes.status).toBe(200);
     await expect(memberRes.json()).resolves.toMatchObject({
-      error: { code: "CONVERSATION_NOT_FOUND" },
+      messages: [expect.objectContaining({ id: "msg-1" }), expect.objectContaining({ id: "msg-2" })],
     });
   });
 
-  it("serves a member's own conversation transcript but never another member's", async () => {
+  it("serves a member's own transcript and lets a granted editor read a teammate's read-only", async () => {
     await seedAdmin(db);
     const owner = await createUserRepository(db).create({ name: "Owner", email: "owner-scope@test.com" });
     const maya = await createUserRepository(db).create({ name: "Maya", email: "maya-scope@test.com" });
@@ -830,10 +837,14 @@ describe("scheduled task conversation API", () => {
       messages: [expect.objectContaining({ id: "m-1", role: "user" })],
     });
 
+    // Nora is a granted editor, so she reads Maya's transcript read-only.
     const noraRes = await app.request("/api/scheduled-tasks/scope-task/conversations/maya-chat/messages", {
       headers: { Cookie: await memberCookie(db, nora.id) },
     });
-    expect(noraRes.status).toBe(404);
+    expect(noraRes.status).toBe(200);
+    await expect(noraRes.json()).resolves.toMatchObject({
+      messages: [expect.objectContaining({ id: "m-1", role: "user" })],
+    });
 
     // The owner still sees the member's transcript content.
     const ownerRes = await app.request("/api/scheduled-tasks/scope-task/conversations/maya-chat/messages", {

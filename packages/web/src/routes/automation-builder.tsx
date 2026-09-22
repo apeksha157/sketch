@@ -58,13 +58,13 @@ import { useChat } from "@ai-sdk/react";
 import {
   ArchiveIcon,
   ArrowClockwiseIcon,
-  ArrowLeftIcon,
   BellIcon,
   BellSlashIcon,
   BracketsCurlyIcon,
   BrainIcon,
   CalendarDotsIcon,
   CaretDownIcon,
+  CaretLeftIcon,
   CaretRightIcon,
   ChatCircleIcon,
   CheckCircleIcon,
@@ -72,6 +72,7 @@ import {
   CodeIcon,
   CopySimpleIcon,
   EnvelopeSimpleIcon,
+  FunnelSimpleIcon,
   GitBranchIcon,
   GlobeHemisphereWestIcon,
   GoogleLogoIcon,
@@ -108,10 +109,12 @@ import {
 import { Badge } from "@sketch/ui/components/badge";
 import { Button } from "@sketch/ui/components/button";
 import { Input } from "@sketch/ui/components/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@sketch/ui/components/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@sketch/ui/components/select";
 import { Textarea } from "@sketch/ui/components/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@sketch/ui/components/tooltip";
 import { cn } from "@sketch/ui/lib/utils";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createRoute, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
   Background,
@@ -304,13 +307,54 @@ const canvasGhostButtonClass = cn(
 const canvasIconButtonClass =
   "size-8 shrink-0 rounded-[7px] text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand-accent/50";
 const canvasCompactIconButtonClass =
-  "size-7 shrink-0 rounded-[6px] text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-brand-accent/50";
+  "size-7 shrink-0 rounded-[8px] text-foreground/70 shadow-none transition-[color,background-color,transform] duration-150 hover:bg-muted hover:text-foreground active:scale-[0.94] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/50";
 const canvasPrimaryButtonClass =
   "h-8 rounded-[7px] bg-brand-accent px-2.5 text-[12px] font-medium text-[#161300] shadow-none transition-colors hover:bg-brand-accent/90 focus-visible:ring-2 focus-visible:ring-brand-accent/50";
+/**
+ * Single tray shell for every floating cluster in the builder toolbar (identity,
+ * actions, panel toggles). One radius, one border, one height so the chrome reads
+ * as one visual language instead of a pile of differently-styled pills.
+ */
+const builderTrayClass =
+  "flex h-9 items-center rounded-[12px] border border-border/65 bg-card/95 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.16)] backdrop-blur";
+
+/**
+ * Hover label for an icon-only control. Self-contained (bundles its own
+ * TooltipProvider) so it can be dropped around any button without a root
+ * provider, matching the pattern used elsewhere in the app.
+ */
+function IconTooltip({
+  label,
+  side = "bottom",
+  children,
+}: {
+  label: string;
+  side?: "top" | "right" | "bottom" | "left";
+  children: ReactNode;
+}) {
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipContent side={side} sideOffset={6} className="font-medium">
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 const builderSidebarFrameClass =
   "absolute inset-y-0 z-40 flex h-full w-full max-w-none shrink-0 flex-col overflow-hidden bg-background text-foreground transition-[width,min-width,max-width,transform,border-color] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none lg:static lg:z-auto lg:h-auto lg:translate-x-0";
 const builderSidebarContentClass =
   "flex h-full w-full min-w-0 flex-col overflow-hidden transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none";
+/**
+ * Shared responsive width for BOTH side drawers (chat + runs), so they always
+ * stay equal. The width is a ratio of the viewport — `clamp(floor, vw, cap)` —
+ * so the drawers grow on larger screens and hold a comfortable floor on smaller
+ * ones. The floor keeps the chat transcript readable (~40 chars/line with the
+ * message avatar in place); the cap stops either drawer from eating the canvas.
+ */
+const builderSidebarWidthClass = "lg:w-[clamp(340px,22vw,420px)] lg:min-w-[340px] lg:max-w-[420px]";
 const builderInputClass =
   "h-10 rounded-[8px] border-input bg-background text-[13px] text-foreground shadow-none placeholder:text-muted-foreground focus-visible:border-brand-accent/55 focus-visible:ring-brand-accent/20";
 const builderTextareaClass =
@@ -499,33 +543,6 @@ function BuilderDeleteDialog({
   );
 }
 
-function BuilderOwnership({ automation }: { automation: AutomationDefinition }) {
-  const owner = automation.createdByName?.trim() || automation.createdBy || "Unknown";
-  const editor = automation.lastEditedByName?.trim() || automation.lastEditedBy || "Unknown";
-  return (
-    <div
-      data-testid="automation-builder-ownership"
-      aria-label={`Owner ${owner}. Last edited by ${editor}.`}
-      title={`Owner: ${owner} · Last edited by: ${editor}`}
-      className="automation-builder-ownership pointer-events-auto inline-flex w-fit min-w-0 max-w-full items-center justify-end gap-2.5 rounded-[7px] border border-border/60 bg-card/70 px-2.5 py-1.5 text-[11px] leading-4 shadow-none"
-    >
-      <span className="automation-builder-ownership-field inline-flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap">
-        <span className="shrink-0 text-muted-foreground/80">Owner </span>
-        <span className="min-w-0 truncate font-medium text-foreground">{owner}</span>
-      </span>
-      {automation.lastEditedBy ? (
-        <>
-          <span aria-hidden className="automation-builder-ownership-divider h-3 w-px shrink-0 bg-border/70" />
-          <span className="automation-builder-ownership-field inline-flex min-w-0 max-w-full items-center gap-1.5 whitespace-nowrap">
-            <span className="shrink-0 text-muted-foreground/80">Last edited by </span>
-            <span className="min-w-0 truncate font-medium text-foreground">{editor}</span>
-          </span>
-        </>
-      ) : null}
-    </div>
-  );
-}
-
 function AutomationSetupCard({
   mode,
   recommendation,
@@ -628,7 +645,7 @@ export function AutomationBuilderPage() {
   const queryKey = useMemo(() => automationDefinitionQueryKey(taskId), [taskId]);
   const [draft, setDraft] = useState<DraftAutomation | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
-  const [runInspectorOpen, setRunInspectorOpen] = useState(true);
+  const [runInspectorOpen, setRunInspectorOpen] = useState(false);
   const [chatSidecarOpen, setChatSidecarOpen] = useState(true);
   const [triggeredRunId, setTriggeredRunId] = useState<string | null>(null);
   const [runRequestError, setRunRequestError] = useState<unknown | null>(null);
@@ -639,6 +656,7 @@ export function AutomationBuilderPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [builderChatBusy, setBuilderChatBusy] = useState(false);
   const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [runMenuOpen, setRunMenuOpen] = useState(false);
   const [stealDialogOpen, setStealDialogOpen] = useState(false);
   const [holderResponseDialogOpen, setHolderResponseDialogOpen] = useState(false);
   const [authoringLease, setAuthoringLease] = useState<AutomationAuthoringLease | null>(null);
@@ -1122,6 +1140,33 @@ export function AutomationBuilderPage() {
     setSelectedStepId(stepId);
   }, []);
 
+  const setupConversationsQuery = useQuery({
+    queryKey: builderConversationQueryKey(taskId, clientSessionId),
+    queryFn: () => api.scheduledTasks.conversations(taskId, { includeArchived: true, clientSessionId }),
+    staleTime: 30_000,
+  });
+  const setupBuilderConversationId = useMemo(() => {
+    const builderConversations = (setupConversationsQuery.data?.conversations ?? []).filter(
+      (conversation) => conversation.state === "active" && conversation.kinds.includes("builder"),
+    );
+    if (builderConversations.length === 0) return null;
+    return builderConversations.reduce((oldest, conversation) =>
+      new Date(conversation.createdAt).getTime() < new Date(oldest.createdAt).getTime() ? conversation : oldest,
+    ).conversationId;
+  }, [setupConversationsQuery.data?.conversations]);
+  const rawAutomationTitle = automationQuery.data?.title ?? null;
+  const setupNeedsDerivedName = rawAutomationTitle === null || rawAutomationTitle === "New automation";
+  const setupNameMessagesQuery = useQuery({
+    queryKey: ["automation-setup-name", taskId, setupBuilderConversationId],
+    queryFn: () => api.scheduledTasks.conversationMessages(taskId, setupBuilderConversationId as string),
+    enabled: setupNeedsDerivedName && Boolean(setupBuilderConversationId),
+    staleTime: 60_000,
+  });
+  const derivedSetupName = useMemo(
+    () => deriveSetupNameFromMessages((setupNameMessagesQuery.data?.messages ?? []) as BuilderWebChatMessage[]),
+    [setupNameMessagesQuery.data],
+  );
+
   if (automationQuery.isError) {
     return (
       <BuilderLoadError
@@ -1144,14 +1189,29 @@ export function AutomationBuilderPage() {
   }
 
   const automation = automationQuery.data;
-  const canShareAutomation =
-    automation?.canShare === true ||
-    (automation != null && automation.canShare == null && Boolean(auth.userId) && automation.createdBy === auth.userId);
-  const canControlAutomationStatus =
-    auth.role === "admin" ||
-    automation.isOwner === true ||
-    (automation.isOwner == null && Boolean(auth.userId) && automation.createdBy === auth.userId);
+  /**
+   * Unified permission model: anyone who can edit the automation — owner,
+   * granted editors, and admins alike — can also manage its sharing. The server
+   * still limits grant/revoke to the owner today, so for a non-owner the Share
+   * dialog opens and reads the roster, but the actual grant/revoke is rejected
+   * and surfaced as an error toast until the backend widens canShare.
+   *
+   * FLAG FOR TANUSH (backend): canShare must include granted editors + admins.
+   * The owner row is never removable in the dialog, so the agreed scope — an
+   * editor can add and remove co-editors but never the owner — already holds.
+   * See the project_automation_builder_redesign memory.
+   */
+  const canManageSharing = canEditAutomation;
+  /**
+   * Unified model (user 2026-09-22, "everyone can do everything"): anyone who can
+   * edit the automation can also control its run status. The backend already
+   * permits this — /pause, /resume and /response-delivery all authorize via
+   * loadAccessibleTask (owner || admin || granted) — so un-gating it here is a
+   * pure frontend change with NO backend dependency, unlike Share/Delete.
+   */
+  const canControlAutomationStatus = canEditAutomation;
   const placeholderSetup = isPlaceholderDraft(automation);
+  const runInspectorVisible = runInspectorOpen && !placeholderSetup;
   const builderDraft = displayDraft ?? draft;
   const exactRunCandidate = exactRunQuery.data?.run;
   const exactRun = selectedRunId && exactRunCandidate?.id === selectedRunId ? exactRunCandidate : null;
@@ -1168,6 +1228,23 @@ export function AutomationBuilderPage() {
   const executingStepId = testingStepId ?? inferredRunStepId;
   const executionActivity: ExecutionActivity = testingStepId ? "test" : inferredRunStepId ? "run" : null;
   const automationTitle = placeholderSetup ? "Automation setup" : draft.title?.trim() || draft.prompt;
+  /**
+   * Identity-pill name. Priority: the automation's saved title, then a name
+   * derived from the setup chat (owner/admin — chat-gated), then a name derived
+   * from the definition's own prompt. The prompt path is what keeps an editor
+   * (who cannot read a teammate's chat) from ever seeing a bare "Untitled" — the
+   * prompt lives on the definition they *can* load, so it names the automation
+   * by what it actually does. Final fallback is a neutral noun, never "Untitled".
+   *
+   * FLAG FOR TANUSH (backend): the canonical fix is a server-derived short title
+   * on the task, readable by every viewer, so owner/editor/admin all show one
+   * consistent name (and teammate chat titles stop reading "Automation chat").
+   * See the project_automation_builder_redesign memory.
+   */
+  const setupIdentityName =
+    automation.title && automation.title !== "New automation"
+      ? automation.title
+      : (derivedSetupName ?? (placeholderSetup ? null : deriveSetupName(draft.prompt ?? "")) ?? "New automation");
   const selectedRunLifecycle = runMutation.isPending
     ? "pending"
     : triggeredRunId && !selectedRun
@@ -1177,8 +1254,6 @@ export function AutomationBuilderPage() {
     selectedRunId && (exactRunQuery.isError || (exactRunQuery.isSuccess && !exactRun)),
   );
   const exactRunLoading = Boolean(selectedRunId && !exactRunUnavailable && exactRunQuery.isPending);
-  const latestRun = (automation.latestRun as AutomationRunRecord | null) ?? automation.recentRuns[0] ?? null;
-  const latestRunLifecycle = runMutation.isPending ? "pending" : automationRunLifecycleState(latestRun);
   const showRunStatusNotice = Boolean(
     runRequestError ||
       exactRunUnavailable ||
@@ -1208,7 +1283,7 @@ export function AutomationBuilderPage() {
     }
     setDiscardingSetup(true);
     void api.scheduledTasks
-      .remove(taskId)
+      .remove(taskId, authoringLease ? leaseRequest(authoringLease) : undefined)
       .then(async () => {
         if (requestedConversationId?.startsWith("builder-")) {
           await api.webChat.removeConversation(requestedConversationId).catch((error: unknown) => {
@@ -1237,7 +1312,6 @@ export function AutomationBuilderPage() {
         onExecutionModeSelect={updateExecutionMode}
         onExecutionModeSelectionHandled={handleExecutionModeSelectionHandled}
         onBusyChange={setBuilderChatBusy}
-        onBackToAutomations={navigateToAutomations}
         clientSessionId={clientSessionId}
         authoringLease={authoringLeaseRequest}
         onLeaseStale={handleLeaseStale}
@@ -1249,178 +1323,186 @@ export function AutomationBuilderPage() {
       <div
         data-testid="automation-builder-canvas"
         data-chat-sidecar-open={chatSidecarOpen}
-        data-run-inspector-open={runInspectorOpen}
+        data-run-inspector-open={runInspectorVisible}
         className="automation-builder-canvas-container relative min-h-0 min-w-0 flex-1 bg-background text-foreground"
         aria-busy={runMutation.isPending || selectedRun?.status === "running"}
       >
-        <div
-          data-testid="automation-builder-header"
-          className="automation-builder-header pointer-events-none absolute top-4 left-4 right-4 z-10 min-w-0"
-        >
+        {placeholderSetup ? (
           <div
-            data-testid="automation-builder-toolbar"
-            className="automation-builder-header-primary automation-builder-toolbar-enter pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center justify-start gap-2"
+            data-testid="automation-builder-header"
+            className="pointer-events-none absolute top-1.5 right-4 left-4 z-10 flex items-start justify-between gap-2"
           >
-            {!chatSidecarOpen ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className={cn(canvasToolbarButtonClass, "gap-1.5")}
-                aria-label="Expand automation chat"
-                aria-expanded={false}
-                aria-controls="automation-builder-chat-sidecar"
-                onClick={() => setChatSidecarOpen(true)}
-              >
-                <ChatCircleIcon size={14} weight="fill" />
-                Chat
-              </Button>
-            ) : null}
-          </div>
-
-          <div
-            data-testid="automation-builder-header-status"
-            className="automation-builder-header-status pointer-events-auto flex min-w-0 max-w-full flex-wrap items-center gap-2"
-          >
-            <output
-              data-testid="automation-latest-run-chip"
-              data-status={latestRunLifecycle ?? "idle"}
-              className={cn(
-                "inline-flex min-h-8 max-w-full min-w-0 items-center gap-1.5 rounded-[7px] border border-border/70 bg-card/90 px-2.5 py-1 text-[12px] leading-4 text-muted-foreground",
-                latestRunLifecycle === "success" && "border-success/35 bg-success/10 text-success",
-                latestRunLifecycle === "failure" && "border-destructive/40 bg-destructive/10 text-destructive",
-                latestRunLifecycle === "aborted" &&
-                  "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-              )}
-            >
-              {latestRunLifecycle === "success" ? (
-                <CheckCircleIcon size={13} weight="fill" className="shrink-0" />
-              ) : latestRunLifecycle === "failure" ? (
-                <XCircleIcon size={13} weight="fill" className="shrink-0" />
-              ) : null}
-              <span className="shrink-0 font-medium">Latest</span>
-              <span aria-hidden className="shrink-0">
-                ·
-              </span>
-              <span className="min-w-0 break-words">
-                {latestRun
-                  ? `${formatRunDate(latestRun.startedAt)} · ${runDuration(latestRun) ?? "—"}`
-                  : "No executions yet"}
-              </span>
-            </output>
-            <AutomationLockBanner
-              lock={lockView}
-              canEdit={canEditAutomation}
-              onRequestTakeover={() => setStealDialogOpen(true)}
-              onReviewStealRequest={() => setHolderResponseDialogOpen(true)}
-            />
-            {showRunStatusNotice ? (
-              <AutomationRunStatusNotice
-                state={runRequestError ? "failure" : selectedRunLifecycle}
-                run={selectedRun}
-                loading={exactRunLoading}
-                unavailable={exactRunUnavailable}
-                requestFailed={Boolean(runRequestError)}
-              />
-            ) : null}
-          </div>
-
-          <div
-            data-testid="automation-builder-header-meta"
-            className="automation-builder-header-meta pointer-events-auto flex min-w-0 max-w-full flex-col items-end justify-end gap-1"
-          >
-            <div
-              data-testid="automation-builder-ownership-stack"
-              className="flex w-fit min-w-0 max-w-full flex-col items-center gap-1"
-            >
-              <BuilderOwnership automation={automation} />
-              {automation.isOwner === false ? (
+            <div className="pointer-events-auto flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-1 rounded-[13px] border border-border/70 bg-card/95 py-1 pr-3 pl-1 shadow-md backdrop-blur">
+                <IconTooltip label="Back to automations">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className={canvasCompactIconButtonClass}
+                    aria-label="Back to automations"
+                    onClick={navigateToAutomations}
+                  >
+                    <CaretLeftIcon size={16} />
+                  </Button>
+                </IconTooltip>
                 <span
-                  data-testid="automation-shared-hint"
-                  className="automation-builder-shared-hint w-full px-1 text-right text-[11px] leading-4 text-muted-foreground"
+                  title={setupIdentityName}
+                  className="min-w-0 max-w-[240px] truncate text-[13px] font-semibold text-foreground"
                 >
-                  Runs use the owner's integrations
+                  {setupIdentityName}
                 </span>
+                {!chatSidecarOpen ? (
+                  <>
+                    <span className="mx-0.5 h-4 w-px shrink-0 bg-border/70" aria-hidden />
+                    <IconTooltip label="Open chat">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className={canvasCompactIconButtonClass}
+                        aria-label="Expand automation chat"
+                        aria-expanded={false}
+                        aria-controls="automation-builder-chat-sidecar"
+                        onClick={() => setChatSidecarOpen(true)}
+                      >
+                        <ChatCircleIcon size={16} weight="fill" />
+                      </Button>
+                    </IconTooltip>
+                  </>
+                ) : null}
+              </div>
+              <AutomationLockBanner
+                lock={lockView}
+                canEdit={canEditAutomation}
+                onRequestTakeover={() => setStealDialogOpen(true)}
+                onReviewStealRequest={() => setHolderResponseDialogOpen(true)}
+              />
+            </div>
+
+            <div className="pointer-events-auto flex shrink-0 items-center gap-0.5 rounded-[13px] border border-border/70 bg-card/95 p-1 shadow-md backdrop-blur">
+              {canManageSharing ? (
+                <IconTooltip label="Share">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className={canvasCompactIconButtonClass}
+                    aria-label="Share automation"
+                    onClick={() => setShareDialogOpen(true)}
+                  >
+                    <ShareNetworkIcon size={16} />
+                  </Button>
+                </IconTooltip>
               ) : null}
+              <IconTooltip label={builderReadOnly ? "Request control to discard" : "Discard setup"}>
+                <span className={cn("inline-flex", builderReadOnly && "cursor-not-allowed")}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className={cn(
+                      canvasCompactIconButtonClass,
+                      "hover:bg-destructive/10 hover:text-destructive",
+                      builderReadOnly && "pointer-events-none",
+                    )}
+                    aria-label="Discard setup"
+                    onClick={closeBuilder}
+                    disabled={discardingSetup || builderReadOnly}
+                  >
+                    {discardingSetup ? <SpinnerGapIcon size={16} className="animate-spin" /> : <TrashIcon size={16} />}
+                  </Button>
+                </span>
+              </IconTooltip>
             </div>
           </div>
-
+        ) : (
           <div
-            data-testid="automation-builder-header-actions"
-            className="automation-builder-header-actions pointer-events-auto min-w-0 max-w-full"
+            data-testid="automation-builder-header"
+            className="automation-builder-toolbar-enter pointer-events-none absolute top-2.5 right-4 left-4 z-10 flex flex-wrap items-start justify-between gap-2"
           >
-            <div className="automation-builder-header-action-layout">
-              <div
-                data-testid="automation-builder-header-management-row"
-                className="automation-builder-header-action-row"
-              >
-                <div
-                  data-testid="automation-builder-header-management-actions"
-                  className="automation-builder-header-action-group automation-builder-header-management-actions flex items-center justify-end gap-2"
-                >
-                  {canShareAutomation ? (
+            <div
+              data-testid="automation-builder-toolbar"
+              className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-2"
+            >
+              {!chatSidecarOpen ? (
+                <div className={cn(builderTrayClass, "px-1")}>
+                  <IconTooltip label="Show chat">
                     <Button
-                      size="sm"
-                      variant="outline"
-                      className={cn(canvasToolbarButtonClass, "gap-1.5")}
-                      onClick={() => setShareDialogOpen(true)}
-                      disabled={builderReadOnly}
+                      size="icon"
+                      variant="ghost"
+                      className={canvasCompactIconButtonClass}
+                      aria-label="Show automation chat"
+                      aria-expanded={false}
+                      aria-controls="automation-builder-chat-sidecar"
+                      onClick={() => setChatSidecarOpen(true)}
                     >
-                      <ShareNetworkIcon size={14} />
-                      Share{automation.shares && automation.shares.length > 0 ? ` · ${automation.shares.length}` : ""}
+                      <ChatCircleIcon size={16} />
                     </Button>
-                  ) : null}
-                  {!placeholderSetup ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className={cn(
-                        canvasToolbarButtonClass,
-                        "gap-1.5 border-destructive/35 text-destructive hover:bg-destructive/10 hover:text-destructive",
-                      )}
-                      aria-label="Delete automation"
-                      onClick={() => setDeleteDialogOpen(true)}
-                      disabled={deleteMutation.isPending || builderReadOnly}
-                    >
-                      <TrashIcon size={14} />
-                      <span>Delete</span>
-                    </Button>
-                  ) : null}
+                  </IconTooltip>
+                </div>
+              ) : null}
+              <div className={cn(builderTrayClass, "min-w-0 gap-1 pr-3 pl-1")}>
+                <IconTooltip label="Back to automations">
                   <Button
-                    size="sm"
-                    variant="outline"
-                    className={canvasToolbarButtonClass}
-                    onClick={closeBuilder}
-                    disabled={discardingSetup}
+                    size="icon"
+                    variant="ghost"
+                    className={canvasCompactIconButtonClass}
+                    aria-label="Back to automations"
+                    onClick={navigateToAutomations}
                   >
-                    {discardingSetup ? "Discarding…" : placeholderSetup ? "Discard setup" : "Close"}
+                    <CaretLeftIcon size={16} />
                   </Button>
-                </div>
-
-                <div
-                  data-testid="automation-builder-header-panel-actions"
-                  className="automation-builder-header-action-group automation-builder-header-panel-actions flex items-center gap-2"
+                </IconTooltip>
+                <span
+                  title={setupIdentityName}
+                  className="min-w-0 max-w-[240px] truncate text-[13px] font-semibold text-foreground"
                 >
-                  {!runInspectorOpen ? (
-                    <PastRunsButton
-                      onClick={() => {
-                        setSelectedStepId(null);
-                        setRunInspectorOpen(true);
-                      }}
-                    />
-                  ) : null}
-                </div>
+                  {setupIdentityName}
+                </span>
               </div>
+              <AutomationLockBanner
+                lock={lockView}
+                canEdit={canEditAutomation}
+                onRequestTakeover={() => setStealDialogOpen(true)}
+                onReviewStealRequest={() => setHolderResponseDialogOpen(true)}
+              />
+              {showRunStatusNotice ? (
+                <AutomationRunStatusNotice
+                  state={runRequestError ? "failure" : selectedRunLifecycle}
+                  run={selectedRun}
+                  loading={exactRunLoading}
+                  unavailable={exactRunUnavailable}
+                  requestFailed={Boolean(runRequestError)}
+                />
+              ) : null}
+            </div>
 
-              <div data-testid="automation-builder-header-run-row" className="automation-builder-header-action-row">
-                <div
-                  data-testid="automation-builder-header-lifecycle-actions"
-                  className="automation-builder-header-action-group automation-builder-header-lifecycle-actions flex items-center gap-2"
-                >
-                  {!placeholderSetup && canControlAutomationStatus ? (
+            <div
+              data-testid="automation-builder-header-actions"
+              className="pointer-events-auto flex min-w-0 flex-wrap items-center justify-end gap-2"
+            >
+              <div className={cn(builderTrayClass, "gap-0.5 px-1")}>
+                {canManageSharing ? (
+                  <IconTooltip
+                    label={`Share${automation.shares && automation.shares.length > 0 ? ` · ${automation.shares.length}` : ""}`}
+                  >
                     <Button
-                      size="sm"
-                      variant="outline"
-                      className={canvasToolbarButtonClass}
+                      size="icon"
+                      variant="ghost"
+                      className={canvasCompactIconButtonClass}
+                      aria-label="Share automation"
+                      onClick={() => setShareDialogOpen(true)}
+                    >
+                      <ShareNetworkIcon size={16} />
+                    </Button>
+                  </IconTooltip>
+                ) : null}
+                {canControlAutomationStatus ? (
+                  <IconTooltip label={automation.delivery.mode === "silent" ? "Unmute responses" : "Mute responses"}>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className={cn(
+                        canvasCompactIconButtonClass,
+                        automation.delivery.mode === "silent" && "bg-muted text-foreground hover:bg-muted",
+                      )}
                       aria-label={
                         automation.delivery.mode === "silent"
                           ? "Unmute automation responses"
@@ -1431,118 +1513,152 @@ export function AutomationBuilderPage() {
                       disabled={responseDeliveryMutation.isPending || builderReadOnly}
                     >
                       {responseDeliveryMutation.isPending ? (
-                        <SpinnerGapIcon size={14} className="animate-spin" />
+                        <SpinnerGapIcon size={16} className="animate-spin" />
                       ) : automation.delivery.mode === "silent" ? (
-                        <BellIcon size={14} weight="fill" />
+                        <BellSlashIcon size={16} />
                       ) : (
-                        <BellSlashIcon size={14} />
+                        <BellIcon size={16} />
                       )}
-                      {responseDeliveryMutation.isPending
-                        ? automation.delivery.mode === "silent"
-                          ? "Unmuting…"
-                          : "Muting…"
-                        : automation.delivery.mode === "silent"
-                          ? "Unmute"
-                          : "Mute"}
                     </Button>
-                  ) : null}
-                  {!placeholderSetup && canControlAutomationStatus && automation.status !== "completed" ? (
+                  </IconTooltip>
+                ) : null}
+                {canControlAutomationStatus && automation.status !== "completed" ? (
+                  <IconTooltip label={automation.status === "active" ? "Pause automation" : "Resume automation"}>
                     <Button
-                      size="sm"
-                      variant="outline"
-                      className={canvasToolbarButtonClass}
+                      size="icon"
+                      variant="ghost"
+                      className={canvasCompactIconButtonClass}
                       aria-label={automation.status === "active" ? "Pause automation" : "Resume automation"}
                       onClick={() => statusMutation.mutate(automation.status === "active" ? "pause" : "resume")}
                       disabled={statusMutation.isPending || runIsBusy || builderReadOnly}
                     >
                       {statusMutation.isPending ? (
-                        <SpinnerGapIcon size={14} className="animate-spin" />
+                        <SpinnerGapIcon size={16} className="animate-spin" />
                       ) : automation.status === "active" ? (
-                        <PauseIcon size={14} weight="fill" />
+                        <PauseIcon size={16} />
                       ) : (
-                        <PlayIcon size={14} weight="fill" />
+                        <PlayIcon size={16} />
                       )}
-                      {statusMutation.isPending
-                        ? automation.status === "active"
-                          ? "Pausing…"
-                          : "Resuming…"
-                        : automation.status === "active"
-                          ? "Pause"
-                          : "Resume"}
                     </Button>
-                  ) : null}
-                </div>
-
-                <div
-                  data-testid="automation-builder-header-execution-actions"
-                  className="automation-builder-header-action-group automation-builder-header-execution-actions flex items-center gap-2"
-                >
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className={canvasToolbarButtonClass}
-                    aria-label="Test automation"
-                    onClick={() => runMutation.mutate("test")}
-                    disabled={runIsBusy || !canRunAutomation || builderReadOnly}
-                    title={
-                      placeholderSetup
-                        ? "Finish setup before testing this automation"
-                        : canRunAutomation
-                          ? "Run without sending output to configured channels"
-                          : "Only active automations can be tested"
-                    }
-                  >
-                    {runMutation.isPending && runMutation.variables === "test" ? (
-                      <SpinnerGapIcon size={14} className="animate-spin" />
-                    ) : (
-                      <PlayIcon size={15} />
-                    )}
-                    {runMutation.isPending && runMutation.variables === "test"
-                      ? "Testing…"
-                      : placeholderSetup
-                        ? "Setting up"
-                        : canRunAutomation
-                          ? "Test"
-                          : "Paused"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    className={cn(canvasPrimaryButtonClass, "gap-1.5")}
-                    onClick={() => runMutation.mutate("manual")}
-                    disabled={runIsBusy || !canRunAutomation || builderReadOnly}
-                    title={
-                      placeholderSetup
-                        ? "Finish setup before running this automation"
-                        : canRunAutomation
-                          ? undefined
-                          : "Only active automations can be triggered"
-                    }
-                  >
-                    {runMutation.isPending && runMutation.variables === "manual" ? (
-                      <SpinnerGapIcon size={14} className="animate-spin" />
-                    ) : (
-                      <PlayIcon size={14} weight="fill" />
-                    )}
-                    {runMutation.isPending && runMutation.variables === "manual"
-                      ? "Starting…"
-                      : runIsBusy
-                        ? "Running"
-                        : placeholderSetup
-                          ? "Setting up"
-                          : canRunAutomation
-                            ? "Run"
-                            : "Paused"}
-                  </Button>
-                </div>
+                  </IconTooltip>
+                ) : null}
+                <span className="mx-0.5 h-4 w-px shrink-0 bg-border/70" aria-hidden />
+                <IconTooltip label="Delete automation">
+                  <span className={cn("inline-flex", builderReadOnly && "cursor-not-allowed")}>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className={cn(
+                        canvasCompactIconButtonClass,
+                        "hover:bg-destructive/10 hover:text-destructive active:bg-destructive/[0.16]",
+                        builderReadOnly && "pointer-events-none",
+                      )}
+                      aria-label="Delete automation"
+                      onClick={() => setDeleteDialogOpen(true)}
+                      disabled={deleteMutation.isPending || builderReadOnly}
+                    >
+                      {deleteMutation.isPending ? (
+                        <SpinnerGapIcon size={16} className="animate-spin" />
+                      ) : (
+                        <TrashIcon size={16} />
+                      )}
+                    </Button>
+                  </span>
+                </IconTooltip>
               </div>
+
+              <div className="inline-flex h-9 shrink-0 items-stretch overflow-hidden rounded-[12px] bg-brand-accent shadow-[0_2px_10px_-4px_rgba(15,23,42,0.16)]">
+                <button
+                  type="button"
+                  onClick={() => runMutation.mutate("manual")}
+                  disabled={runIsBusy || !canRunAutomation || builderReadOnly}
+                  title={canRunAutomation ? "Run now" : "Only active automations can be triggered"}
+                  className="inline-flex items-center gap-1.5 pr-2.5 pl-3 text-[13px] font-semibold text-[#161300] transition-colors hover:bg-[#161300]/[0.06] active:bg-[#161300]/[0.13] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#161300]/40 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {runMutation.isPending && runMutation.variables === "manual" ? (
+                    <SpinnerGapIcon size={16} className="animate-spin" />
+                  ) : (
+                    <PlayIcon size={16} />
+                  )}
+                  {runMutation.isPending && runMutation.variables === "manual"
+                    ? "Starting…"
+                    : runIsBusy
+                      ? "Running"
+                      : canRunAutomation
+                        ? "Run"
+                        : "Paused"}
+                </button>
+                <span className="w-px shrink-0 self-stretch bg-[#161300]/15" aria-hidden />
+                <Popover open={runMenuOpen} onOpenChange={setRunMenuOpen}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="More run options"
+                      disabled={runIsBusy || !canRunAutomation || builderReadOnly}
+                      className="inline-flex items-center px-1.5 text-[#161300] transition-colors hover:bg-[#161300]/[0.06] active:bg-[#161300]/[0.13] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#161300]/40 disabled:pointer-events-none disabled:opacity-50"
+                    >
+                      <CaretDownIcon size={14} />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    sideOffset={10}
+                    className="w-[248px] rounded-[12px] border-border/65 p-1 shadow-[0_10px_30px_-10px_rgba(15,23,42,0.28)]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRunMenuOpen(false);
+                        runMutation.mutate("test");
+                      }}
+                      disabled={runIsBusy || !canRunAutomation || builderReadOnly}
+                      className="group flex w-full items-center gap-2.5 rounded-[9px] px-2 py-2 text-left transition-colors hover:bg-muted active:bg-muted/80 focus-visible:bg-muted focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+                    >
+                      <span className="grid size-8 shrink-0 place-items-center rounded-[8px] bg-muted/70 text-foreground/80 transition-colors group-hover:bg-background group-hover:text-foreground">
+                        <PlayIcon size={15} weight="fill" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-medium leading-5 text-foreground">
+                          {runMutation.isPending && runMutation.variables === "test" ? "Testing…" : "Test run"}
+                        </span>
+                        <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+                          Skips delivery to your channels
+                        </span>
+                      </span>
+                    </button>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {!runInspectorVisible ? (
+                <div className={cn(builderTrayClass, "px-1")}>
+                  <IconTooltip label="Show run history">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className={canvasCompactIconButtonClass}
+                      data-testid="automation-see-past-runs"
+                      aria-label="Show run history"
+                      aria-expanded={false}
+                      aria-controls="automation-builder-runs-panel"
+                      onClick={() => {
+                        setSelectedStepId(null);
+                        setRunInspectorOpen(true);
+                      }}
+                    >
+                      <SidebarSimpleIcon size={16} className="-scale-x-100" />
+                    </Button>
+                  </IconTooltip>
+                </div>
+              ) : null}
             </div>
           </div>
-        </div>
+        )}
 
         <AutomationCanvas
           draft={builderDraft}
           selectedStepId={selectedStepId}
-          isRunInspectorOpen={runInspectorOpen && selectedStepId === null}
+          isRunInspectorOpen={runInspectorVisible && selectedStepId === null}
           stepOutputs={selectedRun?.stepOutputs ?? {}}
           runStatus={selectedRun?.status}
           testingStepId={testingStepId}
@@ -1570,8 +1686,9 @@ export function AutomationBuilderPage() {
             setRunInspectorOpen(true);
             navigateRun(runId === selectedRunId ? null : runId);
           }}
-          open={runInspectorOpen}
+          open={runInspectorVisible}
           onClose={() => setRunInspectorOpen(false)}
+          onRefresh={() => automationQuery.refetch()}
         />
       ) : null}
 
@@ -1637,7 +1754,9 @@ export function AutomationBuilderPage() {
         taskId={taskId}
         taskName={automationTitle}
         ownerUserId={automation.createdBy}
-        canShare={canShareAutomation && !builderReadOnly}
+        canShare={canManageSharing}
+        lastEditedByName={automation.lastEditedByName ?? automation.lastEditedBy}
+        lastEditedAt={automation.updatedAt}
         lease={authoringLease ? leaseRequest(authoringLease) : null}
         open={shareDialogOpen}
         onOpenChange={setShareDialogOpen}
@@ -1770,6 +1889,44 @@ function textFromBuilderMessage(message: BuilderWebChatMessage): string {
   return (
     normalizeBuilderDisplayText(text) || (questionBatchAnswerFromBuilderMessage(message) ? "Submitted answers" : "")
   );
+}
+
+const SETUP_NAME_LEAD_IN =
+  /^(?:hey|hi|hello)?[\s,]*(?:sketch)?[\s,]*(?:please|can you|could you|can we|could we|i'?d like to|i would like to|i want to|i wanna|i need to|i need|help me|let'?s|lets|set ?up|create|build|make|configure|schedule)\b[\s,:-]*/i;
+
+const SETUP_NAME_TAIL =
+  /[.!?]| — |,? and (?:then |post|send|share|deliver|notify|save)| every | each | then | so that | so it /i;
+
+function deriveSetupName(raw: string): string | null {
+  let text = raw.replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  for (let index = 0; index < 3; index += 1) {
+    const next = text.replace(SETUP_NAME_LEAD_IN, "").trim();
+    if (next === text) break;
+    text = next;
+  }
+  if (!text) return null;
+  const cut = text.search(SETUP_NAME_TAIL);
+  if (cut >= 12) text = text.slice(0, cut);
+  text = text.trim().replace(/[\s,.;:—-]+$/, "");
+  if (text.length > 52) {
+    const clipped = text.slice(0, 52);
+    const lastSpace = clipped.lastIndexOf(" ");
+    text = `${clipped.slice(0, lastSpace > 24 ? lastSpace : 52).trim()}…`;
+  }
+  if (text.length < 3) return null;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function deriveSetupNameFromMessages(messages: BuilderWebChatMessage[]): string | null {
+  for (const message of messages) {
+    if (message.role !== "user") continue;
+    const text = textFromBuilderMessage(message).trim();
+    if (!text || text === "Submitted answers" || /\bselected\.?$/i.test(text)) continue;
+    const name = deriveSetupName(text);
+    if (name) return name;
+  }
+  return null;
 }
 
 function normalizeBuilderDisplayText(text: string): string {
@@ -2043,14 +2200,6 @@ function replaceBuilderConversationCache(
   });
 }
 
-function conversationSourceLabel(conversation: ScheduledTaskConversationSummary): string {
-  const hasBuilder = conversation.kinds.includes("builder");
-  const hasWebChat = conversation.kinds.includes("web_chat");
-  if (hasBuilder && hasWebChat) return "Source + automation";
-  if (hasWebChat) return "Source";
-  return "Automation";
-}
-
 function conversationDateLabel(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Recently";
@@ -2060,10 +2209,59 @@ function conversationDateLabel(value: string): string {
 function conversationDisplayTitle(
   conversation: ScheduledTaskConversationSummary,
   summary?: WebChatConversationSummary,
+  derivedTitle?: string | null,
 ): string {
   const title = summary?.title.trim();
   if (title) return normalizeBuilderDisplayText(title);
+  const derived = derivedTitle?.trim();
+  if (derived) return normalizeBuilderDisplayText(derived);
   return conversation.kinds.includes("web_chat") ? "Source chat" : "Automation chat";
+}
+
+const CHAT_LIST_TITLE_MAX_WORDS = 6;
+const CHAT_LIST_TITLE_MAX_CHARS = 34;
+const CHAT_LIST_TITLE_TRAILING_STOPWORDS = new Set([
+  "the",
+  "a",
+  "an",
+  "to",
+  "of",
+  "for",
+  "in",
+  "on",
+  "by",
+  "with",
+  "and",
+  "or",
+  "at",
+  "from",
+  "into",
+  "as",
+]);
+
+/**
+ * Brevity rule for chat-list rail titles. Backend/derived titles are often a
+ * whole first-message sentence; the rail is narrow, so a CSS-truncated
+ * "Only include accounts above $5k ARR in th…" reads as noise. This clamps any
+ * title to a short headline — at most {@link CHAT_LIST_TITLE_MAX_WORDS} words /
+ * {@link CHAT_LIST_TITLE_MAX_CHARS} chars, cut on a word boundary, trailing
+ * stop-words ("… accounts by") dropped, no ellipsis — while the full title
+ * stays on the row's hover tooltip.
+ */
+function shortConversationTitle(title: string): string {
+  const clean = title.replace(/\s+/g, " ").trim();
+  if (clean.length <= CHAT_LIST_TITLE_MAX_CHARS) return clean;
+  const words: string[] = [];
+  for (const word of clean.split(" ").slice(0, CHAT_LIST_TITLE_MAX_WORDS)) {
+    const length = [...words, word].join(" ").length;
+    if (words.length && length > CHAT_LIST_TITLE_MAX_CHARS) break;
+    words.push(word);
+  }
+  while (words.length > 1 && CHAT_LIST_TITLE_TRAILING_STOPWORDS.has(words[words.length - 1].toLowerCase())) {
+    words.pop();
+  }
+  const out = words.join(" ") || clean.slice(0, CHAT_LIST_TITLE_MAX_CHARS);
+  return out.replace(/[\s,.;:—-]+$/, "");
 }
 
 function conversationDisplayUpdatedAt(
@@ -2099,7 +2297,6 @@ function BuilderChatSidecar({
   onExecutionModeSelect,
   onExecutionModeSelectionHandled,
   onBusyChange,
-  onBackToAutomations,
   clientSessionId,
   authoringLease,
   onLeaseStale,
@@ -2119,7 +2316,6 @@ function BuilderChatSidecar({
   onExecutionModeSelect: (mode: AutomationExecutionMode) => void;
   onExecutionModeSelectionHandled: (selectionId: number) => void;
   onBusyChange: (busy: boolean) => void;
-  onBackToAutomations: () => void;
   clientSessionId: string;
   authoringLease: AutomationLeaseRequest | null;
   onLeaseStale: () => void;
@@ -2153,6 +2349,46 @@ function BuilderChatSidecar({
     () => new Map((webChatConversationsQuery.data?.conversations ?? []).map((summary) => [summary.id, summary])),
     [webChatConversationsQuery.data],
   );
+  const sessionQuery = useQuery({
+    queryKey: ["auth", "session"],
+    queryFn: () => api.auth.session(),
+    staleTime: 5 * 60_000,
+  });
+  const currentUserName = sessionQuery.data?.name ?? null;
+  /**
+   * Teammate builder chats have no title we can read (the web-chat summary is
+   * per-user), so they'd fall back to a generic "Automation chat". Derive a real
+   * name from each teammate chat's first message — the same heuristic the setup
+   * pill uses — via the task-scoped messages endpoint (readable by owner/admin/
+   * editor). Own chats keep their backend summary title; this only fills the gap.
+   */
+  const conversationsNeedingDerivedTitle = useMemo(() => {
+    const conversations = conversationsQuery.data?.conversations ?? [];
+    return conversations.filter((conversation) => {
+      if (!conversation.kinds.includes("builder")) return false;
+      if (webChatSummaryById.get(conversation.conversationId)?.title?.trim()) return false;
+      const creator = conversation.transcriptUserName?.trim();
+      return Boolean(creator) && creator !== (currentUserName ?? "").trim();
+    });
+  }, [conversationsQuery.data?.conversations, webChatSummaryById, currentUserName]);
+  const derivedTitleQueries = useQueries({
+    queries: conversationsNeedingDerivedTitle.map((conversation) => ({
+      queryKey: ["builder-derived-title", taskId, conversation.conversationId],
+      queryFn: () => api.scheduledTasks.conversationMessages(taskId, conversation.conversationId),
+      staleTime: 5 * 60_000,
+      retry: false,
+      select: (data: { messages: unknown[] }) =>
+        deriveSetupNameFromMessages((data.messages ?? []) as BuilderWebChatMessage[]),
+    })),
+  });
+  const derivedTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    conversationsNeedingDerivedTitle.forEach((conversation, index) => {
+      const name = derivedTitleQueries[index]?.data;
+      if (name) map.set(conversation.conversationId, name);
+    });
+    return map;
+  }, [conversationsNeedingDerivedTitle, derivedTitleQueries]);
   const pendingSelectionLeaseRef = useRef<AutomationLeaseRequest | null>(null);
   const visibleConversations = useMemo(() => {
     const conversations = conversationsQuery.data?.conversations ?? [];
@@ -2215,6 +2451,7 @@ function BuilderChatSidecar({
       replace: true,
     });
   }, [navigate, taskId]);
+  const [chatListOpen, setChatListOpen] = useState(false);
 
   const createMutation = useMutation({
     mutationFn: () => {
@@ -2225,6 +2462,7 @@ function BuilderChatSidecar({
     onSuccess: ({ conversation }) => {
       if (!sameLease(pendingSelectionLeaseRef.current, authoringLease)) return;
       replaceBuilderConversationCache(queryClient, conversationsQueryKey, conversation);
+      setChatListOpen(false);
       openConversation(conversation.conversationId);
     },
     onError: (error) => toast.error(builderChatMutationError(error, "Could not start a chat")),
@@ -2245,6 +2483,7 @@ function BuilderChatSidecar({
     onSuccess: ({ conversation }) => {
       if (!sameLease(pendingSelectionLeaseRef.current, authoringLease)) return;
       replaceBuilderConversationCache(queryClient, conversationsQueryKey, conversation);
+      setChatListOpen(false);
       openConversation(conversation.conversationId);
     },
     onError: (error) => {
@@ -2252,26 +2491,52 @@ function BuilderChatSidecar({
       toast.error(builderChatMutationError(error, "This chat is unavailable"));
     },
   });
-  const archiveMutation = useMutation({
-    mutationFn: (conversationId: string) =>
-      api.scheduledTasks.archiveConversation(taskId, conversationId, true, authoringLease ?? undefined),
-    onSuccess: ({ conversation }) => {
-      replaceBuilderConversationCache(queryClient, conversationsQueryKey, conversation);
-      openChatList();
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not archive this chat"),
-  });
   const restoreMutation = useMutation({
     mutationFn: (conversationId: string) =>
       api.scheduledTasks.archiveConversation(taskId, conversationId, false, authoringLease ?? undefined),
     onSuccess: ({ conversation }) => {
       replaceBuilderConversationCache(queryClient, conversationsQueryKey, conversation);
-      openConversation(conversation.conversationId);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Could not restore this chat"),
   });
+  const archiveMutation = useMutation({
+    mutationFn: (conversationId: string) =>
+      api.scheduledTasks.archiveConversation(taskId, conversationId, true, authoringLease ?? undefined),
+    onSuccess: ({ conversation }) => {
+      replaceBuilderConversationCache(queryClient, conversationsQueryKey, conversation);
+      const archivedId = conversation.conversationId;
+      toast("Chat archived", {
+        action: { label: "Undo", onClick: () => restoreMutation.mutate(archivedId) },
+      });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Could not archive this chat"),
+  });
 
+  const selectConversationFromList = useCallback(
+    (conversation: ScheduledTaskConversationSummary) => {
+      if (conversation.conversationId === requestedConversationId) {
+        setChatListOpen(false);
+        return;
+      }
+      const isTeammateChat = Boolean(
+        conversation.transcriptUserName && conversation.transcriptUserName.trim() !== (currentUserName ?? "").trim(),
+      );
+      if (conversation.state === "archived" || !authoringLease || isTeammateChat) {
+        setChatListOpen(false);
+        openConversation(conversation.conversationId);
+        return;
+      }
+      selectMutation.mutate(conversation);
+    },
+    [authoringLease, currentUserName, openConversation, requestedConversationId, selectMutation],
+  );
   const selectedIsArchived = selectedConversation?.state === "archived";
+  const selectedIsViewOnly = Boolean(
+    selectedConversation?.transcriptUserName &&
+      selectedConversation.transcriptUserName.trim() !== (currentUserName ?? "").trim(),
+  );
+  const inList = !requestedConversationId || chatListOpen;
+  const selectingConversationId = selectMutation.isPending ? (selectMutation.variables?.conversationId ?? null) : null;
   return (
     <aside
       id="automation-builder-chat-sidecar"
@@ -2284,7 +2549,7 @@ function BuilderChatSidecar({
         builderSidebarFrameClass,
         "left-0 border-r",
         open
-          ? "translate-x-0 border-border/80 lg:w-[345px] lg:min-w-[300px] lg:max-w-[420px]"
+          ? `translate-x-0 border-border/80 ${builderSidebarWidthClass}`
           : "pointer-events-none -translate-x-full border-transparent lg:w-0 lg:min-w-0 lg:max-w-0",
         className,
       )}
@@ -2292,25 +2557,38 @@ function BuilderChatSidecar({
       <div
         className={cn(
           builderSidebarContentClass,
-          "lg:w-[345px] lg:min-w-[300px]",
+          builderSidebarWidthClass,
           open ? "lg:translate-x-0" : "lg:-translate-x-full",
         )}
       >
         <BuilderChatHeader
-          conversation={selectedConversation}
-          summary={selectedConversation ? webChatSummaryById.get(selectedConversation.conversationId) : undefined}
-          title={title}
-          onBack={selectedConversation ? openChatList : undefined}
-          onBackToAutomations={onBackToAutomations}
-          onNew={() => createMutation.mutate()}
-          newPending={createMutation.isPending}
-          newDisabled={!authoringLease}
-          onArchive={
-            selectedConversation && !selectedIsArchived && authoringLease
-              ? () => archiveMutation.mutate(selectedConversation.conversationId)
-              : undefined
+          mode={inList ? "list" : "transcript"}
+          switcher={
+            selectedConversation ? (
+              <BuilderChatSwitcher
+                currentConversation={selectedConversation}
+                currentTitle={conversationDisplayTitle(
+                  selectedConversation,
+                  webChatSummaryById.get(selectedConversation.conversationId),
+                  derivedTitleById.get(selectedConversation.conversationId),
+                )}
+                conversations={visibleConversations}
+                summaryById={webChatSummaryById}
+                derivedTitleById={derivedTitleById}
+                currentUserName={currentUserName}
+                canEdit={Boolean(authoringLease)}
+                newPending={createMutation.isPending}
+                selectingId={selectingConversationId}
+                onSelect={selectConversationFromList}
+                onNew={() => createMutation.mutate()}
+                onArchive={(conversation) => archiveMutation.mutate(conversation.conversationId)}
+                onSeeAll={() => setChatListOpen(true)}
+              />
+            ) : null
           }
-          archivePending={archiveMutation.isPending}
+          onNewChat={() => createMutation.mutate()}
+          newChatPending={createMutation.isPending}
+          newChatDisabled={!authoringLease}
           onClose={onClose}
         />
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -2318,17 +2596,18 @@ function BuilderChatSidecar({
             <BuilderChatNavigationError onRetry={() => void conversationsQuery.refetch()} />
           ) : conversationsQuery.isLoading || !conversationsQuery.data ? (
             <BuilderChatLoadingState />
-          ) : !requestedConversationId ? (
+          ) : inList ? (
             <BuilderChatListView
-              title={title}
               conversations={visibleConversations}
               builderLock={conversationsQuery.data.builderLock}
               summaryById={webChatSummaryById}
-              onSelect={(conversation) => {
-                if (conversation.state === "archived" || !authoringLease) openConversation(conversation.conversationId);
-                else selectMutation.mutate(conversation);
-              }}
-              selectingConversationId={selectMutation.isPending ? selectMutation.variables?.conversationId : null}
+              derivedTitleById={derivedTitleById}
+              currentUserName={currentUserName}
+              canEdit={Boolean(authoringLease)}
+              onSelect={selectConversationFromList}
+              onArchive={(conversation) => archiveMutation.mutate(conversation.conversationId)}
+              onRestore={(conversation) => restoreMutation.mutate(conversation.conversationId)}
+              selectingConversationId={selectingConversationId}
             />
           ) : !selectedConversation ? (
             <BuilderChatUnavailableState onBack={openChatList} />
@@ -2361,6 +2640,8 @@ function BuilderChatSidecar({
               onExecutionModeSelectionHandled={onExecutionModeSelectionHandled}
               onBusyChange={onBusyChange}
               onBack={openChatList}
+              viewOnly={selectedIsViewOnly}
+              viewOnlyOwnerName={selectedConversation.transcriptUserName ?? null}
             />
           )}
         </div>
@@ -2370,221 +2651,435 @@ function BuilderChatSidecar({
 }
 
 function BuilderChatHeader({
-  conversation,
-  summary,
-  title,
-  onBack,
-  onBackToAutomations,
-  onNew,
-  newPending,
-  newDisabled,
-  onArchive,
-  archivePending,
+  mode,
+  switcher,
+  onNewChat,
+  newChatPending,
+  newChatDisabled,
   onClose,
 }: {
-  conversation?: ScheduledTaskConversationSummary;
-  summary?: WebChatConversationSummary;
-  title: string;
-  onBack?: () => void;
-  onBackToAutomations: () => void;
-  onNew: () => void;
-  newPending: boolean;
-  newDisabled?: boolean;
-  onArchive?: () => void;
-  archivePending: boolean;
+  mode: "transcript" | "list";
+  switcher?: ReactNode;
+  onNewChat?: () => void;
+  newChatPending?: boolean;
+  newChatDisabled?: boolean;
   onClose: () => void;
 }) {
-  const conversationTitle = conversation ? conversationDisplayTitle(conversation, summary) : null;
   return (
     <div
       data-testid="automation-builder-chat-header"
-      className="shrink-0 border-b border-border/80 bg-background/95 p-3 backdrop-blur"
+      className="shrink-0 border-b border-border/80 bg-background/95 px-2 py-2.5 backdrop-blur"
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        {conversation && onBack ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cn(canvasGhostButtonClass, "shrink-0 gap-1.5")}
-            aria-label="Back to chats"
-            onClick={onBack}
-          >
-            <ArrowLeftIcon size={15} />
-            <span>Chats</span>
-          </Button>
-        ) : !conversation ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cn(canvasGhostButtonClass, "shrink-0 gap-1.5")}
-            aria-label="Back to automations"
-            onClick={onBackToAutomations}
-          >
-            <ArrowLeftIcon size={15} />
-            <span>Automations</span>
-          </Button>
+      <div className="flex h-9 min-w-0 items-center gap-1">
+        {mode === "transcript" ? (
+          switcher
         ) : (
-          <span className="size-8 shrink-0" aria-hidden />
-        )}
-        {conversation ? (
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <p
-                title={conversationTitle ?? undefined}
-                className="truncate text-[13px] font-semibold leading-5 text-foreground"
-              >
-                {conversationTitle}
-              </p>
-              <Badge className="shrink-0 rounded-[5px] border border-border/80 bg-muted/60 px-1.5 py-0 font-mono text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                {conversationSourceLabel(conversation)}
-              </Badge>
-            </div>
-            <p title={title} className="truncate text-[11px] leading-4 text-muted-foreground">
-              {title} · {conversationDateLabel(conversationDisplayUpdatedAt(conversation, summary))}
-            </p>
-            {!summary ? (
-              <p className="truncate font-mono text-[10px] leading-4 text-muted-foreground/60">
-                Chat {conversation.conversationId}
-              </p>
+          <>
+            <span className="min-w-0 flex-1 px-1 text-[13px] font-semibold leading-5 text-foreground">Chats</span>
+            {onNewChat ? (
+              <IconTooltip label={newChatDisabled ? "Request control to start a new chat" : "New chat"}>
+                <span className={cn("inline-flex", newChatDisabled && "cursor-not-allowed")}>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    data-testid="automation-builder-new-chat"
+                    className={cn(
+                      canvasCompactIconButtonClass,
+                      "size-7 shrink-0",
+                      newChatDisabled && "pointer-events-none",
+                    )}
+                    aria-label="New chat"
+                    onClick={onNewChat}
+                    disabled={newChatDisabled || newChatPending}
+                  >
+                    {newChatPending ? <SpinnerGapIcon size={16} className="animate-spin" /> : <PlusIcon size={16} />}
+                  </Button>
+                </span>
+              </IconTooltip>
             ) : null}
-          </div>
-        ) : (
-          <span className="min-w-0 flex-1" aria-hidden />
+          </>
         )}
-        {conversation ? (
+        <IconTooltip label="Collapse chat">
           <Button
             size="icon"
             variant="ghost"
-            className={canvasIconButtonClass}
-            aria-label="Archive chat"
-            disabled={!onArchive || archivePending}
-            onClick={onArchive}
+            className={cn(canvasCompactIconButtonClass, "ml-auto size-7 shrink-0")}
+            aria-label="Collapse automation chat"
+            aria-controls="automation-builder-chat-sidecar"
+            onClick={onClose}
           >
-            {archivePending ? <SpinnerGapIcon size={15} className="animate-spin" /> : <ArchiveIcon size={16} />}
+            <SidebarSimpleIcon size={16} />
           </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            className={cn(canvasToolbarButtonClass, "shrink-0 gap-1.5")}
-            onClick={onNew}
-            disabled={newPending || newDisabled}
-          >
-            {newPending ? <SpinnerGapIcon size={14} className="animate-spin" /> : <PlusIcon size={14} />}
-            New chat
-          </Button>
-        )}
-        <Button
-          size="icon"
-          variant="ghost"
-          className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
-          aria-label="Collapse automation chat"
-          aria-controls="automation-builder-chat-sidecar"
-          title="Collapse automation chat"
-          onClick={onClose}
-        >
-          <SidebarSimpleIcon size={16} />
-        </Button>
+        </IconTooltip>
       </div>
     </div>
   );
 }
 
+function BuilderChatSwitchRow({
+  conversation,
+  summary,
+  derivedTitle,
+  isCurrent,
+  currentUserName,
+  onSelect,
+  onArchive,
+  onRestore,
+  selecting,
+  disabled,
+}: {
+  conversation: ScheduledTaskConversationSummary;
+  summary?: WebChatConversationSummary;
+  derivedTitle?: string | null;
+  isCurrent: boolean;
+  currentUserName?: string | null;
+  onSelect: () => void;
+  onArchive?: () => void;
+  onRestore?: () => void;
+  selecting?: boolean;
+  disabled?: boolean;
+}) {
+  const fullConversationTitle = conversationDisplayTitle(conversation, summary, derivedTitle);
+  const conversationTitle = shortConversationTitle(fullConversationTitle);
+  const isArchived = conversation.state === "archived";
+  const rawCreator = conversation.transcriptUserName?.trim();
+  const isOwn = !rawCreator || rawCreator === (currentUserName ?? "").trim();
+  const creatorLabel = isOwn ? "You" : (rawCreator as string);
+  const dateLabel = conversationDateLabel(conversationDisplayUpdatedAt(conversation, summary));
+  const canArchive = !isArchived && !isCurrent && Boolean(onArchive);
+  const canRestore = isArchived && Boolean(onRestore);
+  const showAction = canArchive || canRestore;
+  return (
+    <div
+      data-testid={`automation-builder-conversation-${conversation.conversationId}`}
+      className={cn(
+        "group/row relative flex w-full items-center rounded-[8px] transition-colors duration-100 ease-out",
+        isCurrent ? "bg-accent" : "hover:bg-accent",
+      )}
+    >
+      <button
+        type="button"
+        aria-label={`Open ${isArchived ? "archived " : ""}chat: ${fullConversationTitle}, by ${creatorLabel}`}
+        className={cn(
+          "flex min-w-0 flex-1 flex-col gap-[3px] rounded-[8px] px-[10px] py-2 text-left outline-none transition-[padding] focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-60",
+          showAction ? "group-hover/row:pr-9 group-focus-within/row:pr-9" : null,
+        )}
+        onClick={onSelect}
+        disabled={disabled}
+      >
+        <span
+          title={fullConversationTitle}
+          className={cn(
+            "block truncate text-sm font-medium leading-5",
+            isArchived ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {conversationTitle}
+        </span>
+        <span className="flex min-w-0 items-center gap-1.5 text-xs leading-4 text-muted-foreground">
+          <span className="truncate">{creatorLabel}</span>
+          <span aria-hidden className="shrink-0 text-muted-foreground/60">
+            ·
+          </span>
+          <span className="shrink-0 tabular-nums">{dateLabel}</span>
+          {selecting ? <SpinnerGapIcon size={12} className="ml-0.5 shrink-0 animate-spin" /> : null}
+        </span>
+      </button>
+      {showAction ? (
+        <IconTooltip label={canRestore ? "Restore chat" : "Archive chat"}>
+          <button
+            type="button"
+            aria-label={`${canRestore ? "Restore" : "Archive"} chat: ${fullConversationTitle}`}
+            className="pointer-events-none absolute right-[6px] top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-[6px] bg-background/80 text-muted-foreground opacity-0 shadow-sm outline-none backdrop-blur-sm transition-[opacity,color,background-color] hover:bg-muted hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/row:pointer-events-auto group-hover/row:opacity-100"
+            onClick={canRestore ? onRestore : onArchive}
+          >
+            {canRestore ? <ArrowClockwiseIcon size={16} /> : <ArchiveIcon size={16} />}
+          </button>
+        </IconTooltip>
+      ) : null}
+    </div>
+  );
+}
+
+function BuilderNewChatButton({
+  onNew,
+  pending,
+  disabled,
+}: {
+  onNew: () => void;
+  pending: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid="automation-builder-new-chat-menu"
+      onClick={onNew}
+      disabled={disabled || pending}
+      className="flex w-full items-center gap-2.5 rounded-[8px] px-[10px] py-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      <span className="flex size-[18px] shrink-0 items-center justify-center text-muted-foreground">
+        {pending ? <SpinnerGapIcon size={16} className="animate-spin" /> : <PlusIcon size={16} />}
+      </span>
+      <span className="text-[13px] font-medium text-foreground">New chat</span>
+    </button>
+  );
+}
+
+function BuilderChatSwitcher({
+  currentConversation,
+  currentTitle,
+  conversations,
+  summaryById,
+  derivedTitleById,
+  currentUserName,
+  canEdit,
+  newPending,
+  selectingId,
+  onSelect,
+  onNew,
+  onArchive,
+  onSeeAll,
+}: {
+  currentConversation?: ScheduledTaskConversationSummary;
+  currentTitle: string | null;
+  conversations: ScheduledTaskConversationSummary[];
+  summaryById: ReadonlyMap<string, WebChatConversationSummary>;
+  derivedTitleById: ReadonlyMap<string, string>;
+  currentUserName?: string | null;
+  canEdit: boolean;
+  newPending: boolean;
+  selectingId: string | null;
+  onSelect: (conversation: ScheduledTaskConversationSummary) => void;
+  onNew: () => void;
+  onArchive: (conversation: ScheduledTaskConversationSummary) => void;
+  onSeeAll: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const RECENT = 6;
+  const active = conversations.filter((conversation) => conversation.state === "active");
+  const currentId = currentConversation?.conversationId;
+  const ordered = currentConversation
+    ? [currentConversation, ...active.filter((conversation) => conversation.conversationId !== currentId)]
+    : active;
+  const recent = ordered.slice(0, RECENT);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-testid="automation-builder-chat-switcher"
+          className="flex min-w-0 items-center gap-1.5 rounded-[7px] px-2 py-1.5 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70"
+          aria-label="Switch or start a chat"
+        >
+          <span
+            title={currentTitle ?? undefined}
+            className="min-w-0 truncate text-[13px] font-semibold leading-5 text-foreground"
+          >
+            {currentTitle}
+          </span>
+          <CaretDownIcon size={13} className="shrink-0 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={6} className="w-[300px] rounded-[12px] p-1.5">
+        <BuilderNewChatButton
+          onNew={() => {
+            setOpen(false);
+            onNew();
+          }}
+          pending={newPending}
+          disabled={!canEdit}
+        />
+        <p className="px-[10px] pb-1 pt-3 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/70">
+          Recent chats
+        </p>
+        <div className="flex flex-col gap-0.5">
+          {recent.map((conversation) => (
+            <BuilderChatSwitchRow
+              key={conversation.conversationId}
+              conversation={conversation}
+              summary={summaryById.get(conversation.conversationId)}
+              derivedTitle={derivedTitleById.get(conversation.conversationId)}
+              isCurrent={conversation.conversationId === currentId}
+              currentUserName={currentUserName}
+              selecting={selectingId === conversation.conversationId}
+              onSelect={() => {
+                setOpen(false);
+                onSelect(conversation);
+              }}
+              onArchive={canEdit ? () => onArchive(conversation) : undefined}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          className="mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-[10px] py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+          onClick={() => {
+            setOpen(false);
+            onSeeAll();
+          }}
+        >
+          <span className="flex-1">See all chats ({conversations.length})</span>
+          <CaretRightIcon size={14} className="shrink-0" />
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function BuilderChatListView({
-  title,
   conversations,
   builderLock,
   summaryById,
+  derivedTitleById,
+  currentUserName,
+  canEdit,
   onSelect,
+  onArchive,
+  onRestore,
   selectingConversationId,
 }: {
-  title: string;
   conversations: ScheduledTaskConversationSummary[];
   builderLock?: ScheduledTaskConversationLock;
   summaryById: ReadonlyMap<string, WebChatConversationSummary>;
+  derivedTitleById: ReadonlyMap<string, string>;
+  currentUserName?: string | null;
+  canEdit: boolean;
   onSelect: (conversation: ScheduledTaskConversationSummary) => void;
+  onArchive: (conversation: ScheduledTaskConversationSummary) => void;
+  onRestore: (conversation: ScheduledTaskConversationSummary) => void;
   selectingConversationId: string | null;
 }) {
-  const active = conversations.filter((conversation) => conversation.state === "active");
-  const archived = conversations.filter((conversation) => conversation.state === "archived");
-  const renderConversation = (conversation: ScheduledTaskConversationSummary) => {
-    const summary = summaryById.get(conversation.conversationId);
-    const conversationTitle = conversationDisplayTitle(conversation, summary);
-    return (
-      <button
-        key={conversation.conversationId}
-        type="button"
-        data-testid={`automation-builder-conversation-${conversation.conversationId}`}
-        aria-label={`Open ${conversation.state === "archived" ? "archived " : ""}chat: ${conversationTitle}`}
-        className="group flex w-full min-w-0 items-start gap-2.5 rounded-[9px] px-2.5 py-2.5 text-left outline-none transition-[background-color,color] hover:bg-muted/70 focus-visible:bg-muted/80 focus-visible:ring-2 focus-visible:ring-brand-accent/55 disabled:cursor-wait disabled:opacity-60"
-        onClick={() => onSelect(conversation)}
-        disabled={selectingConversationId !== null}
-      >
-        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-muted/80 text-brand-accent transition-colors group-hover:bg-brand-accent/12">
-          <RobotIcon size={15} weight="fill" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-2">
-            <span title={conversationTitle} className="truncate text-[12px] font-medium leading-5 text-foreground">
-              {conversationTitle}
-            </span>
-            {selectingConversationId === conversation.conversationId ? (
-              <SpinnerGapIcon size={13} className="shrink-0 animate-spin text-muted-foreground" />
-            ) : null}
-          </span>
-          {!summary ? (
-            <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground/60">
-              Chat {conversation.conversationId}
-            </span>
-          ) : null}
-          <span className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="truncate">{conversationSourceLabel(conversation)}</span>
-            <span aria-hidden>·</span>
-            {conversation.transcriptUserName ? (
-              <>
-                <span className="truncate">by {conversation.transcriptUserName}</span>
-                <span aria-hidden>·</span>
-              </>
-            ) : null}
-            <span className="shrink-0">
-              {conversationDateLabel(conversationDisplayUpdatedAt(conversation, summary))}
-            </span>
-          </span>
-        </span>
-      </button>
-    );
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState<"active" | "archived">("active");
+  const [ownerFilter, setOwnerFilter] = useState<"everyone" | "mine">("everyone");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const needle = query.trim().toLowerCase();
+  const matches = (conversation: ScheduledTaskConversationSummary) =>
+    needle.length === 0 ||
+    conversationDisplayTitle(
+      conversation,
+      summaryById.get(conversation.conversationId),
+      derivedTitleById.get(conversation.conversationId),
+    )
+      .toLowerCase()
+      .includes(needle);
+  const isOwnConversation = (conversation: ScheduledTaskConversationSummary) => {
+    const creator = conversation.transcriptUserName?.trim();
+    return !creator || creator === (currentUserName ?? "").trim();
   };
-
+  const hasOthers = conversations.some((conversation) => !isOwnConversation(conversation));
+  const scoped = ownerFilter === "mine" ? conversations.filter(isOwnConversation) : conversations;
+  const activeAll = scoped.filter((conversation) => conversation.state === "active");
+  const archivedAll = scoped.filter((conversation) => conversation.state === "archived");
+  const list = (tab === "active" ? activeAll : archivedAll).filter(matches);
+  const lockedByOther = builderLock?.state === "held" && builderLock.owner !== "self";
   return (
-    <div className="chat-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 py-3">
-      <div className="flex min-h-full flex-col gap-5">
-        <div data-testid="automation-builder-chat-list-heading" className="px-2.5">
-          <h2 className="text-[16px] font-semibold leading-6 text-foreground">Chats</h2>
-          <p title={title} className="mt-0.5 break-words text-[12px] leading-5 text-muted-foreground">
-            {title}
-          </p>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="px-2 pt-2.5">
+        <div className="flex items-center gap-2 rounded-[8px] bg-muted/50 px-2.5 py-1.5">
+          <MagnifyingGlassIcon size={16} className="shrink-0 text-muted-foreground" />
+          <input
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search chats"
+            aria-label="Search chats"
+            className="min-w-0 flex-1 bg-transparent text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+          />
         </div>
-        {builderLock?.state === "held" && builderLock.owner !== "self" ? (
-          <BuilderChatLockNotice lock={builderLock} />
+      </div>
+      <div className="flex items-center justify-between gap-2 px-2 py-2">
+        <div
+          role="tablist"
+          aria-label="Chat status"
+          className="inline-flex items-center rounded-[8px] bg-muted/50 p-0.5"
+        >
+          {(["active", "archived"] as const).map((value) => {
+            const selected = tab === value;
+            const count = value === "active" ? activeAll.length : archivedAll.length;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setTab(value)}
+                className={cn(
+                  "rounded-[6px] px-2.5 py-1 text-[12px] font-medium capitalize outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  selected ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {value}{" "}
+                <span className={cn("tabular-nums", selected ? "text-muted-foreground" : "text-muted-foreground/70")}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {hasOthers ? (
+          <FiltersMenu
+            open={filterOpen}
+            onOpenChange={setFilterOpen}
+            activeCount={ownerFilter === "mine" ? 1 : 0}
+            activeSummary={ownerFilter === "mine" ? "Only mine" : undefined}
+            ariaLabel="Filter chats"
+            testId="builder-chat-creator-filter"
+            onReset={() => setOwnerFilter("everyone")}
+            resetTestId="builder-chat-creator-filter-clear"
+            contentClassName="w-[220px]"
+          >
+            <FilterSegments
+              label="Creator"
+              value={ownerFilter}
+              onChange={setOwnerFilter}
+              options={[
+                { value: "everyone", label: "Everyone" },
+                { value: "mine", label: "Only mine" },
+              ]}
+            />
+          </FiltersMenu>
         ) : null}
-        <div>
-          <p className="px-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">Recent</p>
-          {active.length > 0 ? (
-            <div className="mt-1 grid gap-0.5">{active.map(renderConversation)}</div>
+      </div>
+      {builderLock?.state === "held" && builderLock.owner !== "self" ? (
+        <div className="px-2 pb-2">
+          <BuilderChatLockNotice lock={builderLock} />
+        </div>
+      ) : null}
+      <div className="chat-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 pb-3">
+        <div className="flex flex-col gap-0.5">
+          {list.length > 0 ? (
+            list.map((conversation) => (
+              <BuilderChatSwitchRow
+                key={conversation.conversationId}
+                conversation={conversation}
+                summary={summaryById.get(conversation.conversationId)}
+                derivedTitle={derivedTitleById.get(conversation.conversationId)}
+                isCurrent={false}
+                currentUserName={currentUserName}
+                selecting={selectingConversationId === conversation.conversationId}
+                onSelect={() => onSelect(conversation)}
+                onArchive={tab === "active" && canEdit ? () => onArchive(conversation) : undefined}
+                onRestore={tab === "archived" && canEdit ? () => onRestore(conversation) : undefined}
+              />
+            ))
           ) : (
-            <div className="mx-2.5 mt-3 border-l border-border pl-3 text-[12px] leading-5 text-muted-foreground">
-              No chats yet. Start one when you are ready.
-            </div>
+            <p className="px-3 pt-8 text-center text-[13px] leading-5 text-muted-foreground">
+              {tab === "active"
+                ? needle.length > 0
+                  ? "No active chats match your search."
+                  : ownerFilter === "mine"
+                    ? "You haven't started any chats yet."
+                    : lockedByOther
+                      ? "No chats yet."
+                      : "No chats yet — use ＋ above to start one."
+                : needle.length > 0
+                  ? "No archived chats match your search."
+                  : "No archived chats."}
+            </p>
           )}
         </div>
-        {archived.length > 0 ? (
-          <div>
-            <p className="px-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-              Archived
-            </p>
-            <div className="mt-1 grid gap-0.5">{archived.map(renderConversation)}</div>
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -2597,7 +3092,7 @@ function BuilderChatLockNotice({ lock }: { lock: ScheduledTaskConversationLock }
       className="mx-2.5 border-l-2 border-amber-500/70 pl-3 text-[12px] leading-5 text-muted-foreground"
     >
       <p className="font-medium text-foreground">Chat is read-only</p>
-      <p>Another editing session is active. Use Take over editing above to continue here.</p>
+      <p>Someone else is editing. Request control above to make changes.</p>
     </div>
   );
 }
@@ -2654,7 +3149,7 @@ function BuilderChatLockState({
         </p>
         <p className="mt-1 text-[12px] leading-5 text-muted-foreground">
           {locked
-            ? "Another editing session is active. Use Take over editing above, then try again."
+            ? "Someone else is editing. Request control above, then try again."
             : "Sketch could not confirm editing access. Refresh and try again before sending a message."}
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -2734,6 +3229,8 @@ function BuilderChatTranscript({
   onExecutionModeSelectionHandled,
   onBusyChange,
   onBack,
+  viewOnly,
+  viewOnlyOwnerName,
 }: {
   conversationId: string;
   conversationKind: ScheduledTaskConversationKind;
@@ -2754,6 +3251,8 @@ function BuilderChatTranscript({
   onExecutionModeSelectionHandled: (selectionId: number) => void;
   onBusyChange: (busy: boolean) => void;
   onBack: () => void;
+  viewOnly: boolean;
+  viewOnlyOwnerName: string | null;
 }) {
   const queryClient = useQueryClient();
   const { toolProgress, pendingToolProgress, changeToolProgress } = useWebChatProgressSettings();
@@ -2778,7 +3277,7 @@ function BuilderChatTranscript({
   const selectBuilderConversation = useCallback(
     async (isCancelled?: () => boolean) => {
       setLockStatus("loading");
-      if (!authoringLease) {
+      if (!authoringLease || viewOnly) {
         setLockStatus("ready");
         return;
       }
@@ -2798,7 +3297,16 @@ function BuilderChatTranscript({
         setLockStatus(error instanceof ApiRequestError && error.code === "BUILDER_CHAT_LOCKED" ? "locked" : "error");
       }
     },
-    [authoringLease, conversationId, conversationKind, conversationsQueryKey, onLeaseStale, queryClient, taskId],
+    [
+      authoringLease,
+      conversationId,
+      conversationKind,
+      conversationsQueryKey,
+      onLeaseStale,
+      queryClient,
+      taskId,
+      viewOnly,
+    ],
   );
   useEffect(() => {
     let cancelled = false;
@@ -2933,7 +3441,7 @@ function BuilderChatTranscript({
   }, [chat.setMessages, conversationId, historyKey, lockReady, taskId]);
 
   useEffect(() => {
-    if (!lockReady || !authoringLease) return;
+    if (!lockReady || !authoringLease || viewOnly) return;
     const timer = window.setInterval(() => {
       void api.scheduledTasks
         .selectConversation(taskId, conversationId, conversationKind, authoringLease)
@@ -2955,6 +3463,7 @@ function BuilderChatTranscript({
     onLeaseStale,
     queryClient,
     taskId,
+    viewOnly,
   ]);
 
   useEffect(() => {
@@ -3053,22 +3562,33 @@ function BuilderChatTranscript({
           />
         )}
       </div>
-      <div className="shrink-0 border-t border-border/80 bg-background px-3 py-3">
-        <ChatInput
-          key={conversationId}
-          disabled={!historyReady || Boolean(historyLoadError) || chatBusy}
-          disabledPlaceholder={chatBusy ? "" : historyReady ? "Transcript unavailable" : "Loading conversation..."}
-          running={chatBusy}
-          runningPlaceholder="Sketch is thinking..."
-          rendererValue={pendingToolProgress ?? toolProgress}
-          rendererSaving={pendingToolProgress !== null}
-          rendererOptions={WEB_CHAT_PROGRESS_MODES}
-          onRendererChange={changeToolProgress}
-          stopping={stoppingRun}
-          onStop={handleStop}
-          placeholder="Reply to Sketch..."
-          onSubmit={sendBuilderMessage}
+      <div className="relative shrink-0 bg-background px-3 py-3">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 bottom-full h-8 bg-gradient-to-t from-background to-transparent"
         />
+        {viewOnly ? (
+          <div className="rounded-lg bg-muted/40 px-3 py-2.5 text-[12px] leading-5 text-muted-foreground">
+            <span className="font-medium text-foreground">Read-only.</span> You're viewing{" "}
+            {viewOnlyOwnerName ?? "a teammate"}'s chat — start a new chat to make changes.
+          </div>
+        ) : (
+          <ChatInput
+            key={conversationId}
+            disabled={!historyReady || Boolean(historyLoadError) || chatBusy}
+            disabledPlaceholder={chatBusy ? "" : historyReady ? "Transcript unavailable" : "Loading conversation..."}
+            running={chatBusy}
+            runningPlaceholder="Sketch is thinking..."
+            rendererValue={pendingToolProgress ?? toolProgress}
+            rendererSaving={pendingToolProgress !== null}
+            rendererOptions={WEB_CHAT_PROGRESS_MODES}
+            onRendererChange={changeToolProgress}
+            stopping={stoppingRun}
+            onStop={handleStop}
+            placeholder="Reply to Sketch..."
+            onSubmit={sendBuilderMessage}
+          />
+        )}
       </div>
     </>
   );
@@ -3474,6 +3994,52 @@ function AutomationBuilderPlaceholder({
   running: boolean;
 }) {
   const authoringInProgress = isSetupPlaceholder && running;
+
+  if (isSetupPlaceholder) {
+    return (
+      <div data-testid="automation-builder-graph-loading" className="automation-builder-forming" aria-hidden>
+        <svg className="automation-builder-forming-edges" viewBox="0 0 520 280" fill="none" aria-hidden="true">
+          <path
+            className="automation-builder-forming-edge automation-builder-forming-edge-1"
+            pathLength={1}
+            d="M150 154C172 154 163 86 185 86"
+          />
+          <path
+            className="automation-builder-forming-edge automation-builder-forming-edge-2"
+            pathLength={1}
+            d="M335 86C357 86 348 154 370 154"
+          />
+          <path
+            className="automation-builder-forming-comet"
+            pathLength={1}
+            d="M150 154C172 154 163 86 185 86L335 86C357 86 348 154 370 154"
+          />
+          <circle className="automation-builder-forming-dot automation-builder-forming-dot-1" cx="150" cy="154" r="3" />
+          <circle className="automation-builder-forming-dot automation-builder-forming-dot-1" cx="185" cy="86" r="3" />
+          <circle className="automation-builder-forming-dot automation-builder-forming-dot-2" cx="335" cy="86" r="3" />
+          <circle className="automation-builder-forming-dot automation-builder-forming-dot-2" cx="370" cy="154" r="3" />
+        </svg>
+        <div className="automation-builder-forming-node automation-builder-forming-node-1">
+          <span className="automation-builder-forming-icon">
+            <LightningIcon size={15} weight="fill" />
+          </span>
+          <span className="automation-builder-forming-bar" />
+        </div>
+        <div className="automation-builder-forming-node automation-builder-forming-node-2">
+          <span className="automation-builder-forming-icon">
+            <RobotIcon size={15} weight="fill" />
+          </span>
+          <span className="automation-builder-forming-bar" />
+        </div>
+        <div className="automation-builder-forming-node automation-builder-forming-node-3">
+          <span className="automation-builder-forming-icon">
+            <CheckCircleIcon size={15} weight="fill" />
+          </span>
+          <span className="automation-builder-forming-bar" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -3936,6 +4502,37 @@ const runSortLabels: Record<RunSort, string> = {
   oldest: "Oldest first",
 };
 
+const runOriginChipLabels: Record<AutomationRunOrigin, string> = {
+  automatic: "Auto",
+  manual: "Manual",
+  test: "Test",
+};
+
+const runDateChipLabels: Record<Exclude<RunDateFilter, "all">, string> = {
+  today: "Today",
+  "7d": "7 days",
+  "30d": "30 days",
+};
+
+/**
+ * Legible one-line summary of the runs "Filters" chip's active facets, shown on
+ * the chip itself after a selection (instead of an opaque count badge). One
+ * active facet reads as its value ("Manual"); several collapse to "N filters".
+ */
+function runFilterChipSummary(
+  originFilter: RunOriginFilter,
+  dateFilter: RunDateFilter,
+  sort: RunSort,
+): string | undefined {
+  const parts: string[] = [];
+  if (originFilter !== "all") parts.push(runOriginChipLabels[originFilter]);
+  if (dateFilter !== "all") parts.push(runDateChipLabels[dateFilter]);
+  if (sort !== "newest") parts.push("Oldest");
+  if (parts.length === 0) return undefined;
+  if (parts.length === 1) return parts[0];
+  return `${parts.length} filters`;
+}
+
 function runStartedAtTimestamp(run: AutomationRunRecord): number | null {
   const timestamp = Date.parse(run.startedAt);
   return Number.isFinite(timestamp) ? timestamp : null;
@@ -3989,21 +4586,128 @@ function runDateSort(left: AutomationRunRecord, right: AutomationRunRecord, sort
     : left.startedAt.localeCompare(right.startedAt);
 }
 
-function PastRunsButton({ onClick }: { onClick: () => void }) {
+/**
+ * A labeled segmented control used inside a filter popover. Generic over the
+ * value type so both the runs drawer (Trigger/When/Sort) and the chat list
+ * (Creator) share one control — the builder's single filter language.
+ */
+function FilterSegments<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  className,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (value: T) => void;
+  className?: string;
+}) {
   return (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      data-testid="automation-see-past-runs"
-      aria-expanded={false}
-      aria-controls="automation-builder-runs-panel"
-      onClick={onClick}
-      className={cn(canvasToolbarButtonClass, "min-w-0 max-w-full gap-1.5 text-foreground/75")}
-    >
-      <SidebarSimpleIcon size={15} className="-scale-x-100" />
-      <span>Past runs</span>
-    </Button>
+    <div className={cn("flex flex-col gap-1.5", className)}>
+      <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+      <div className="flex flex-wrap gap-1">
+        {options.map((option) => {
+          const selected = value === option.value;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onChange(option.value)}
+              className={cn(
+                "whitespace-nowrap rounded-full px-2.5 py-1 text-[12px] font-medium leading-4 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                selected
+                  ? "bg-foreground text-background"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+              )}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The shared "Filters" chip + popover used on BOTH builder drawers (chat list
+ * and runs). One trigger idiom — a funnel + label + active-count badge + caret,
+ * opening a popover of {@link FilterSegments} groups — so the two rows read as
+ * one language and scale to any number of facets. Each drawer passes its own
+ * groups (and Reset) as children.
+ */
+function FiltersMenu({
+  open,
+  onOpenChange,
+  activeCount,
+  activeSummary,
+  ariaLabel,
+  testId,
+  title = "Filters",
+  onReset,
+  resetTestId,
+  contentClassName,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  activeCount: number;
+  activeSummary?: string;
+  ariaLabel: string;
+  testId?: string;
+  title?: string;
+  onReset?: () => void;
+  resetTestId?: string;
+  contentClassName?: string;
+  children: ReactNode;
+}) {
+  const active = activeCount > 0;
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-testid={testId}
+          aria-label={ariaLabel}
+          className={cn(
+            "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            active
+              ? "bg-foreground text-background hover:bg-foreground/90"
+              : "text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/60 data-[state=open]:text-foreground",
+          )}
+        >
+          <FunnelSimpleIcon size={14} weight={active ? "fill" : "regular"} />
+          <span className="max-w-[128px] truncate">{active ? (activeSummary ?? "Filters") : "Filters"}</span>
+          <CaretDownIcon size={12} className={active ? "text-background/70" : "text-muted-foreground"} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        sideOffset={8}
+        className={cn(
+          "rounded-[12px] border-border/65 p-3 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.3)]",
+          contentClassName ?? "w-[264px]",
+        )}
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="text-[13px] font-semibold text-foreground">{title}</p>
+          {active && onReset ? (
+            <button
+              type="button"
+              data-testid={resetTestId}
+              onClick={onReset}
+              className="rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium text-muted-foreground outline-none transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Reset
+            </button>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-3">{children}</div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -4018,6 +4722,7 @@ function RunInspector({
   onSelectRun,
   open,
   onClose,
+  onRefresh,
 }: {
   draft: DraftAutomation;
   runs: AutomationRunRecord[];
@@ -4029,11 +4734,23 @@ function RunInspector({
   onSelectRun: (runId: string) => void;
   open: boolean;
   onClose: () => void;
+  onRefresh?: () => Promise<unknown>;
 }) {
   const [originFilter, setOriginFilter] = useState<RunOriginFilter>("all");
   const [statusFilter, setStatusFilter] = useState<RunStatusFilter>("all");
   const [dateFilter, setDateFilter] = useState<RunDateFilter>("all");
   const [sort, setSort] = useState<RunSort>("newest");
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = async () => {
+    if (refreshing || !onRefresh) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const history = useMemo(() => {
     const unique = new Map<string, AutomationRunRecord>();
     for (const run of [...runs, ...(activeRun ? [activeRun] : [])]) unique.set(run.id, run);
@@ -4049,14 +4766,17 @@ function RunInspector({
     [dateFilter, history, originFilter, sort, statusFilter],
   );
   const filtersActive = originFilter !== "all" || statusFilter !== "all" || dateFilter !== "all";
-  const resultSummary =
-    filteredHistory.length === history.length
-      ? `${history.length} recent ${history.length === 1 ? "run" : "runs"}`
-      : `${filteredHistory.length} of ${history.length} runs`;
+  const secondaryFilterCount =
+    (originFilter !== "all" ? 1 : 0) + (dateFilter !== "all" ? 1 : 0) + (sort !== "newest" ? 1 : 0);
   const clearFilters = () => {
     setOriginFilter("all");
     setStatusFilter("all");
     setDateFilter("all");
+  };
+  const resetSecondaryFilters = () => {
+    setOriginFilter("all");
+    setDateFilter("all");
+    setSort("newest");
   };
 
   return (
@@ -4071,7 +4791,7 @@ function RunInspector({
         builderSidebarFrameClass,
         "right-0 border-l",
         open
-          ? "translate-x-0 border-border/80 lg:w-[392px] lg:min-w-[360px] lg:max-w-[420px]"
+          ? `translate-x-0 border-border/80 ${builderSidebarWidthClass}`
           : "pointer-events-none translate-x-full border-transparent lg:w-0 lg:min-w-0 lg:max-w-0",
       )}
     >
@@ -4079,16 +4799,39 @@ function RunInspector({
         data-testid="automation-builder-runs-panel-content"
         className={cn(
           builderSidebarContentClass,
-          "lg:w-[392px] lg:min-w-[360px]",
+          builderSidebarWidthClass,
           open ? "lg:translate-x-0" : "lg:translate-x-full",
         )}
       >
-        <div className="shrink-0 border-b border-border/80 px-4 pt-4 pb-3">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <h2 className="text-[15px] font-semibold leading-5 text-foreground">All runs</h2>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">{resultSummary}</p>
+        <div className="shrink-0 border-b border-border/80 px-4 py-2.5">
+          <div className="flex h-9 items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+              <h2 className="truncate text-[13px] font-semibold leading-5 text-foreground">All runs</h2>
+              {filtersActive ? (
+                <span
+                  data-testid="automation-run-count"
+                  className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[11px] font-medium tabular-nums text-muted-foreground"
+                >
+                  {filteredHistory.length}/{history.length}
+                </span>
+              ) : null}
             </div>
+            {onRefresh ? (
+              <IconTooltip label="Refresh runs">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
+                  data-testid="automation-runs-refresh"
+                  aria-label="Refresh runs"
+                  onClick={handleRefresh}
+                  disabled={refreshing}
+                >
+                  <ArrowClockwiseIcon size={16} className={cn(refreshing && "animate-spin")} />
+                </Button>
+              </IconTooltip>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -4102,90 +4845,85 @@ function RunInspector({
               <SidebarSimpleIcon size={16} className="-scale-x-100" />
             </Button>
           </div>
-          <div data-testid="automation-run-filters" className="mt-3 grid grid-cols-2 gap-1.5">
-            <Select value={originFilter} onValueChange={(value) => setOriginFilter(value as RunOriginFilter)}>
-              <SelectTrigger
-                data-testid="automation-run-origin-filter"
-                aria-label="Filter runs by trigger"
-                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(runOriginFilterLabels) as RunOriginFilter[]).map((value) => (
-                  <SelectItem key={value} value={value} className="text-[12px]">
-                    {runOriginFilterLabels[value]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as RunStatusFilter)}>
-              <SelectTrigger
-                data-testid="automation-run-status-filter"
-                aria-label="Filter runs by status"
-                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(runStatusFilterLabels) as RunStatusFilter[]).map((value) => (
-                  <SelectItem key={value} value={value} className="text-[12px]">
-                    {runStatusFilterLabels[value]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={dateFilter} onValueChange={(value) => setDateFilter(value as RunDateFilter)}>
-              <SelectTrigger
-                data-testid="automation-run-date-filter"
-                aria-label="Filter runs by date"
-                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(runDateFilterLabels) as RunDateFilter[]).map((value) => (
-                  <SelectItem key={value} value={value} className="text-[12px]">
-                    {runDateFilterLabels[value]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={sort} onValueChange={(value) => setSort(value as RunSort)}>
-              <SelectTrigger
-                data-testid="automation-run-sort"
-                aria-label="Sort runs by date"
-                className="h-8 min-w-0 rounded-[7px] border-border/70 bg-card/90 px-2 text-[12px] shadow-none focus-visible:ring-2 focus-visible:ring-brand-accent/50 [&>span]:truncate"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {(Object.keys(runSortLabels) as RunSort[]).map((value) => (
-                  <SelectItem key={value} value={value} className="text-[12px]">
-                    {runSortLabels[value]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {filtersActive ? (
-            <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-              <span>Filters applied together</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                data-testid="automation-run-filters-clear"
-                className={cn(canvasGhostButtonClass, "h-6 shrink-0 rounded-[5px] px-1.5 text-[10px]")}
-                onClick={clearFilters}
-              >
-                Clear filters
-              </Button>
-            </div>
-          ) : null}
         </div>
 
-        <div className="chat-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+        <div className="shrink-0 px-4 pt-3 pb-3">
+          <div data-testid="automation-run-filters" className="flex items-center justify-between gap-2">
+            <div
+              data-testid="automation-run-status-filter"
+              role="tablist"
+              aria-label="Filter runs by status"
+              className="inline-flex min-w-0 items-center rounded-[8px] bg-muted/50 p-0.5"
+            >
+              {(Object.keys(runStatusFilterLabels) as RunStatusFilter[]).map((value) => {
+                const selected = statusFilter === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    onClick={() => setStatusFilter(value)}
+                    className={cn(
+                      "rounded-[6px] px-2.5 py-1 text-[12px] font-medium leading-4 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      selected
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {value === "all" ? "All" : runStatusFilterLabels[value]}
+                  </button>
+                );
+              })}
+            </div>
+            <FiltersMenu
+              open={moreFiltersOpen}
+              onOpenChange={setMoreFiltersOpen}
+              activeCount={secondaryFilterCount}
+              activeSummary={runFilterChipSummary(originFilter, dateFilter, sort)}
+              ariaLabel="More run filters"
+              testId="automation-run-more-filters"
+              onReset={resetSecondaryFilters}
+              resetTestId="automation-run-filters-clear"
+            >
+              <FilterSegments
+                label="Trigger"
+                value={originFilter}
+                onChange={setOriginFilter}
+                options={[
+                  { value: "all", label: "Any" },
+                  { value: "automatic", label: "Auto" },
+                  { value: "manual", label: "Manual" },
+                  { value: "test", label: "Test" },
+                ]}
+              />
+              <FilterSegments
+                label="When"
+                value={dateFilter}
+                onChange={setDateFilter}
+                className="mt-2"
+                options={[
+                  { value: "all", label: "Any" },
+                  { value: "today", label: "Today" },
+                  { value: "7d", label: "7 days" },
+                  { value: "30d", label: "30 days" },
+                ]}
+              />
+              <FilterSegments
+                label="Sort"
+                value={sort}
+                onChange={setSort}
+                className="mt-2"
+                options={[
+                  { value: "newest", label: "Newest" },
+                  { value: "oldest", label: "Oldest" },
+                ]}
+              />
+            </FiltersMenu>
+          </div>
+        </div>
+
+        <div className="chat-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-0 pb-4">
           <RunHistoryList
             draft={draft}
             runs={filteredHistory}
@@ -4321,9 +5059,9 @@ function RunStepRow({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-[8px] border border-border bg-card transition-colors",
-        expanded && "border-foreground/35",
-        status === "failed" && "border-destructive/35",
+        "overflow-hidden rounded-[8px] border border-border/55 transition-colors",
+        expanded && "border-border",
+        status === "failed" && "border-destructive/30",
       )}
     >
       <button
@@ -4333,21 +5071,21 @@ function RunStepRow({
         aria-label={`Inspect ${step.label}`}
         aria-expanded={expanded}
         onClick={toggleExpanded}
-        className="flex min-h-[52px] w-full items-center gap-3 px-3 text-left transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55 focus-visible:ring-inset"
+        className="flex min-h-[52px] w-full items-center gap-2.5 px-3 text-left transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55 focus-visible:ring-inset"
       >
         <span className="flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-muted text-muted-foreground">
           <Icon size={15} weight={visual.kind === "agent" ? "fill" : "regular"} />
         </span>
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground">{step.label}</span>
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {output ? formatDuration(output.duration_ms) : "—"}
+        <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
+          <span className="text-[11px] tabular-nums">{output ? formatDuration(output.duration_ms) : "—"}</span>
+          <RunStepStatusIcon status={status} />
+          {expanded ? (
+            <CaretDownIcon size={14} className="shrink-0" aria-hidden />
+          ) : (
+            <CaretRightIcon size={14} className="shrink-0" aria-hidden />
+          )}
         </span>
-        <RunStepStatusIcon status={status} />
-        {expanded ? (
-          <CaretDownIcon size={14} className="shrink-0 text-muted-foreground" aria-hidden />
-        ) : (
-          <CaretRightIcon size={14} className="shrink-0 text-muted-foreground" aria-hidden />
-        )}
       </button>
       {renderDetails ? (
         <div
@@ -4410,17 +5148,28 @@ function RunHistoryList({
 }) {
   if (runs.length === 0) {
     return (
-      <div data-testid="automation-run-history" className="space-y-3">
-        <div className="rounded-[8px] border border-dashed border-border bg-muted/15 p-4 text-sm text-muted-foreground">
-          {filtersActive ? "No runs match these filters." : "No runs yet."}
-        </div>
+      <div
+        data-testid="automation-run-history"
+        className="flex flex-col items-center justify-center px-6 py-14 text-center"
+      >
+        <span className="grid size-11 place-items-center rounded-full bg-muted/60 text-muted-foreground">
+          <LightningIcon size={20} />
+        </span>
+        <p className="mt-3 text-[13px] font-medium text-foreground">
+          {filtersActive ? "No matching runs" : "No runs yet"}
+        </p>
+        <p className="mt-1 max-w-[210px] text-[11px] leading-4 text-muted-foreground">
+          {filtersActive
+            ? "Try widening or clearing the filters to see more runs."
+            : "Runs show up here each time this automation runs — start one with Run."}
+        </p>
         {filtersActive ? (
           <Button
             type="button"
             variant="outline"
             size="sm"
             data-testid="automation-run-filters-empty-clear"
-            className={cn(canvasToolbarButtonClass, "text-[11px]")}
+            className={cn(canvasToolbarButtonClass, "mt-3 text-[11px]")}
             onClick={onClearFilters}
           >
             Clear filters
@@ -4482,8 +5231,8 @@ function RunHistoryItem({
   return (
     <section
       className={cn(
-        "overflow-hidden rounded-[8px] border border-border bg-card transition-colors",
-        active && "bg-muted/35",
+        "overflow-hidden rounded-[10px] border border-border/70 bg-card transition-colors",
+        active && "border-border bg-muted/40",
       )}
     >
       <button
@@ -4495,23 +5244,26 @@ function RunHistoryItem({
           setRenderDetails(true);
           onSelectRun(run.id);
         }}
-        className="flex min-h-[58px] w-full items-center gap-3 px-3 text-left transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55 focus-visible:ring-inset"
+        className="flex min-h-[52px] w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-accent/55 focus-visible:ring-inset"
       >
-        <RunIcon status={run.status} />
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          <RunIcon lifecycle={lifecycle} />
+        </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[12px] text-foreground">{formatRunDate(run.startedAt)}</span>
-          <span className="mt-0.5 block text-[10px] text-muted-foreground">
-            {completedSteps}/{draft.steps.length} steps complete
-            {run.triggeredByUserId ? ` · by ${memberNameById.get(run.triggeredByUserId) ?? "a member"}` : null}
+          <span className="block truncate text-[12px] font-medium text-foreground">{formatRunDate(run.startedAt)}</span>
+          <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">
+            {runOriginFilterLabels[origin]} · {completedSteps}/{draft.steps.length} steps
+            {run.triggeredByUserId ? ` · ${memberNameById.get(run.triggeredByUserId) ?? "a member"}` : null}
           </span>
         </span>
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{runDuration(run) ?? "—"}</span>
-        <RunOriginIndicator run={run} />
-        {active ? (
-          <CaretDownIcon size={14} className="shrink-0 text-muted-foreground" aria-hidden />
-        ) : (
-          <CaretRightIcon size={14} className="shrink-0 text-muted-foreground" aria-hidden />
-        )}
+        <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+          <span className="text-[11px] tabular-nums">{runDuration(run) ?? "—"}</span>
+          {active ? (
+            <CaretDownIcon size={14} className="shrink-0" aria-hidden />
+          ) : (
+            <CaretRightIcon size={14} className="shrink-0" aria-hidden />
+          )}
+        </span>
         <span className="sr-only">{lifecycle ? runStatusLabel(lifecycle) : run.status}</span>
       </button>
       {renderDetails ? (
@@ -4543,34 +5295,6 @@ function RunHistoryItem({
         </div>
       ) : null}
     </section>
-  );
-}
-
-function RunOriginIndicator({ run }: { run: AutomationRunRecord }) {
-  const origin = automationRunOrigin(run);
-  const label = runOriginFilterLabels[origin];
-  const className = cn(
-    "flex size-5 shrink-0 items-center justify-center",
-    origin === "automatic" && "text-brand-accent",
-    origin !== "automatic" && "text-muted-foreground",
-  );
-  return (
-    <span
-      data-testid={`automation-run-origin-${run.id}`}
-      data-origin={origin}
-      className={className}
-      role="img"
-      aria-label={`${label} run`}
-      title={`${label} run`}
-    >
-      {origin === "automatic" ? (
-        <LightningIcon size={15} weight="fill" aria-hidden />
-      ) : origin === "manual" ? (
-        <PlayIcon size={14} weight="fill" aria-hidden />
-      ) : (
-        <PlayIcon size={15} aria-hidden />
-      )}
-    </span>
   );
 }
 
@@ -4610,8 +5334,7 @@ function runDuration(run: AutomationRunRecord | null): string | null {
   return formatDuration(Math.max(0, completedAt - startedAt));
 }
 
-function RunIcon({ status }: { status: string }) {
-  const lifecycle = automationRunLifecycleState({ status });
+function RunIcon({ lifecycle }: { lifecycle: AutomationRunLifecycleState | null }) {
   if (lifecycle === "pending" || lifecycle === "running") {
     return <SpinnerGapIcon size={15} className="animate-spin text-muted-foreground" />;
   }

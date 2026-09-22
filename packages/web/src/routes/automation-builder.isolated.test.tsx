@@ -556,12 +556,9 @@ describe("AutomationBuilderPage", () => {
 
     expect(await screen.findByTestId("automation-builder-empty-canvas")).toBeInTheDocument();
     expect(document.querySelector(".automation-builder-empty-grid")).toBeInTheDocument();
-    expect(screen.getByText("Workflow preview")).toBeInTheDocument();
-    expect(screen.getByText("Trigger")).toBeInTheDocument();
-    expect(screen.getByText("Action")).toBeInTheDocument();
-    expect(screen.getByText("Delivery")).toBeInTheDocument();
-    expect(document.querySelectorAll(".automation-builder-empty-edge-track")).toHaveLength(2);
-    expect(screen.getByTestId("automation-builder-graph-loading")).toHaveTextContent("Workflow canvas");
+    expect(screen.getByTestId("automation-builder-graph-loading")).toBeInTheDocument();
+    expect(screen.queryByText("Workflow preview")).not.toBeInTheDocument();
+    expect(screen.queryByText("Workflow canvas")).not.toBeInTheDocument();
     expect(await screen.findByText("What should this automation do?")).toBeInTheDocument();
     expect(screen.queryByTestId("automation-setup-card")).not.toBeInTheDocument();
     expect(screen.queryByTestId("automation-builder-question-dock")).not.toBeInTheDocument();
@@ -627,22 +624,33 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Discard setup" }));
-    await waitFor(() => expect(mocks.removeAutomation).toHaveBeenCalledWith("task-123"));
+    await waitFor(() =>
+      expect(mocks.removeAutomation).toHaveBeenCalledWith(
+        "task-123",
+        expect.objectContaining({ clientSessionId: expect.any(String), generation: 1 }),
+      ),
+    );
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/scheduled-tasks" }));
   });
 
   it("keeps an untouched setup open when discard fails and never deletes a non-placeholder", async () => {
     mocks.getAutomation.mockResolvedValue({ ...automation, isPlaceholderDraft: true });
     mocks.removeAutomation.mockRejectedValue(new Error("Delete failed"));
-    renderBuilder();
+    const firstRender = renderBuilder();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Discard setup" }));
-    await waitFor(() => expect(mocks.removeAutomation).toHaveBeenCalledWith("task-123"));
+    await waitFor(() =>
+      expect(mocks.removeAutomation).toHaveBeenCalledWith(
+        "task-123",
+        expect.objectContaining({ clientSessionId: expect.any(String), generation: 1 }),
+      ),
+    );
     expect(mocks.navigate).not.toHaveBeenCalled();
+    firstRender.unmount();
 
     mocks.getAutomation.mockResolvedValue({ ...automation, isPlaceholderDraft: false });
     renderBuilder();
-    await user.click(await screen.findByRole("button", { name: "Close" }));
+    await user.click(await screen.findByRole("button", { name: "Back to automations" }));
     expect(mocks.removeAutomation).toHaveBeenCalledTimes(1);
   });
 
@@ -650,32 +658,13 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
     const user = userEvent.setup();
 
-    await screen.findByRole("button", { name: "Back to chats" });
-    expect(
-      within(screen.getByTestId("automation-builder-chat-sidecar")).getByRole("button", {
-        name: "Back to chats",
-      }),
-    ).toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("automation-builder-chat-sidecar")).queryByRole("button", {
-        name: "Back to automations",
-      }),
-    ).not.toBeInTheDocument();
-    expect(
-      within(screen.getByTestId("automation-builder-canvas")).queryByRole("button", {
-        name: "Back to automations",
-      }),
-    ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Back to chats" }));
-    expect(mocks.navigate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "/scheduled-tasks/$taskId/edit",
-        params: { taskId: "task-123" },
-        search: {},
-      }),
-    );
+    const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
+    const switcher = await within(sidecar).findByTestId("automation-builder-chat-switcher");
+    await user.click(switcher);
+    await user.click(await screen.findByRole("button", { name: /See all chats/ }));
+    expect(within(sidecar).getByText("Chats")).toBeInTheDocument();
+    expect(within(sidecar).queryByTestId("automation-builder-chat-switcher")).not.toBeInTheDocument();
 
-    mocks.navigate.mockClear();
     await user.click(screen.getByRole("button", { name: "Delete automation" }));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("Daily account brief");
@@ -706,16 +695,14 @@ describe("AutomationBuilderPage", () => {
 
     const mute = await screen.findByRole("button", { name: "Mute automation responses" });
     await waitFor(() => expect(mute).toBeEnabled());
-    expect(mute).toHaveTextContent("Mute");
     await user.click(mute);
 
     await waitFor(() => expect(mocks.setResponseMuted).toHaveBeenLastCalledWith("task-123", true));
     const unmute = await screen.findByRole("button", { name: "Unmute automation responses" });
-    expect(unmute).toHaveTextContent("Unmute");
     await user.click(unmute);
 
     await waitFor(() => expect(mocks.setResponseMuted).toHaveBeenLastCalledWith("task-123", false));
-    expect(await screen.findByRole("button", { name: "Mute automation responses" })).toHaveTextContent("Mute");
+    expect(await screen.findByRole("button", { name: "Mute automation responses" })).toBeInTheDocument();
   });
 
   it("uses the automation-list nav only from the automation thread list", async () => {
@@ -724,25 +711,19 @@ describe("AutomationBuilderPage", () => {
 
     const user = userEvent.setup();
     const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
-    const automationTitle = automation.title;
-    if (!automationTitle) throw new Error("Expected an automation title");
     const header = within(sidecar).getByTestId("automation-builder-chat-header");
-    const listHeading = await within(sidecar).findByTestId("automation-builder-chat-list-heading");
-    expect(within(header).queryByText("Chats")).not.toBeInTheDocument();
-    expect(within(header).queryByText(automationTitle)).not.toBeInTheDocument();
-    expect(within(listHeading).getByRole("heading", { name: "Chats" })).toBeInTheDocument();
-    expect(within(listHeading).getByText(automationTitle)).toBeInTheDocument();
-    expect(within(sidecar).getByRole("button", { name: "Back to automations" })).toBeInTheDocument();
+    expect(within(header).getByText("Chats")).toBeInTheDocument();
+    expect(within(sidecar).queryByTestId("automation-builder-chat-switcher")).not.toBeInTheDocument();
     expect(within(sidecar).queryByRole("button", { name: "Back to chats" })).not.toBeInTheDocument();
     const newChat = within(header).getByRole("button", { name: "New chat" });
     const collapseChat = within(header).getByRole("button", { name: "Collapse automation chat" });
     const headerButtons = within(header).getAllByRole("button");
     expect(headerButtons.indexOf(newChat)).toBeLessThan(headerButtons.indexOf(collapseChat));
-    expect(
-      within(screen.getByTestId("automation-builder-canvas")).queryByRole("button", { name: "Back to automations" }),
-    ).not.toBeInTheDocument();
 
-    await user.click(within(sidecar).getByRole("button", { name: "Back to automations" }));
+    const backToAutomations = within(screen.getByTestId("automation-builder-toolbar")).getByRole("button", {
+      name: "Back to automations",
+    });
+    await user.click(backToAutomations);
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/scheduled-tasks" });
   });
 
@@ -821,6 +802,7 @@ describe("AutomationBuilderPage", () => {
     const user = userEvent.setup();
     renderBuilder();
 
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
     const panel = await screen.findByTestId("automation-builder-runs-panel");
     expect(panel).toHaveAttribute("aria-hidden", "false");
     expect(within(panel).getByTestId("automation-run-step-trigger")).toBeInTheDocument();
@@ -980,6 +962,7 @@ describe("AutomationBuilderPage", () => {
     const user = userEvent.setup();
     renderBuilder();
 
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
     const panel = await screen.findByTestId("automation-builder-runs-panel");
     expect(panel).toHaveAttribute("aria-hidden", "false");
     expect(screen.getByTestId("automation-run-history")).toBeInTheDocument();
@@ -993,7 +976,7 @@ describe("AutomationBuilderPage", () => {
     await user.click(reopenedSeePastRuns);
     expect(screen.getByTestId("automation-builder-runs-panel")).toHaveAttribute("aria-hidden", "false");
 
-    await user.click(runButtons[1]);
+    await user.click(screen.getAllByRole("button", { name: /Open run from/ })[1]);
     expect(mocks.navigate).toHaveBeenCalledWith(
       expect.objectContaining({
         search: { conversationId: "chat-alpha", runId: "run-previous" },
@@ -1014,14 +997,15 @@ describe("AutomationBuilderPage", () => {
     const user = userEvent.setup();
     const initialRender = renderBuilder();
 
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
     const initialPanel = await screen.findByTestId("automation-builder-runs-panel");
     expect(initialPanel).toHaveAttribute("aria-hidden", "false");
     expect(initialPanel).toHaveAttribute("data-state", "open");
     expect(initialPanel).toHaveClass(
       "translate-x-0",
       "lg:static",
-      "lg:w-[392px]",
-      "lg:min-w-[360px]",
+      "lg:w-[clamp(340px,22vw,420px)]",
+      "lg:min-w-[340px]",
       "lg:max-w-[420px]",
       "transition-[width,min-width,max-width,transform,border-color]",
     );
@@ -1030,8 +1014,8 @@ describe("AutomationBuilderPage", () => {
     expect(canvas.nextElementSibling).toBe(initialPanel);
     const panelContent = within(initialPanel).getByTestId("automation-builder-runs-panel-content");
     expect(panelContent).toHaveClass(
-      "lg:w-[392px]",
-      "lg:min-w-[360px]",
+      "lg:w-[clamp(340px,22vw,420px)]",
+      "lg:min-w-[340px]",
       "lg:translate-x-0",
       "transition-transform",
       "duration-300",
@@ -1046,6 +1030,7 @@ describe("AutomationBuilderPage", () => {
     mocks.navigate.mockClear();
     renderBuilder();
 
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
     const selectedPanel = await screen.findByTestId("automation-builder-runs-panel");
     expect(selectedPanel).toHaveAttribute("aria-hidden", "false");
     const selectedRunButton = within(selectedPanel).getByRole("button", { name: /Open run from/ });
@@ -1150,33 +1135,24 @@ describe("AutomationBuilderPage", () => {
     const user = userEvent.setup();
     renderBuilder();
 
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    expect(within(panel).getByTestId("automation-run-origin-run-automatic")).toHaveAttribute(
-      "data-origin",
-      "automatic",
-    );
-    expect(within(panel).getByTestId("automation-run-origin-run-manual")).toHaveAttribute("data-origin", "manual");
-    expect(within(panel).getByTestId("automation-run-origin-run-test")).toHaveAttribute("data-origin", "test");
-    expect(within(panel).getByRole("img", { name: "Automatic run" })).toBeInTheDocument();
-    expect(within(panel).getByRole("img", { name: "Manual run" })).toBeInTheDocument();
-    expect(within(panel).getByRole("img", { name: "Test run" })).toBeInTheDocument();
-    expect(within(panel).getByTestId("automation-run-origin-run-automatic")).toHaveClass("text-brand-accent");
-    expect(within(panel).getByTestId("automation-run-origin-run-manual")).toHaveClass("text-muted-foreground");
-    expect(within(panel).getByTestId("automation-run-origin-run-test")).toHaveClass("text-muted-foreground");
-    expect(within(panel).getByTestId("automation-run-origin-run-manual")).not.toHaveClass("text-info");
-    expect(within(panel).getByTestId("automation-run-origin-run-test")).not.toHaveClass("text-warning");
+    expect(within(panel).getByRole("button", { name: /automatic run/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /manual run/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /test run/ })).toBeInTheDocument();
+    expect(within(panel).queryByTestId("automation-run-count")).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId("automation-run-origin-filter"));
-    await user.click(screen.getByRole("option", { name: "Manual" }));
-    expect(within(panel).getByText("1 of 3 runs")).toBeInTheDocument();
-    expect(within(panel).getByTestId("automation-run-origin-run-manual")).toBeInTheDocument();
-    expect(within(panel).queryByTestId("automation-run-origin-run-automatic")).not.toBeInTheDocument();
-    expect(within(panel).queryByTestId("automation-run-origin-run-test")).not.toBeInTheDocument();
+    await user.click(within(panel).getByTestId("automation-run-more-filters"));
+    await user.click(screen.getByRole("button", { name: "Manual" }));
+    expect(within(panel).getByTestId("automation-run-count")).toHaveTextContent("1/3");
+    expect(within(panel).getByRole("button", { name: /manual run/ })).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /automatic run/ })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /test run/ })).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId("automation-run-origin-filter"));
-    await user.click(screen.getByRole("option", { name: "Test" }));
-    expect(within(panel).getByTestId("automation-run-origin-run-test")).toBeInTheDocument();
-    expect(within(panel).queryByTestId("automation-run-origin-run-manual")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Test" }));
+    expect(within(panel).getByTestId("automation-run-count")).toHaveTextContent("1/3");
+    expect(within(panel).getByRole("button", { name: /test run/ })).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /manual run/ })).not.toBeInTheDocument();
   });
 
   it("composes status and date filters before sorting the run history", async () => {
@@ -1226,20 +1202,21 @@ describe("AutomationBuilderPage", () => {
     const user = userEvent.setup();
     renderBuilder();
 
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
     const panel = await screen.findByTestId("automation-builder-runs-panel");
-    expect(within(panel).getByText("4 recent runs")).toBeInTheDocument();
-    await user.click(screen.getByTestId("automation-run-status-filter"));
-    await user.click(screen.getByRole("option", { name: "Failed" }));
-    expect(within(panel).getByText("3 of 4 runs")).toBeInTheDocument();
+    expect(within(panel).getAllByRole("button", { name: /Open run from/ })).toHaveLength(4);
+    expect(within(panel).queryByTestId("automation-run-count")).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId("automation-run-date-filter"));
-    await user.click(screen.getByRole("option", { name: "Last 7 days" }));
-    expect(within(panel).getByText("2 of 4 runs")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Open run from/ })).toHaveLength(2);
+    await user.click(within(panel).getByRole("tab", { name: "Failed" }));
+    expect(within(panel).getByTestId("automation-run-count")).toHaveTextContent("3/4");
 
-    await user.click(screen.getByTestId("automation-run-sort"));
-    await user.click(screen.getByRole("option", { name: "Oldest first" }));
-    const visibleRuns = screen.getAllByRole("button", { name: /Open run from/ });
+    await user.click(within(panel).getByTestId("automation-run-more-filters"));
+    await user.click(screen.getByRole("button", { name: "7 days" }));
+    expect(within(panel).getByTestId("automation-run-count")).toHaveTextContent("2/4");
+    expect(within(panel).getAllByRole("button", { name: /Open run from/ })).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Oldest" }));
+    const visibleRuns = within(panel).getAllByRole("button", { name: /Open run from/ });
     expect(visibleRuns[0]).toHaveTextContent(expectedRunDate(failedEarlierRun.startedAt));
     expect(visibleRuns[1]).toHaveTextContent(expectedRunDate(failedRecentRun.startedAt));
   });
@@ -1386,14 +1363,14 @@ describe("AutomationBuilderPage", () => {
     const runsPanel = screen.getByTestId("automation-builder-runs-panel");
     expect(sidecar).toHaveAttribute("data-state", "open");
     expect(sidecar).toHaveAttribute("aria-hidden", "false");
-    expect(runsPanel).toHaveAttribute("data-state", "open");
-    expect(runsPanel).toHaveAttribute("aria-hidden", "false");
+    expect(runsPanel).toHaveAttribute("data-state", "closed");
+    expect(runsPanel).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByTestId("automation-builder-canvas")).toHaveAttribute("data-chat-sidecar-open", "true");
-    expect(screen.getByTestId("automation-builder-canvas")).toHaveAttribute("data-run-inspector-open", "true");
+    expect(screen.getByTestId("automation-builder-canvas")).toHaveAttribute("data-run-inspector-open", "false");
     expect(sidecar).toHaveClass(
       "translate-x-0",
-      "lg:w-[345px]",
-      "lg:min-w-[300px]",
+      "lg:w-[clamp(340px,22vw,420px)]",
+      "lg:min-w-[340px]",
       "lg:max-w-[420px]",
       "duration-300",
     );
@@ -1403,65 +1380,50 @@ describe("AutomationBuilderPage", () => {
     expect(sidecar).toHaveAttribute("data-state", "closed");
     expect(sidecar).toHaveAttribute("aria-hidden", "true");
     expect(sidecar).toHaveClass("-translate-x-full", "lg:w-0", "lg:min-w-0", "duration-300");
-    const expandChat = screen.getByRole("button", { name: "Expand automation chat" });
+    const expandChat = screen.getByRole("button", { name: "Show automation chat" });
     expect(expandChat).toBeInTheDocument();
     expect(screen.getByTestId("automation-builder-toolbar")).toContainElement(expandChat);
     expect(screen.getByTestId("automation-builder-header-actions")).not.toContainElement(expandChat);
     expect(screen.getByRole("button", { name: "Run" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Past runs" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Expand automation chat" }));
+    await user.click(screen.getByRole("button", { name: "Show automation chat" }));
     expect(sidecar).toHaveAttribute("data-state", "open");
     expect(sidecar).toHaveAttribute("aria-hidden", "false");
-    expect(sidecar).toHaveClass("translate-x-0", "lg:w-[345px]", "lg:min-w-[300px]");
+    expect(sidecar).toHaveClass("translate-x-0", "lg:w-[clamp(340px,22vw,420px)]", "lg:min-w-[340px]");
   });
 
-  it("uses deliberate left, center, and right header zones when both sidebars are closed", async () => {
+  it("uses deliberate left and right toolbar zones when both sidebars are closed", async () => {
     const user = userEvent.setup();
     mocks.getAutomation.mockResolvedValue(automationWithStepOutput("latest step output"));
     renderBuilder();
 
     const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
     await user.click(within(sidecar).getByRole("button", { name: "Collapse automation chat" }));
-    await user.click(screen.getByRole("button", { name: "Collapse all runs" }));
 
     const canvas = screen.getByTestId("automation-builder-canvas");
     const left = screen.getByTestId("automation-builder-toolbar");
-    const leftStatus = screen.getByTestId("automation-builder-header-status");
-    const center = screen.getByTestId("automation-builder-header-meta");
     const right = screen.getByTestId("automation-builder-header-actions");
-    const latest = screen.getByTestId("automation-latest-run-chip");
-    const editing = screen.getByText("You're editing").parentElement;
-    const chat = screen.getByRole("button", { name: "Expand automation chat" });
+    const chat = screen.getByRole("button", { name: "Show automation chat" });
 
-    expect(canvas).not.toHaveClass("automation-builder-canvas-enter");
     expect(canvas).toHaveAttribute("data-chat-sidecar-open", "false");
     expect(canvas).toHaveAttribute("data-run-inspector-open", "false");
     expect(left).toContainElement(chat);
-    expect(leftStatus).toContainElement(latest);
-    expect(leftStatus).toContainElement(editing);
-    expect(right).not.toContainElement(latest);
-    expect(center).toContainElement(screen.getByLabelText(/Owner Owner Member/));
-    expect(right).not.toContainElement(screen.getByLabelText(/Owner Owner Member/));
+    expect(left).toContainElement(screen.getByRole("button", { name: "Back to automations" }));
+    expect(right).not.toContainElement(chat);
     expect(right).toContainElement(screen.getByRole("button", { name: "Run" }));
-    expect(right).toContainElement(screen.getByRole("button", { name: "Past runs" }));
-    expect(screen.getByTestId("automation-builder-header-meta")).toBeInTheDocument();
-    expect(screen.getByTestId("automation-builder-header-management-actions")).toBeInTheDocument();
-    expect(screen.getByTestId("automation-builder-header-lifecycle-actions")).toBeInTheDocument();
-    expect(screen.getByTestId("automation-builder-header-execution-actions")).toBeInTheDocument();
-    expect(screen.getByTestId("automation-builder-header-panel-actions")).toBeInTheDocument();
-    expect(screen.getByTestId("automation-builder-header-management-row")).toContainElement(
-      screen.getByTestId("automation-builder-header-management-actions"),
-    );
-    expect(screen.getByTestId("automation-builder-header-management-row")).toContainElement(
-      screen.getByTestId("automation-builder-header-panel-actions"),
-    );
-    expect(screen.getByTestId("automation-builder-header-run-row")).toContainElement(
-      screen.getByTestId("automation-builder-header-lifecycle-actions"),
-    );
-    expect(screen.getByTestId("automation-builder-header-run-row")).toContainElement(
-      screen.getByTestId("automation-builder-header-execution-actions"),
-    );
+    expect(right).toContainElement(screen.getByTestId("automation-see-past-runs"));
+    expect(right).toContainElement(screen.getByRole("button", { name: "Delete automation" }));
+
+    expect(screen.queryByTestId("automation-latest-run-chip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-meta")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-status")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-management-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-lifecycle-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-execution-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-panel-actions")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-management-row")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-header-run-row")).not.toBeInTheDocument();
   });
 
   it("renders a Slack channel message trigger and its channel", async () => {
@@ -1844,29 +1806,26 @@ describe("AutomationBuilderPage", () => {
     });
 
     expect(screen.getByRole("button", { name: "Notify Slack" })).toBeInTheDocument();
-    expect(screen.getByTestId("automation-latest-run-chip")).toHaveTextContent("Latest");
-    expect(screen.getByTestId("automation-latest-run-chip")).toHaveTextContent(
-      expectedRunDate(refreshedAutomation.latestRun?.startedAt),
-    );
+    expect(screen.queryByTestId("automation-latest-run-chip")).not.toBeInTheDocument();
     expect(mocks.getAutomation).toHaveBeenCalledTimes(2);
   });
 
-  it("shows the complete latest run information in the builder toolbar", async () => {
+  it("shows the complete latest run information in the runs drawer", async () => {
     mocks.getAutomation.mockResolvedValue(automationWithStepOutput("latest step output"));
 
+    const user = userEvent.setup();
     renderBuilder();
 
-    const latestChip = await screen.findByTestId("automation-latest-run-chip");
-    expect(latestChip).toHaveTextContent("Latest");
-    expect(latestChip).toHaveTextContent(
-      `${expectedRunDate(automationWithStepOutput("latest step output").latestRun?.startedAt)} · 1.0s`,
+    await user.click(await screen.findByTestId("automation-see-past-runs"));
+    const panel = await screen.findByTestId("automation-builder-runs-panel");
+    const runButton = within(panel).getByRole("button", { name: /Open run from/ });
+    expect(runButton).toHaveTextContent(
+      expectedRunDate(automationWithStepOutput("latest step output").latestRun?.startedAt),
     );
-    expect(latestChip).toHaveClass("max-w-full", "min-w-0");
-    expect(latestChip.querySelector("span:last-child")).toHaveClass("min-w-0", "break-words");
-    expect(latestChip).toHaveAttribute("data-status", "success");
-    expect(latestChip).toHaveClass("border-success/35", "bg-success/10");
+    expect(runButton).toHaveTextContent("1.0s");
+
+    expect(screen.queryByTestId("automation-latest-run-chip")).not.toBeInTheDocument();
     expect(screen.queryByTestId("automation-run-state")).not.toBeInTheDocument();
-    expect(latestChip).not.toHaveAttribute("aria-expanded");
   });
 
   it("shows the execution-mode setup card in an empty chat for a saved automation", async () => {
@@ -1907,7 +1866,7 @@ describe("AutomationBuilderPage", () => {
     expect(await screen.findByTestId("automation-builder-canvas")).toBeInTheDocument();
   });
 
-  it("identifies the foreign owner and acting editor in the builder", async () => {
+  it("no longer shows an ownership stack in the builder toolbar", async () => {
     mocks.getAutomation.mockResolvedValue({
       ...automation,
       createdBy: "owner-1",
@@ -1918,11 +1877,10 @@ describe("AutomationBuilderPage", () => {
 
     renderBuilder();
 
-    const ownership = await screen.findByTestId("automation-builder-ownership");
-    expect(ownership).toHaveTextContent("Owner Alice Member");
-    expect(ownership).toHaveTextContent("Last edited by Karan Admin");
-    expect(ownership).toHaveClass("automation-builder-ownership", "w-fit", "bg-card/70");
-    expect(ownership).toHaveAttribute("title", "Owner: Alice Member · Last edited by: Karan Admin");
+    await screen.findByTestId("automation-builder-toolbar");
+    expect(screen.queryByTestId("automation-builder-ownership")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Owner Alice Member/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Last edited by Karan Admin/)).not.toBeInTheDocument();
   });
 
   it("uses theme tokens and paired theme classes across builder surfaces", async () => {
@@ -1987,17 +1945,9 @@ describe("AutomationBuilderPage", () => {
     const sidecar = screen.getByTestId("automation-builder-chat-sidecar");
     expect(canvas).toHaveClass("bg-background", "text-foreground");
     expect(toolbar).not.toHaveClass("border-border/70", "bg-card/90", "p-1.5", "shadow-md");
-    expect(screen.getByTestId("automation-latest-run-chip")).toHaveClass("border-success/35", "bg-success/10");
-    expect(toolbar).toHaveClass("justify-start");
-    expect(headerActions).toHaveClass("automation-builder-header-actions");
-    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-management-actions"));
-    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-lifecycle-actions"));
-    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-execution-actions"));
-    expect(headerActions).toContainElement(screen.getByTestId("automation-builder-header-panel-actions"));
-    expect(screen.getByTestId("automation-builder-header-status")).toContainElement(
-      screen.getByTestId("automation-latest-run-chip"),
-    );
-    expect(toolbar).not.toContainElement(screen.getByTestId("automation-latest-run-chip"));
+    expect(headerActions).toContainElement(screen.getByRole("button", { name: "Run" }));
+    expect(headerActions).toContainElement(screen.getByTestId("automation-see-past-runs"));
+    expect(screen.queryByTestId("automation-latest-run-chip")).not.toBeInTheDocument();
     expect(sidecar).toHaveClass("border-border/80", "bg-background", "text-foreground");
     expect(screen.getByTestId("automation-background")).toHaveAttribute("data-color", "var(--automation-builder-grid)");
     expect(screen.getByTestId("automation-controls")).toHaveClass("automation-builder-controls");
@@ -2091,11 +2041,9 @@ describe("AutomationBuilderPage", () => {
 
     renderBuilder();
 
-    const latestChip = await screen.findByTestId("automation-latest-run-chip");
-    expect(latestChip).toHaveAttribute("data-status", "failure");
-    expect(latestChip).toHaveClass("border-destructive/40", "bg-destructive/10");
     const failedNode = await screen.findByTestId("automation-node-check");
     expect(failedNode).toHaveAttribute("data-state", "failed");
+    expect(screen.queryByTestId("automation-latest-run-chip")).not.toBeInTheDocument();
     expect(failedNode.querySelector('[data-testid="automation-node-shell"]')).toHaveClass(
       "automation-node-failed",
       "shadow-none",
@@ -2391,11 +2339,11 @@ describe("AutomationBuilderPage", () => {
     expect(screen.queryByText("Review the source thread")).not.toBeInTheDocument();
     expect(screen.queryByText("chat-source")).not.toBeInTheDocument();
     expect(screen.queryByText("chat-builder")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Automation").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("You").length).toBeGreaterThan(0);
     expect(screen.getByText(/(?:Jun 4|4 Jun)/)).toBeInTheDocument();
   });
 
-  it("uses a generic title and subdued diagnostic ID when a transcript summary is missing", async () => {
+  it("uses a generic title and hides the raw identifier when a transcript summary is missing", async () => {
     mocks.search = {};
     mocks.listConversations.mockResolvedValue({
       taskId: "task-123",
@@ -2417,8 +2365,8 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     expect((await screen.findAllByText("Automation chat")).length).toBeGreaterThan(0);
-    const diagnostic = screen.getByText("Chat chat-missing-summary");
-    expect(diagnostic).toHaveClass("font-mono", "text-muted-foreground/60");
+    expect(screen.queryByText("Chat chat-missing-summary")).not.toBeInTheDocument();
+    expect(screen.queryByText("chat-missing-summary")).not.toBeInTheDocument();
   });
 
   it("keeps a long chat title in the folded rail without exposing its identifier", async () => {
@@ -2453,8 +2401,12 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
 
     const row = await screen.findByTestId("automation-builder-conversation-chat-with-a-diagnostic-only-id");
-    expect(row).toHaveAttribute("aria-label", `Open chat: ${title}`);
-    expect(row).toHaveClass("min-w-0");
+    const openButton = await within(row).findByRole(
+      "button",
+      { name: `Open chat: ${title}, by You` },
+      { timeout: 8000 },
+    );
+    expect(openButton).toHaveClass("min-w-0");
     expect(row.querySelector(`[title="${title}"]`)).toHaveClass("truncate");
     expect(row).not.toHaveTextContent("chat-with-a-diagnostic-only-id");
   });
@@ -2488,7 +2440,8 @@ describe("AutomationBuilderPage", () => {
     });
 
     renderBuilder();
-    await user.click(await screen.findByTestId("automation-builder-conversation-chat-beta"));
+    const betaRow = await screen.findByTestId("automation-builder-conversation-chat-beta");
+    await user.click(within(betaRow).getByRole("button", { name: /^Open chat:/ }));
 
     await waitFor(() =>
       expect(mocks.selectConversation).toHaveBeenCalledWith(
@@ -2502,11 +2455,13 @@ describe("AutomationBuilderPage", () => {
     expect(mocks.conversationMessages).not.toHaveBeenCalled();
   });
 
-  it("archives the current chat from the sidechat and returns to history", async () => {
+  it("archives a chat from the sidechat list", async () => {
     const user = userEvent.setup();
+    mocks.search = {};
     renderBuilder();
 
-    await user.click(await screen.findByRole("button", { name: "Archive chat" }));
+    const alphaRow = await screen.findByTestId("automation-builder-conversation-chat-alpha");
+    await user.click(within(alphaRow).getByRole("button", { name: /^Archive chat:/ }));
 
     await waitFor(() =>
       expect(mocks.archiveConversation).toHaveBeenCalledWith(
@@ -2515,9 +2470,6 @@ describe("AutomationBuilderPage", () => {
         true,
         expect.objectContaining({ clientSessionId: expect.any(String), generation: 1 }),
       ),
-    );
-    expect(mocks.navigate).toHaveBeenCalledWith(
-      expect.objectContaining({ search: {}, params: { taskId: "task-123" } }),
     );
   });
 

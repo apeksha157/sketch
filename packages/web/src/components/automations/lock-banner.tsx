@@ -14,9 +14,8 @@ import type { AutomationEditLockView } from "@/lib/api";
  * The viewer's lock state is driven by polling the definition endpoint (see
  * the builder), so this component is purely presentational.
  */
-import { LockIcon, LockSimpleIcon, UserFocusIcon } from "@phosphor-icons/react";
+import { LockIcon, UserFocusIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
-import { cn } from "@sketch/ui/lib/utils";
 import { useEffect, useState } from "react";
 
 export const AUTOMATION_EDIT_LOCK_TTL_MS = 90 * 1000;
@@ -67,6 +66,19 @@ export function lockRemainingLabel(expiresAt: string | null, now = Date.now()): 
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
+/**
+ * The banner is one of the toolbar's cards, so it borrows the identity pill's
+ * exact shell — same 36px height, 13px radius, neutral card surface and border.
+ * Lock status is carried by a single quiet neutral icon, never a loud tint or
+ * off-brand colour, matching the builder's toast + pill language.
+ */
+const lockBannerCardClass =
+  "flex min-w-0 items-center gap-2 rounded-[13px] border border-border/70 bg-card/95 py-1 pr-1.5 pl-2.5 shadow-md backdrop-blur";
+const lockBannerLabelClass = "min-w-0 truncate text-[13px] text-foreground/70";
+const lockBannerDividerClass = "h-4 w-px shrink-0 bg-border/70";
+const lockBannerActionClass =
+  "h-7 shrink-0 rounded-[8px] px-2 text-[13px] font-medium text-foreground shadow-none transition-colors hover:bg-muted";
+
 export function AutomationLockBanner({
   lock,
   canEdit,
@@ -82,69 +94,34 @@ export function AutomationLockBanner({
 
   if (lock.isHeldByMe) {
     const stealPending = lock.stealPending;
+    if (!stealPending) return null;
     return (
-      <div
-        data-testid="automation-lock-banner"
-        data-lock-state="held-by-me"
-        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[8px] border border-brand-accent/40 bg-brand-accent/10 px-3 py-1.5 text-[11px] font-medium text-foreground/85 shadow-md backdrop-blur"
-      >
-        <LockSimpleIcon size={13} weight="fill" className="shrink-0 text-brand-accent" />
-        <span>You're editing</span>
-        {stealPending ? (
-          <>
-            <span aria-hidden className="text-muted-foreground/60">
-              ·
-            </span>
-            <span className="min-w-0 truncate text-amber-700 dark:text-amber-300">
-              {stealPending.requesterName} wants to take over editing
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 gap-1 rounded-[6px] border-border/70 bg-card/80 px-2 text-[11px] shadow-none hover:bg-muted"
-              onClick={onReviewStealRequest}
-            >
-              <UserFocusIcon size={12} />
-              Review request
-            </Button>
-          </>
-        ) : null}
+      <div data-testid="automation-lock-banner" data-lock-state="held-by-me" className={lockBannerCardClass}>
+        <UserFocusIcon size={13} className="shrink-0 text-muted-foreground" />
+        <span className={lockBannerLabelClass}>
+          <span className="font-medium text-foreground/80">{stealPending.requesterName}</span> wants control
+        </span>
+        <span className={lockBannerDividerClass} aria-hidden />
+        <Button size="sm" variant="ghost" className={lockBannerActionClass} onClick={onReviewStealRequest}>
+          Review
+        </Button>
       </div>
     );
   }
 
-  const since = lockSinceLabel(lock.expiresAt);
   return (
-    <div
-      data-testid="automation-lock-banner"
-      data-lock-state="held-by-other"
-      className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[8px] border border-amber-500/30 bg-amber-500/[0.07] px-3 py-1.5 text-[11px] font-medium text-foreground/85 shadow-md backdrop-blur"
-    >
-      <LockIcon size={13} weight="fill" className="shrink-0 text-amber-700 dark:text-amber-300" />
-      <span className="min-w-0 truncate">
-        {lock.isHeldByMyOtherSession
-          ? "Open in another one of your sessions"
-          : `Editing by ${lock.heldByName ?? "another member"}`}
-        {since ? (
-          <span data-testid="automation-lock-since" className="text-muted-foreground">
-            {" "}
-            · since {since}
-          </span>
-        ) : null}
+    <div data-testid="automation-lock-banner" data-lock-state="held-by-other" className={lockBannerCardClass}>
+      <LockIcon size={13} className="shrink-0 text-muted-foreground" />
+      <span className={lockBannerLabelClass}>
+        {lock.isHeldByMyOtherSession ? "Open in another session" : `${lock.heldByName ?? "Someone"} is editing`}
       </span>
       {canEdit ? (
-        <Button
-          size="sm"
-          variant="outline"
-          className={cn(
-            "h-6 gap-1 rounded-[6px] border-border/70 bg-card/80 px-2 text-[11px] shadow-none hover:bg-muted",
-            "text-foreground/80",
-          )}
-          onClick={onRequestTakeover}
-        >
-          <UserFocusIcon size={12} />
-          Take over editing
-        </Button>
+        <>
+          <span className={lockBannerDividerClass} aria-hidden />
+          <Button size="sm" variant="ghost" className={lockBannerActionClass} onClick={onRequestTakeover}>
+            Request control
+          </Button>
+        </>
       ) : null}
     </div>
   );

@@ -19,30 +19,38 @@ function renderDialog(canShare = true) {
   );
 }
 
+/**
+ * The share dialog shows only who HAS access at rest (owner + editors + an
+ * admins note); addable teammates are surfaced by searching, not by a standing
+ * roster of "add me" rows. These tests exercise that model against the default
+ * MSW users (u1 Alice = owner, u2 Bob = admin, u3 Carol / u4 Dave = members).
+ */
 describe("AutomationShareDialog", () => {
-  it("lists every org member except the owner and admins", async () => {
+  it("shows who has access and notes admins, without listing addable members", async () => {
     renderDialog();
 
-    expect(await screen.findByText("Carol Davis")).toBeInTheDocument();
-    expect(screen.getByText("Dave Evans")).toBeInTheDocument();
-    expect(screen.queryByText("Alice Smith")).not.toBeInTheDocument();
-    // Admins already have access to every automation, so they are not targets.
+    expect(await screen.findByText("Alice Smith")).toBeInTheDocument();
+    expect(screen.getByText("People with access")).toBeInTheDocument();
+    expect(screen.getByText(/workspace admin/)).toHaveTextContent("1 workspace admin also has full access.");
+    // Addable members and the admin are not surfaced until you search.
+    expect(screen.queryByText("Carol Davis")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dave Evans")).not.toBeInTheDocument();
     expect(screen.queryByText("Bob Jones")).not.toBeInTheDocument();
   });
 
-  it("filters members by search", async () => {
+  it("reveals a matching person when you search to add", async () => {
     const user = userEvent.setup();
     renderDialog();
 
-    await screen.findByText("Carol Davis");
-    await user.type(screen.getByLabelText("Search members"), "carol");
+    await screen.findByText("Alice Smith");
+    await user.type(screen.getByLabelText("Add people"), "carol");
 
-    expect(screen.getByText("Carol Davis")).toBeInTheDocument();
-    expect(screen.queryByText("Bob Jones")).not.toBeInTheDocument();
+    expect(await screen.findByText("Carol Davis")).toBeInTheDocument();
     expect(screen.queryByText("Dave Evans")).not.toBeInTheDocument();
+    expect(screen.queryByText("Bob Jones")).not.toBeInTheDocument();
   });
 
-  it("grants access optimistically via the member toggle", async () => {
+  it("grants access when you pick a searched person", async () => {
     const grantedUserIds: string[] = [];
     server.use(
       http.put("/api/scheduled-tasks/:id/shares/:userId", ({ params }) => {
@@ -54,20 +62,20 @@ describe("AutomationShareDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    const carolSwitch = await screen.findByRole("switch", { name: "Share with Carol Davis" });
-    expect(carolSwitch).not.toBeChecked();
+    await screen.findByText("Alice Smith");
+    await user.type(screen.getByLabelText("Add people"), "carol");
+    await user.click(await screen.findByRole("button", { name: /Carol Davis/ }));
 
-    await user.click(carolSwitch);
-
-    await waitFor(() => {
-      expect(carolSwitch).toBeChecked();
-    });
     await waitFor(() => {
       expect(grantedUserIds).toEqual(["u3"]);
     });
+    // Adding clears the query and drops back to the roster, where Carol is now
+    // the only non-owner row — so a lone "Editor" label proves she's listed.
+    expect(await screen.findByText("Carol Davis")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
   });
 
-  it("revokes access via the member toggle", async () => {
+  it("revokes access from the roster", async () => {
     const revokedUserIds: string[] = [];
     server.use(
       http.get("/api/scheduled-tasks/:id/shares", () => {
@@ -92,20 +100,14 @@ describe("AutomationShareDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    const carolSwitch = await screen.findByRole("switch", { name: "Share with Carol Davis" });
-    expect(carolSwitch).toBeChecked();
+    await user.click(await screen.findByRole("button", { name: "Remove Carol Davis" }));
 
-    await user.click(carolSwitch);
-
-    await waitFor(() => {
-      expect(carolSwitch).not.toBeChecked();
-    });
     await waitFor(() => {
       expect(revokedUserIds).toEqual(["u3"]);
     });
   });
 
-  it("rolls the toggle back and surfaces the error when a grant fails", async () => {
+  it("rolls back and surfaces the error when a grant fails", async () => {
     server.use(
       http.put("/api/scheduled-tasks/:id/shares/:userId", () => {
         return HttpResponse.json(
@@ -118,20 +120,22 @@ describe("AutomationShareDialog", () => {
     const user = userEvent.setup();
     renderDialog();
 
-    const carolSwitch = await screen.findByRole("switch", { name: "Share with Carol Davis" });
-    await user.click(carolSwitch);
+    await screen.findByText("Alice Smith");
+    await user.type(screen.getByLabelText("Add people"), "carol");
+    await user.click(await screen.findByRole("button", { name: /Carol Davis/ }));
 
+    expect(await screen.findByText("Only the owner can share this automation")).toBeInTheDocument();
+    // The optimistic grant is rolled back — Carol is not left in the roster.
     await waitFor(() => {
-      expect(carolSwitch).not.toBeChecked();
+      expect(screen.queryByText("Carol Davis")).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Only the owner can share this automation")).toBeInTheDocument();
   });
 
-  it("disables the toggles for non-owners", async () => {
+  it("hides the add control for non-owners", async () => {
     renderDialog(false);
 
-    const carolSwitch = await screen.findByRole("switch", { name: "Share with Carol Davis" });
-    expect(carolSwitch).toBeDisabled();
-    expect(screen.getByText("Only the owner can change sharing")).toBeInTheDocument();
+    expect(await screen.findByText("Alice Smith")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Add people")).not.toBeInTheDocument();
+    expect(screen.getByText("You don't have permission to change sharing.")).toBeInTheDocument();
   });
 });

@@ -8,7 +8,7 @@
  */
 import type { AutomationEditLockView } from "@/lib/api";
 import { api } from "@/lib/api";
-import { SpinnerGapIcon, UserFocusIcon } from "@phosphor-icons/react";
+import { SpinnerGapIcon, UserSwitchIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
@@ -45,30 +45,31 @@ export function AutomationLockHolderResponseDialog({
     },
     onSuccess: ({ lock: nextLock }, approve) => {
       if (nextLock) onResponded?.(nextLock);
-      toast.success(approve ? `Editing handed over to ${requesterName}` : "Takeover request denied");
+      toast.success(approve ? `Control handed to ${requesterName}` : "Request declined");
       onOpenChange(false);
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "Could not respond to the takeover request"),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Couldn't respond to the request"),
   });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="automation-lock-holder-response-dialog">
-        <DialogHeader>
-          <DialogTitle className="text-base">Takeover request</DialogTitle>
-          <DialogDescription className="text-xs">
-            {requesterName} wants to take over editing this automation. If you approve, they get the lock immediately
-            and this view becomes read-only.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex items-center gap-2.5 rounded-[8px] border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5 text-[12px] text-foreground/85">
-          <UserFocusIcon size={15} className="shrink-0 text-amber-700 dark:text-amber-300" />
-          <span className="min-w-0 flex-1">
-            <span className="font-medium">{requesterName}</span> is waiting to take over editing
-          </span>
+        <div className="flex items-start gap-3">
+          <div
+            className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+            aria-hidden="true"
+          >
+            <UserSwitchIcon size={18} />
+          </div>
+          <DialogHeader className="min-w-0 flex-1 space-y-0 text-left">
+            <DialogTitle className="text-[15px] leading-6">{requesterName} wants control</DialogTitle>
+            <DialogDescription className="mt-0.5 text-[12px] leading-5">Waiting for you to respond.</DialogDescription>
+          </DialogHeader>
         </div>
+
+        <p className="rounded-[8px] bg-muted/40 px-3 py-2.5 text-[12px] leading-5 text-muted-foreground">
+          Give control and {requesterName} can edit right away — your view becomes read-only. Deny to keep editing.
+        </p>
 
         <DialogFooter className="sm:justify-between">
           <DialogClose asChild>
@@ -87,7 +88,7 @@ export function AutomationLockHolderResponseDialog({
               {respondMutation.isPending && respondMutation.variables === false ? (
                 <SpinnerGapIcon size={14} className="animate-spin" />
               ) : null}
-              Deny takeover
+              Deny
             </Button>
             <Button
               size="sm"
@@ -98,9 +99,9 @@ export function AutomationLockHolderResponseDialog({
               {respondMutation.isPending && respondMutation.variables === true ? (
                 <SpinnerGapIcon size={14} className="animate-spin" />
               ) : (
-                <UserFocusIcon size={14} />
+                <UserSwitchIcon size={14} />
               )}
-              Approve takeover
+              Give control
             </Button>
           </div>
         </DialogFooter>

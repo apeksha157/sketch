@@ -124,11 +124,23 @@ export function scheduledTaskConversationRoutes(db: Kysely<DB>, options: Schedul
 
     const isOwner = userId !== null && row.created_by === userId;
     const isAdmin = c.get("role") === "admin";
-    return {
-      row: accessibleTask,
-      userId,
-      transcriptAccess: isOwner ? ("owner" as const) : isAdmin ? ("admin" as const) : ("viewer" as const),
-    };
+    /**
+     * Granted editors get READ-ONLY access to teammates' transcripts on a
+     * shared automation. "editor" is a non-"viewer" level, so the three read
+     * paths below (list, messages, summary) return every chat / any transcript.
+     * The write paths (POST/PUT/PATCH) never consult transcriptAccess — they are
+     * hard-scoped to `access.userId` via getForTranscriptUser /
+     * archiveForTranscriptUser — so an editor can view a teammate's chat but can
+     * never select, associate, or archive it. Owner/admin are unchanged.
+     */
+    const transcriptAccess = isOwner
+      ? ("owner" as const)
+      : isAdmin
+        ? ("admin" as const)
+        : hasGrant
+          ? ("editor" as const)
+          : ("viewer" as const);
+    return { row: accessibleTask, userId, transcriptAccess };
   }
 
   async function readBody(c: Context): Promise<Record<string, unknown>> {

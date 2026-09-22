@@ -355,12 +355,12 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    const banner = await screen.findByTestId("automation-lock-banner");
-    expect(banner).toHaveAttribute("data-lock-state", "held-by-me");
-    expect(banner).toHaveClass("border-brand-accent/40", "bg-brand-accent/10");
-    expect(screen.getByText("You're editing")).toBeInTheDocument();
-    expect(screen.queryByTestId("automation-lock-lease")).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.acquireLock).toHaveBeenCalledWith("task-123", expect.any(String), undefined));
+    // A solo lock held by the viewer shows no banner by design; only a pending
+    // takeover surfaces one. The lease timer is never exposed either.
+    expect(screen.queryByTestId("automation-lock-banner")).not.toBeInTheDocument();
+    expect(screen.queryByText("You're editing")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-lock-lease")).not.toBeInTheDocument();
   });
 
   it("does not describe the exact holder's builder chat lease as expired or unavailable", async () => {
@@ -380,7 +380,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    expect(await screen.findByText("You're editing")).toBeInTheDocument();
+    await waitFor(() => expect(mocks.acquireLock).toHaveBeenCalled());
     await waitFor(() =>
       expect(mocks.listConversations).toHaveBeenCalledWith("task-123", {
         includeArchived: true,
@@ -410,9 +410,7 @@ describe("AutomationBuilderPage edit lock", () => {
     renderBuilder();
 
     expect(await screen.findByText("Chat is read-only")).toBeInTheDocument();
-    expect(
-      screen.getByText("Another editing session is active. Use Take over editing above to continue here."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Someone else is editing. Request control above to make changes.")).toBeInTheDocument();
     expect(screen.queryByText(/lease|expire/i)).not.toBeInTheDocument();
   });
 
@@ -426,14 +424,14 @@ describe("AutomationBuilderPage edit lock", () => {
 
     const banner = await screen.findByTestId("automation-lock-banner");
     expect(banner).toHaveAttribute("data-lock-state", "held-by-other");
-    expect(screen.getByText(/Editing by Bob Jones/)).toBeInTheDocument();
-    expect(screen.getByTestId("automation-lock-since")).toHaveTextContent(/since/);
-    expect(screen.getByRole("button", { name: /Take over editing/ })).toBeInTheDocument();
+    expect(screen.getByText(/Bob Jones is editing/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Request control/ })).toBeInTheDocument();
 
     expect(screen.getByTestId("automation-flow")).toHaveAttribute("data-nodes-draggable", "false");
     expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Share" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete automation" })).toBeDisabled();
+    // Sharing is a management action, orthogonal to the edit lock, so it stays enabled.
+    expect(screen.getByRole("button", { name: "Share automation" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Check rating" }));
     const drawer = await screen.findByTestId("automation-builder-drawer");
@@ -470,7 +468,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    await user.click(await screen.findByRole("button", { name: "Open chat: Automation chat" }));
+    await user.click(await screen.findByRole("button", { name: /Open chat: Automation chat/ }));
     expect(mocks.selectConversation).not.toHaveBeenCalled();
     expect(mocks.navigate).toHaveBeenCalledWith({
       to: "/scheduled-tasks/$taskId/edit",
@@ -522,7 +520,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    expect(await screen.findByText("No chats yet. Start one when you are ready.")).toBeInTheDocument();
+    expect(await screen.findByText(/No chats yet/)).toBeInTheDocument();
     document.dispatchEvent(new Event("visibilitychange"));
     conversations = [
       {
@@ -541,7 +539,7 @@ describe("AutomationBuilderPage edit lock", () => {
       await vi.advanceTimersByTimeAsync(AUTOMATION_EDIT_LOCK_POLL_INTERVAL_MS);
     });
 
-    expect(await screen.findByRole("button", { name: "Open chat: Automation chat" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Open chat: Automation chat/ })).toBeInTheDocument();
   });
 
   it("treats every browser session for the same user as the lock holder", async () => {
@@ -554,8 +552,10 @@ describe("AutomationBuilderPage edit lock", () => {
     await waitFor(() =>
       expect(mocks.acquireLock).toHaveBeenCalledWith("task-123", expect.any(String), sameUserLock.generation),
     );
-    expect(await screen.findByText("You're editing")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Take over editing/ })).not.toBeInTheDocument();
+    // Same-user sessions are treated as the holder: a solo held-by-me lock shows
+    // no banner and never offers a request-control affordance.
+    expect(screen.queryByTestId("automation-lock-banner")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Request control/ })).not.toBeInTheDocument();
     expect(mocks.requestSteal).not.toHaveBeenCalled();
   });
 
@@ -573,7 +573,7 @@ describe("AutomationBuilderPage edit lock", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(screen.getByText(/Editing by Bob Jones/)).toBeInTheDocument();
+    expect(screen.getByText(/Bob Jones is editing/)).toBeInTheDocument();
     expect(mocks.acquireLock).not.toHaveBeenCalled();
 
     await act(async () => {
@@ -581,7 +581,9 @@ describe("AutomationBuilderPage edit lock", () => {
     });
 
     expect(mocks.acquireLock).toHaveBeenCalledWith("task-123", expect.any(String), undefined);
-    expect(screen.getByText("You're editing")).toBeInTheDocument();
+    // Once the viewer auto-acquires, the read-only "Bob Jones is editing" banner
+    // clears; a solo held-by-me lock renders no banner in its place.
+    expect(screen.queryByText(/Bob Jones is editing/)).not.toBeInTheDocument();
   });
 
   it("requests a takeover, waits for approval, then starts heartbeat renewals", async () => {
@@ -609,15 +611,15 @@ describe("AutomationBuilderPage edit lock", () => {
     const banner = await screen.findByTestId("automation-lock-banner");
     expect(banner).toHaveAttribute("data-lock-state", "held-by-other");
 
-    await user.click(screen.getByRole("button", { name: /Take over editing/ }));
-    expect(await screen.findByTestId("automation-lock-steal-dialog")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Request takeover" }));
+    await user.click(screen.getByRole("button", { name: /Request control/ }));
+    const stealDialog = await screen.findByTestId("automation-lock-steal-dialog");
+    await user.click(within(stealDialog).getByRole("button", { name: "Request control" }));
     await waitFor(() =>
       expect(mocks.requestSteal).toHaveBeenCalledWith("task-123", {
         clientSessionId: expect.any(String),
       }),
     );
-    expect(screen.getByText(/Waiting for Bob Jones to approve/)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for Bob Jones to respond/)).toBeInTheDocument();
 
     // The holder approves: the next polled lock view flips to held by the viewer.
     viewerHolds = true;
@@ -625,9 +627,10 @@ describe("AutomationBuilderPage edit lock", () => {
     await act(async () => {
       vi.advanceTimersByTime(AUTOMATION_EDIT_LOCK_POLL_INTERVAL_MS);
     });
-    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("You're now editing"));
+    await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith("You now have control"));
     expect(screen.queryByTestId("automation-lock-steal-dialog")).not.toBeInTheDocument();
-    expect(banner).toHaveAttribute("data-lock-state", "held-by-me");
+    // The viewer now holds a solo lock, so the read-only banner disappears entirely.
+    expect(screen.queryByTestId("automation-lock-banner")).not.toBeInTheDocument();
 
     // The 2-minute heartbeat renews the lease while the viewer holds the lock.
     const callsBeforeHeartbeat = mocks.acquireLock.mock.calls.length;
@@ -656,9 +659,10 @@ describe("AutomationBuilderPage edit lock", () => {
     renderBuilder();
 
     await screen.findByTestId("automation-lock-banner");
-    await user.click(screen.getByRole("button", { name: /Take over editing/ }));
-    await user.click(await screen.findByRole("button", { name: "Request takeover" }));
-    expect(screen.getByText(/Waiting for Bob Jones to approve/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Request control/ }));
+    const stealDialog = await screen.findByTestId("automation-lock-steal-dialog");
+    await user.click(within(stealDialog).getByRole("button", { name: "Request control" }));
+    expect(screen.getByText(/Waiting for Bob Jones to respond/)).toBeInTheDocument();
 
     // First poll surfaces the pending request (the countdown only renders once
     // the lock view carries it); the next poll shows the request was denied.
@@ -671,14 +675,14 @@ describe("AutomationBuilderPage edit lock", () => {
     await act(async () => {
       vi.advanceTimersByTime(AUTOMATION_EDIT_LOCK_POLL_INTERVAL_MS);
     });
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Your takeover request was not approved"));
-    expect(screen.getByTestId("automation-lock-steal-outcome")).toHaveTextContent("The holder denied the takeover.");
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Your request was declined"));
+    expect(screen.getByTestId("automation-lock-steal-outcome")).toHaveTextContent("The holder declined your request.");
   });
 
   it("shows the timeout state when the holder never responds", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     vi.setSystemTime(new Date("2026-06-01T09:00:00.000Z"));
-    const user = userEvent.setup();
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     let currentLock: AutomationEditLockView = heldByOtherLock();
     mocks.getAutomation.mockImplementation(async () => ({ ...automation, lock: currentLock }));
     mocks.acquireLock.mockRejectedValue(lockedError(currentLock));
@@ -695,15 +699,16 @@ describe("AutomationBuilderPage edit lock", () => {
     renderBuilder();
 
     await screen.findByTestId("automation-lock-banner");
-    await user.click(screen.getByRole("button", { name: /Take over editing/ }));
-    await user.click(await screen.findByRole("button", { name: "Request takeover" }));
+    await user.click(screen.getByRole("button", { name: /Request control/ }));
+    const stealDialog = await screen.findByTestId("automation-lock-steal-dialog");
+    await user.click(within(stealDialog).getByRole("button", { name: "Request control" }));
     await waitFor(() => expect(screen.getByTestId("automation-lock-steal-countdown")).toBeInTheDocument());
 
     await act(async () => {
       vi.advanceTimersByTime(AUTOMATION_EDIT_LOCK_STEAL_REQUEST_TTL_MS + 1000);
     });
-    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Your takeover request expired"));
-    expect(screen.getByTestId("automation-lock-steal-outcome")).toHaveTextContent("The takeover request expired.");
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Your request timed out"));
+    expect(screen.getByTestId("automation-lock-steal-outcome")).toHaveTextContent("Your request timed out.");
 
     // The footer Close button is the second "Close" (the content's top-right X renders first).
     const dialogCloseButtons = within(screen.getByTestId("automation-lock-steal-dialog")).getAllByRole("button", {
@@ -728,28 +733,29 @@ describe("AutomationBuilderPage edit lock", () => {
 
     const banner = await screen.findByTestId("automation-lock-banner");
     expect(banner).toHaveAttribute("data-lock-state", "held-by-me");
-    expect(within(banner).getByText(/Carol Davis wants to take over editing/)).toBeInTheDocument();
+    expect(within(banner).getByText("Carol Davis")).toBeInTheDocument();
+    expect(within(banner).getByText(/wants control/)).toBeInTheDocument();
 
     expect(await screen.findByTestId("automation-lock-holder-response-dialog")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Approve takeover" }));
+    await user.click(screen.getByRole("button", { name: "Give control" }));
     await waitFor(() =>
       expect(mocks.respondToSteal).toHaveBeenCalledWith("task-123", true, {
         clientSessionId: expect.any(String),
         generation: 1,
       }),
     );
-    expect(mocks.toastSuccess).toHaveBeenCalledWith("Editing handed over to Carol Davis");
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Control handed to Carol Davis");
     expect(screen.queryByTestId("automation-lock-holder-response-dialog")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /Review request/ }));
-    await user.click(screen.getByRole("button", { name: "Deny takeover" }));
+    await user.click(screen.getByRole("button", { name: /Review/ }));
+    await user.click(screen.getByRole("button", { name: "Deny" }));
     await waitFor(() =>
       expect(mocks.respondToSteal).toHaveBeenCalledWith("task-123", false, {
         clientSessionId: expect.any(String),
         generation: 1,
       }),
     );
-    expect(mocks.toastSuccess).toHaveBeenCalledWith("Takeover request denied");
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Request declined");
   });
 
   it("rehydrates the holder lease generation after a page reload", async () => {
@@ -771,7 +777,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     expect(await screen.findByTestId("automation-lock-holder-response-dialog")).toBeInTheDocument();
     await waitFor(() => expect(mocks.acquireLock).toHaveBeenCalledWith("task-123", expect.any(String), 7));
-    await user.click(await screen.findByRole("button", { name: "Approve takeover" }));
+    await user.click(await screen.findByRole("button", { name: "Give control" }));
     await waitFor(() =>
       expect(mocks.respondToSteal).toHaveBeenCalledWith("task-123", true, {
         clientSessionId: expect.any(String),
@@ -789,7 +795,10 @@ describe("AutomationBuilderPage edit lock", () => {
 
     const view = renderBuilder();
 
-    expect(await screen.findByText("You're editing")).toBeInTheDocument();
+    // Wait until the lease is fully held (canvas editable) so the acquire's
+    // onSuccess has settled before the poll surfaces the takeover request;
+    // anchoring only on "acquire called" races its own onSuccess write.
+    await waitFor(() => expect(screen.getByTestId("automation-flow")).toHaveAttribute("data-nodes-draggable", "true"));
     document.dispatchEvent(new Event("visibilitychange"));
     currentLock = heldByMeLock({
       stealPending: {
@@ -858,7 +867,8 @@ describe("AutomationBuilderPage edit lock", () => {
     });
 
     const banner = await screen.findByTestId("automation-lock-banner");
-    expect(within(banner).getByText(/Carol Davis wants to take over editing/)).toBeInTheDocument();
+    expect(within(banner).getByText("Carol Davis")).toBeInTheDocument();
+    expect(within(banner).getByText(/wants control/)).toBeInTheDocument();
     expect(await screen.findByTestId("automation-lock-holder-response-dialog")).toBeInTheDocument();
   });
 
@@ -870,8 +880,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    await screen.findByTestId("automation-lock-banner");
-    expect(mocks.acquireLock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.acquireLock).toHaveBeenCalledTimes(1));
 
     await act(async () => {
       vi.advanceTimersByTime(AUTOMATION_EDIT_LOCK_HEARTBEAT_INTERVAL_MS);
@@ -891,7 +900,7 @@ describe("AutomationBuilderPage edit lock", () => {
     const banner = await screen.findByTestId("automation-lock-banner");
     expect(banner).toHaveAttribute("data-lock-state", "held-by-other");
     expect(mocks.acquireLock).not.toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: /Take over editing/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Request control/ })).not.toBeInTheDocument();
   });
 
   it("releases the edit lock after a successful save", async () => {
@@ -900,7 +909,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    await screen.findByTestId("automation-lock-banner");
+    await waitFor(() => expect(screen.getByTestId("automation-flow")).toHaveAttribute("data-nodes-draggable", "true"));
     await user.click(screen.getByRole("button", { name: "Check rating" }));
     const prompt = await screen.findByDisplayValue("Summarize accounts");
     await user.clear(prompt);
@@ -922,7 +931,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     const { unmount } = renderBuilder();
 
-    await screen.findByTestId("automation-lock-banner");
+    await waitFor(() => expect(screen.getByTestId("automation-flow")).toHaveAttribute("data-nodes-draggable", "true"));
     expect(mocks.releaseLock).not.toHaveBeenCalled();
 
     unmount();
@@ -940,7 +949,7 @@ describe("AutomationBuilderPage edit lock", () => {
 
     renderBuilder();
 
-    await screen.findByText("You're editing");
+    await waitFor(() => expect(screen.getByTestId("automation-flow")).toHaveAttribute("data-nodes-draggable", "true"));
     window.dispatchEvent(new PageTransitionEvent("pagehide"));
 
     await waitFor(() =>

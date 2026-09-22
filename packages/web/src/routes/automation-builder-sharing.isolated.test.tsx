@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   grantShare: vi.fn(),
   revokeShare: vi.fn(),
   listUsers: vi.fn(),
+  authSession: vi.fn(),
   search: { conversationId: "chat-alpha" } as Record<string, unknown>,
   chatMessages: [] as Array<{ id: string; role: string; parts: Array<Record<string, unknown>> }>,
   chatStatus: "ready",
@@ -75,6 +76,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
       },
       users: {
         list: mocks.listUsers,
+      },
+      auth: {
+        session: mocks.authSession,
       },
     },
   };
@@ -340,6 +344,14 @@ describe("AutomationBuilderPage sharing", () => {
     mocks.revokeShare.mockResolvedValue({ success: true });
     mocks.listUsers.mockReset();
     mocks.listUsers.mockResolvedValue({ users: members });
+    mocks.authSession.mockReset();
+    mocks.authSession.mockResolvedValue({
+      authenticated: true,
+      userId: "user-1",
+      role: "member",
+      name: "Owner Member",
+      email: "owner@example.com",
+    });
     mocks.search = { conversationId: "chat-alpha" };
     mocks.chatStatus = "ready";
     mocks.chatMessages = [];
@@ -349,29 +361,33 @@ describe("AutomationBuilderPage sharing", () => {
     vi.useRealTimers();
   });
 
-  it("shows a Share button with the share count to the owner and opens the member dialog", async () => {
+  it("shows a Share button to the owner and opens the people-with-access roster", async () => {
     mocks.getAutomation.mockResolvedValue({
       ...automation,
       isOwner: true,
       canShare: true,
+      canEdit: true,
       shares: [shareFor("user-2")],
     });
+    mocks.listShares.mockResolvedValue({ shares: [shareFor("user-2")] });
 
     const user = userEvent.setup();
     renderBuilder();
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Share · 1/i })).toBeInTheDocument();
-    });
+    const shareButton = await screen.findByRole("button", { name: "Share automation" });
+    await user.click(shareButton);
 
-    await user.click(screen.getByRole("button", { name: /Share · 1/i }));
-    expect(await screen.findByText(/Share "Daily account brief"/)).toBeInTheDocument();
+    expect(await screen.findByText("Share automation")).toBeInTheDocument();
     expect(mocks.listShares).toHaveBeenCalledWith("task-123");
     expect(mocks.listUsers).toHaveBeenCalled();
-    expect(screen.getByRole("switch", { name: "Share with Grantee Member" })).toBeInTheDocument();
+
+    expect(await screen.findByText("People with access")).toBeInTheDocument();
+    expect(screen.getByText("Grantee Member")).toBeInTheDocument();
+    expect(screen.getByText("Editor")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 
-  it("hides the Share button and shows the shared-with-you hint for a grantee", async () => {
+  it("shows the Share button to a grantee who can edit and drops the removed ownership stack", async () => {
     mocks.getAutomation.mockResolvedValue({
       ...automation,
       isOwner: false,
@@ -382,35 +398,32 @@ describe("AutomationBuilderPage sharing", () => {
 
     renderBuilder();
 
-    const sharedHint = await screen.findByTestId("automation-shared-hint");
-    expect(sharedHint).toHaveClass("automation-builder-shared-hint", "w-full", "text-right");
-    expect(screen.getByTestId("automation-builder-ownership-stack")).toContainElement(sharedHint);
-    expect(screen.getByText("Runs use the owner's integrations")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Share/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Share automation" })).toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-ownership-stack")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-shared-hint")).not.toBeInTheDocument();
+    expect(screen.queryByText("Runs use the owner's integrations")).not.toBeInTheDocument();
   });
 
   it("shows the Share button for an owned task when sharing fields are absent (legacy fallback)", async () => {
     renderBuilder();
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
-    });
-    expect(screen.getByRole("button", { name: /Share/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Back to automations" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Share automation" })).toBeInTheDocument();
     expect(screen.queryByTestId("automation-shared-hint")).not.toBeInTheDocument();
   });
 
-  it("shows neither the Share button nor the hint when sharing fields are absent and the viewer is not the owner", async () => {
+  it("shows neither the Share button nor the hint for a non-owner who cannot edit", async () => {
     mocks.getAutomation.mockResolvedValue({
       ...automation,
       createdBy: "user-2",
+      canEdit: false,
     });
     renderBuilder();
 
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
-    });
-    expect(screen.queryByRole("button", { name: /Share/i })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Back to automations" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share automation" })).not.toBeInTheDocument();
     expect(screen.queryByTestId("automation-shared-hint")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automation-builder-ownership-stack")).not.toBeInTheDocument();
   });
 
   it("attributes runs to the member who triggered them", async () => {
@@ -447,7 +460,7 @@ describe("AutomationBuilderPage sharing", () => {
 
     renderBuilder();
 
-    expect(await screen.findByText(/by Grantee Member/)).toBeInTheDocument();
+    expect(await screen.findByText(/· Grantee Member/)).toBeInTheDocument();
   });
 
   it("loads another member's transcript through the task-scoped endpoint in owner/admin views", async () => {

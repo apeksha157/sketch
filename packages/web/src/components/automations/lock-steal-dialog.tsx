@@ -18,7 +18,7 @@ import {
 } from "@/components/automations/lock-banner";
 import type { AutomationEditLockView } from "@/lib/api";
 import { api } from "@/lib/api";
-import { HourglassMediumIcon, LockKeyIcon, SpinnerGapIcon, XCircleIcon } from "@phosphor-icons/react";
+import { HourglassMediumIcon, LockKeyIcon, SpinnerGapIcon, UserSwitchIcon, XCircleIcon } from "@phosphor-icons/react";
 import { Button } from "@sketch/ui/components/button";
 import {
   Dialog,
@@ -29,6 +29,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@sketch/ui/components/dialog";
+import { cn } from "@sketch/ui/lib/utils";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -72,7 +73,7 @@ export function AutomationLockStealDialog({
       setRequestedAt(Date.now());
       setPhase("waiting");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "Takeover request failed"),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Couldn't request control"),
   });
 
   useEffect(() => {
@@ -97,19 +98,19 @@ export function AutomationLockStealDialog({
     if (phase !== "waiting" || resolvedRef.current) return;
     if (lock?.isHeldByMe) {
       resolvedRef.current = true;
-      toast.success("You're now editing");
+      toast.success("You now have control");
       onOpenChange(false);
       return;
     }
     if (sawPendingRef.current && !stealPending) {
       resolvedRef.current = true;
-      toast.error("Your takeover request was not approved");
+      toast.error("Your request was declined");
       setPhase("denied");
       return;
     }
     if (deadline !== null && now >= deadline) {
       resolvedRef.current = true;
-      toast.error("Your takeover request expired");
+      toast.error("Your request timed out");
       setPhase("expired");
     }
   }, [deadline, lock?.isHeldByMe, now, onOpenChange, phase, stealPending]);
@@ -119,76 +120,89 @@ export function AutomationLockStealDialog({
     return lockRemainingLabel(new Date(deadline).toISOString(), now);
   }, [deadline, now]);
 
+  const isBad = phase === "denied" || phase === "expired";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="automation-lock-steal-dialog">
-        <DialogHeader>
-          <DialogTitle className="text-base">
-            {phase === "confirm"
-              ? "Take over editing?"
-              : phase === "waiting"
-                ? "Waiting for approval"
-                : phase === "denied"
-                  ? "Request not approved"
-                  : "Request expired"}
-          </DialogTitle>
-          <DialogDescription className="text-xs">
-            {phase === "confirm" ? (
-              <>
-                {heldByMyOtherSession
-                  ? "This automation is open in another one of your sessions. Sketch will ask that session to approve the takeover — until it does, the workflow stays read-only."
-                  : `${holderName} is currently editing this automation. Sketch will ask them to approve the takeover — until they do, the workflow stays read-only.`}
-              </>
-            ) : phase === "waiting" ? (
-              <>Waiting for {holderName} to approve. This automation is still read-only for now.</>
-            ) : phase === "denied" ? (
-              <>You can try again later, or wait for the editing lease to expire.</>
-            ) : (
-              <>The holder did not respond in time. You can request the takeover again.</>
+        <div className="flex items-start gap-3">
+          <div
+            className={cn(
+              "grid size-9 shrink-0 place-items-center rounded-full",
+              isBad ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
             )}
-          </DialogDescription>
-        </DialogHeader>
+            aria-hidden="true"
+          >
+            {phase === "confirm" ? (
+              <UserSwitchIcon size={18} />
+            ) : phase === "waiting" ? (
+              <SpinnerGapIcon size={18} className="animate-spin" />
+            ) : phase === "expired" ? (
+              <HourglassMediumIcon size={18} />
+            ) : (
+              <XCircleIcon size={18} weight="fill" />
+            )}
+          </div>
+          <DialogHeader className="min-w-0 flex-1 space-y-0 text-left">
+            <DialogTitle className="text-[15px] leading-6">
+              {phase === "confirm"
+                ? "Request control"
+                : phase === "waiting"
+                  ? "Waiting for approval"
+                  : phase === "denied"
+                    ? "Request declined"
+                    : "Request timed out"}
+            </DialogTitle>
+            <DialogDescription className="mt-0.5 text-[12px] leading-5">
+              {phase === "confirm" ? (
+                heldByMyOtherSession ? (
+                  "This automation is open in another of your sessions."
+                ) : (
+                  `${holderName} is editing this automation right now.`
+                )
+              ) : phase === "waiting" ? (
+                <>Waiting for {holderName} to respond.</>
+              ) : phase === "denied" ? (
+                <>You can ask again, or wait for their editing to time out.</>
+              ) : (
+                <>{holderName} didn't respond in time. You can ask for control again.</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+        </div>
+
+        {phase === "confirm" ? (
+          <p className="rounded-[8px] bg-muted/40 px-3 py-2.5 text-[12px] leading-5 text-muted-foreground">
+            They'll be asked to hand over control, and the automation stays read-only until they do
+            {heldByMyOtherSession ? "." : ` — only ${holderName} can approve.`}
+          </p>
+        ) : null}
 
         {phase === "waiting" ? (
-          <div className="flex items-center gap-2.5 rounded-[8px] border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5 text-[12px] text-foreground/85">
-            <SpinnerGapIcon size={15} className="shrink-0 animate-spin text-amber-700 dark:text-amber-300" />
-            <span className="min-w-0 flex-1">
-              Waiting for <span className="font-medium">{holderName}</span> to approve
-            </span>
+          <div className="flex items-center justify-between gap-2 rounded-[8px] border border-border/70 bg-muted/40 px-3 py-2.5 text-[12px] text-foreground/85">
+            <span className="min-w-0 flex-1">The automation is still read-only for now.</span>
             {waitingCountdown ? (
               <span
                 data-testid="automation-lock-steal-countdown"
-                className="shrink-0 font-mono text-[10px] text-muted-foreground"
+                className="shrink-0 font-mono text-[10px] uppercase text-muted-foreground"
               >
-                expires in {waitingCountdown}
+                {waitingCountdown} LEFT
               </span>
             ) : null}
           </div>
         ) : null}
 
-        {phase === "denied" || phase === "expired" ? (
+        {isBad ? (
           <div
             data-testid="automation-lock-steal-outcome"
-            className="flex items-center gap-2.5 rounded-[8px] border border-destructive/25 bg-destructive/[0.06] px-3 py-2.5 text-[12px] text-destructive"
+            className="rounded-[8px] border border-destructive/25 bg-destructive/[0.06] px-3 py-2.5 text-[12px] text-destructive"
           >
-            {phase === "expired" ? (
-              <HourglassMediumIcon size={15} className="shrink-0" />
-            ) : (
-              <XCircleIcon size={15} weight="fill" className="shrink-0" />
-            )}
-            <span>{phase === "expired" ? "The takeover request expired." : "The holder denied the takeover."}</span>
+            {phase === "expired" ? "Your request timed out." : "The holder declined your request."}
           </div>
         ) : null}
 
-        <DialogFooter className="sm:justify-between">
+        <DialogFooter>
           {phase === "confirm" ? (
-            <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-              <LockKeyIcon size={12} />
-              {heldByMyOtherSession ? "Only the other session can approve" : `Only ${holderName} can approve`}
-            </span>
-          ) : null}
-          {phase === "confirm" ? (
-            <div className="flex gap-2">
+            <div className="flex justify-end gap-2">
               <DialogClose asChild>
                 <Button variant="ghost" size="sm">
                   Cancel
@@ -205,7 +219,7 @@ export function AutomationLockStealDialog({
                 ) : (
                   <LockKeyIcon size={14} />
                 )}
-                Request takeover
+                Request control
               </Button>
             </div>
           ) : (
