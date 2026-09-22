@@ -124,26 +124,26 @@ export function AutomationLockStealDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="automation-lock-steal-dialog">
-        <div className="flex items-start gap-3">
+        <DialogHeader>
           <div
             className={cn(
-              "grid size-9 shrink-0 place-items-center rounded-full",
-              isBad ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
+              "grid size-10 place-items-center rounded-[12px]",
+              isBad ? "bg-destructive/10 text-destructive" : "bg-muted text-foreground",
             )}
             aria-hidden="true"
           >
             {phase === "confirm" ? (
-              <UserSwitchIcon size={18} />
+              <UserSwitchIcon size={20} />
             ) : phase === "waiting" ? (
-              <SpinnerGapIcon size={18} className="animate-spin" />
+              <SpinnerGapIcon size={20} className="animate-spin" />
             ) : phase === "expired" ? (
-              <HourglassMediumIcon size={18} />
+              <HourglassMediumIcon size={20} />
             ) : (
-              <XCircleIcon size={18} weight="fill" />
+              <XCircleIcon size={20} weight="fill" />
             )}
           </div>
-          <DialogHeader className="min-w-0 flex-1 space-y-0 text-left">
-            <DialogTitle className="text-[15px] leading-6">
+          <div className="flex flex-col gap-1">
+            <DialogTitle className="text-[17px] font-semibold leading-6 tracking-[-0.01em]">
               {phase === "confirm"
                 ? "Request control"
                 : phase === "waiting"
@@ -152,7 +152,7 @@ export function AutomationLockStealDialog({
                     ? "Request declined"
                     : "Request timed out"}
             </DialogTitle>
-            <DialogDescription className="mt-0.5 text-[12px] leading-5">
+            <DialogDescription className="text-[13px] leading-5">
               {phase === "confirm" ? (
                 heldByMyOtherSession ? (
                   "This automation is open in another of your sessions."
@@ -167,18 +167,18 @@ export function AutomationLockStealDialog({
                 <>{holderName} didn't respond in time. You can ask for control again.</>
               )}
             </DialogDescription>
-          </DialogHeader>
-        </div>
+          </div>
+        </DialogHeader>
 
         {phase === "confirm" ? (
-          <p className="rounded-[8px] bg-muted/40 px-3 py-2.5 text-[12px] leading-5 text-muted-foreground">
+          <p className="rounded-[10px] border border-border/60 bg-muted/40 px-3 py-2.5 text-[13px] leading-5 text-muted-foreground">
             They'll be asked to hand over control, and the automation stays read-only until they do
             {heldByMyOtherSession ? "." : ` — only ${holderName} can approve.`}
           </p>
         ) : null}
 
         {phase === "waiting" ? (
-          <div className="flex items-center justify-between gap-2 rounded-[8px] border border-border/70 bg-muted/40 px-3 py-2.5 text-[12px] text-foreground/85">
+          <div className="flex items-center justify-between gap-2 rounded-[10px] border border-border/60 bg-muted/40 px-3 py-2.5 text-[13px] text-foreground/85">
             <span className="min-w-0 flex-1">The automation is still read-only for now.</span>
             {waitingCountdown ? (
               <span
@@ -194,7 +194,7 @@ export function AutomationLockStealDialog({
         {isBad ? (
           <div
             data-testid="automation-lock-steal-outcome"
-            className="rounded-[8px] border border-destructive/25 bg-destructive/[0.06] px-3 py-2.5 text-[12px] text-destructive"
+            className="rounded-[10px] border border-destructive/25 bg-destructive/[0.06] px-3 py-2.5 text-[13px] text-destructive"
           >
             {phase === "expired" ? "Your request timed out." : "The holder declined your request."}
           </div>
@@ -202,29 +202,28 @@ export function AutomationLockStealDialog({
 
         <DialogFooter>
           {phase === "confirm" ? (
-            <div className="flex justify-end gap-2">
+            <>
               <DialogClose asChild>
-                <Button variant="ghost" size="sm">
+                <Button variant="ghost" className="h-9 rounded-[8px] px-4 text-[13px]">
                   Cancel
                 </Button>
               </DialogClose>
               <Button
-                size="sm"
-                className="h-8 gap-1.5 rounded-[7px] bg-brand-accent px-3 text-[12px] text-[#161300] shadow-none hover:bg-brand-accent/90"
+                className="h-9 gap-1.5 rounded-[8px] bg-brand-accent px-4 text-[13px] font-semibold text-[#161300] shadow-none hover:bg-brand-accent/90"
                 disabled={stealMutation.isPending}
                 onClick={() => stealMutation.mutate()}
               >
                 {stealMutation.isPending ? (
-                  <SpinnerGapIcon size={14} className="animate-spin" />
+                  <SpinnerGapIcon size={15} className="animate-spin" />
                 ) : (
-                  <LockKeyIcon size={14} />
+                  <LockKeyIcon size={15} />
                 )}
                 Request control
               </Button>
-            </div>
+            </>
           ) : (
             <DialogClose asChild>
-              <Button variant="ghost" size="sm">
+              <Button variant="ghost" className="h-9 rounded-[8px] px-4 text-[13px]">
                 Close
               </Button>
             </DialogClose>

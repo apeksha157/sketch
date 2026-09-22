@@ -103,7 +103,6 @@ import {
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogFooter,
-  AlertDialogHeader,
   AlertDialogTitle,
 } from "@sketch/ui/components/alert-dialog";
 import { Badge } from "@sketch/ui/components/badge";
@@ -517,20 +516,37 @@ function BuilderDeleteDialog({
 }) {
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="sm:max-w-sm">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete automation?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This permanently deletes <span className="font-medium text-foreground">{automationTitle}</span> and its
-            workflow history. Future runs will not be triggered.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+      <AlertDialogContent className="sm:max-w-md">
+        <div className="flex flex-col gap-2">
+          <div
+            className="grid size-10 place-items-center rounded-[12px] bg-destructive/10 text-destructive"
+            aria-hidden="true"
+          >
+            <TrashIcon size={20} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <AlertDialogTitle className="text-[17px] font-semibold leading-6 tracking-[-0.01em]">
+              Delete automation?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-[13px] leading-5">
+              Permanently deletes <span className="font-medium text-foreground">{automationTitle}</span> and its run
+              history. Future runs won't trigger — this can't be undone.
+            </AlertDialogDescription>
+          </div>
+        </div>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onConfirm} disabled={isDeleting}>
+          <AlertDialogCancel variant="ghost" className="h-9 rounded-[8px] px-4 text-[13px]" disabled={isDeleting}>
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            className="h-9 rounded-[8px] px-4 text-[13px]"
+            onClick={onConfirm}
+            disabled={isDeleting}
+          >
             {isDeleting ? (
               <>
-                <SpinnerGapIcon size={14} className="animate-spin" />
+                <SpinnerGapIcon size={15} className="animate-spin" />
                 Deleting…
               </>
             ) : (
@@ -2968,7 +2984,6 @@ function BuilderChatListView({
     const creator = conversation.transcriptUserName?.trim();
     return !creator || creator === (currentUserName ?? "").trim();
   };
-  const hasOthers = conversations.some((conversation) => !isOwnConversation(conversation));
   const scoped = ownerFilter === "mine" ? conversations.filter(isOwnConversation) : conversations;
   const activeAll = scoped.filter((conversation) => conversation.state === "active");
   const archivedAll = scoped.filter((conversation) => conversation.state === "archived");
@@ -3018,29 +3033,27 @@ function BuilderChatListView({
             );
           })}
         </div>
-        {hasOthers ? (
-          <FiltersMenu
-            open={filterOpen}
-            onOpenChange={setFilterOpen}
-            activeCount={ownerFilter === "mine" ? 1 : 0}
-            activeSummary={ownerFilter === "mine" ? "Only mine" : undefined}
-            ariaLabel="Filter chats"
-            testId="builder-chat-creator-filter"
-            onReset={() => setOwnerFilter("everyone")}
-            resetTestId="builder-chat-creator-filter-clear"
-            contentClassName="w-[220px]"
-          >
-            <FilterSegments
-              label="Creator"
-              value={ownerFilter}
-              onChange={setOwnerFilter}
-              options={[
-                { value: "everyone", label: "Everyone" },
-                { value: "mine", label: "Only mine" },
-              ]}
-            />
-          </FiltersMenu>
-        ) : null}
+        <FiltersMenu
+          open={filterOpen}
+          onOpenChange={setFilterOpen}
+          activeCount={ownerFilter === "mine" ? 1 : 0}
+          activeSummary={ownerFilter === "mine" ? "Only mine" : undefined}
+          ariaLabel="Filter chats"
+          testId="builder-chat-creator-filter"
+          onReset={() => setOwnerFilter("everyone")}
+          resetTestId="builder-chat-creator-filter-clear"
+          contentClassName="w-[220px]"
+        >
+          <FilterSegments
+            label="Creator"
+            value={ownerFilter}
+            onChange={setOwnerFilter}
+            options={[
+              { value: "everyone", label: "Everyone" },
+              { value: "mine", label: "Only mine" },
+            ]}
+          />
+        </FiltersMenu>
       </div>
       {builderLock?.state === "held" && builderLock.owner !== "self" ? (
         <div className="px-2 pb-2">
@@ -4607,7 +4620,10 @@ function FilterSegments<T extends string>({
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
-      <div className="flex flex-wrap gap-1">
+      <fieldset
+        aria-label={label}
+        className="flex w-full items-center gap-0.5 rounded-[8px] border-0 bg-muted/50 p-0.5"
+      >
         {options.map((option) => {
           const selected = value === option.value;
           return (
@@ -4617,17 +4633,15 @@ function FilterSegments<T extends string>({
               aria-pressed={selected}
               onClick={() => onChange(option.value)}
               className={cn(
-                "whitespace-nowrap rounded-full px-2.5 py-1 text-[12px] font-medium leading-4 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                selected
-                  ? "bg-foreground text-background"
-                  : "bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+                "flex-1 whitespace-nowrap rounded-[6px] px-2 py-1 text-[12px] font-medium leading-4 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                selected ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
             >
               {option.label}
             </button>
           );
         })}
-      </div>
+      </fieldset>
     </div>
   );
 }
@@ -4675,13 +4689,13 @@ function FiltersMenu({
           className={cn(
             "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
             active
-              ? "bg-foreground text-background hover:bg-foreground/90"
+              ? "bg-muted text-foreground ring-1 ring-inset ring-border/70 hover:bg-muted/80"
               : "text-muted-foreground hover:bg-muted/60 hover:text-foreground data-[state=open]:bg-muted/60 data-[state=open]:text-foreground",
           )}
         >
           <FunnelSimpleIcon size={14} weight={active ? "fill" : "regular"} />
           <span className="max-w-[128px] truncate">{active ? (activeSummary ?? "Filters") : "Filters"}</span>
-          <CaretDownIcon size={12} className={active ? "text-background/70" : "text-muted-foreground"} />
+          <CaretDownIcon size={12} className={active ? "text-foreground/55" : "text-muted-foreground"} />
         </button>
       </PopoverTrigger>
       <PopoverContent

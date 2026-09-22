@@ -794,7 +794,7 @@ function StatusFilterChip({
       className={cn(
         "inline-flex h-7 items-center gap-2 rounded-full px-3 text-xs font-medium transition-colors",
         active
-          ? "bg-foreground text-background"
+          ? "bg-foreground/[0.14] font-semibold text-foreground ring-1 ring-border/70 ring-inset"
           : tone === "attention" && count > 0
             ? "bg-destructive/10 text-destructive hover:bg-destructive/15"
             : "bg-muted text-muted-foreground hover:bg-muted/70",
@@ -806,7 +806,7 @@ function StatusFilterChip({
       <span
         className={cn(
           "grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] tabular-nums",
-          active ? "bg-background/15 text-background/80" : "bg-background/50 text-muted-foreground",
+          active ? "bg-background/70 text-foreground/70" : "bg-background/50 text-muted-foreground",
         )}
       >
         {count}

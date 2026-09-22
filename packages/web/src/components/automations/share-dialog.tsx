@@ -20,7 +20,7 @@
  */
 import { type User, api } from "@/lib/api";
 import { invalidateAutomationQueries } from "@/lib/automation-refresh";
-import { MagnifyingGlassIcon, PlusIcon, SpinnerGapIcon, XIcon } from "@phosphor-icons/react";
+import { MagnifyingGlassIcon, PlusIcon, ShareNetworkIcon, SpinnerGapIcon, XIcon } from "@phosphor-icons/react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@sketch/ui/components/dialog";
 import { cn, getInitials } from "@sketch/ui/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -312,11 +312,18 @@ export function AutomationShareDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex flex-col gap-0 p-0 sm:max-w-md">
-        <DialogHeader className="space-y-1 p-5 pb-3">
-          <DialogTitle className="text-base">Share automation</DialogTitle>
-          <DialogDescription className="text-xs leading-5">
-            Anyone you add can run and edit this automation.
-          </DialogDescription>
+        <DialogHeader className="p-5 pb-3">
+          <div className="grid size-10 place-items-center rounded-[12px] bg-muted text-foreground" aria-hidden="true">
+            <ShareNetworkIcon size={20} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <DialogTitle className="text-[17px] font-semibold leading-6 tracking-[-0.01em]">
+              Share automation
+            </DialogTitle>
+            <DialogDescription className="text-[13px] leading-5">
+              Anyone you add can run and edit this automation.
+            </DialogDescription>
+          </div>
         </DialogHeader>
 
         {showSearch ? (
