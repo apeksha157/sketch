@@ -68,6 +68,7 @@ import {
   CaretRightIcon,
   ChatCircleIcon,
   CheckCircleIcon,
+  CheckIcon,
   CircleIcon,
   CodeIcon,
   CopySimpleIcon,
@@ -2330,22 +2331,45 @@ function builderChatMutationError(error: unknown, fallback: string): string {
 }
 
 /**
- * Design spike (Variant A rework) — the single consolidated panel header.
+ * The automation's brand identity tile — the yellow lightning glyph reused from
+ * the automations list, so the same object is recognisable everywhere.
+ */
+function BuilderAutomationTile({ size = "md" }: { size?: "sm" | "md" }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "grid shrink-0 place-items-center rounded-[7px] bg-brand-accent/12 text-brand-accent",
+        size === "md" ? "size-6" : "size-5",
+      )}
+    >
+      <LightningIcon size={size === "md" ? 13 : 11} weight="fill" />
+    </span>
+  );
+}
+
+function BuilderSwitcherLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="px-2 pb-1 pt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
+      {children}
+    </p>
+  );
+}
+
+const builderSwitcherFooterClass =
+  "mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-2 py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent";
+
+/**
+ * Design spike (Variant A) — the consolidated panel header.
  *
- * ONE control carries the automation (parent) AND the current chat (child) so two
- * titles never compete: the trigger shows the combined title (per `titleModel`),
- * the collapse button sits on this same top row, and the popover is a unified
- * switcher that changes BOTH the chat (children of the current automation) and the
- * automation (siblings). No separate back-arrow — "back to automations" lives in
- * the popover and the nav rail. Gated by `?hdr=a` (+ `?tm=`). Remove before ship.
- *
- * `titleModel`:
- *   bc — breadcrumb: `Automation › Chat` on one line.
- *   eb — eyebrow: tiny automation kicker above a prominent chat title.
- *   co — chat-only: just the chat; automation lives in the popover.
+ * A breadcrumb-as-switcher: `[⚡] Automation / Chat`. The automation crumb (with
+ * its brand identity tile) opens a focused automation switcher; the chat crumb
+ * opens a focused chat switcher. It reads as one header — the automation is always
+ * visible and switchable, chats are its children — but no single menu is
+ * overloaded: each popover has exactly one job. The collapse button shares this
+ * top row. Gated by `?hdr=a`. Remove before ship.
  */
 function BuilderUnifiedHeader({
-  titleModel,
   mode,
   automationName,
   currentTaskId,
@@ -2365,7 +2389,6 @@ function BuilderUnifiedHeader({
   onClose,
   onViewAllAutomations,
 }: {
-  titleModel: "bc" | "eb" | "co";
   mode: "list" | "transcript";
   automationName: string;
   currentTaskId: string;
@@ -2386,15 +2409,14 @@ function BuilderUnifiedHeader({
   onViewAllAutomations: () => void;
 }) {
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
+  const [automationOpen, setAutomationOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const automationsQuery = useQuery({
     queryKey: ["scheduled-tasks"],
     queryFn: () => api.scheduledTasks.list(),
     staleTime: 30_000,
   });
-  const otherAutomations = (automationsQuery.data ?? []).filter(
-    (task) => task.status !== "completed" && task.id !== currentTaskId,
-  );
+  const automations = (automationsQuery.data ?? []).filter((task) => task.status !== "completed");
   const inTranscript = mode === "transcript" && Boolean(selectedConversation);
 
   const RECENT = 6;
@@ -2406,189 +2428,160 @@ function BuilderUnifiedHeader({
   const recentChats = orderedChats.slice(0, RECENT);
 
   const goToAutomation = (id: string) => {
-    setOpen(false);
-    void navigate({
-      to: "/scheduled-tasks/$taskId/edit",
-      params: { taskId: id },
-      search: { hdr: "a", ...(titleModel !== "bc" ? { tm: titleModel } : {}) },
-    });
+    setAutomationOpen(false);
+    if (id === currentTaskId) return;
+    void navigate({ to: "/scheduled-tasks/$taskId/edit", params: { taskId: id }, search: { hdr: "a" } });
   };
 
-  const caret = <CaretDownIcon size={13} className="shrink-0 text-muted-foreground" />;
-  let triggerInner: ReactNode;
-  let triggerLayout: string;
-  if (!inTranscript) {
-    triggerLayout = "flex items-center gap-1.5";
-    triggerInner = (
-      <>
-        <span
-          title={automationName}
-          className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-foreground"
-        >
-          {automationName}
-        </span>
-        {caret}
-      </>
-    );
-  } else if (titleModel === "eb") {
-    triggerLayout = "flex flex-col items-start gap-0.5";
-    triggerInner = (
-      <>
-        <span
-          title={automationName}
-          className="max-w-full truncate font-mono text-[10px] uppercase leading-4 tracking-[0.09em] text-muted-foreground/80"
-        >
-          {automationName}
-        </span>
-        <span className="flex min-w-0 max-w-full items-center gap-1">
-          <span
-            title={chatTitle ?? undefined}
-            className="min-w-0 truncate text-[13px] font-semibold leading-5 text-foreground"
-          >
-            {chatTitle}
-          </span>
-          {caret}
-        </span>
-      </>
-    );
-  } else if (titleModel === "co") {
-    triggerLayout = "flex items-center gap-1.5";
-    triggerInner = (
-      <>
-        <span
-          title={chatTitle ?? undefined}
-          className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-foreground"
-        >
-          {chatTitle}
-        </span>
-        {caret}
-      </>
-    );
-  } else {
-    triggerLayout = "flex items-center gap-1";
-    triggerInner = (
-      <>
-        <span
-          title={automationName}
-          className="max-w-[46%] shrink-0 truncate text-[13px] font-medium leading-5 text-muted-foreground"
-        >
-          {automationName}
-        </span>
-        <CaretRightIcon size={12} className="shrink-0 text-muted-foreground/45" />
-        <span
-          title={chatTitle ?? undefined}
-          className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-foreground"
-        >
-          {chatTitle}
-        </span>
-        {caret}
-      </>
-    );
-  }
+  const automationPopover = (
+    <PopoverContent align="start" sideOffset={8} className="w-[280px] rounded-[12px] p-1.5">
+      <BuilderSwitcherLabel>Automations</BuilderSwitcherLabel>
+      <div className="flex max-h-[300px] flex-col gap-0.5 overflow-y-auto">
+        {automations.map((task) => {
+          const isCurrent = task.id === currentTaskId;
+          const name = task.title && task.title !== "New automation" ? task.title : "Untitled automation";
+          return (
+            <button
+              key={task.id}
+              type="button"
+              onClick={() => goToAutomation(task.id)}
+              className={cn(
+                "flex w-full items-center gap-2.5 rounded-[8px] px-2 py-1.5 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
+                isCurrent && "bg-accent",
+              )}
+            >
+              <BuilderAutomationTile size="sm" />
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{name}</span>
+              {task.sharedWithMe ? (
+                <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                  Shared
+                </span>
+              ) : null}
+              {isCurrent ? <CheckIcon size={14} weight="bold" className="shrink-0 text-foreground" /> : null}
+            </button>
+          );
+        })}
+      </div>
+      <div className="mx-1 my-1 h-px bg-border/60" />
+      <button
+        type="button"
+        className={builderSwitcherFooterClass}
+        onClick={() => {
+          setAutomationOpen(false);
+          onViewAllAutomations();
+        }}
+      >
+        <span className="flex-1">View all automations</span>
+        <CaretRightIcon size={14} className="shrink-0" />
+      </button>
+    </PopoverContent>
+  );
+
+  const chatPopover = (
+    <PopoverContent align="start" sideOffset={8} className="w-[300px] rounded-[12px] p-1.5">
+      <BuilderNewChatButton
+        onNew={() => {
+          setChatOpen(false);
+          onNewChat();
+        }}
+        pending={newPending}
+        disabled={!canEdit}
+      />
+      <BuilderSwitcherLabel>Chats</BuilderSwitcherLabel>
+      <div className="flex max-h-[320px] flex-col gap-0.5 overflow-y-auto">
+        {recentChats.map((conversation) => (
+          <BuilderChatSwitchRow
+            key={conversation.conversationId}
+            conversation={conversation}
+            summary={summaryById.get(conversation.conversationId)}
+            derivedTitle={derivedTitleById.get(conversation.conversationId)}
+            isCurrent={conversation.conversationId === currentChatId}
+            currentUserName={currentUserName}
+            selecting={selectingId === conversation.conversationId}
+            onSelect={() => {
+              setChatOpen(false);
+              onSelectChat(conversation);
+            }}
+            onArchive={canEdit ? () => onArchiveChat(conversation) : undefined}
+          />
+        ))}
+      </div>
+      <div className="mx-1 my-1 h-px bg-border/60" />
+      <button
+        type="button"
+        className={builderSwitcherFooterClass}
+        onClick={() => {
+          setChatOpen(false);
+          onSeeAllChats();
+        }}
+      >
+        <span className="flex-1">See all chats ({conversations.length})</span>
+        <CaretRightIcon size={14} className="shrink-0" />
+      </button>
+    </PopoverContent>
+  );
 
   return (
     <div
       data-testid="builder-unified-header"
-      className="shrink-0 border-b border-border/80 bg-background/95 px-2 backdrop-blur"
+      className="shrink-0 border-b border-border/80 bg-background/95 px-2.5 py-2 backdrop-blur"
     >
-      <div className="flex min-h-11 min-w-0 items-center gap-1 py-1.5">
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              data-testid="builder-unified-header-trigger"
-              className={cn(
-                "group/switch min-w-0 flex-1 rounded-[7px] px-2 py-1 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70",
-                triggerLayout,
-              )}
-              aria-label="Switch automation or chat"
-            >
-              {triggerInner}
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="start" sideOffset={6} className="w-[300px] rounded-[12px] p-1.5">
-            <BuilderNewChatButton
-              onNew={() => {
-                setOpen(false);
-                onNewChat();
-              }}
-              pending={newPending}
-              disabled={!canEdit}
-            />
-            <p
-              title={automationName}
-              className="truncate px-[10px] pb-1 pt-3 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/70"
-            >
-              {automationName}
-            </p>
-            <div className="flex flex-col gap-0.5">
-              {recentChats.map((conversation) => (
-                <BuilderChatSwitchRow
-                  key={conversation.conversationId}
-                  conversation={conversation}
-                  summary={summaryById.get(conversation.conversationId)}
-                  derivedTitle={derivedTitleById.get(conversation.conversationId)}
-                  isCurrent={conversation.conversationId === currentChatId}
-                  currentUserName={currentUserName}
-                  selecting={selectingId === conversation.conversationId}
-                  onSelect={() => {
-                    setOpen(false);
-                    onSelectChat(conversation);
-                  }}
-                  onArchive={canEdit ? () => onArchiveChat(conversation) : undefined}
-                />
-              ))}
-            </div>
-            <button
-              type="button"
-              className="mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-[10px] py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
-              onClick={() => {
-                setOpen(false);
-                onSeeAllChats();
-              }}
-            >
-              <span className="flex-1">See all chats ({conversations.length})</span>
-              <CaretRightIcon size={14} className="shrink-0" />
-            </button>
-            {otherAutomations.length > 0 ? (
-              <>
-                <div className="mx-[6px] my-1.5 h-px bg-border/70" />
-                <p className="px-[10px] pb-1 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/70">
-                  Switch automation
-                </p>
-                <div className="flex max-h-[240px] flex-col gap-0.5 overflow-y-auto">
-                  {otherAutomations.map((task) => {
-                    const name = task.title && task.title !== "New automation" ? task.title : "Untitled automation";
-                    return (
-                      <button
-                        key={task.id}
-                        type="button"
-                        onClick={() => goToAutomation(task.id)}
-                        className="flex w-full items-center gap-2.5 rounded-[8px] px-[10px] py-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{name}</span>
-                        {task.sharedWithMe ? (
-                          <span className="shrink-0 text-[10px] text-muted-foreground">Shared</span>
-                        ) : null}
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            ) : null}
-            <button
-              type="button"
-              className="mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-[10px] py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
-              onClick={() => {
-                setOpen(false);
-                onViewAllAutomations();
-              }}
-            >
-              <span className="flex-1">View all automations</span>
-              <CaretRightIcon size={14} className="shrink-0" />
-            </button>
-          </PopoverContent>
-        </Popover>
+      <div className="flex min-h-9 min-w-0 items-center gap-2.5">
+        <BuilderAutomationTile />
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          {/* Automation crumb — parent context (muted in a chat, the active title in list mode). */}
+          <Popover open={automationOpen} onOpenChange={setAutomationOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-testid="builder-unified-header-automation"
+                className={cn(
+                  "group/crumb -ml-1 flex items-center gap-1 self-start rounded-[6px] px-1 py-0.5 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70",
+                  inTranscript ? "max-w-[calc(100%+0.5rem)]" : "w-[calc(100%+0.5rem)]",
+                )}
+                aria-label="Switch automation"
+              >
+                <span
+                  title={automationName}
+                  className={cn(
+                    "min-w-0 truncate",
+                    inTranscript
+                      ? "text-[11px] font-medium leading-4 text-muted-foreground"
+                      : "flex-1 text-[13px] font-semibold leading-5 text-foreground",
+                  )}
+                >
+                  {automationName}
+                </span>
+                <CaretDownIcon size={inTranscript ? 10 : 11} className="shrink-0 text-muted-foreground/60" />
+              </button>
+            </PopoverTrigger>
+            {automationPopover}
+          </Popover>
+
+          {/* Chat crumb — the active leaf (prominent), only inside a chat. */}
+          {inTranscript ? (
+            <Popover open={chatOpen} onOpenChange={setChatOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  data-testid="builder-unified-header-chat"
+                  className="group/crumb -ml-1 flex w-[calc(100%+0.5rem)] items-center gap-1 rounded-[6px] px-1 py-0.5 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70"
+                  aria-label="Switch chat"
+                >
+                  <span
+                    title={chatTitle ?? undefined}
+                    className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-foreground"
+                  >
+                    {chatTitle}
+                  </span>
+                  <CaretDownIcon size={12} className="shrink-0 text-muted-foreground/60" />
+                </button>
+              </PopoverTrigger>
+              {chatPopover}
+            </Popover>
+          ) : null}
+        </div>
+
         {mode === "list" ? (
           <IconTooltip label={canEdit ? "New chat" : "Request control to start a new chat"}>
             <span className={cn("inline-flex", !canEdit && "cursor-not-allowed")}>
@@ -2610,7 +2603,7 @@ function BuilderUnifiedHeader({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
+            className={cn(canvasCompactIconButtonClass, "size-7 shrink-0 self-start")}
             aria-label="Collapse automation chat"
             aria-controls="automation-builder-chat-sidecar"
             onClick={onClose}
@@ -2915,7 +2908,6 @@ function BuilderChatSidecar({
       >
         {headerVariant === "a" && onBackToAutomations ? (
           <BuilderUnifiedHeader
-            titleModel={titleModel ?? "bc"}
             mode={inList ? "list" : "transcript"}
             automationName={automationName ?? title}
             currentTaskId={taskId}
