@@ -68,7 +68,6 @@ import {
   CaretRightIcon,
   ChatCircleIcon,
   CheckCircleIcon,
-  CheckIcon,
   CircleIcon,
   CodeIcon,
   CopySimpleIcon,
@@ -2330,44 +2329,27 @@ function builderChatMutationError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-/**
- * The automation's brand identity tile — the yellow lightning glyph reused from
- * the automations list, so the same object is recognisable everywhere.
- */
-function BuilderAutomationTile({ size = "md" }: { size?: "sm" | "md" }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "grid shrink-0 place-items-center rounded-[7px] bg-brand-accent/12 text-brand-accent",
-        size === "md" ? "size-6" : "size-5",
-      )}
-    >
-      <LightningIcon size={size === "md" ? 13 : 11} weight="fill" />
-    </span>
-  );
-}
-
 function BuilderSwitcherLabel({ children }: { children: ReactNode }) {
   return (
-    <p className="px-2 pb-1 pt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
+    <p className="px-2.5 pb-1.5 pt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
       {children}
     </p>
   );
 }
 
 const builderSwitcherFooterClass =
-  "mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-2 py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent";
+  "mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-2.5 py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent";
 
 /**
  * Design spike (Variant A) — the consolidated panel header.
  *
- * A breadcrumb-as-switcher: `[⚡] Automation / Chat`. The automation crumb (with
- * its brand identity tile) opens a focused automation switcher; the chat crumb
- * opens a focused chat switcher. It reads as one header — the automation is always
- * visible and switchable, chats are its children — but no single menu is
- * overloaded: each popover has exactly one job. The collapse button shares this
- * top row. Gated by `?hdr=a`. Remove before ship.
+ * A quiet parent context above a prominent current title (Linear / Notion
+ * pattern). Inside a chat: the automation reads as a small breadcrumb line, the
+ * chat name is the title. In the chat list: the automation IS the title. Whatever
+ * is current gets the weight and the visible caret; the parent stays a subtle
+ * link (its caret only appears on hover) so the two never read as the same
+ * control. Each opens a focused, single-job switcher. Gated by `?hdr=a`. Remove
+ * before ship.
  */
 function BuilderUnifiedHeader({
   mode,
@@ -2434,7 +2416,7 @@ function BuilderUnifiedHeader({
   };
 
   const automationPopover = (
-    <PopoverContent align="start" sideOffset={8} className="w-[280px] rounded-[12px] p-1.5">
+    <PopoverContent align="start" sideOffset={10} className="w-[272px] rounded-[12px] p-1.5">
       <BuilderSwitcherLabel>Automations</BuilderSwitcherLabel>
       <div className="flex max-h-[300px] flex-col gap-0.5 overflow-y-auto">
         {automations.map((task) => {
@@ -2446,23 +2428,28 @@ function BuilderUnifiedHeader({
               type="button"
               onClick={() => goToAutomation(task.id)}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-[8px] px-2 py-1.5 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
+                "flex w-full items-center gap-2 rounded-[8px] px-2.5 py-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
                 isCurrent && "bg-accent",
               )}
             >
-              <BuilderAutomationTile size="sm" />
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{name}</span>
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-[13px] leading-5",
+                  isCurrent ? "font-semibold text-foreground" : "font-medium text-foreground",
+                )}
+              >
+                {name}
+              </span>
               {task.sharedWithMe ? (
-                <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                <span className="shrink-0 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/80">
                   Shared
                 </span>
               ) : null}
-              {isCurrent ? <CheckIcon size={14} weight="bold" className="shrink-0 text-foreground" /> : null}
             </button>
           );
         })}
       </div>
-      <div className="mx-1 my-1 h-px bg-border/60" />
+      <div className="mx-1.5 my-1 h-px bg-border/60" />
       <button
         type="button"
         className={builderSwitcherFooterClass}
@@ -2478,7 +2465,7 @@ function BuilderUnifiedHeader({
   );
 
   const chatPopover = (
-    <PopoverContent align="start" sideOffset={8} className="w-[300px] rounded-[12px] p-1.5">
+    <PopoverContent align="start" sideOffset={10} className="w-[300px] rounded-[12px] p-1.5">
       <BuilderNewChatButton
         onNew={() => {
           setChatOpen(false);
@@ -2506,7 +2493,7 @@ function BuilderUnifiedHeader({
           />
         ))}
       </div>
-      <div className="mx-1 my-1 h-px bg-border/60" />
+      <div className="mx-1.5 my-1 h-px bg-border/60" />
       <button
         type="button"
         className={builderSwitcherFooterClass}
@@ -2521,65 +2508,85 @@ function BuilderUnifiedHeader({
     </PopoverContent>
   );
 
+  const titleTriggerClass =
+    "group/title -ml-1.5 flex w-[calc(100%+0.75rem)] items-center gap-1.5 rounded-[7px] px-1.5 py-1 text-left transition-colors hover:bg-muted/60 data-[state=open]:bg-muted/60";
+
   return (
     <div
       data-testid="builder-unified-header"
-      className="shrink-0 border-b border-border/80 bg-background/95 px-2.5 py-2 backdrop-blur"
+      className="shrink-0 border-b border-border/80 bg-background/95 px-3 py-2.5 backdrop-blur"
     >
-      <div className="flex min-h-9 min-w-0 items-center gap-2.5">
-        <BuilderAutomationTile />
-        <div className="flex min-w-0 flex-1 flex-col justify-center">
-          {/* Automation crumb — parent context (muted in a chat, the active title in list mode). */}
-          <Popover open={automationOpen} onOpenChange={setAutomationOpen}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                data-testid="builder-unified-header-automation"
-                className={cn(
-                  "group/crumb -ml-1 flex items-center gap-1 self-start rounded-[6px] px-1 py-0.5 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70",
-                  inTranscript ? "max-w-[calc(100%+0.5rem)]" : "w-[calc(100%+0.5rem)]",
-                )}
-                aria-label="Switch automation"
-              >
-                <span
-                  title={automationName}
-                  className={cn(
-                    "min-w-0 truncate",
-                    inTranscript
-                      ? "text-[11px] font-medium leading-4 text-muted-foreground"
-                      : "flex-1 text-[13px] font-semibold leading-5 text-foreground",
-                  )}
-                >
-                  {automationName}
-                </span>
-                <CaretDownIcon size={inTranscript ? 10 : 11} className="shrink-0 text-muted-foreground/60" />
-              </button>
-            </PopoverTrigger>
-            {automationPopover}
-          </Popover>
-
-          {/* Chat crumb — the active leaf (prominent), only inside a chat. */}
+      <div className="flex min-w-0 items-start gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           {inTranscript ? (
-            <Popover open={chatOpen} onOpenChange={setChatOpen}>
+            <>
+              {/* Parent context — a quiet, readable breadcrumb. Its caret only shows on hover. */}
+              <Popover open={automationOpen} onOpenChange={setAutomationOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="builder-unified-header-automation"
+                    className="group/crumb -ml-1.5 flex max-w-[calc(100%+0.75rem)] items-center gap-1 self-start rounded-[6px] px-1.5 py-px text-left transition-colors hover:bg-muted/60 data-[state=open]:bg-muted/60"
+                    aria-label="Switch automation"
+                  >
+                    <span
+                      title={automationName}
+                      className="min-w-0 truncate text-[12px] font-medium leading-4 text-muted-foreground"
+                    >
+                      {automationName}
+                    </span>
+                    <CaretDownIcon
+                      size={10}
+                      className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/crumb:opacity-100 group-data-[state=open]/crumb:opacity-100"
+                    />
+                  </button>
+                </PopoverTrigger>
+                {automationPopover}
+              </Popover>
+
+              {/* Current title — the chat. The one prominent, always-visible switcher. */}
+              <Popover open={chatOpen} onOpenChange={setChatOpen}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-testid="builder-unified-header-chat"
+                    className={titleTriggerClass}
+                    aria-label="Switch chat"
+                  >
+                    <span
+                      title={chatTitle ?? undefined}
+                      className="min-w-0 flex-1 truncate text-[14px] font-semibold leading-5 text-foreground"
+                    >
+                      {chatTitle}
+                    </span>
+                    <CaretDownIcon size={13} className="shrink-0 text-muted-foreground/70" />
+                  </button>
+                </PopoverTrigger>
+                {chatPopover}
+              </Popover>
+            </>
+          ) : (
+            /* Chat list — the automation IS the current title. */
+            <Popover open={automationOpen} onOpenChange={setAutomationOpen}>
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  data-testid="builder-unified-header-chat"
-                  className="group/crumb -ml-1 flex w-[calc(100%+0.5rem)] items-center gap-1 rounded-[6px] px-1 py-0.5 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70"
-                  aria-label="Switch chat"
+                  data-testid="builder-unified-header-automation"
+                  className={titleTriggerClass}
+                  aria-label="Switch automation"
                 >
                   <span
-                    title={chatTitle ?? undefined}
-                    className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-foreground"
+                    title={automationName}
+                    className="min-w-0 flex-1 truncate text-[14px] font-semibold leading-5 text-foreground"
                   >
-                    {chatTitle}
+                    {automationName}
                   </span>
-                  <CaretDownIcon size={12} className="shrink-0 text-muted-foreground/60" />
+                  <CaretDownIcon size={13} className="shrink-0 text-muted-foreground/70" />
                 </button>
               </PopoverTrigger>
-              {chatPopover}
+              {automationPopover}
             </Popover>
-          ) : null}
+          )}
         </div>
 
         {mode === "list" ? (
@@ -2603,7 +2610,7 @@ function BuilderUnifiedHeader({
           <Button
             size="icon"
             variant="ghost"
-            className={cn(canvasCompactIconButtonClass, "size-7 shrink-0 self-start")}
+            className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
             aria-label="Collapse automation chat"
             aria-controls="automation-builder-chat-sidecar"
             onClick={onClose}
