@@ -155,6 +155,8 @@ import { dashboardRoute, useDashboardAuth } from "./dashboard";
 interface BuilderSearch {
   conversationId?: string;
   runId?: string;
+  /** Design spike flag — header-consolidation variant. Remove before ship. */
+  hdr?: "a" | "b";
 }
 
 const SAFE_AUTOMATION_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/;
@@ -163,9 +165,11 @@ const BUILDER_MODE_SELECTION_MARKER = "[automation-setup-mode-selection]";
 export function validateAutomationBuilderSearch(search: Record<string, unknown>): BuilderSearch {
   const conversationId = typeof search.conversationId === "string" ? search.conversationId.trim() : "";
   const runId = typeof search.runId === "string" ? search.runId.trim() : "";
+  const hdr = search.hdr === "a" || search.hdr === "b" ? search.hdr : undefined;
   return {
     ...(conversationId ? { conversationId } : {}),
     ...(runId && SAFE_AUTOMATION_RUN_ID.test(runId) ? { runId } : {}),
+    ...(hdr ? { hdr } : {}),
   };
 }
 
@@ -656,6 +660,7 @@ export function AutomationBuilderPage() {
   const requestedConversationId = builderSearch.conversationId;
   const requestedRunId =
     builderSearch.runId && SAFE_AUTOMATION_RUN_ID.test(builderSearch.runId) ? builderSearch.runId : undefined;
+  const headerVariant = builderSearch.hdr;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const queryKey = useMemo(() => automationDefinitionQueryKey(taskId), [taskId]);
@@ -1334,6 +1339,9 @@ export function AutomationBuilderPage() {
         open={chatSidecarOpen}
         onClose={() => setChatSidecarOpen(false)}
         className="automation-builder-sidecar-enter"
+        headerVariant={headerVariant}
+        automationName={setupIdentityName}
+        onBackToAutomations={navigateToAutomations}
       />
 
       <div
@@ -1349,7 +1357,12 @@ export function AutomationBuilderPage() {
             className="pointer-events-none absolute top-1.5 right-4 left-4 z-10 flex items-start justify-between gap-2"
           >
             <div className="pointer-events-auto flex min-w-0 items-center gap-2">
-              <div className="flex min-w-0 items-center gap-1 rounded-[13px] border border-border/70 bg-card/95 py-1 pr-3 pl-1 shadow-md backdrop-blur">
+              <div
+                className={cn(
+                  "flex min-w-0 items-center gap-1 rounded-[13px] border border-border/70 bg-card/95 py-1 pr-3 pl-1 shadow-md backdrop-blur",
+                  headerVariant === "a" && chatSidecarOpen && "hidden",
+                )}
+              >
                 <IconTooltip label="Back to automations">
                   <Button
                     size="icon"
@@ -1454,7 +1467,13 @@ export function AutomationBuilderPage() {
                   </IconTooltip>
                 </div>
               ) : null}
-              <div className={cn(builderTrayClass, "min-w-0 gap-1 pr-3 pl-1")}>
+              <div
+                className={cn(
+                  builderTrayClass,
+                  "min-w-0 gap-1 pr-3 pl-1",
+                  headerVariant === "a" && chatSidecarOpen && "hidden",
+                )}
+              >
                 <IconTooltip label="Back to automations">
                   <Button
                     size="icon"
@@ -2300,6 +2319,116 @@ function builderChatMutationError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+/**
+ * Design spike (Variant A) — the consolidated header that sits at the TOP of the
+ * chat panel: back to automations + an automation switcher (the parent), with the
+ * chat list below acting as its children. Gated by `?hdr=a`. Remove before ship.
+ */
+function BuilderAutomationSwitcher({
+  currentTaskId,
+  currentName,
+  onBack,
+}: {
+  currentTaskId: string;
+  currentName: string;
+  onBack: () => void;
+}) {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const listQuery = useQuery({
+    queryKey: ["scheduled-tasks"],
+    queryFn: () => api.scheduledTasks.list(),
+    staleTime: 30_000,
+  });
+  const automations = (listQuery.data ?? []).filter((task) => task.status !== "completed");
+  const goTo = (id: string) => {
+    setOpen(false);
+    if (id === currentTaskId) return;
+    void navigate({ to: "/scheduled-tasks/$taskId/edit", params: { taskId: id }, search: { hdr: "a" } });
+  };
+  return (
+    <div
+      data-testid="builder-automation-switcher"
+      className="flex h-11 shrink-0 items-center gap-1 border-b border-border/80 bg-background/95 px-2 backdrop-blur"
+    >
+      <IconTooltip label="Back to automations">
+        <Button
+          size="icon"
+          variant="ghost"
+          className={cn(canvasCompactIconButtonClass, "size-7 shrink-0")}
+          aria-label="Back to automations"
+          onClick={onBack}
+        >
+          <CaretLeftIcon size={16} />
+        </Button>
+      </IconTooltip>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            data-testid="builder-automation-switcher-trigger"
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[7px] px-2 py-1.5 text-left transition-colors hover:bg-muted/70 data-[state=open]:bg-muted/70"
+            aria-label="Switch automation"
+          >
+            <span
+              title={currentName}
+              className="min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-foreground"
+            >
+              {currentName}
+            </span>
+            <CaretDownIcon size={13} className="shrink-0 text-muted-foreground" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" sideOffset={6} className="w-[300px] rounded-[12px] p-1.5">
+          <p className="px-[10px] pb-1 pt-2 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground/70">
+            Automations
+          </p>
+          <div className="flex max-h-[320px] flex-col gap-0.5 overflow-y-auto">
+            {automations.map((task) => {
+              const isCurrent = task.id === currentTaskId;
+              const name = task.title && task.title !== "New automation" ? task.title : "Untitled automation";
+              return (
+                <button
+                  key={task.id}
+                  type="button"
+                  onClick={() => goTo(task.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-[8px] px-[10px] py-2 text-left outline-none transition-colors hover:bg-accent focus-visible:bg-accent",
+                    isCurrent && "bg-accent",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      isCurrent ? "bg-foreground" : "bg-muted-foreground/40",
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{name}</span>
+                  {task.sharedWithMe ? (
+                    <span className="shrink-0 text-[10px] text-muted-foreground">Shared</span>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            className="mt-0.5 flex w-full items-center gap-1 rounded-[8px] px-[10px] py-2 text-left text-[13px] font-medium text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+            onClick={() => {
+              setOpen(false);
+              onBack();
+            }}
+          >
+            <span className="flex-1">View all automations</span>
+            <CaretRightIcon size={14} className="shrink-0" />
+          </button>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 function BuilderChatSidecar({
   requestedConversationId,
   taskId,
@@ -2319,6 +2448,9 @@ function BuilderChatSidecar({
   open,
   onClose,
   className,
+  headerVariant,
+  automationName,
+  onBackToAutomations,
 }: {
   requestedConversationId: string | null;
   taskId: string;
@@ -2338,6 +2470,9 @@ function BuilderChatSidecar({
   open: boolean;
   onClose: () => void;
   className?: string;
+  headerVariant?: "a" | "b";
+  automationName?: string;
+  onBackToAutomations?: () => void;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -2577,6 +2712,13 @@ function BuilderChatSidecar({
           open ? "lg:translate-x-0" : "lg:-translate-x-full",
         )}
       >
+        {headerVariant === "a" && onBackToAutomations ? (
+          <BuilderAutomationSwitcher
+            currentTaskId={taskId}
+            currentName={automationName ?? title}
+            onBack={onBackToAutomations}
+          />
+        ) : null}
         <BuilderChatHeader
           mode={inList ? "list" : "transcript"}
           switcher={
