@@ -50,7 +50,7 @@ describe("AutomationShareDialog", () => {
     expect(screen.queryByText("Bob Jones")).not.toBeInTheDocument();
   });
 
-  it("grants access when you pick a searched person", async () => {
+  it("stages a grant and only writes it on Save", async () => {
     const grantedUserIds: string[] = [];
     server.use(
       http.put("/api/scheduled-tasks/:id/shares/:userId", ({ params }) => {
@@ -66,16 +66,19 @@ describe("AutomationShareDialog", () => {
     await user.type(screen.getByLabelText("Add people"), "carol");
     await user.click(await screen.findByRole("button", { name: /Carol Davis/ }));
 
+    // Picking a person stages the change (Carol shows "Adding") — nothing is
+    // written until the batch is committed.
+    expect(await screen.findByText("Adding")).toBeInTheDocument();
+    expect(grantedUserIds).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: /Save change/i }));
+
     await waitFor(() => {
       expect(grantedUserIds).toEqual(["u3"]);
     });
-    // Adding clears the query and drops back to the roster, where Carol is now
-    // the only non-owner row — so a lone "Editor" label proves she's listed.
-    expect(await screen.findByText("Carol Davis")).toBeInTheDocument();
-    expect(screen.getByText("Editor")).toBeInTheDocument();
   });
 
-  it("revokes access from the roster", async () => {
+  it("stages a removal and only writes it on Save", async () => {
     const revokedUserIds: string[] = [];
     server.use(
       http.get("/api/scheduled-tasks/:id/shares", () => {
@@ -102,12 +105,51 @@ describe("AutomationShareDialog", () => {
 
     await user.click(await screen.findByRole("button", { name: "Remove Carol Davis" }));
 
+    // The row flips to "Removing" but access is untouched until Save.
+    expect(await screen.findByText("Removing")).toBeInTheDocument();
+    expect(revokedUserIds).toEqual([]);
+
+    await user.click(screen.getByRole("button", { name: /Save change/i }));
+
     await waitFor(() => {
       expect(revokedUserIds).toEqual(["u3"]);
     });
   });
 
-  it("rolls back and surfaces the error when a grant fails", async () => {
+  it("undoing a staged removal writes nothing on Save", async () => {
+    const revokedUserIds: string[] = [];
+    server.use(
+      http.get("/api/scheduled-tasks/:id/shares", () => {
+        return HttpResponse.json({
+          shares: [
+            {
+              userId: "u3",
+              name: "Carol Davis",
+              email: "carol@example.com",
+              grantedByUserId: "u1",
+              grantedAt: "2026-01-05T00:00:00Z",
+            },
+          ],
+        });
+      }),
+      http.delete("/api/scheduled-tasks/:id/shares/:userId", ({ params }) => {
+        revokedUserIds.push(String(params.userId));
+        return HttpResponse.json({ success: true });
+      }),
+    );
+
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(await screen.findByRole("button", { name: "Remove Carol Davis" }));
+    await user.click(await screen.findByRole("button", { name: "Undo" }));
+
+    // With nothing staged, the commit bar is gone and no revoke ever fires.
+    expect(screen.queryByRole("button", { name: /Save change/i })).not.toBeInTheDocument();
+    expect(revokedUserIds).toEqual([]);
+  });
+
+  it("keeps the change staged and surfaces the error when Save fails", async () => {
     server.use(
       http.put("/api/scheduled-tasks/:id/shares/:userId", () => {
         return HttpResponse.json(
@@ -123,12 +165,11 @@ describe("AutomationShareDialog", () => {
     await screen.findByText("Alice Smith");
     await user.type(screen.getByLabelText("Add people"), "carol");
     await user.click(await screen.findByRole("button", { name: /Carol Davis/ }));
+    await user.click(screen.getByRole("button", { name: /Save change/i }));
 
     expect(await screen.findByText("Only the owner can share this automation")).toBeInTheDocument();
-    // The optimistic grant is rolled back — Carol is not left in the roster.
-    await waitFor(() => {
-      expect(screen.queryByText("Carol Davis")).not.toBeInTheDocument();
-    });
+    // A failed grant stays staged so it can be retried — Carol is still "Adding".
+    expect(screen.getByText("Adding")).toBeInTheDocument();
   });
 
   it("hides the add control for non-owners", async () => {

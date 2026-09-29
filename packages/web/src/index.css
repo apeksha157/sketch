@@ -10,6 +10,22 @@
   --font-serif: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
 }
 
+/*
+ * Automation status marker tints. The switcher marks the exception, not the
+ * norm: a healthy automation shows no dot at all, so the only marks in the list
+ * are rose (needs attention — full chroma so it's the one thing that pops) and a
+ * quiet grey ring (paused). Softer + lighter than the raw semantic tokens
+ * (--success/--destructive read heavy at pip size), so a mark is felt, not shouted.
+ */
+:root {
+  --status-attention: oklch(0.7 0.115 25);
+  --status-idle: oklch(0.68 0.006 106);
+}
+.dark {
+  --status-attention: oklch(0.72 0.12 25);
+  --status-idle: oklch(0.6 0.01 106);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -358,6 +374,53 @@
   .sketch-chat-route-enter {
     animation: none;
   }
+}
+
+.builder-status-dot {
+  position: relative;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.builder-status-dot--running {
+  animation: builder-status-strobe 2s ease-in-out infinite;
+}
+
+@keyframes builder-status-strobe {
+  0%,
+  100% {
+    opacity: 0.28;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .builder-status-dot--running {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+.builder-palette-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 22%, transparent) transparent;
+}
+.builder-palette-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.builder-palette-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.builder-palette-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--muted-foreground) 20%, transparent);
+  border-radius: 999px;
+}
+.builder-palette-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklch, var(--muted-foreground) 34%, transparent);
 }
 
 .automation-builder-flow {

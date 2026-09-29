@@ -624,6 +624,8 @@ describe("AutomationBuilderPage", () => {
     renderBuilder();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Discard setup" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
     await waitFor(() =>
       expect(mocks.removeAutomation).toHaveBeenCalledWith(
         "task-123",
@@ -639,6 +641,8 @@ describe("AutomationBuilderPage", () => {
     const firstRender = renderBuilder();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Discard setup" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Discard" }));
     await waitFor(() =>
       expect(mocks.removeAutomation).toHaveBeenCalledWith(
         "task-123",
@@ -654,21 +658,15 @@ describe("AutomationBuilderPage", () => {
     expect(mocks.removeAutomation).toHaveBeenCalledTimes(1);
   });
 
-  it("returns from an automation thread to its thread list and can delete a saved automation", async () => {
+  it("deletes a saved automation from the builder", async () => {
     renderBuilder();
     const user = userEvent.setup();
 
-    const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
-    const switcher = await within(sidecar).findByTestId("automation-builder-chat-switcher");
-    await user.click(switcher);
-    await user.click(await screen.findByRole("button", { name: /See all chats/ }));
-    expect(within(sidecar).getByText("Chats")).toBeInTheDocument();
-    expect(within(sidecar).queryByTestId("automation-builder-chat-switcher")).not.toBeInTheDocument();
-
+    await screen.findByTestId("automation-builder-chat-sidecar");
     await user.click(screen.getByRole("button", { name: "Delete automation" }));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("Daily account brief");
-    await user.click(within(dialog).getByRole("button", { name: "Delete automation" }));
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
 
     await waitFor(() =>
       expect(mocks.removeAutomation).toHaveBeenCalledWith(
@@ -711,10 +709,9 @@ describe("AutomationBuilderPage", () => {
 
     const user = userEvent.setup();
     const sidecar = await screen.findByTestId("automation-builder-chat-sidecar");
-    const header = within(sidecar).getByTestId("automation-builder-chat-header");
-    expect(within(header).getByText("Chats")).toBeInTheDocument();
-    expect(within(sidecar).queryByTestId("automation-builder-chat-switcher")).not.toBeInTheDocument();
-    expect(within(sidecar).queryByRole("button", { name: "Back to chats" })).not.toBeInTheDocument();
+    const header = within(sidecar).getByTestId("builder-unified-header");
+    expect(within(header).getByTestId("builder-unified-header-automation")).toBeInTheDocument();
+    expect(within(sidecar).queryByTestId("builder-unified-header-command")).not.toBeInTheDocument();
     const newChat = within(header).getByRole("button", { name: "New chat" });
     const collapseChat = within(header).getByRole("button", { name: "Collapse automation chat" });
     const headerButtons = within(header).getAllByRole("button");
@@ -1349,7 +1346,7 @@ describe("AutomationBuilderPage", () => {
 
     renderBuilder();
 
-    expect(await screen.findByText("Chats")).toBeInTheDocument();
+    expect(await screen.findByTestId("builder-unified-header")).toBeInTheDocument();
     expect(screen.queryByRole("radio", { name: "Agent" })).not.toBeInTheDocument();
     expect(mocks.saveAutomation).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
@@ -2268,7 +2265,7 @@ describe("AutomationBuilderPage", () => {
     });
     renderBuilder();
 
-    expect(await screen.findByText("Chats")).toBeInTheDocument();
+    expect(await screen.findByTestId("builder-unified-header")).toBeInTheDocument();
     expect(screen.queryByLabelText("Message Sketch")).not.toBeInTheDocument();
     expect(mocks.conversationMessages).not.toHaveBeenCalled();
     expect(mocks.originChatMessages).not.toHaveBeenCalled();
