@@ -53,7 +53,11 @@ export function AutomationLockHolderResponseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" data-testid="automation-lock-holder-response-dialog">
+      <DialogContent
+        className="sm:max-w-md"
+        data-testid="automation-lock-holder-response-dialog"
+        showCloseButton={false}
+      >
         <DialogHeader>
           <div className="grid size-10 place-items-center rounded-[12px] bg-muted text-foreground" aria-hidden="true">
             <UserSwitchIcon size={20} />

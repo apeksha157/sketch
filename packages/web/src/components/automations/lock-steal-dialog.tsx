@@ -123,7 +123,7 @@ export function AutomationLockStealDialog({
   const isBad = phase === "denied" || phase === "expired";
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" data-testid="automation-lock-steal-dialog">
+      <DialogContent className="sm:max-w-md" data-testid="automation-lock-steal-dialog" showCloseButton={false}>
         <DialogHeader>
           <div
             className={cn(
